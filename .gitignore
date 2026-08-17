@@ -1,0 +1,25 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Deploy config — contains real Hostinger SSH host/user/paths, never
+# committed. Copy .env.deploy.example to .env.deploy and fill it in
+# locally. See docs/DEPLOYMENT.md.
+.env.deploy
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# If any tooling ever gets installed at the repo root directly
+# (backend/, frontend/, frontend-admin/ each have their own).
+/node_modules
+*.log
+npm-debug.log*
+
+# Stray, never-used `git init` skeleton found inside backend/ pre-dating
+# this repo (empty objects/, only hook samples + a stray lockfile) —
+# not the app's real history, just debris from an earlier abandoned
+# attempt. Root .git is the one real repo now.
+backend/.git_stray_unused/

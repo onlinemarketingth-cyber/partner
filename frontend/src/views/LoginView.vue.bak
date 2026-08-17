@@ -1,0 +1,223 @@
+<script setup lang="ts">
+/**
+ * LoginView — Sanctum SPA session login.
+ *
+ * Visual treatment follows docs/design/CI-001-neural-atlas-reference.md:
+ * cool gray gradient background, one large rounded-2xl card, editorial
+ * headline (light italic + bold upright in one line) — the treatment the
+ * ADR explicitly reserved for marketing-style screens like this one.
+ * Indigo stays the only accent here; lime is intentionally NOT used
+ * (reserved for gamification/success moments elsewhere in the app).
+ *
+ * CI-001 addendum (2026-07-08, human-reviewed against the live reference
+ * shot): the reference's near-black is confined to small pills/nav on a
+ * mostly light-gray canvas, not a full dark panel — so the brand panel
+ * here is narrower + one step lighter than the first pass, and the
+ * full-panel dot-grid texture was removed (reference confines that motif
+ * to the small logo mark only — "used sparingly" per our own decision).
+ * The italic-light+bold-upright pairing stays for Latin/English copy but
+ * is NOT applied to Thai script (Kanit italic has no native Thai
+ * legibility precedent) — Thai headline uses weight contrast only.
+ *
+ * CI-001 addendum 2 (2026-07-08, human-reviewed against the actual
+ * marketing-hero screenshot): the reference has NO dark panel at all —
+ * it's a single light-gray canvas with near-black *pill* (rounded-full)
+ * nav/CTA buttons and outline pill tags. Rebuilt as a single-column
+ * light layout to match. Human-approved scope: rounded-full is adopted
+ * **only on this screen** (submit button, lang toggle, tag pills,
+ * password-visibility toggle) — CI-001 Decision #2 (keep rounded-xl
+ * everywhere else — TopNavigation, HeroHeader, TabFilterBar, etc.)
+ * still stands; do not spread rounded-full to shared components without
+ * a separate sign-off.
+ */
+import { computed, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useAuthStore, ApiError } from '@/stores/auth'
+import { useI18n } from '@/composables/useI18n'
+import Icon from '@/design-system/components/Icon.vue'
+import AppLogo from '@/design-system/components/AppLogo.vue'
+
+const router = useRouter()
+const route = useRoute()
+const authStore = useAuthStore()
+const { lang, t, setLang } = useI18n()
+
+const email = ref('')
+const password = ref('')
+const showPassword = ref(false)
+const remember = ref(false)
+const submitting = ref(false)
+const errorMessage = ref('')
+const fieldErrors = ref<Record<string, string[]>>({})
+
+function toggleLang() {
+  setLang(lang.value === 'TH' ? 'EN' : 'TH')
+}
+
+// Backend messages come back in English (lang/en/auth.php — no
+// Accept-Language negotiation wired up yet, see lang/th/auth.php notes).
+// Map the two known shapes to localized copy rather than show raw API
+// text to a Thai-reading user; anything unrecognized still falls back
+// to the raw message so nothing is silently swallowed.
+function localizeAuthError(raw: string): string {
+  if (lang.value !== 'TH') return raw
+  if (raw.includes('do not match')) return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+  if (raw.includes('Too many login attempts')) return 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณาลองใหม่อีกครั้งในภายหลัง'
+  return raw
+}
+
+const emailError = computed(() => fieldErrors.value.email?.[0])
+
+async function handleSubmit() {
+  if (submitting.value) return
+  errorMessage.value = ''
+  fieldErrors.value = {}
+  submitting.value = true
+
+  try {
+    await authStore.login(email.value, password.value)
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
+    router.push(redirect)
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 422) {
+      const body = err.body as { errors?: Record<string, string[]> }
+      fieldErrors.value = body.errors ?? {}
+      const first = Object.values(fieldErrors.value)[0]?.[0]
+      errorMessage.value = first ? localizeAuthError(first) : t('login_error_generic', 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่', 'Login failed. Please try again.')
+    } else {
+      errorMessage.value = t(
+        'login_error_network',
+        'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง',
+        'Could not reach the server. Please try again.',
+      )
+    }
+  } finally {
+    submitting.value = false
+  }
+}
+</script>
+
+<template>
+  <div
+    class="min-h-screen w-full flex items-center justify-center p-4 sm:p-8 font-sans"
+    style="background: linear-gradient(160deg, #eef0f2 0%, #dde1e6 45%, #cfd4da 100%);"
+  >
+    <div class="w-full max-w-xl rounded-[28px] bg-white shadow-xl border border-slate-200/80 overflow-hidden p-8 sm:p-12">
+      <!-- Top row: logo pill + lang toggle pill, echoing the reference's
+           nav-pill row (no dark panel — see CI-001 addendum 2 above) -->
+      <div class="flex items-center justify-between">
+        <AppLogo mode="wordmark" :height="30" />
+
+        <button
+          type="button"
+          @click="toggleLang"
+          class="relative w-14 h-7 shrink-0 bg-slate-100 rounded-full border border-slate-200 flex items-center px-1"
+        >
+          <div
+            class="absolute top-1 bottom-1 w-6 bg-white rounded-full shadow flex items-center justify-center transition-all duration-300"
+            :class="lang === 'TH' ? 'translate-x-0' : 'translate-x-7'"
+          >
+            <span class="text-[9px] font-black text-indigo-600">{{ lang }}</span>
+          </div>
+        </button>
+      </div>
+
+      <!-- Outline tag pills, echoing the reference's "Smart glasses / NeuroAtlas" tags -->
+      <div class="mt-8 flex items-center gap-2">
+        <span class="inline-flex items-center px-3 py-1 rounded-full border border-slate-200 text-xs font-bold text-slate-500">
+          {{ t('login_tag_portal', 'พอร์ทัลตัวแทน', 'Agent Portal') }}
+        </span>
+        <span class="inline-flex items-center px-3 py-1 rounded-full border border-slate-200 text-xs font-bold text-slate-500">
+          Thai Life
+        </span>
+      </div>
+
+      <div class="mt-4">
+        <h1 class="text-3xl sm:text-4xl leading-tight text-slate-900">
+          <!-- Italic reserved for Latin script (see CI-001 addendum) — Thai
+               keeps the light/bold weight contrast without a slant. -->
+          <span class="font-light text-slate-500" :class="lang === 'EN' ? 'italic' : ''">{{ t('login_hello', 'ยินดีต้อนรับ', 'Welcome') }}</span>
+          <span class="font-bold"> {{ t('login_back', 'กลับมา', 'back') }}</span>
+        </h1>
+        <p class="mt-2 text-sm text-slate-500">
+          {{ t('login_sub', 'เข้าสู่ระบบเพื่อดำเนินการต่อ', 'Sign in to continue') }}
+        </p>
+      </div>
+
+      <form class="mt-8 space-y-4" @submit.prevent="handleSubmit" novalidate>
+          <div
+            v-if="errorMessage"
+            class="flex items-start gap-2 rounded-xl bg-rose-50 border border-rose-100 px-3 py-2.5 text-sm text-rose-700"
+          >
+            <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+            <span>{{ errorMessage }}</span>
+          </div>
+
+          <div>
+            <label for="email" class="block text-xs font-bold text-slate-600 mb-1.5">
+              {{ t('login_email', 'อีเมล', 'Email') }}
+            </label>
+            <div class="relative">
+              <Icon name="mail" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                id="email"
+                v-model="email"
+                type="email"
+                autocomplete="username"
+                required
+                class="w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-colors"
+                :class="emailError ? 'border-rose-300' : 'border-slate-200'"
+                placeholder="agent@thailife.test"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label for="password" class="block text-xs font-bold text-slate-600 mb-1.5">
+              {{ t('login_password', 'รหัสผ่าน', 'Password') }}
+            </label>
+            <div class="relative">
+              <Icon name="key" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                id="password"
+                v-model="password"
+                :type="showPassword ? 'text' : 'password'"
+                autocomplete="current-password"
+                required
+                class="w-full pl-9 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-colors"
+                placeholder="••••••••"
+              />
+              <button
+                type="button"
+                @click="showPassword = !showPassword"
+                class="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+                :title="showPassword ? t('hide', 'ซ่อน', 'Hide') : t('show', 'แสดง', 'Show')"
+              >
+                <Icon :name="showPassword ? 'eye_off' : 'eye'" :size="16" />
+              </button>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between text-sm">
+            <label class="flex items-center gap-2 text-slate-600 cursor-pointer select-none">
+              <input v-model="remember" type="checkbox" class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/30" />
+              {{ t('login_remember', 'จดจำฉัน', 'Remember me') }}
+            </label>
+            <!-- TODO: CONFIRM (product) — password reset flow not specced yet; out of scope for this task. -->
+            <span class="text-slate-300 cursor-not-allowed" :title="t('login_forgot_todo', 'ยังไม่เปิดใช้งาน', 'Not available yet')">
+              {{ t('login_forgot', 'ลืมรหัสผ่าน?', 'Forgot password?') }}
+            </span>
+          </div>
+
+          <button
+            type="submit"
+            :disabled="submitting"
+            class="w-full py-2.5 rounded-full bg-indigo-600 text-white text-sm font-bold shadow-sm hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+          >
+            <span>{{ submitting ? t('login_submitting', 'กำลังเข้าสู่ระบบ...', 'Signing in...') : t('login_submit', 'เข้าสู่ระบบ', 'Sign in') }}</span>
+            <Icon v-if="!submitting" name="arrow_right" :size="16" />
+          </button>
+        </form>
+      </div>
+  </div>
+</template>

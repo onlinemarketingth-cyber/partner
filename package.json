@@ -1,0 +1,12 @@
+{
+  "name": "sync-vision-agent",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sync Vision Agent — monorepo root. See CLAUDE.md and docs/DEPLOYMENT.md.",
+  "scripts": {
+    "build": "npm run build --prefix frontend && npm run build --prefix frontend-admin",
+    "deploy": "bash scripts/deploy.sh",
+    "deploy:dry-run": "bash scripts/deploy.sh --dry-run",
+    "deploy:frontend-only": "bash scripts/deploy.sh --skip-backend"
+  }
+}

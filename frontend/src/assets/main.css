@@ -1,0 +1,410 @@
+@import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=Noto+Sans+Thai:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * TASK-055 / ADR-018 — per-company theming defaults.
+ *
+ * The brand/gold palettes in tailwind.config.js reference these CSS
+ * variables via `rgb(var(--brand-500) / <alpha-value>)`, so the values
+ * below are held as space-separated "R G B" channels (NOT hex) to keep
+ * Tailwind's opacity utilities working (e.g. `bg-brand-50/60`).
+ *
+ * These are the DEFAULT (neutral, no-company-theme) values — the exact
+ * GENESENN hex values ported from tailwind.config.js, converted to RGB
+ * channels, so the default rendering is pixel-identical to before this
+ * refactor. The boot theme loader (src/stores/theme.ts → apply()) may
+ * override any of these per company at runtime.
+ *
+ *   brand-50  #F4F5FB   brand-100 #C5CDEA   brand-200 #96A5DA
+ *   brand-300 #677DC9   brand-400 #3F59B2   brand-500 #2F4183
+ *   brand-600 #1E2A54   brand-700 #182142   brand-800 #111830
+ *   brand-900 #0B0F1E
+ *   gold-50   #FAF8F5   gold-100  #E5DCCE   gold-200  #D1BFA7
+ *   gold-300  #BCA381   gold-400  #A8875A   gold-500  #8C704A
+ *   gold-600  #705A3B   gold-700  #54432C   gold-800  #372C1D
+ *   gold-900  #1B150E
+ */
+:root {
+  --brand-50: 244 245 251;
+  --brand-100: 197 205 234;
+  --brand-200: 150 165 218;
+  --brand-300: 103 125 201;
+  --brand-400: 63 89 178;
+  --brand-500: 47 65 131;
+  --brand-600: 30 42 84;
+  --brand-700: 24 33 66;
+  --brand-800: 17 24 48;
+  --brand-900: 11 15 30;
+
+  --gold-50: 250 248 245;
+  --gold-100: 229 220 206;
+  --gold-200: 209 191 167;
+  --gold-300: 188 163 129;
+  --gold-400: 168 135 90;
+  --gold-500: 140 112 74;
+  --gold-600: 112 90 59;
+  --gold-700: 84 67 44;
+  --gold-800: 55 44 29;
+  --gold-900: 27 21 14;
+
+  /* App-chrome (top bar + bottom-nav "menu") colours. Defaults match the
+     pre-existing look — white bar + slate-700 text — so the chrome is
+     unchanged until a company sets nav_bg_hex / nav_text_hex. The theme
+     loader (theme.ts → apply()) overrides these per company at runtime. */
+  --nav-bg: #ffffff;
+  --nav-text: #334155;
+
+  /* Bottom-nav "active tab" colour. Defaults to the generated brand-600
+     ramp (same as the old hardcoded `text-brand-600` utility) so a company
+     that never sets nav_active_hex sees pixel-identical behaviour; the
+     theme loader (theme.ts → apply()) overrides this directly with a hex
+     when a company wants the active tab decoupled from the primary color. */
+  --nav-active: rgb(var(--brand-600));
+
+  /* Content-card / surface colour, as `R G B` channels so the existing
+     `bg-white/95` translucency is preserved. Default = white (255 255 255)
+     → identical to today until a company sets card_bg_hex. */
+  --card-bg: 255 255 255;
+
+  /* App font — default equals Tailwind's `font-sans` (Kanit-first) stack.
+     The theme loader overrides this from the company's Google Font. */
+  --app-font: 'Kanit', 'Noto Sans Thai', ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans',
+    sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+
+  /*
+   * TASK-098 / ADR-023 — surface / ink / line token pairs.
+   *
+   * Every BACKGROUND token ships with the FOREGROUND token guaranteed
+   * readable on it. A component never picks a text colour; it inherits
+   * the one belonging to the surface it sits on:
+   *
+   *   bg-surface-card  text-ink-card  border-line-card
+   *   bg-surface-primary text-ink-primary
+   *   bg-surface-chip  text-ink-chip
+   *
+   * The values below are the DEFAULTS and are exactly today's hardcoded
+   * slate values, so a company with no theme renders pixel-identically:
+   *   ink-card       = slate-900   ink-card-muted  = slate-500
+   *   ink-card-subtle= slate-400   line-card       = slate-200
+   *   line-card-subtle = slate-100 surface-chip    = slate-100
+   *   ink-chip       = slate-600
+   *
+   * theme.ts → applyContrastTokens() recomputes every one of them from
+   * the company's chosen SURFACES using WCAG contrast (theme/contrast.ts),
+   * so a tenant cannot configure light-on-light or dark-on-dark.
+   *
+   * Held as "R G B" channels, like the brand ramp, so Tailwind opacity
+   * utilities keep working (`bg-surface-card/80`, `text-ink-card/60`).
+   */
+  --surface-app: 248 250 252;
+  --ink-app: 15 23 42;
+  --ink-app-muted: 100 116 139;
+
+  --surface-card: 255 255 255;
+  --ink-card: 15 23 42;
+  --ink-card-muted: 100 116 139;
+  --ink-card-subtle: 148 163 184;
+  --line-card: 226 232 240;
+  --line-card-subtle: 241 245 249;
+
+  --surface-nav: 255 255 255;
+  --ink-nav: 51 65 85;
+  --ink-nav-muted: 148 163 184;
+
+  --surface-primary: 30 42 84;
+  --ink-primary: 255 255 255;
+  /* Brand-coloured TEXT on a card (prices, accents). Default = the
+     GENESENN brand-700 the app used to hardcode as `text-brand-700`. */
+  --ink-brand: 24 33 66;
+
+  /* Neutral pill/counter surface. THIS is the token that fixes the
+     "ตัวหนังสือสีอ่อน พื้นสีอ่อน" half of the report: `bg-slate-100
+     text-slate-600` stayed pale on a black card and then inherited the
+     light --card-text, so it went light-on-light. */
+  --surface-chip: 241 245 249;
+  --ink-chip: 71 85 105;
+
+  --surface-success: 236 253 245;
+  --ink-success: 4 120 87;
+  --surface-warning: 255 251 235;
+  --ink-warning: 180 83 9;
+  --surface-danger: 255 241 242;
+  --ink-danger: 190 18 60;
+
+  /*
+   * TASK-124 / ADR-023 — the FORM FIELD surface.
+   *
+   * Human-reported 2026-08-05 (screenshot of /register under a dark
+   * tenant theme): a field rendered light-tan text on a near-white box.
+   * Every input in the app was written as
+   *
+   *     text-ink-card placeholder:text-ink-card-subtle   ← and NO bg
+   *
+   * so the TEXT followed the card (correctly flipping to a light ink on a
+   * dark card) while the BOX stayed the browser's default white. Under a
+   * light card that accidentally read fine; under a dark one it was
+   * invisible. The input was the one surface in the app that never got a
+   * surface/ink pair — so this was a latent bug in EVERY form, not just
+   * the public register page.
+   *
+   * WHY the field is derived from the CARD and not pinned to white:
+   * pinning to white would "fix" the dark theme by punching a white hole
+   * into a black card — the same mistake ADR-023 §2.2 already recorded
+   * for pale `bg-slate-100` chips. A field must be a SIBLING of the card
+   * it sits in: a slightly darker light on a light card, a slightly
+   * lighter dark on a dark card. theme.ts steps the card surface toward
+   * its own ink to get there, then picks the ink back off the RESULT, so
+   * the pair is AA-guaranteed whatever the tenant configured.
+   *
+   * The defaults below are today's rendering (white field, slate-900
+   * text, slate-400 placeholder, slate-200 border) so an unthemed tenant
+   * sees no change before applyContrastTokens() runs.
+   */
+  --surface-input: 255 255 255;
+  --ink-input: 15 23 42;
+  --ink-input-placeholder: 148 163 184;
+  --line-input: 226 232 240;
+
+  /* Not a colour — the browser's hint for the parts of a field WE cannot
+     paint: the `type="time"` clock glyph, the number spinner, the
+     autofill wash, the select popup. They are drawn in dark ink by
+     default, so once `--surface-input` legitimately goes dark they would
+     disappear inside the very field this task made readable. theme.ts
+     flips it with the field. */
+  --input-color-scheme: light;
+}
+
+@layer base {
+  body {
+    /* font-family goes through --app-font (default = Kanit stack, so no
+       visual change) so the company theme can swap the font at runtime. */
+    /*
+     * TASK-160 (human, 2026-08-11: "ในโหมด Mobile แนวนอน ปรับสี background
+     * ให้เป็นสีเดียวกับ admin setup").
+     *
+     * This is the margin either side of the phone column — the only thing
+     * visible in landscape or on a desktop viewport, and it was
+     * `bg-slate-50`, a fixed platform grey. So the wider the screen, the
+     * MORE of a tenant's app was not their colour.
+     *
+     * TASK-159 §4.1 left this alone and flagged it, because App.vue's own
+     * comment said the margin was deliberately outside the theme. The human
+     * has now overruled that: the margin is themed. Ink moves with it —
+     * changing the surface without the ink is how you get slate-900 text on
+     * a near-black page.
+     */
+    @apply text-ink-app bg-surface-app;
+    font-family: var(--app-font);
+  }
+
+  /*
+   * TASK-124 — THE GUARD. An input that carries a text colour and no
+   * background is the exact shape of the bug this task fixes, and it is
+   * invisible in review because the missing half is a class that ISN'T
+   * there. A lint rule can only spot the classes you wrote; this makes
+   * the pair the DEFAULT, so a new form is readable even if whoever
+   * writes it never thinks about theming at all.
+   *
+   * In @layer base deliberately: Tailwind utilities live in a later
+   * layer, so any component that genuinely needs a different surface
+   * (e.g. the readonly URL fields on `bg-surface-chip text-ink-chip`)
+   * still overrides this by writing BOTH halves of another real pair.
+   *
+   * Checkboxes, radios, ranges, colour swatches and file pickers are
+   * excluded: they are not text fields, their box IS their control, and
+   * repainting it is how you break a native checkbox.
+   */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+  select,
+  textarea {
+    background-color: rgb(var(--surface-input));
+    color: rgb(var(--ink-input));
+    color-scheme: var(--input-color-scheme);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--ink-input-placeholder));
+  }
+}
+
+/* TASK-055 — make every `bg-white/95` content card follow the company
+   card colour. Redefines what that utility resolves to via --card-bg
+   (default white = unchanged). Placed OUTSIDE @layer base so it wins over
+   the Tailwind utility without !important; nav bars use inline styles so
+   they're unaffected by this. */
+.bg-white\/95 {
+  background-color: rgb(var(--card-bg) / 0.95);
+}
+
+/* Card text colour — only active when the company sets one (html gets the
+   `has-card-text` class via theme.ts). Overrides the neutral slate text
+   shades inside cards so dark card backgrounds stay readable; semantic
+   colours (emerald/amber/rose/brand) are deliberately NOT touched. */
+.has-card-text .bg-white\/95,
+.has-card-text .bg-white\/95 .text-slate-900,
+.has-card-text .bg-white\/95 .text-slate-800,
+.has-card-text .bg-white\/95 .text-slate-700,
+.has-card-text .bg-white\/95 .text-slate-600,
+.has-card-text .bg-white\/95 .text-slate-500,
+.has-card-text .bg-white\/95 .text-slate-400 {
+  color: var(--card-text);
+}
+
+/* Card border colour / borderless — only when a company sets it. */
+.has-card-border .bg-white\/95 {
+  border-color: var(--card-border);
+}
+
+/* Card shadow style — only when a company sets it. */
+.has-card-shadow .bg-white\/95 {
+  box-shadow: var(--card-shadow);
+}
+
+/*
+ * Shared transition system (added Phase 3+ — see TASK-005-ui-animation.md).
+ * Duplicated verbatim in frontend-admin/src/assets/main.css per CLAUDE.md
+ * Section 7 (design-system components are duplicated between the two
+ * frontends, not shared via a package yet — keep both copies in sync,
+ * CI-001/CI-002). Named classes are meant to be reused as `<Transition
+ * name="...">` / `<TransitionGroup name="...">` in any view, not
+ * redefined per-component.
+ */
+
+/* Route-level page transition — CURRENTLY UNUSED.
+
+   Bug fix (2026-08-03): App.vue no longer wraps <RouterView> in
+   <Transition name="page-fade">. Once every view gained a HeroHeader root
+   and a nested content-fade <Transition> (TASK-079 Phase 4), this leave
+   transition stopped firing `transitionend`, so Vue never finished the
+   leave: with mode="out-in" the next view was never mounted (whole app
+   blank), and without it the old views were never removed (they stacked).
+
+   Kept here only so the class names are documented. If a page transition
+   is ever wanted again, verify the leave actually completes — mount two
+   views, tab between them, and assert `document.querySelector('main')
+   .children.length` stays at 1 — BEFORE shipping it. */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+/* List entrance — wrap a v-for'd list in <TransitionGroup tag="div"
+   name="list-fade" class="..."> instead of a plain <div>. */
+.list-fade-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.list-fade-leave-active {
+  transition: opacity 0.15s ease;
+  position: absolute;
+}
+.list-fade-move {
+  transition: transform 0.2s ease;
+}
+.list-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.list-fade-leave-to {
+  opacity: 0;
+}
+
+/* Skeleton → content cross-fade (TASK-079 Phase 3, UX audit finding D:
+   every view swapped its loading skeleton for real content in a single
+   frame, which reads as a flash/jump on a phone). Wrap the loading /
+   error / loaded branches in <Transition name="content-fade"> — with NO
+   `mode`, see the bug note below. Deliberately opacity-only — no
+   translate — because the skeleton stands in for the very content that
+   replaces it, so any movement would read as the page shifting under the
+   reader's thumb.
+   NOTE for future edits: <Transition> needs exactly ONE root child per
+   branch, and the view itself must stay single-rooted or App.vue's
+   <Transition mode="out-in"> around <RouterView> breaks (the multi-root
+   Fragment regression previously fixed across 8 views). */
+/* Bug fix (2026-08-03, human-reported: "กดทุกปุ่มไม่มีอะไรแสดงออกมาเลย" —
+   every route rendered a blank page on a real phone, while the same build
+   was fine on a wide desktop viewport).
+
+   Cause: Phase 3 wrapped all 12 views' loading/error/loaded branches in
+   <Transition name="content-fade" mode="out-in">, and App.vue ALREADY
+   wraps <RouterView> in <Transition name="page-fade" mode="out-in">. Two
+   nested out-in transitions deadlock: the outer one will not mount the
+   incoming view until the outgoing one signals its leave is done, and the
+   outgoing view is itself mid-inner-transition, so that signal can be
+   lost — leaving <main> permanently empty. It is timing-sensitive, which
+   is exactly why it reproduced on a phone and not on a fast desktop.
+
+   Fix: the inner transitions are no longer `mode="out-in"` (see the 12
+   views). A skeleton→content cross-fade has no reason to serialise — the
+   two states can overlap for 150ms — and dropping out-in removes the
+   wait-for-leave handshake that could hang. DO NOT re-add mode="out-in"
+   to a transition nested inside App.vue's page transition.
+
+   Only the ENTER side is animated. Without `mode="out-in"` both states are
+   in normal flow at once, so animating the leave as well would stack the
+   skeleton above the incoming content for 150ms and shove the page down.
+   (Taking the leaving node out of flow with position:absolute was tried
+   and is worse: these views live in a max-w-md column, and an absolutely
+   positioned child escapes it and spans the whole viewport.) Dropping the
+   leave transition removes the outgoing node immediately and fades the
+   real content in over it — same perceived cross-fade, no layout shift. */
+.content-fade-enter-active {
+  transition: opacity 0.15s ease;
+}
+.content-fade-enter-from,
+.content-fade-leave-to {
+  opacity: 0;
+}
+
+/* Slide-in drawer/panel — wrap the whole `v-if` drawer block in
+   <Transition name="drawer">; give the inner panel element (not the
+   backdrop) the class "drawer-panel" so it slides while the backdrop
+   only fades. */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity 0.2s ease;
+}
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
+  transition: transform 0.25s ease;
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+  transform: translateX(100%);
+}
+
+/* Respect the user's OS-level motion preference — accessibility, not
+   optional polish. Overrides every transition/animation above (and the
+   sk-shimmer keyframe in LoadingSkeleton.vue) uniformly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* TASK-079 Phase 3 — .content-fade is already covered by the wildcard
+     above; spelled out so the intent survives if that selector is ever
+     narrowed, and so a reduced-motion user gets an instant swap rather
+     than a merely-fast one. */
+  .content-fade-enter-active,
+  .content-fade-leave-active {
+    transition: none !important;
+  }
+}

@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="">
+  <head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="/favicon.ico">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vite App</title>
+  </head>
+  <body>
+    <!-- TASK-055 / ADR-018, TASK-078 (2026-08-02, human-confirmed via
+         AskUserQuestion) — branded boot splash. Inline (no JS/CSS deps) so
+         it paints instantly before Vue mounts, replacing the blank flash.
+         Neutral default look; the theme loader may swap its bg/logo once
+         the public theme resolves. Held open by main.ts for a minimum
+         3000ms (progress bar driven by real boot work — see main.ts) before
+         being faded out, landing on Home (session already logged in) or
+         Login otherwise — same behavior either way per TASK-078. -->
+    <div id="app-splash" style="position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:#f8fafc;transition:opacity .3s ease;">
+      <img id="app-splash-logo" alt="" style="max-height:64px;max-width:60%;object-fit:contain;display:none;" />
+      <div style="width:160px;max-width:50vw;height:4px;border-radius:9999px;background:rgba(30,42,84,.12);overflow:hidden;">
+        <div id="app-splash-bar" style="width:0%;height:100%;border-radius:9999px;background:#1e2a54;transition:width .25s ease-out;"></div>
+      </div>
+      <style>@media (prefers-reduced-motion: reduce){#app-splash-bar{transition-duration:.01ms!important}}</style>
+    </div>
+    <script>
+      /*
+        TASK-168 — paint the splash in THIS TENANT's colours on the first
+        frame. Runs synchronously, before the parser reaches #app and before
+        anything is painted, so there is no neutral frame to see.
+        Vue cannot do this job: the theme arrives from an API call that only
+        starts once main.ts loads, so a JS-applied theme is by construction a
+        SECOND look — and a second look reads as a second loading screen
+        (human report, 2026-08-11).
+
+        Written by theme.ts's cacheSplashBoot() on every successful theme
+        load. Anything missing, unparseable, or belonging to a different
+        tenant leaves the neutral default above untouched; main.ts still
+        applies the real theme when it resolves, so a stale cache corrects
+        itself within the same boot.
+
+        The slug rule MIRRORS theme.ts's resolveSlug() — ?company= first,
+        then the cached slug — duplicated only because this must run before
+        any module loads. The slug COMPARISON is what makes the duplication
+        safe: if the two ever disagree we paint neutral, never the wrong
+        company. If resolveSlug() gains a third source, update this too.
+      */
+      (function () {
+        try {
+          var slug =
+            new URLSearchParams(location.search).get('company') ||
+            localStorage.getItem('sv_company_slug')
+          if (!slug) return
+          var boot = JSON.parse(localStorage.getItem('sv_splash_boot') || 'null')
+          if (!boot || boot.slug !== slug) return
+          if (boot.bg) document.getElementById('app-splash').style.background = boot.bg
+          if (boot.bar) document.getElementById('app-splash-bar').style.background = boot.bar
+          if (boot.logo) {
+            var logo = document.getElementById('app-splash-logo')
+            logo.src = boot.logo
+            logo.style.display = 'block'
+          }
+        } catch (e) {
+          /* the neutral default is always a correct fallback */
+        }
+      })()
+    </script>
+
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

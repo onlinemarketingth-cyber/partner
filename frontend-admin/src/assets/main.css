@@ -1,0 +1,139 @@
+/* TASK-090 — weight 800 added to both families. The buttons below ask for
+   a weight ABOVE the 700 the UI already used everywhere; without loading
+   800 the browser would synthesise it (smeared, uneven strokes on Thai
+   glyphs in particular) instead of using the real cut. */
+@import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply font-sans text-slate-900 bg-slate-50;
+  }
+}
+
+/*
+ * TASK-090 (2026-08-03, human: "ทุกปุ่มปรับขนาดใหญ่ สูง 50px กว้าง 100px
+ * และมี bolder / บันทึกใช้น้ำเงินระบบ ตัวอักษรสีขาว / ส่วนยกเลิก สีใส กรอบ
+ * สีน้ำเงิน").
+ *
+ * Resized same day on the human's second look: 50x100 / rounded-xl felt
+ * oversized in the dense admin tables, so the spec is now
+ * height 40px, min-width 90px, radius 0.65rem. Note 0.65rem is not a
+ * Tailwind scale step (rounded-lg is 0.5rem, rounded-xl 0.75rem), hence
+ * the arbitrary value — a deliberate exact-value request, not drift.
+ *
+ * Two component classes rather than a Vue <AppButton>: the admin had 354
+ * hand-written <button> elements across 20 views with at least nine
+ * different class strings for what is the same primary button. Converting
+ * them to a component means touching every call site AND its imports;
+ * swapping the class string reaches all of them with one definition and no
+ * behavioural change, which is the cheaper and far less regression-prone
+ * route for a purely visual spec.
+ *
+ * `min-w` not `w`: a fixed 100px width would clip "+ สร้างคำสั่งซื้อ" and
+ * every other long Thai label. 100px is the FLOOR, so short buttons
+ * ("บันทึก", "ลบ") all line up at the requested size and long ones grow.
+ *
+ * Colour comes from the brand palette (CSS-var backed, see
+ * tailwind.config.js) — never a hardcoded hex, or per-company theming
+ * (TASK-055 / ADR-018) stops applying to every button at once.
+ *
+ * NOT applied to: icon-only buttons (pencil/trash/close — a 50x100 trash
+ * icon per table row is unusable), tab chips, and the media-grid tiles,
+ * all of which are sized by their own layout.
+ */
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center h-[40px] min-w-[90px] px-5 rounded-[0.65rem]
+           font-extrabold text-sm whitespace-nowrap transition-colors
+           bg-brand-600 text-white hover:bg-brand-700
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center h-[40px] min-w-[90px] px-5 rounded-[0.65rem]
+           font-extrabold text-sm whitespace-nowrap transition-colors
+           bg-transparent border-2 border-brand-600 text-brand-600 hover:bg-brand-50
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+}
+
+/*
+ * Shared transition system (added Phase 3+ — see TASK-005-ui-animation.md).
+ * Duplicated verbatim in frontend/src/assets/main.css per CLAUDE.md
+ * Section 7 (design-system components are duplicated between the two
+ * frontends, not shared via a package yet — keep both copies in sync,
+ * CI-001/CI-002). Named classes are meant to be reused as `<Transition
+ * name="...">` / `<TransitionGroup name="...">` in any view, not
+ * redefined per-component.
+ */
+
+/* Route-level page transition — wraps <RouterView> in App.vue, so every
+   view (past and future) gets this for free with zero per-view code. */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+/* List entrance — wrap a v-for'd list in <TransitionGroup tag="div"
+   name="list-fade" class="..."> instead of a plain <div>. */
+.list-fade-enter-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.list-fade-leave-active {
+  transition: opacity 0.15s ease;
+  position: absolute;
+}
+.list-fade-move {
+  transition: transform 0.2s ease;
+}
+.list-fade-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.list-fade-leave-to {
+  opacity: 0;
+}
+
+/* Slide-in drawer/panel — wrap the whole `v-if` drawer block in
+   <Transition name="drawer">; give the inner panel element (not the
+   backdrop) the class "drawer-panel" so it slides while the backdrop
+   only fades. */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity 0.2s ease;
+}
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
+  transition: transform 0.25s ease;
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+  transform: translateX(100%);
+}
+
+/* Respect the user's OS-level motion preference — accessibility, not
+   optional polish. Overrides every transition/animation above (and the
+   sk-shimmer keyframe in LoadingSkeleton.vue) uniformly. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

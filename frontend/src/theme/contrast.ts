@@ -1,0 +1,200 @@
+/**
+ * TASK-098 / ADR-023 — colour contrast maths for the theme system.
+ *
+ * WHY this exists (human-reported 2026-08-04): "สีตัวอักษรบางตำแหน่ง
+ * เจอปัญหาสีพื้นเข้ม ตัวอักษรเข้ม และบางตำแหน่งตัวหนังสือสีอ่อน พื้นสีอ่อน
+ * ทำให้เห็นไม่ชัด". Before this file the codebase had ZERO contrast maths —
+ * `theme/assets.ts` generated the brand ramp by mixing lightness and never
+ * asked whether anything was readable on the result. So `bg-brand-600
+ * text-white` broke the moment a tenant picked a pale primary, and the
+ * `--card-text` override painted light ink onto pale `bg-slate-100` chips.
+ *
+ * Everything here is pure (no DOM, no deps) so it can be unit-tested and
+ * reused by the Admin live preview.
+ *
+ * Reference: WCAG 2.1 relative luminance + contrast ratio.
+ */
+
+export type Rgb = [number, number, number]
+
+/** Parse `#rrggbb`/`rrggbb`/`#rgb` → channels, or null when unparseable. */
+export function parseHex(hex: string | null | undefined): Rgb | null {
+  if (!hex) return null
+  const raw = hex.trim().replace(/^#/, '')
+
+  if (/^[0-9a-fA-F]{3}$/.test(raw)) {
+    const r = raw[0]!
+    const g = raw[1]!
+    const b = raw[2]!
+    return parseHex(`${r}${r}${g}${g}${b}${b}`)
+  }
+
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return null
+
+  const n = parseInt(raw, 16)
+
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+}
+
+/** `[r, g, b]` → the `"R G B"` channel string Tailwind's `rgb(var(--x) / <alpha>)` form needs. */
+export function toChannels(rgb: Rgb): string {
+  return rgb.map((c) => Math.round(Math.min(255, Math.max(0, c)))).join(' ')
+}
+
+/** sRGB 0-255 → linear-light 0-1, per WCAG. */
+function toLinear(channel: number): number {
+  const c = channel / 255
+
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+}
+
+/** WCAG relative luminance, 0 (black) → 1 (white). */
+export function relativeLuminance([r, g, b]: Rgb): number {
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b)
+}
+
+/** WCAG contrast ratio between two opaque colours: 1 (identical) → 21 (black/white). */
+export function contrastRatio(a: Rgb, b: Rgb): number {
+  const la = relativeLuminance(a)
+  const lb = relativeLuminance(b)
+  const lighter = Math.max(la, lb)
+  const darker = Math.min(la, lb)
+
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+/**
+ * Is this colour dark enough that light ink reads better on it?
+ *
+ * Uses the contrast ratio against white rather than a raw luminance
+ * threshold, because luminance alone mis-classifies saturated mid-tones —
+ * a strong yellow and a strong blue can share a luminance band while
+ * needing opposite ink.
+ */
+export function isDark(rgb: Rgb): boolean {
+  return contrastRatio(rgb, [255, 255, 255]) >= contrastRatio(rgb, [15, 23, 42])
+}
+
+/** Linear channel mix. `amount` is the share of `b` (0 = all `a`, 1 = all `b`). */
+export function mix(a: Rgb, b: Rgb, amount: number): Rgb {
+  const t = Math.min(1, Math.max(0, amount))
+
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
+}
+
+/** WCAG AA for body text. Anything below this is what the human is reporting. */
+export const AA_CONTRAST = 4.5
+
+const INK_LIGHT: Rgb = [255, 255, 255]
+const INK_DARK: Rgb = [15, 23, 42] // slate-900 — the app's existing dark ink
+
+/**
+ * The readable ink for a background.
+ *
+ * Picks whichever candidate scores the higher contrast ratio; defaults to
+ * the app's existing light/dark ink pair. Never returns "the one the
+ * designer wrote down" — that is precisely the bug being fixed.
+ */
+export function pickInk(bg: Rgb, candidates: Rgb[] = [INK_DARK, INK_LIGHT]): Rgb {
+  let best = candidates[0] ?? INK_DARK
+  let bestRatio = contrastRatio(bg, best)
+
+  for (const candidate of candidates.slice(1)) {
+    const ratio = contrastRatio(bg, candidate)
+    if (ratio > bestRatio) {
+      best = candidate
+      bestRatio = ratio
+    }
+  }
+
+  return best
+}
+
+/**
+ * A dimmer version of `ink` that still sits on `surface`.
+ *
+ * This replaces the old approach of hardcoding `text-slate-500` /
+ * `text-slate-400` for secondary text, which is what forced the blunt
+ * `.has-card-text` override that flattened every shade to one colour.
+ * Mixing the ink TOWARD its own surface keeps the visual hierarchy on a
+ * black card and a white one alike.
+ *
+ * The result is clamped: if fading by `amount` would drop below AA, back
+ * off until it doesn't. A muted label that cannot be read is not muted,
+ * it is missing.
+ */
+export function muteInk(ink: Rgb, surface: Rgb, amount: number, minRatio = 3): Rgb {
+  let step = Math.min(1, Math.max(0, amount))
+
+  while (step > 0) {
+    const candidate = mix(ink, surface, step)
+    if (contrastRatio(candidate, surface) >= minRatio) return candidate
+    step -= 0.05
+  }
+
+  return ink
+}
+
+/**
+ * The nearest readable version of a hue, as TEXT on a given surface.
+ *
+ * TASK-098 follow-up (human, 2026-08-04: "สีตัวอักษรจมกับสี background").
+ * `text-brand-700` was being used for prices and accents on cards. The
+ * brand ramp is generated by lightness-mixing from primary_hex, so on a
+ * black card with a mid-tone primary the 700 step is a DARK version of an
+ * already-dim colour — it sank into the background. This walks the hue
+ * toward whichever pole the surface needs until it clears AA, so the text
+ * still reads as the brand colour instead of being flattened to plain ink.
+ */
+export function readableTint(hue: Rgb, surface: Rgb, minRatio = AA_CONTRAST): Rgb {
+  if (contrastRatio(hue, surface) >= minRatio) return hue
+
+  const pole = isDark(surface) ? INK_LIGHT : INK_DARK
+
+  for (let step = 0.1; step <= 1; step += 0.1) {
+    const candidate = mix(hue, pole, step)
+    if (contrastRatio(candidate, surface) >= minRatio) return candidate
+  }
+
+  return pole
+}
+
+/**
+ * A semantic (success/warning/danger) surface + ink pair that belongs to
+ * the current card.
+ *
+ * Human decision (2026-08-04): semantic colours adapt to the card's
+ * lightness rather than staying fixed emerald/amber/rose. A pale
+ * `bg-emerald-50` pill on a black card is legible in isolation but reads
+ * as a hole punched in the card — and it is exactly the surface the
+ * `--card-text` override then painted light ink onto.
+ *
+ * Tinting the CARD BACKGROUND with the hue (rather than picking a fixed
+ * ramp step) means the pill is always a sibling of its card: light-tinted
+ * on a white card, dark-tinted on a black one, with ink chosen to match.
+ */
+export function semanticPair(hue: Rgb, surface: Rgb): { surface: Rgb; ink: Rgb } {
+  const tinted = mix(surface, hue, isDark(surface) ? 0.22 : 0.12)
+
+  // Candidates are the hue pushed toward each pole, so the ink still
+  // reads as "green"/"amber"/"red" rather than becoming plain black or
+  // white and losing the semantic signal.
+  //
+  // Take the FIRST candidate that clears AA, in preference order — not
+  // the highest-scoring one. Picking the maximum always returns plain
+  // white/black, which is readable but throws away the colour that makes
+  // a status pill a status pill.
+  const preferred: Rgb[] = isDark(tinted)
+    ? [mix(hue, INK_LIGHT, 0.55), mix(hue, INK_LIGHT, 0.75)]
+    : [mix(hue, INK_DARK, 0.35), mix(hue, INK_DARK, 0.55)]
+
+  for (const candidate of preferred) {
+    if (contrastRatio(tinted, candidate) >= AA_CONTRAST) {
+      return { surface: tinted, ink: candidate }
+    }
+  }
+
+  // Fall back to plain ink only when no tint of the hue can be read on
+  // this card — legibility outranks the colour signal.
+  return { surface: tinted, ink: pickInk(tinted) }
+}
