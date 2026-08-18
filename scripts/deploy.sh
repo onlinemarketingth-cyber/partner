@@ -110,7 +110,11 @@ fi
 ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "$@"; }
 rsync_to() {
   local src="$1" dst="$2"
-  rsync -avz --delete -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
+  shift 2
+  # Extra args (e.g. --exclude=/admin) let callers protect destination
+  # paths that --delete would otherwise remove — see the frontend call
+  # below for why this exists.
+  rsync -avz --delete "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
 }
 
 # ---------- sanity checks ----------
@@ -185,7 +189,17 @@ fi
 # ---------- 3. deploy frontends (static rsync) ----------
 if [[ "$SKIP_FRONTEND" != true ]]; then
   info "Uploading frontend/dist/ -> $FRONTEND_REMOTE_PATH ..."
-  run rsync_to "$ROOT_DIR/frontend/dist/" "$FRONTEND_REMOTE_PATH/"
+  # FRONTEND_REMOTE_PATH is the domain ROOT (Agent Portal lives there, not
+  # a subfolder — docs/DEPLOYMENT.md step 3), and admin/ + api both live
+  # as siblings inside that same public_html. --delete on a plain rsync
+  # here would erase both on every deploy: frontend/dist/ never contains
+  # an admin/ or api/ path, so rsync would treat them as "extraneous" and
+  # remove them — admin/ silently comes back a few lines down (the very
+  # next rsync recreates it from frontend-admin/dist/), but nothing ever
+  # recreates the api/ symlink to backend/public (docs/DEPLOYMENT.md
+  # step 4), so every deploy quietly broke the API until the next manual
+  # fix. Protect both explicitly.
+  run rsync_to "$ROOT_DIR/frontend/dist/" "$FRONTEND_REMOTE_PATH/" --exclude=/admin --exclude=/api
   ok "frontend deployed."
 fi
 
