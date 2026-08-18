@@ -120,8 +120,8 @@ rmdir ~/domains/partner.syncvision.io/public_html/api
 ln -s ~/syncvision-partner/backend/public ~/domains/partner.syncvision.io/public_html/api
 ```
 
-`BACKEND_REMOTE_PATH` in `.env.deploy` is `~/repo/backend` (the folder
-containing `artisan`) — already filled in.
+`BACKEND_REMOTE_PATH` in `.env.deploy` is `~/syncvision-partner/backend`
+(the folder containing `artisan`) — already filled in.
 
 Also confirm PHP 8.3+ and Composer are actually reachable over SSH —
 some shared plans alias the default `php`/`composer` to an old
