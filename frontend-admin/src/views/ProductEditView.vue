@@ -1588,6 +1588,7 @@ async function saveEditRule(rule: CommissionRule) {
         cert_tier_id: '',
         rate_value_input: '',
         effective_from: '',
+        effective_to: '',
         renewal_rate_percent: editRuleForm.value.renewal_rate_percent,
         renewal_recurs: editRuleForm.value.renewal_recurs,
       }),
