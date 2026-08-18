@@ -47,46 +47,79 @@ ssh-copy-id -i ~/.ssh/hostinger_deploy.pub -p <SSH_PORT> <SSH_USER>@<SSH_HOST>
 Test it: `ssh -p <SSH_PORT> -i ~/.ssh/hostinger_deploy <SSH_USER>@<SSH_HOST>`
 should log in with no password prompt.
 
-### 3. Domains / subdomains
+### 3. Domains / subdomains — real values for this account (confirmed 2026-08-18)
 
-Create 3 subdomains in hPanel (Domains → Subdomains), one per app, e.g.:
+The Hostinger account (`u995267164`) hosts one domain, **`partner.syncvision.io`**,
+whose DNS lives OUTSIDE Hostinger (hPanel warned "Domain Is Not Pointing
+to Our Nameservers" when creating a subdomain — that's expected, not an
+error; see the DNS step below). ag-lead decision (2026-08-18, in chat):
+**2 subdomains instead of 3** — Agent Portal doesn't need its own,
+it lives at the domain root. Confirmed real layout:
 
-| App | Suggested subdomain | Document root |
+| App | URL | hPanel-created directory |
 |---|---|---|
-| Backend (Laravel API) | `api.yourdomain.com` | points at `backend/public` — see step 4 |
-| Agent Portal (frontend) | `agent.yourdomain.com` | its own `public_html`-style folder |
-| Admin (frontend-admin) | `admin.yourdomain.com` | its own `public_html`-style folder |
+| Agent Portal (frontend) | `partner.syncvision.io` (root — no subdomain) | `/home/u995267164/domains/partner.syncvision.io/public_html` |
+| Admin (frontend-admin) | `admin.partner.syncvision.io` | `/home/u995267164/domains/partner.syncvision.io/public_html/admin` |
+| Backend (Laravel API) | `api.partner.syncvision.io` | `/home/u995267164/domains/partner.syncvision.io/public_html/api` |
 
-Hostinger's hPanel lets you set a subdomain's document root to any
-folder path — it does not have to be `public_html`. Use whatever path
-you set here as `FRONTEND_REMOTE_PATH` / `FRONTEND_ADMIN_REMOTE_PATH`
-in `.env.deploy` later.
+Note Hostinger nests these subdomains as **subfolders of the root
+domain's own `public_html`**, not as sibling `domains/<subdomain>/`
+folders — different from what a generic Hostinger tutorial might show.
+Both `admin` and `api` subdomains were created with the **default
+`public_html`-relative folder** (unchecked "Custom folder"), since at
+creation time the code that would eventually live there didn't exist
+yet — see step 4 for why `api`'s folder gets replaced with a symlink
+right after cloning.
+
+**DNS — required, separate from hPanel.** Since `partner.syncvision.io`'s
+nameservers aren't Hostinger's, hPanel creating the subdomain does NOT
+make it reachable by itself. Add these A records wherever
+`syncvision.io`'s DNS is actually managed:
+
+| Host | Type | Value |
+|---|---|---|
+| `admin` | A | `145.79.25.96` |
+| `api` | A | `145.79.25.96` |
+
+(The root `partner.syncvision.io` A record already exists — that's the
+domain hPanel is hosting.)
 
 ### 4. Clone the backend on the server (once)
 
-The deploy script only ever `git pull`s the backend on the server — it
-never clones it for you, and it never writes the server's `.env`. Do
-this once, by hand, over SSH:
+The deploy script only ever `git fetch` + hard-resets the backend on
+the server — it never clones it for you, and it never writes the
+server's `.env`. Do this once, by hand, over SSH:
 
 ```bash
-ssh -p <SSH_PORT> <SSH_USER>@<SSH_HOST>
-cd ~/domains/api.yourdomain.com   # or wherever you want it
-git clone https://github.com/onlinemarketingth-cyber/partner.git backend
-cd backend/backend                # the Laravel app lives in the repo's backend/ subfolder
+ssh -p 65002 -i ~/.ssh/hostinger_deploy u995267164@145.79.25.96
+
+# Clone the WHOLE repo outside any subdomain's public_html — Laravel's
+# app code, .env, and vendor/ must never be web-servable directly.
+# ~/repo/backend/ is the Laravel app itself (contains artisan);
+# ~/repo/frontend and ~/repo/frontend-admin just sit there unused
+# (their dist/ builds are rsynced in separately by deploy.sh, not
+# built on the server).
+cd ~
+git clone https://github.com/onlinemarketingth-cyber/partner.git repo
+cd repo/backend
 cp .env.example .env
 nano .env                         # fill in real DB creds, APP_URL, mail, etc. — see CLAUDE.md §5/§6
 composer install --no-dev --optimize-autoloader
 php artisan key:generate
 php artisan migrate --force
 php artisan storage:link
+
+# api.partner.syncvision.io's document root was created by hPanel as a
+# real (empty) folder under public_html — replace it with a symlink to
+# Laravel's public/ so ONLY that folder is web-servable, never the rest
+# of the app. This survives every future `git reset --hard` deploy
+# (the symlink lives outside the git repo).
+rmdir ~/domains/partner.syncvision.io/public_html/api
+ln -s ~/repo/backend/public ~/domains/partner.syncvision.io/public_html/api
 ```
 
-Then point the `api.yourdomain.com` subdomain's document root at
-`~/domains/api.yourdomain.com/backend/backend/public`.
-
-**BACKEND_REMOTE_PATH in `.env.deploy` must be the `backend/backend`
-folder above** (the one containing `artisan`), not the outer
-`backend/` clone folder and not `public/`.
+`BACKEND_REMOTE_PATH` in `.env.deploy` is `~/repo/backend` (the folder
+containing `artisan`) — already filled in.
 
 Also confirm PHP 8.3+ and Composer are actually reachable over SSH —
 some shared plans alias the default `php`/`composer` to an old
@@ -124,6 +157,15 @@ Fill in the real `SSH_HOST` / `SSH_PORT` / `SSH_USER` /
 `FRONTEND_ADMIN_REMOTE_PATH` from steps 2-4 above. `.env.deploy` is
 gitignored — it stays local to your machine only.
 
+**Already done for this account (2026-08-18)** — `.env.deploy` on
+KreangYot's machine has real values filled in: `SSH_HOST=145.79.25.96`,
+`SSH_PORT=65002`, `SSH_USER=u995267164`,
+`SSH_KEY_PATH=/Users/ken/.ssh/hostinger_deploy`,
+`BACKEND_REMOTE_PATH=/home/u995267164/repo/backend`,
+`FRONTEND_REMOTE_PATH=/home/u995267164/domains/partner.syncvision.io/public_html`,
+`FRONTEND_ADMIN_REMOTE_PATH=/home/u995267164/domains/partner.syncvision.io/public_html/admin`.
+A fresh clone on a different machine still needs to redo this step.
+
 ### 6. Production API URLs for the two Vue apps
 
 `frontend/.env` and `frontend-admin/.env` are **committed dev
@@ -141,6 +183,13 @@ Fill in your real `https://api.yourdomain.com`-style URL from step 3 in
 both. Both files are gitignored (deploy-target-specific, not secret,
 but not something a fresh clone should inherit blindly). `deploy.sh`
 refuses to build if either is missing.
+
+**Already done for this account (2026-08-18)** —
+`frontend/.env.production` has `VITE_API_BASE_URL=https://api.partner.syncvision.io`
+and `VITE_ADMIN_APP_URL=https://admin.partner.syncvision.io`;
+`frontend-admin/.env.production` has
+`VITE_API_BASE_URL=https://api.partner.syncvision.io`. A fresh clone on
+a different machine still needs to redo this step.
 
 ---
 
