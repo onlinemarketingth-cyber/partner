@@ -50,8 +50,15 @@ const avatarInitial = computed(() => authStore.user?.name?.trim().charAt(0).toUp
 const userMenuOpen = ref(false)
 async function handleLogout() {
   userMenuOpen.value = false
-  await authStore.logout()
-  router.push({ name: 'login' })
+  // Guarded so a network hiccup on /logout still returns the UI to a sane
+  // state — same pattern as ProfileSettingsView.vue's handleLogout(). The
+  // store's own logout() already nulls user.value in a finally, but without
+  // this wrapper a thrown error here would skip the redirect entirely.
+  try {
+    await authStore.logout()
+  } finally {
+    router.push({ name: 'login' })
+  }
 }
 
 interface SubMenuItem {

@@ -42,8 +42,15 @@ async function handleLogout() {
     // default (an in-SPA route push never re-runs the boot-time
     // loadPublic() that would otherwise pick this up from localStorage).
     const target = themeStore.loginRouteLocation()
-    await authStore.logout()
-    router.push(target)
+    // Guarded so a network hiccup on /logout still returns the UI to a sane
+    // state — same pattern as ProfileSettingsView.vue's handleLogout(). The
+    // store's own logout() already nulls user.value in a finally, but without
+    // this wrapper a thrown error here would skip the redirect entirely.
+    try {
+        await authStore.logout()
+    } finally {
+        router.push(target)
+    }
 }
 
 const fontSizeOptions = [

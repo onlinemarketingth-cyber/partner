@@ -287,7 +287,19 @@ router.beforeEach(async (to) => {
   // also catches an Agent navigating straight to /login while still
   // holding a valid session.
   if (authStore.isAuthenticated && authStore.user?.role === 'agent') {
-    await authStore.logout()
+    // Guarded so a network hiccup on /logout still kicks the Agent back to
+    // /login — same reasoning as ProfileSettingsView.vue's handleLogout().
+    // Unlike a click handler this is a navigation guard: the redirect is a
+    // `return` value, not a side-effecting router.push(), so it must sit
+    // after the try/catch rather than in a finally (a finally block can't
+    // supply the guard's return value without an explicit return inside
+    // it, which would just duplicate this line).
+    try {
+      await authStore.logout()
+    } catch {
+      // best-effort — the redirect below must happen regardless of
+      // whether the server-side /logout call succeeded.
+    }
     return { name: 'login', query: { blocked: 'agent' } }
   }
 
