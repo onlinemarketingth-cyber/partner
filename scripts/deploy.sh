@@ -95,13 +95,18 @@ for var in SSH_HOST SSH_PORT SSH_USER BACKEND_REMOTE_PATH FRONTEND_REMOTE_PATH F
   fi
 done
 
-SSH_KEY_OPT=()
+# Built as one always-non-empty array from the start (never interpolate
+# a separately-declared possibly-EMPTY array into another array with
+# "${arr[@]}") — macOS ships bash 3.2 by default (Apple froze it at the
+# last GPLv2 release), which throws "unbound variable" under `set -u`
+# when expanding a zero-element array. SSH_OPTS always has >=2 elements
+# here, so that bug never triggers, whether or not SSH_KEY_PATH is set.
+SSH_OPTS=(-p "$SSH_PORT" -o BatchMode=yes)
 RSYNC_SSH="ssh -p $SSH_PORT"
 if [[ -n "${SSH_KEY_PATH:-}" ]]; then
-  SSH_KEY_OPT=(-i "$SSH_KEY_PATH")
+  SSH_OPTS+=(-i "$SSH_KEY_PATH")
   RSYNC_SSH="ssh -p $SSH_PORT -i $SSH_KEY_PATH"
 fi
-SSH_OPTS=(-p "$SSH_PORT" "${SSH_KEY_OPT[@]}" -o BatchMode=yes)
 ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "$@"; }
 rsync_to() {
   local src="$1" dst="$2"
