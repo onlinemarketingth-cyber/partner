@@ -95,13 +95,15 @@ ssh -p 65002 -i ~/.ssh/hostinger_deploy u995267164@145.79.25.96
 
 # Clone the WHOLE repo outside any subdomain's public_html — Laravel's
 # app code, .env, and vendor/ must never be web-servable directly.
-# ~/repo/backend/ is the Laravel app itself (contains artisan);
-# ~/repo/frontend and ~/repo/frontend-admin just sit there unused
-# (their dist/ builds are rsynced in separately by deploy.sh, not
-# built on the server).
+# Named "syncvision-partner", not just "repo" — this Hostinger account
+# hosts several other projects (visible as separate tabs in File
+# Manager), a generic folder name risks collision/confusion.
+# ~/syncvision-partner/backend/ is the Laravel app itself (contains
+# artisan); frontend/ and frontend-admin/ just sit there unused (their
+# dist/ builds are rsynced in separately by deploy.sh, not built here).
 cd ~
-git clone https://github.com/onlinemarketingth-cyber/partner.git repo
-cd repo/backend
+git clone https://github.com/onlinemarketingth-cyber/partner.git syncvision-partner
+cd syncvision-partner/backend
 cp .env.example .env
 nano .env                         # fill in real DB creds, APP_URL, mail, etc. — see CLAUDE.md §5/§6
 composer install --no-dev --optimize-autoloader
@@ -115,7 +117,7 @@ php artisan storage:link
 # of the app. This survives every future `git reset --hard` deploy
 # (the symlink lives outside the git repo).
 rmdir ~/domains/partner.syncvision.io/public_html/api
-ln -s ~/repo/backend/public ~/domains/partner.syncvision.io/public_html/api
+ln -s ~/syncvision-partner/backend/public ~/domains/partner.syncvision.io/public_html/api
 ```
 
 `BACKEND_REMOTE_PATH` in `.env.deploy` is `~/repo/backend` (the folder
@@ -161,7 +163,7 @@ gitignored — it stays local to your machine only.
 KreangYot's machine has real values filled in: `SSH_HOST=145.79.25.96`,
 `SSH_PORT=65002`, `SSH_USER=u995267164`,
 `SSH_KEY_PATH=/Users/ken/.ssh/hostinger_deploy`,
-`BACKEND_REMOTE_PATH=/home/u995267164/repo/backend`,
+`BACKEND_REMOTE_PATH=/home/u995267164/syncvision-partner/backend`,
 `FRONTEND_REMOTE_PATH=/home/u995267164/domains/partner.syncvision.io/public_html`,
 `FRONTEND_ADMIN_REMOTE_PATH=/home/u995267164/domains/partner.syncvision.io/public_html/admin`.
 A fresh clone on a different machine still needs to redo this step.
