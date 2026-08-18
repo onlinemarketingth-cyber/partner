@@ -1,0 +1,12 @@
+# SPA fallback for Vue Router's createWebHistory (HTML5 pushState) mode.
+# Same reasoning as frontend/public/.htaccess — see that file's comment.
+# admin.partner.syncvision.io has its own dedicated document root
+# (public_html/admin), so RewriteBase "/" is correct here too.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>

@@ -1,0 +1,20 @@
+# SPA fallback for Vue Router's createWebHistory (HTML5 pushState) mode.
+#
+# Without this, a hard refresh or a direct link/bookmark to any deep
+# route (e.g. /clients/123, /login?redirect=/) sends a REAL HTTP
+# request to the server for that exact path. There's no such file on
+# disk (the route only exists inside the Vue app's own JS router), so
+# Apache/LiteSpeed 404s before the SPA ever gets a chance to boot and
+# handle the route client-side. This rewrites any request that isn't a
+# real file or directory back to index.html, letting the SPA take over.
+#
+# Vite copies everything in public/ verbatim into dist/ on build, so
+# this ships automatically with every `npm run deploy`.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>
