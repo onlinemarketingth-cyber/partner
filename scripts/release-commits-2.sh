@@ -361,6 +361,56 @@ php artisan test: 1662 passed (6222 assertions), up from 1660." \
   backend/tests/Feature/Authorization/RoleGateCharacterizationTest.php \
   docs/tasks/TASK-222-super-admin-large-upload.md
 
+commit "fix(media): stop one card revoking another card's image blob (TASK-223)
+
+Reported from production in Safari: product images showed sometimes and
+not others. The files were fine — both media rows answered 200 image/jpeg
+with real byte counts when fetched directly. The bug was in
+useAuthenticatedMedia.
+
+Protected media cannot be an <img src> (the session cookie is not sent on
+a subresource), so it is fetched and turned into a blob URL. The trigger
+is two components showing the SAME image at once, which the product
+screens do constantly — the recommended card and the grid below it can be
+the same product.
+
+Two defects compounded:
+
+1. No de-duplication of in-flight fetches. The second card found an empty
+   cache while the first request was still open, started its own, and its
+   objectUrlCache.set() OVERWROTE the first entry. The first card was left
+   displaying a blob the cache no longer knew about — a leak and a
+   dangling handle.
+
+2. The reference count was incremented AFTER the await. Between a fetch
+   starting and finishing the count was zero, so any release() in that
+   window revoked a blob another card was already showing. That is the
+   'sometimes'.
+
+Now: in-flight promises are shared, the cache is written once and never
+overwritten, retain() runs before the await and the previous url is
+released after (so re-loading the same url can never dip to zero), a blob
+whose last holder unmounted mid-flight is revoked instead of cached, and a
+late-resolving load cannot overwrite a newer one.
+
+Safari surfaced it and Chrome mostly did not. That is a timing hint, not a
+difference in correctness — a revoked object URL is invalid everywhere.
+
+Both copies of the composable are changed; frontend and frontend-admin
+keep them in sync deliberately (CI-001/CI-002).
+
+Proven rather than assumed: the new spec has five cases, and three of them
+FAIL against the previous implementation, including the one that describes
+the reported symptom. Run npm run test:unit in both apps — the sandbox
+cannot run this project's vitest (rolldown native binding is a macOS
+build), so the spec was verified against a clean vue+vitest install with
+the real composable." \
+  frontend/src/composables/useAuthenticatedMedia.ts \
+  frontend/src/composables/__tests__/useAuthenticatedMedia.spec.ts \
+  frontend-admin/src/composables/useAuthenticatedMedia.ts \
+  frontend-admin/src/composables/__tests__/useAuthenticatedMedia.spec.ts \
+  docs/tasks/TASK-223-authenticated-media-race.md
+
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.
 if [[ -n "$(git status --porcelain)" ]]; then
