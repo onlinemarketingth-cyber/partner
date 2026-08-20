@@ -791,10 +791,15 @@ async function shareProduct(product: { id: number; name: string }) {
       </div>
     </Transition>
 
+    <!-- TASK-212 — a product-share link is a broadcast link with no
+         intended reader, so no :default-email: the agent types who it
+         goes to. -->
     <ShareLinkModal
       v-model:show="showShareModal"
       :url="shareLink?.public_url ?? ''"
       :heading="shareHeading"
+      email-type="product_share"
+      :email-target-id="shareLink?.id ?? null"
     />
 
     <!-- TASK-080 — same modal component the other two views mount. No

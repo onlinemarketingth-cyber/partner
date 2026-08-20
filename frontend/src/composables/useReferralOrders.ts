@@ -39,6 +39,10 @@ export interface OrderSummary {
   // OrderResource already sends this field; it was simply never read by
   // this composable before now.
   paid_at: string | null
+  // TASK-212 — prefills <ShareLinkModal>'s recipient box. whenLoaded on
+  // OrderResource, so it is absent (not null) when the caller did not
+  // eager-load the client; `?? null` at every read site handles both.
+  client_email?: string | null
 }
 /** Laravel paginates /orders (AnonymousResourceCollection). */
 interface PaginatedResponse<T> {
@@ -123,10 +127,17 @@ export function useReferralOrders(signal?: AbortSignal) {
   const showShareModal = ref(false)
   const shareUrl = ref('')
   const shareHeading = ref('')
+  // TASK-212 — what the sheet needs to email this link THROUGH the platform
+  // rather than hand it to the phone's mail client. The id, not the URL:
+  // the server rebuilds the URL from the order it authorizes.
+  const shareOrderId = ref<number | null>(null)
+  const shareDefaultEmail = ref<string | null>(null)
 
   function openShare(order: OrderSummary): void {
     shareUrl.value = order.public_pay_url
     shareHeading.value = `ชำระเงิน ${order.order_number}`
+    shareOrderId.value = order.id
+    shareDefaultEmail.value = order.client_email ?? null
     showShareModal.value = true
   }
 
@@ -217,6 +228,8 @@ export function useReferralOrders(signal?: AbortSignal) {
     showShareModal,
     shareUrl,
     shareHeading,
+    shareOrderId,
+    shareDefaultEmail,
     loadOrders,
     ensureOrdersLoaded,
     orderFor,
