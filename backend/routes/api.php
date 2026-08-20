@@ -21,6 +21,8 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BadgeController;
 use App\Http\Controllers\Api\V1\BinaryMatchingCycleController;
 use App\Http\Controllers\Api\V1\BrandController;
+use App\Http\Controllers\Api\V1\CatalogBrandController;
+use App\Http\Controllers\Api\V1\CatalogCategoryController;
 use App\Http\Controllers\Api\V1\CertTierController;
 use App\Http\Controllers\Api\V1\ChunkedUploadController;
 use App\Http\Controllers\Api\V1\ClientActivityController;
@@ -63,6 +65,8 @@ use App\Http\Controllers\Api\V1\PipelineTemplateController;
 use App\Http\Controllers\Api\V1\PlatformCommissionSettingController;
 use App\Http\Controllers\Api\V1\PlatformMailSettingController;
 use App\Http\Controllers\Api\V1\PlatformReportController;
+use App\Http\Controllers\Api\V1\ProductCatalogItemController;
+use App\Http\Controllers\Api\V1\ProductCatalogLinkController;
 use App\Http\Controllers\Api\V1\ProductCategoryController;
 use App\Http\Controllers\Api\V1\ProductController;
 use App\Http\Controllers\Api\V1\ProductMediaController;
@@ -82,6 +86,7 @@ use App\Http\Controllers\Api\V1\RewardItemController;
 use App\Http\Controllers\Api\V1\RewardRedemptionController;
 use App\Http\Controllers\Api\V1\SalesMaterialShareLinkController;
 use App\Http\Controllers\Api\V1\SalesTeamOverviewController;
+use App\Http\Controllers\Api\V1\ShareLinkEmailController;
 use App\Http\Controllers\Api\V1\StorefrontBannerController;
 use App\Http\Controllers\Api\V1\TeamVisibilitySettingController;
 use App\Http\Controllers\Api\V1\ThemePresetController;
@@ -348,6 +353,23 @@ Route::prefix('v1')->group(function () {
         // show route, same "flat custom path" choice as
         // /reward-redemptions-my-balance above.
         Route::get('/products-abc-grades', [ProductController::class, 'abcGrades']);
+
+        // ADR-036 (TASK-211..213) — shared cross-company product catalog.
+        // catalog-brands/catalog-categories/product-catalog-items are
+        // global (no company_id) — Policy is the only gate
+        // (viewAny/view true for anyone, create/update/delete
+        // Super-Admin-only). The link/unlink action is deliberately its
+        // own controller, not a ProductController action — see
+        // ProductCatalogLinkController's docblock.
+        Route::apiResource('catalog-brands', CatalogBrandController::class)
+            ->parameters(['catalog-brands' => 'catalog_brand']);
+        Route::apiResource('catalog-categories', CatalogCategoryController::class)
+            ->parameters(['catalog-categories' => 'catalog_category']);
+        Route::apiResource('product-catalog-items', ProductCatalogItemController::class)
+            ->parameters(['product-catalog-items' => 'product_catalog_item']);
+        Route::post('/products/{product}/catalog-link', [ProductCatalogLinkController::class, 'store']);
+        Route::delete('/products/{product}/catalog-link', [ProductCatalogLinkController::class, 'destroy']);
+
         // Product-view IA item 2.3b — customer-facing price promotions.
         Route::apiResource('product-price-promotions', ProductPricePromotionController::class)
             ->parameters(['product-price-promotions' => 'product_price_promotion']);
@@ -435,6 +457,22 @@ Route::prefix('v1')->group(function () {
             ->only(['index', 'store', 'show', 'destroy']);
         Route::get('/affiliate-attribution-settings', [AffiliateAttributionSettingController::class, 'show']);
         Route::put('/affiliate-attribution-settings', [AffiliateAttributionSettingController::class, 'update']);
+
+        // TASK-212 — send a shareable link by email THROUGH THE PLATFORM
+        // (human, 2026-08-19: "ระบบ อีเมล์ให้ส่งผ่านระบบ"), replacing
+        // <ShareLinkModal>'s `mailto:` handoff.
+        //
+        // The body is {type, id, email} — never a URL. See ShareLinkType's
+        // docblock: an endpoint that mailed a caller-supplied URL from this
+        // application's From: address would be an authenticated open relay.
+        //
+        // throttle:10,1 — the same tier as /register/resolve-invite-code
+        // and stricter than the default, for the reason
+        // /register/resend-verification-email's comment already states: an
+        // unthrottled mail-sending endpoint is a free mail cannon, and this
+        // one takes an arbitrary recipient address.
+        Route::post('/share-emails', [ShareLinkEmailController::class, 'store'])
+            ->middleware('throttle:10,1');
 
         // TASK-056 Sprint P1 — Product Share links: minting/listing/
         // revoking (Agent manages own; Company Admin/Super Admin manage
