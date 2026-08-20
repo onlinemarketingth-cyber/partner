@@ -313,6 +313,54 @@ direct SFC compile are all clean. See docs/tasks/TASK-221." \
   frontend-admin/src/views/AcademyManagementView.vue \
   docs/tasks/TASK-221-cert-tier-management.md
 
+commit "fix(uploads): a Super Admin has no company, so large uploads 500'd (TASK-222)
+
+Reported from production on a 198 MB video: POST /uploads/init answered
+500 before a single byte was sent. NOT a host limit — the server allows
+2048M per request and the transport sends 5 MB chunks precisely so no PHP
+limit ever has to be raised.
+
+users.company_id is NULL for a Super Admin, deliberately and by design
+(the users migration calls them the one legitimate exception to NOT NULL).
+ChunkedUploadController::init() handed that null to
+VideoProcessingSettingService::forCompany(int \$companyId) — a fatal
+TypeError. forCompany() now accepts ?int and answers with the platform
+defaults from config/media.php, which is the same answer it already gave
+for a company that never customised its settings.
+
+chunked_uploads.company_id becomes nullable for the same actor. NULL means
+something here: staged by a platform operator, not yet bound to a company.
+A chunked upload is a temporary pile of bytes; the company binding happens
+later at the create endpoint the token is handed to, which validates it
+properly.
+
+BR-6 is not weakened, and it is worth stating because it looks like it
+should be: TenantScope narrows a Company Admin with where company_id =
+:own, which excludes a NULL row — so a tenant cannot see, append to, or
+consume a platform operator's staging file, token or no token. Pinned by
+test_a_company_admin_cannot_touch_a_super_admins_unbound_upload.
+
+The same null was already recorded in RoleGateCharacterizationTest as
+settings.video_processing.view => [403, 200, 500, 200], with a TODO:
+CONFIRM and the note 'Recorded, NOT fixed (TASK-185 §4)'. It stayed unfixed
+until it surfaced through a different door and hit a human in production.
+That line is now [403, 200, 200, 200] — the characterization suite doing
+exactly the job it exists for.
+
+Rejected for now: requiring a Super Admin to name a company at
+/uploads/init. It matches the pattern used elsewhere, but the chunked
+transport lives in api/client.ts behind six call sites, several of which
+legitimately have no company in hand (a lesson upload derives its company
+from the module in the URL). Six changes to work around one null.
+
+php artisan test: 1662 passed (6222 assertions), up from 1660." \
+  backend/app/Services/Catalog/VideoProcessingSettingService.php \
+  backend/app/Http/Controllers/Api/V1/ChunkedUploadController.php \
+  backend/database/migrations/2026_09_06_090000_make_chunked_uploads_company_id_nullable.php \
+  backend/tests/Feature/Catalog/ChunkedUploadTest.php \
+  backend/tests/Feature/Authorization/RoleGateCharacterizationTest.php \
+  docs/tasks/TASK-222-super-admin-large-upload.md
+
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.
 if [[ -n "$(git status --porcelain)" ]]; then

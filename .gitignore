@@ -26,3 +26,6 @@ backend/.git_stray_unused/
 
 # Scratch bucket for files staged for manual deletion (device_bash cannot rm).
 _to_delete/
+
+# sandbox scratch tarball (see scripts/release-commits.sh)
+_to_delete_sync.tgz
