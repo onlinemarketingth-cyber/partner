@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ข้อเสนอ UI — รวมศูนย์การตั้งค่าค่าคอมมิชชั่น</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#1e293b; --navy-2:#334155; --slate:#64748b; --slate-l:#94a3b8;
+    --line:#e2e8f0; --bg:#f1f5f9; --card:#fff;
+    --ok:#059669; --ok-bg:#ecfdf5; --warn:#b45309; --warn-bg:#fffbeb;
+    --bad:#e11d48; --bad-bg:#fff1f2; --accent:#3f6c92;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:'Noto Sans Thai',system-ui,sans-serif;color:var(--navy);font-size:14px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px 64px}
+  .note{background:#0f172a;color:#cbd5e1;border-radius:14px;padding:14px 18px;font-size:12.5px;line-height:1.85;margin-bottom:22px}
+  .note b{color:#fff}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--slate);font-size:13px;margin-bottom:20px}
+
+  .topbar{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:12px 16px;display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .brand{font-weight:700}
+  .pill{margin-left:auto;border:1px solid var(--line);background:#f8fafc;border-radius:10px;padding:7px 13px;font-weight:700;font-size:13px}
+
+  .tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .tab{border:1px solid var(--line);background:var(--card);border-radius:11px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;color:var(--slate);font-family:inherit}
+  .tab.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px}
+  .card h3{margin:0 0 4px;font-size:15px}
+  .card .hint{color:var(--slate);font-size:12.5px;margin:0 0 14px;line-height:1.7}
+
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:11.5px;color:var(--slate-l);font-weight:700;padding:0 10px 9px;border-bottom:1px solid var(--line)}
+  td{padding:13px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  .muted{color:var(--slate);font-size:12px}
+  .scope{display:inline-block;background:#f1f5f9;color:var(--slate);border-radius:6px;padding:2px 7px;font-size:11px;margin-left:6px}
+  .rate{font-weight:700;font-variant-numeric:tabular-nums}
+  .dash{color:#cbd5e1}
+
+  .badge{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:5px 10px;font-size:11.5px;font-weight:700;line-height:1.4}
+  .b-ok{background:var(--ok-bg);color:var(--ok)}
+  .b-warn{background:var(--warn-bg);color:var(--warn)}
+  .b-bad{background:var(--bad-bg);color:var(--bad)}
+
+  .chips{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:#f8fafc;border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:700;color:var(--slate);cursor:pointer;font-family:inherit}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .btn{margin-left:auto;background:var(--navy);color:#fff;border:none;border-radius:11px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit}
+  .who{font-weight:700;font-size:12.5px}
+  .who-a{color:var(--accent)} .who-b{color:#a16207}
+
+  .form{border:1px dashed #cbd5e1;border-radius:14px;padding:18px;background:#fafcff;margin-top:16px}
+  .step{display:flex;gap:12px;padding:12px 0;border-bottom:1px dashed #e2e8f0}
+  .step:last-of-type{border-bottom:none}
+  .num{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:11.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none;margin-top:2px}
+  .q{font-weight:700;font-size:13px;margin-bottom:8px}
+  .opts{display:flex;gap:8px;flex-wrap:wrap}
+  .opt{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 13px;font-size:12.5px;cursor:pointer;font-family:inherit;color:var(--navy)}
+  .opt.on{border-color:var(--accent);background:#eff6ff;color:var(--accent);font-weight:700}
+  .inp{border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-size:13px;font-family:inherit;background:#fff;width:130px}
+  .lock{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:8px 11px;font-size:11.5px;font-weight:700;line-height:1.6}
+
+  .plan{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid #f1f5f9}
+  .plan:last-child{border-bottom:none}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .on-dot{background:var(--ok)} .off-dot{background:#cbd5e1}
+  .pname{font-weight:700;font-size:13.5px;min-width:190px}
+  .psub{color:var(--slate);font-size:12px}
+  .ghost{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 14px;font-size:12.5px;font-weight:700;cursor:pointer;color:var(--navy);font-family:inherit}
+  .info{background:#eff6ff;color:#1d4ed8;border-radius:9px;padding:9px 12px;font-size:12px;font-weight:600;margin-top:8px;line-height:1.65}
+  .row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid #f1f5f9}
+  .row:last-child{border-bottom:none}
+  .new{background:#f0fdf4;color:var(--ok);border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:700;margin-left:6px}
+  .sw{margin-left:auto;width:42px;height:24px;border-radius:999px;background:var(--ok);position:relative;flex:none}
+  .sw::after{content:'';position:absolute;top:3px;right:3px;width:18px;height:18px;border-radius:50%;background:#fff}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>ข้อเสนอ UI — รวมศูนย์การตั้งค่าค่าคอมมิชชั่น</h1>
+  <p class="sub">คลิกแท็บและชิปเพื่อดูแต่ละหน้าจอได้ · ตัวเลขทั้งหมดเป็นข้อมูลตัวอย่าง</p>
+
+  <div class="note">
+    <b>ปัญหาที่แก้:</b> ตอนนี้ตั้งค่าคอมได้ <b>13 จุด กระจายใน 5 หน้า</b> — ตาราง <code>commission_rules</code>
+    เขียนได้จาก 4 ฟอร์มที่ความสามารถไม่เท่ากัน, <b>อัตราหัวหน้าทีมซ่อนอยู่ในหน้าแคตตาล็อกสินค้า</b>,
+    แท็บ “พันธมิตร (Affiliate)” ไม่มีอัตราให้กรอกเลย และมี <b>13 ทางที่ตั้งค่าผิดแล้วระบบไม่จ่ายเงินอย่างเงียบสนิท</b>
+    โดยไม่มีหน้าจอไหนเตือน
+  </div>
+
+  <div class="topbar">
+    <span class="brand">แผนคอมมิชชั่น</span>
+    <span class="muted">ทุกอย่างที่เกี่ยวกับ “ใครได้เงิน เท่าไหร่” อยู่ที่นี่ที่เดียว</span>
+    <span class="pill">🏢 Thai Life ▾</span>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" data-t="1">ภาพรวม</button>
+    <button class="tab" data-t="2">อัตราค่าคอม</button>
+    <button class="tab" data-t="3">โครงสร้างแผน</button>
+    <button class="tab" data-t="4">ตั้งค่าทั่วไป</button>
+  </div>
+
+  <!-- ═══ TAB 1 ═══ -->
+  <section id="t1">
+    <div class="card">
+      <h3>ภาพรวมรายสินค้า</h3>
+      <p class="hint">1 บรรทัด = 1 สินค้า — เห็นครบว่าใครได้เท่าไหร่ และ<b>อะไรยังตั้งไม่ครบจนจะไม่มีใครได้เงิน</b> ก่อนจะมีดีลจริง</p>
+      <table>
+        <thead><tr><th>สินค้า</th><th>แผน</th><th>ตัวแทนผู้ขายได้</th><th>หัวหน้าทีมได้</th><th>สถานะ</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Vital Blueprint Mini + BALANZ V5</b></td>
+            <td class="muted">พันธมิตร</td>
+            <td><span class="rate">3.00%</span><span class="scope">รายสินค้า</span></td>
+            <td><span class="rate">2.00%</span><span class="scope">ทั้งบริษัท</span></td>
+            <td><span class="badge b-ok">✓ พร้อมจ่าย</span></td>
+          </tr>
+          <tr>
+            <td><b>ทดสอบค่าคอม แบ่งให้ หัวหน้าทีม</b></td>
+            <td class="muted">มาตรฐาน</td>
+            <td><span class="rate">100 บาท</span><span class="scope">รายสินค้า</span></td>
+            <td class="dash">—</td>
+            <td><span class="badge b-warn">! ไม่มีอัตราหัวหน้าทีม — หัวหน้าจะไม่ได้อะไร</span></td>
+          </tr>
+          <tr>
+            <td><b>แพ็กเกจสุขภาพ C</b></td>
+            <td class="muted">Matrix</td>
+            <td><span class="rate">5.00%</span><span class="scope">หมวดหมู่</span></td>
+            <td class="dash">—</td>
+            <td><span class="badge b-bad">● บริษัทยังไม่ตั้งค่า Matrix — ชั้นบนจะไม่ได้เงิน</span></td>
+          </tr>
+          <tr>
+            <td><b>แพ็กเกจเริ่มต้น</b></td>
+            <td class="muted">มาตรฐาน</td>
+            <td class="dash">—</td>
+            <td class="dash">—</td>
+            <td><span class="badge b-bad">● ไม่มีกฎคอมมิชชั่นเลย — ทั้งดีลจะไม่มีใครได้เงิน</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>ทำไมแท็บนี้ถึงมาก่อน</h3>
+      <p class="hint" style="margin:0">
+        จากการอ่าน service ทั้งหมด พบทางที่ระบบ <b>ไม่จ่ายเงินและไม่บอกใคร</b> อย่างน้อย 13 ทาง
+        ทั้งหมดจงใจให้ดีลเดินต่อได้ (ไม่ block การขาย) แต่หลักฐานมีแค่บรรทัดใน log —
+        กว่าจะรู้คือตอนตัวแทนทวงเงิน แท็บนี้เปลี่ยนความเงียบนั้นให้เป็นไฟเตือน
+        และ<b>ทำได้โดยไม่ต้องแตะหลังบ้านเลย</b>
+      </p>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 2 ═══ -->
+  <section id="t2" class="hide">
+    <div class="card">
+      <h3>อัตราค่าคอม</h3>
+      <p class="hint">รวม 4 ฟอร์มที่กระจายอยู่ (wizard · กฎคอมมิชชั่น · อัตราคอมมิชชั่นในแคตตาล็อก · ค่าคอมหัวหน้าทีม) ให้เหลือตารางเดียว — แยกด้วย <b>“ใครได้เงิน”</b> ไม่ใช่ชื่อตารางใน DB</p>
+      <div class="chips">
+        <button class="chip on" data-f="all">ทั้งหมด</button>
+        <button class="chip" data-f="a">ตัวแทนผู้ขาย</button>
+        <button class="chip" data-f="b">หัวหน้าทีม</button>
+        <button class="btn">+ เพิ่มอัตรา</button>
+      </div>
+      <table>
+        <thead><tr><th>จ่ายให้ใคร</th><th>ใช้กับอะไร</th><th>อัตรา</th><th>ช่วงเวลา</th></tr></thead>
+        <tbody id="rates">
+          <tr data-r="a"><td><span class="who who-a">ตัวแทนผู้ขาย</span></td><td>ค่าเริ่มต้นทั้งบริษัท</td><td class="rate">4.50%</td><td class="muted">22 ก.ค. 69 → ไม่มีกำหนด</td></tr>
+          <tr data-r="a"><td><span class="who who-a">ตัวแทนผู้ขาย</span></td><td>สินค้า: Vital Blueprint Mini</td><td class="rate">3.00%</td><td class="muted">19 ส.ค. 69 → ไม่มีกำหนด</td></tr>
+          <tr data-r="a"><td><span class="who who-a">ตัวแทนผู้ขาย</span></td><td>หมวดหมู่: อุปกรณ์สุขภาพ</td><td class="rate">5.00%</td><td class="muted">1 ส.ค. 69 → 31 ธ.ค. 69</td></tr>
+          <tr data-r="b"><td><span class="who who-b">หัวหน้าทีม</span></td><td>ค่าเริ่มต้นทั้งบริษัท</td><td class="rate">2.00%</td><td class="muted">1 ส.ค. 69 → ไม่มีกำหนด</td></tr>
+          <tr data-r="b"><td><span class="who who-b">หัวหน้าทีม</span></td><td>สินค้า: Vital Blueprint Mini <span class="new">ต้องแก้ schema</span></td><td class="rate">2.50%</td><td class="muted">19 ส.ค. 69 → ไม่มีกำหนด</td></tr>
+        </tbody>
+      </table>
+      <p class="hint" style="margin:14px 0 0">
+        <b>ลำดับการใช้ค่า (เหมือนกันทั้งของตัวแทนและของหัวหน้าทีม):</b>
+        สินค้าเฉพาะ → หมวดหมู่ → ค่าเริ่มต้นทั้งบริษัท · ใช้อันที่เจาะจงที่สุดที่ตรงเงื่อนไข
+      </p>
+
+      <div class="form">
+        <div style="font-weight:700;margin-bottom:6px">+ เพิ่มอัตรา — ฟอร์มเดียวใช้ได้ทุกกรณี</div>
+        <div class="muted" style="margin-bottom:10px">5 คำถามเรียงกัน แทนฟอร์มที่ต่างกัน 4 แบบ</div>
+
+        <div class="step"><div class="num">1</div><div>
+          <div class="q">จ่ายให้ใคร</div>
+          <div class="opts"><button class="opt">ตัวแทนผู้ขาย</button><button class="opt on">หัวหน้าทีม</button></div>
+        </div></div>
+
+        <div class="step"><div class="num">2</div><div>
+          <div class="q">ใช้กับอะไร</div>
+          <div class="opts"><button class="opt">ทุกสินค้าในบริษัท</button><button class="opt">ทั้งหมวดหมู่</button><button class="opt on">สินค้าเดียว</button></div>
+          <div style="margin-top:8px"><select class="inp" style="width:290px"><option>Vital Blueprint Mini + BALANZ V5</option></select></div>
+        </div></div>
+
+        <div class="step"><div class="num">3</div><div>
+          <div class="q">คิดแบบไหน</div>
+          <div class="opts"><button class="opt on">% ของยอดขาย</button><button class="opt">จำนวนเงินคงที่ (บาท)</button></div>
+          <div class="lock" style="margin-top:8px">ⓘ ถ้าสินค้านั้นล็อกหน่วยไว้แล้ว ขั้นนี้จะหายไปเองพร้อมบอกว่าล็อกเป็นอะไร — แทนที่จะให้กรอกจนจบแล้วค่อย error ทีหลังแบบตอนนี้</div>
+        </div></div>
+
+        <div class="step"><div class="num">4</div><div>
+          <div class="q">เท่าไหร่</div>
+          <input class="inp" value="2.50"> <span class="muted">%</span>
+        </div></div>
+
+        <div class="step"><div class="num">5</div><div>
+          <div class="q">เริ่มเมื่อไหร่</div>
+          <input class="inp" value="19 ส.ค. 2569"> <span class="muted">ถึง</span> <input class="inp" value="ไม่กำหนด">
+          <div class="muted" style="margin-top:8px">↳ ต่ออายุปีถัดไปด้วยไหม? <button class="opt" style="padding:4px 10px">ตั้งค่า</button></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 3 ═══ -->
+  <section id="t3" class="hide">
+    <div class="card">
+      <h3>โครงสร้างแผน</h3>
+      <p class="hint">เรียงตามจำนวนสินค้าที่ใช้จริง — แผนที่ยังไม่มีใครใช้ยุบเหลือบรรทัดเดียว <b>ความซับซ้อนต้องขอถึงจะเห็น</b></p>
+
+      <div class="plan"><span class="dot on-dot"></span>
+        <span class="pname">พันธมิตร (Affiliate)</span>
+        <span class="psub">ใช้กับ 4 สินค้า · ช่วงเวลา attribution · โหมดจ่าย Additive</span>
+        <button class="ghost">ตั้งค่า</button></div>
+      <div class="info">ⓘ อัตราที่หัวหน้าทีมได้จากแผนนี้ <b>ไม่ได้อยู่ตรงนี้</b> — อยู่ที่แท็บ “อัตราค่าคอม” → เลือก “หัวหน้าทีม” <span style="text-decoration:underline;cursor:pointer">ไปที่นั่น →</span></div>
+
+      <div class="plan" style="margin-top:6px"><span class="dot on-dot"></span>
+        <span class="pname">Matrix</span>
+        <span class="psub">ใช้กับ 1 สินค้า · <span style="color:var(--bad);font-weight:700">ยังไม่ได้ตั้งความกว้าง/ความลึก</span></span>
+        <button class="ghost" style="border-color:#fecdd3;color:var(--bad)">ตั้งค่าเดี๋ยวนี้</button></div>
+
+      <div class="plan"><span class="dot off-dot"></span><span class="pname" style="color:var(--slate-l)">Binary</span><span class="psub">ยังไม่มีสินค้าใช้แผนนี้</span><button class="ghost">เปิดดู</button></div>
+      <div class="plan"><span class="dot off-dot"></span><span class="pname" style="color:var(--slate-l)">อันดับ (Stairstep)</span><span class="psub">ยังไม่มีสินค้าใช้แผนนี้</span><button class="ghost">เปิดดู</button></div>
+      <div class="plan"><span class="dot off-dot"></span><span class="pname" style="color:var(--slate-l)">Generation</span><span class="psub">ยังไม่มีสินค้าใช้แผนนี้</span><button class="ghost">เปิดดู</button></div>
+    </div>
+  </section>
+
+  <!-- ═══ TAB 4 ═══ -->
+  <section id="t4" class="hide">
+    <div class="card">
+      <h3>ตั้งค่าทั่วไป</h3>
+      <p class="hint">รวมสวิตช์ระดับบริษัทที่ตอนนี้กระจายอยู่คนละเมนู</p>
+      <div class="row"><div><b>แผนคอมมิชชั่นเริ่มต้นของบริษัท</b><div class="muted">สินค้าที่ไม่ได้ระบุเอง จะใช้ค่านี้</div></div>
+        <select class="inp" style="margin-left:auto;width:190px"><option>มาตรฐาน (Unilevel)</option></select></div>
+      <div class="row"><div><b>แบ่งคอมมิชชั่นกับตัวแทนร่วม</b><div class="muted">ย้ายมาจากเมนู “คอมมิชชั่นตัวแทนร่วม”</div></div><div class="sw"></div></div>
+      <div class="row"><div><b>เพดานอัตราค่าคอมของแพลตฟอร์ม</b> <span class="new">สร้างใหม่</span>
+        <div class="muted">มี API อยู่แล้วแต่<b>ไม่เคยมีหน้าจอ</b> — ทุกวันนี้ต้องยิง API เอง (Super Admin เท่านั้น)</div></div>
+        <input class="inp" value="30.00" style="margin-left:auto;width:90px"></div>
+      <div class="row"><div><b>Promotion สำหรับ Agent</b><div class="muted">ไม่ย้ายมา — เป็นโบนัสแคมเปญ คนละก้อนกับค่าคอม เดินคนละทางในโค้ด</div></div><button class="ghost">ไปที่หน้า Promotion →</button></div>
+    </div>
+  </section>
+
+  <div class="note" style="margin-top:22px">
+    <b>ลำดับการทำ —</b> เฟส 1 (ภาพรวม+ไฟเตือน) · เฟส 2 (ย้ายอัตราหัวหน้าทีมออกจากแคตตาล็อก + เพิ่มตัวเลือกบาท) ·
+    เฟส 3 (รวมฟอร์มเป็นฟอร์มเดียว) — <b>สามเฟสนี้ไม่แตะหลังบ้านเลย</b><br>
+    เฟส 4 (อัตราหัวหน้าทีมแยกรายสินค้า/หมวดหมู่) ต้องเพิ่ม 2 คอลัมน์ nullable ให้ <code>commission_override_rules</code> — แถวเดิมเป็น NULL = พฤติกรรมเดิมไม่เปลี่ยน ·
+    เฟส 5 (โครงสร้างแผนแบบยุบ + หน้าเพดาน)<br><br>
+    <b>คำถามที่ต้องให้คุณตัดสิน:</b> อัตราหัวหน้าทีมยังควรผูกกับ cert tier ของหัวหน้าอยู่ไหม
+    ในเมื่อ ADR-035 เพิ่งตัดเหตุผลนี้ออกจากอัตราของตัวแทนไปแล้ว
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on'));
+    b.classList.add('on');
+    [1,2,3,4].forEach(n=>document.getElementById('t'+n).classList.toggle('hide', String(n)!==b.dataset.t));
+    window.scrollTo({top:0,behavior:'smooth'});
+  });
+  document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+    document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on');
+    document.querySelectorAll('#rates tr').forEach(r=>{
+      r.style.display = (c.dataset.f==='all'||r.dataset.r===c.dataset.f) ? '' : 'none';
+    });
+  });
+  document.querySelectorAll('.step .opt').forEach(o=>o.onclick=()=>{
+    o.parentElement.querySelectorAll('.opt').forEach(x=>x.classList.remove('on'));
+    o.classList.add('on');
+  });
+</script>
+</body>
+</html>
