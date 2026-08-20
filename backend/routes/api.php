@@ -611,7 +611,13 @@ Route::prefix('v1')->group(function () {
         // user-certifications is normally system-created only (a passing
         // exam attempt), except for the Company/Super Admin manual-grant
         // override below (TASK-058, no update/destroy route either way).
-        Route::get('/cert-tiers', [CertTierController::class, 'index']);
+        // TASK-221 — index stays open to every authenticated role (an
+        // Agent needs it for Academy progress); store/update/destroy are
+        // Super-Admin-only via CertTierPolicy, because cert_tiers has no
+        // company_id and is therefore shared by every tenant.
+        Route::apiResource('cert-tiers', CertTierController::class)
+            ->parameters(['cert-tiers' => 'cert_tier'])
+            ->except('show');
         Route::apiResource('modules', ModuleController::class);
         /*
          * TASK-151 / ADR-031 §2.1 — BULK REORDER, one endpoint per parent.

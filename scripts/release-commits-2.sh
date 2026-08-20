@@ -258,6 +258,61 @@ php artisan test: 1647 passed (6175 assertions), up from 1641." \
   backend/app/Services/Academy/ModuleLessonService.php \
   docs/tasks/TASK-220-upload-display-audit.md
 
+commit "feat(academy): make cert tiers manageable, and fix the 500 that hid them (TASK-221)
+
+There was no way to create a cert tier. GET /cert-tiers was the only route,
+and the rows came from CatalogSeeder — a DEV-ONLY seeder that also inserts
+placeholder brands and products, so it never ran on production. Production
+had ZERO tiers (verified: {\"data\":[]}), and the symptom surfaced two
+screens away: the Academy Section form would not save, because its Cert
+tier <select> is required and had nothing in it.
+
+Adds store/update/destroy behind CertTierPolicy, and an admin screen —
+Academy's fifth tab, Super Admin only.
+
+Super-Admin-only because cert_tiers has NO company_id: every company shares
+one list. A Company Admin renaming Basic would rename it for every tenant,
+and deleting a tier would reach into other companies commission rules,
+modules and certifications. Reading stays open to every role, Agent
+included — the Agent Portal renders Academy progress against these.
+
+Also fixes a TASK-209 regression found on the way: CertTierController
+called CompanyScopeFilter with a comment claiming cert tiers are
+per-company. They are not, and there is no such column — the filter
+appended where company_id = ? to a table without it, so any caller passing
+?company_id= got a 500. Nothing in the app sends it, which is the only
+reason it was never seen. Checked every other CompanyScopeFilter caller:
+cert_tiers is the only table missing the column.
+
+Two guards worth naming. Eleven tables point at cert_tiers with
+restrictOnDelete, so deleting one in use would surface as a 500 carrying an
+SQLSTATE; the Service counts the references first and answers 422 with a
+sentence naming what is still using it. And key becomes immutable once
+anything depends on the tier — it is the handle server code matches on
+(where key = basic), so moving it under live data breaks call sites that
+cannot be found by looking at this table. The display name stays editable
+either way.
+
+BR-7: no tier names, keys or ordering are defaulted anywhere. CLAUDE.md §2
+documents Basic (mandatory) -> Intermediate -> High; the empty state cites
+it as a hint and fills in nothing.
+
+php artisan test: 1660 passed (6215 assertions), up from 1647.
+
+NOT clicked in a browser yet — the admin dev server is stuck on an
+unrelated Vite dep-optimizer 503 for pdfjs-dist. vue-tsc, eslint and a
+direct SFC compile are all clean. See docs/tasks/TASK-221." \
+  backend/app/Services/Academy/CertTierService.php \
+  backend/app/Policies/CertTierPolicy.php \
+  backend/app/Http/Requests/Academy/StoreCertTierRequest.php \
+  backend/app/Http/Requests/Academy/UpdateCertTierRequest.php \
+  backend/app/Http/Controllers/Api/V1/CertTierController.php \
+  backend/routes/api.php \
+  backend/tests/Feature/Academy/CertTierManagementTest.php \
+  frontend-admin/src/views/CertTierPanel.vue \
+  frontend-admin/src/views/AcademyManagementView.vue \
+  docs/tasks/TASK-221-cert-tier-management.md
+
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.
 if [[ -n "$(git status --porcelain)" ]]; then

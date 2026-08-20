@@ -25,6 +25,7 @@ import QuizQuestionEditor from '@/design-system/components/QuizQuestionEditor.vu
 // TASK-188 Phase A/B — every explanation on this screen now lives behind this
 // ⓘ (human decision D1, 2026-08-13), including the consequence warnings.
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
+import CertTierPanel from './CertTierPanel.vue'
 import QuizLibraryPanel from './QuizLibraryPanel.vue'
 import { useAuthStore } from '@/stores/auth'
 // TASK-208 / ADR-038 — the app-wide company scope.
@@ -340,13 +341,32 @@ interface ProgressSummaryResponse {
 // will be attached to, and a separate page would mean a second shell, a
 // second nav entry and a back-and-forth for one job. It sits directly after
 // โมดูล because that is the tab an admin comes from and returns to.
-type Tab = 'modules' | 'quizzes' | 'exams' | 'progress'
+type Tab = 'modules' | 'quizzes' | 'exams' | 'progress' | 'tiers'
 const activeTab = ref<Tab>('modules')
-const tabs: { key: Tab; label: string; icon: string }[] = [
+
+/*
+ * TASK-221 — "ระดับใบรับรอง" is a FIFTH tab, and a Super-Admin-only one.
+ *
+ * A tab rather than its own route for the same reason the quiz library is
+ * one (ADR-030): it is Academy config that only matters next to the
+ * Sections and exams that reference it, and every other Academy screen
+ * already lives here.
+ *
+ * LAST, not first, even though nothing else on this page works without at
+ * least one tier. It is set up once and then almost never touched, and a
+ * tab an admin passes over daily to reach the one they want is a tax on
+ * every other visit. The empty states of the tabs that DO need a tier are
+ * what point here.
+ *
+ * superAdminOnly because `cert_tiers` has no company_id — one list shared
+ * by every tenant. See CertTierPolicy on the server, which enforces it.
+ */
+const allTabs: { key: Tab; label: string; icon: string; superAdminOnly?: boolean }[] = [
   { key: 'modules', label: 'โมดูล', icon: 'book' },
   { key: 'quizzes', label: 'แบบทดสอบท้ายบทเรียน', icon: 'layers' },
   { key: 'exams', label: 'แบบประเมินผล', icon: 'check_square' },
   { key: 'progress', label: 'ความคืบหน้าตัวแทน', icon: 'users' },
+  { key: 'tiers', label: 'ระดับใบรับรอง', icon: 'shield_check', superAdminOnly: true },
 ]
 
 const loading = ref(false)
@@ -366,6 +386,8 @@ const exams = ref<ExamItem[]>([])
 // this screen — POST /modules and POST /exams both 422'd).
 const authStore = useAuthStore()
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
+
+const tabs = computed(() => allTabs.filter((t) => !t.superAdminOnly || isSuperAdmin.value))
 // TASK-208 — this screen carried TWO copies of the same company <select>
 // (one for modules/quizzes/progress, one for exams) plus its own /companies
 // fetch. All of it now comes from the global store; the alias keeps the rest
@@ -2424,6 +2446,11 @@ async function confirmGrantCertification() {
       v-if="activeTab === 'modules' || activeTab === 'quizzes' || activeTab === 'progress'"
       action="จัดการเนื้อหา Academy"
     />
+
+    <!-- TASK-221 — cert tiers. No CompanyScopeNotice above it on purpose:
+         the list is global, so there is no company to pick and telling the
+         admin to pick one would be wrong. -->
+    <CertTierPanel v-if="activeTab === 'tiers'" @changed="loadAll" />
 
     <!-- TASK-150 / ADR-030 — the quiz LIBRARY. -->
     <QuizLibraryPanel
