@@ -11,11 +11,11 @@ use App\Models\Announcement;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
+use App\Support\Media\StoredFileName;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 // Agent-view IA item 1.6. Same "own company or platform default"
 // forcing pattern as BadgeService::create().
@@ -193,7 +193,7 @@ class AnnouncementService
 
         $data['image_path'] = $image->storeAs(
             'announcements/images',
-            Str::uuid()->toString().'.'.$image->getClientOriginalExtension(),
+            StoredFileName::random($image),
             self::DISK,
         );
     }
@@ -221,7 +221,7 @@ class AnnouncementService
         $data['video_embed_url'] = null;
         $data['video_path'] = $video->storeAs(
             'announcements/videos',
-            Str::uuid()->toString().'.'.$video->getClientOriginalExtension(),
+            StoredFileName::random($video),
             self::DISK,
         );
     }

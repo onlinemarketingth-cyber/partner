@@ -4,9 +4,9 @@ namespace App\Services\Theme;
 
 use App\Models\Company;
 use App\Models\CompanyThemeSetting;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use InvalidArgumentException;
 
 /**
@@ -135,7 +135,7 @@ class ThemeService
 
         $path = $file->storeAs(
             "themes/{$company->id}",
-            $slot.'-'.Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+            StoredFileName::random($file, $slot.'-'),
             self::DISK,
         );
 

@@ -13,6 +13,7 @@ use App\Models\ModuleLesson;
 use App\Models\ModuleLessonProgress;
 use App\Models\User;
 use App\Support\Media\PdfPageCounter;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -54,7 +55,7 @@ class ModuleLessonService
         if ($isUploadedVideo && $file) {
             $data['content_ref'] = $file->storeAs(
                 "academy-modules/{$module->company_id}",
-                Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                StoredFileName::random($file),
                 self::DISK,
             );
             $data['processing_status'] = MediaProcessingStatus::Pending->value;
@@ -116,7 +117,7 @@ class ModuleLessonService
 
             $data['content_ref'] = $file->storeAs(
                 "academy-modules/{$lesson->company_id}",
-                Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                StoredFileName::random($file),
                 self::DISK,
             );
             $data['processing_status'] = MediaProcessingStatus::Pending->value;
@@ -316,7 +317,7 @@ class ModuleLessonService
                 $path = $newType === ModuleContentType::Video
                     ? $file->storeAs(
                         "academy-modules/{$lesson->company_id}",
-                        Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                        StoredFileName::random($file),
                         self::DISK,
                     )
                     : $this->storeLessonFile($lesson, $file);
@@ -474,12 +475,12 @@ class ModuleLessonService
      */
     private function safeExtension(UploadedFile $file): string
     {
-        $guessed = $file->extension();
-
-        if (is_string($guessed) && $guessed !== '') {
-            return $guessed;
-        }
-
-        return preg_replace('/[^a-z0-9]/', '', strtolower($file->getClientOriginalExtension())) ?: 'bin';
+        // TASK-220 — the rule this method describes is now shared. Fifteen
+        // other call sites carried the naive `getClientOriginalExtension()`
+        // version and could produce a path ending in a bare dot. Kept as a
+        // named method because the docblock above explains why it matters
+        // HERE (the `mimes:` rule and this must not disagree), which a
+        // shared helper cannot say on a specific caller's behalf.
+        return StoredFileName::extensionFor($file);
     }
 }

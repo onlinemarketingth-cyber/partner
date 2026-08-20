@@ -4,9 +4,9 @@ namespace App\Services\Catalog;
 
 use App\Models\StorefrontBanner;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -74,7 +74,7 @@ class StorefrontBannerService
 
         $data['image_path'] = $image->storeAs(
             'storefront-banners',
-            Str::uuid()->toString().'.'.$image->getClientOriginalExtension(),
+            StoredFileName::random($image),
             self::DISK,
         );
     }

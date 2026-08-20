@@ -4,9 +4,9 @@ namespace App\Services\Catalog;
 
 use App\Models\Brand;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 // Section 7: business logic lives here, not in the Controller. For a
@@ -93,7 +93,7 @@ class BrandService
         // attacker-controlled (path traversal, collisions across companies).
         $data['logo_path'] = $logo->storeAs(
             'brand-logos',
-            Str::uuid()->toString().'.'.$logo->getClientOriginalExtension(),
+            StoredFileName::random($logo),
             self::DISK,
         );
     }

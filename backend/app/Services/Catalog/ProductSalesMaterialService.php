@@ -8,9 +8,9 @@ use App\Jobs\CompressUploadedVideo;
 use App\Models\Product;
 use App\Models\ProductSalesMaterial;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 // Human-requested: Product Catalog sales/marketing collateral. Files
 // live on the 'local' disk (storage/app/private, NOT the 'public' disk
@@ -49,7 +49,7 @@ class ProductSalesMaterialService
         } else {
             $path = $file->storeAs(
                 "product-materials/{$product->company_id}/{$product->id}",
-                Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                StoredFileName::random($file),
                 self::DISK,
             );
 

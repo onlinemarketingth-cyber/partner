@@ -9,10 +9,10 @@ use App\Jobs\GeneratePdfThumbnail;
 use App\Models\Product;
 use App\Models\ProductSpecAttachment;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 // ADR-008 — Product's spec image/PDF gallery. Files live on the 'local'
 // (private) disk, same reasoning as ProductMediaService: served through
@@ -44,7 +44,7 @@ class ProductSpecAttachmentService
         } else {
             $attributes['file_path'] = $file->storeAs(
                 "product-spec-attachments/{$product->company_id}/{$product->id}",
-                Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                StoredFileName::random($file),
                 self::DISK,
             );
 

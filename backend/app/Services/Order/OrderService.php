@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Notification\NotificationService;
 use App\Services\Referral\PipelineService;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -133,7 +134,7 @@ class OrderService
     {
         $path = $slip->storeAs(
             "orders/slips/{$order->company_id}",
-            Str::uuid()->toString().'.'.$slip->getClientOriginalExtension(),
+            StoredFileName::random($slip),
             self::DISK,
         );
 

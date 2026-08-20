@@ -4,10 +4,10 @@ namespace App\Services\Platform;
 
 use App\Models\AuditLog;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 /**
  * Personal profile customization — avatar + background (human-requested
@@ -31,7 +31,7 @@ class UserProfileService
 
         $path = $file->storeAs(
             "avatars/{$user->company_id}",
-            $user->id.'-'.Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+            StoredFileName::random($file, $user->id.'-'),
             self::DISK,
         );
 
@@ -77,7 +77,7 @@ class UserProfileService
 
         $path = $file->storeAs(
             "backgrounds/{$user->company_id}",
-            $user->id.'-'.Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+            StoredFileName::random($file, $user->id.'-'),
             self::DISK,
         );
 

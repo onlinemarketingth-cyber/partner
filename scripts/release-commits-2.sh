@@ -21,17 +21,33 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-BRANCH="release/2026-08-20-commission"
+# 2026-08-20 — accepts main too. The release branch was merged into main
+# partway through this batch (deploy.sh's new pre-flight does that), so
+# insisting on the feature branch would refuse to run on the very branch
+# the work now lives on. Anything OTHER than these two is still refused:
+# committing this file list onto an unrelated branch is not a mistake worth
+# being helpful about.
+HEAD_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 
-if [[ "$(git rev-parse --abbrev-ref HEAD)" != "$BRANCH" ]]; then
-  echo "Expected to be on $BRANCH, but HEAD is $(git rev-parse --abbrev-ref HEAD)." >&2
-  echo "Run: git checkout $BRANCH" >&2
-  exit 1
-fi
+case "$HEAD_BRANCH" in
+  release/2026-08-20-commission|main) ;;
+  *)
+    echo "HEAD is '$HEAD_BRANCH'. Expected 'main' or 'release/2026-08-20-commission'." >&2
+    echo "Run: git checkout main" >&2
+    exit 1
+    ;;
+esac
+
+echo "==> on '$HEAD_BRANCH'" 
 
 # Left behind by the sandbox when it copied backend sources out to run
-# PHPUnit. Not part of the project.
+# PHPUnit against real PHP. Not part of the project — and batch 1's
+# catch-all commit swept it into git, so it needs removing AND ignoring,
+# not just deleting.
 rm -f _to_delete_sync.tgz
+if ! grep -qx '_to_delete_sync.tgz' .gitignore 2>/dev/null; then
+  printf '\n# sandbox scratch tarball (see scripts/release-commits.sh)\n_to_delete_sync.tgz\n' >> .gitignore
+fi
 
 commit() {
   local msg="$1"; shift
@@ -44,7 +60,7 @@ commit() {
   echo "  ✓ ${msg%%$'\n'*}"
 }
 
-echo "==> committing batch 2 on $BRANCH"
+echo "==> committing batch 2"
 
 commit "fix(admin): regroup the admin nav — companies and commission settings
 
@@ -180,6 +196,67 @@ is not a call to make on the human's behalf (BR-7)." \
   frontend/src/views/SuperAdminNoticeView.vue \
   frontend/src/router/index.ts \
   docs/tasks/TASK-218-super-admin-agent-portal-lock.md
+
+commit "fix(media): stop uploads that display as broken, and add an audit for the rest (TASK-220)
+
+Follow-up to the public/storage fix: a full pass over all 18 upload
+features asking what ELSE can make an uploaded file fail to display.
+Production itself is healthy — APP_URL is correct, all four theme logos
+return 200 with the right content-type and non-zero length, and stored
+files are 0644 — so this is the code-level residue.
+
+Two real defects:
+
+1. Sixteen call sites built the stored filename from
+   getClientOriginalExtension(), which reads the CLIENT-supplied name and
+   returns an EMPTY STRING when the upload had none. An upload named
+   'logo' with no dot was stored at '<uuid>.' — a path ending in a bare
+   dot, served with no usable Content-Type, rendering nothing, with the
+   file present on disk and nothing in any log. ModuleLessonService
+   already solved this correctly for Academy files (TASK-093) and only
+   there; that method is now App\Support\Media\StoredFileName and every
+   call site uses it. It guesses from the real MIME type first, falls back
+   to the client extension stripped to [a-z0-9], then to 'bin' — so the
+   result can never be empty and a '.' or '..' cannot survive.
+
+2. ProductCatalogMediaResource calls route() on two names that do not
+   exist in routes/api.php. Its own comment claimed it was 'not reachable
+   until those routes exist'; it is — ProductCatalogItemResource embeds it
+   and the controller eager-loads media, so one product_catalog_media row
+   would turn the whole catalog-item endpoint into a 500. Nothing creates
+   those rows through the API today, so it has never fired. Defused with
+   Route::has() rather than deleted: when TASK-213's routes land the URLs
+   start working with no further change.
+
+Plus `php artisan media:audit` (read-only). The last round was found
+because a human happened to notice one broken logo; every other file was
+equally broken and nobody had looked. It walks all 18 path columns and
+reports files that are missing, zero bytes, or carry the bare-dot path,
+and separately whether public/storage exists — separately, because a
+missing symlink makes every public file unreachable however healthy the
+rows are, and one combined 'no problems' verdict would be a lie.
+
+It never deletes a row or repairs anything. A command that tidies away
+rows whose file is missing is a command that deletes a client's PDPA
+document the one time a disk fails to mount.
+
+php artisan test: 1647 passed (6175 assertions), up from 1641." \
+  backend/app/Support/Media/StoredFileName.php \
+  backend/app/Console/Commands/AuditMediaFilesCommand.php \
+  backend/tests/Feature/Media/AuditMediaFilesCommandTest.php \
+  backend/app/Http/Resources/ProductCatalogMediaResource.php \
+  backend/app/Services/Order/OrderService.php \
+  backend/app/Services/Catalog/StorefrontBannerService.php \
+  backend/app/Services/Catalog/ProductMediaService.php \
+  backend/app/Services/Catalog/ProductSpecAttachmentService.php \
+  backend/app/Services/Catalog/ProductSalesMaterialService.php \
+  backend/app/Services/Catalog/BrandService.php \
+  backend/app/Services/Platform/UserProfileService.php \
+  backend/app/Services/Engagement/AnnouncementService.php \
+  backend/app/Services/Theme/ThemeService.php \
+  backend/app/Services/Customer/ClientDocumentService.php \
+  backend/app/Services/Academy/ModuleLessonService.php \
+  docs/tasks/TASK-220-upload-display-audit.md
 
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.

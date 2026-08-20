@@ -5,9 +5,9 @@ namespace App\Services\Customer;
 use App\Models\Client;
 use App\Models\ClientDocument;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 // Section 5 rule 6 — files live on the 'local' disk (config/filesystems.php:
 // storage/app/private, NOT the 'public' disk), so there is no direct URL
@@ -23,7 +23,7 @@ class ClientDocumentService
     {
         $path = $file->storeAs(
             "client-documents/{$client->company_id}/{$client->id}",
-            Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+            StoredFileName::random($file),
             self::DISK,
         );
 

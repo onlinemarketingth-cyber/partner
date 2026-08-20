@@ -10,10 +10,10 @@ use App\Jobs\CompressUploadedVideo;
 use App\Models\Product;
 use App\Models\ProductMedia;
 use App\Models\User;
+use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 // ADR-007 — Product's image/video gallery. Files live on the 'local'
 // (private) disk, same reasoning as ProductSalesMaterialService: even
@@ -55,7 +55,7 @@ class ProductMediaService
         } else {
             $attributes['file_path'] = $file->storeAs(
                 "product-media/{$product->company_id}/{$product->id}",
-                Str::uuid()->toString().'.'.$file->getClientOriginalExtension(),
+                StoredFileName::random($file),
                 self::DISK,
             );
 
