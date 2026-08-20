@@ -16,6 +16,8 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+// TASK-209 P4 — this screen ignores the header company scope on purpose.
+import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
 // ADR-006 Round 3/4 → ADR-011 (TASK-034 update): one commission plan
 // type per company. All 6 enum values now have a working
@@ -145,6 +147,8 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
         </button>
       </template>
     </HeroHeader>
+
+    <PlatformScopeBadge reason="จัดการบริษัททั้งหมดในระบบ" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

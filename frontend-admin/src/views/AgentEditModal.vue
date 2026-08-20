@@ -100,8 +100,16 @@ const emit = defineEmits<{
    * recruit links: turning the flag off makes every link that agent owns stop
    * admitting recruits (RegistrationService::resolveActiveInviter), so those
    * rows need re-reading — see AgentManagementView's handler.
+   *
+   * `successMessage` is present ONLY on the writes that also close the modal
+   * (TASK-210). Those are the ones with no other way to report themselves:
+   * the modal carrying the inline "บันทึกแล้ว" line is gone by the time the
+   * admin could read it. The host shows it in <SuccessDialog>. Actions that
+   * leave the modal open (granting a tier) omit it on purpose — they already
+   * report inline, and a dialog on top of the form they are still using would
+   * be in the way.
    */
-  saved: [payload: { leaderChanged: boolean }]
+  saved: [payload: { leaderChanged: boolean; successMessage?: string }]
   /** The "ดูในแท็บ ลิงก์ชวนทีม" shortcut — only a host with such a tab acts on it. */
   'show-links': [agentId: number]
 }>()
@@ -713,6 +721,19 @@ function validateEdit(): boolean {
   return Object.keys(errors).length === 0
 }
 
+/**
+ * The name to put in the success dialog. Built from the form because the
+ * name is one of the things a save can change; `subject.name` is derived
+ * server-side (User::booted()'s saving() hook) and the local copy is still
+ * the pre-save one. Falls back to whatever the row already said rather than
+ * rendering an empty string.
+ */
+function savedSubjectName(subject: AgentItem): string {
+  const typed = `${editForm.value.first_name.trim()} ${editForm.value.last_name.trim()}`.trim()
+
+  return typed || subject.name
+}
+
 async function submitEdit(): Promise<void> {
   const subject = agent.value
   if (!subject || editIsReadOnly.value) return
@@ -738,8 +759,15 @@ async function submitEdit(): Promise<void> {
 
     const leaderChanged = Object.prototype.hasOwnProperty.call(patch, 'is_team_leader')
     // The host owns its own lists — it reloads them (and, when the leader
-    // flag moved, its recruit links) off this event.
-    emit('saved', { leaderChanged })
+    // flag moved, its recruit links) off this event. It also raises the
+    // success dialog: this modal is about to close, so it cannot report its
+    // own result (TASK-210).
+    emit('saved', {
+      leaderChanged,
+      // Named from the FORM, not from `subject.name`: the name is exactly
+      // what may have just changed, and `subject` is still the pre-save row.
+      successMessage: `บันทึกข้อมูลของ ${savedSubjectName(subject)} เรียบร้อยแล้ว`,
+    })
     closeModal()
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
@@ -819,7 +847,7 @@ async function confirmDeactivate(): Promise<void> {
   accountActionSaving.value = true
   try {
     await api.delete(`/users/${subject.id}`)
-    emit('saved', { leaderChanged: false })
+    emit('saved', { leaderChanged: false, successMessage: `ปิดใช้งานบัญชีของ ${subject.name} เรียบร้อยแล้ว` })
     closeModal()
   } catch (e) {
     editFormError.value = e instanceof ApiError ? `ปิดใช้งานไม่สำเร็จ (${e.status})` : 'ปิดใช้งานไม่สำเร็จ'
@@ -835,7 +863,7 @@ async function restoreAgent(): Promise<void> {
   editFormError.value = ''
   try {
     await api.post(`/users/${subject.id}/restore`)
-    emit('saved', { leaderChanged: false })
+    emit('saved', { leaderChanged: false, successMessage: `กู้คืนบัญชีของ ${subject.name} เรียบร้อยแล้ว` })
     closeModal()
   } catch (e) {
     editFormError.value = e instanceof ApiError ? `กู้คืนไม่สำเร็จ (${e.status})` : 'กู้คืนไม่สำเร็จ'
@@ -856,9 +884,15 @@ async function submitMoveCompany(): Promise<void> {
   moveCompanySaving.value = true
   moveCompanyError.value = ''
   try {
+    const target = companies.value.find((c) => c.id === Number(moveCompanyTarget.value))
     await api.post(`/users/${subject.id}/move-company`, { company_id: Number(moveCompanyTarget.value) })
     moveCompanyTarget.value = ''
-    emit('saved', { leaderChanged: false })
+    emit('saved', {
+      leaderChanged: false,
+      successMessage: target
+        ? `ย้าย ${subject.name} ไปบริษัท ${target.name} เรียบร้อยแล้ว`
+        : `ย้ายบริษัทของ ${subject.name} เรียบร้อยแล้ว`,
+    })
     closeModal()
   } catch (e) {
     moveCompanyError.value = e instanceof ApiError ? `ย้ายบริษัทไม่สำเร็จ (${e.status})` : 'ย้ายบริษัทไม่สำเร็จ'

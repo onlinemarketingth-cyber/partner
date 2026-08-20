@@ -30,6 +30,14 @@ class Product extends Model
         'company_id',
         'brand_id',
         'category_id',
+        // ADR-036 §2/§3 (TASK-211/212) — opt-in link to a shared
+        // product_catalog_items row. NULL = standalone (today's behavior,
+        // every existing row). When set, this product's OWN name/brand_id/
+        // category_id/description/spec_description become vestigial — the
+        // effective_ methods below resolve identity from the catalog item
+        // instead. Super-Admin-only to set/clear (ProductCatalogLinkService),
+        // never touched by StoreProductRequest/UpdateProductRequest directly.
+        'catalog_item_id',
         'name',
         'price_satang',
         'description',
@@ -108,22 +116,73 @@ class Product extends Model
         return $this->affiliate_override_mode ?? AffiliateOverrideMode::Additive;
     }
 
+    /**
+     * ADR-036 §2/§3 — a catalog-linked product's identity (name, brand,
+     * category, description, spec_description) is owned by the shared
+     * product_catalog_items row, not this product's own columns (which
+     * become vestigial once catalog_item_id is set — see
+     * 2026_08_18_120600_make_brand_category_name_nullable_on_products_table).
+     * Every consumer (ProductResource, referral/order/commission displays
+     * that read a product's name) must go through these five resolvers,
+     * never $product->name / ->brand / ->category / ->description /
+     * ->spec_description directly, so "catalog wins when linked" can't be
+     * duplicated/drifted elsewhere — same discipline as effectivePlanType()
+     * above. Simple two-way resolution (own row ?? catalog item), unlike
+     * the pipeline template chain's three-level scope — no dedicated
+     * Resolver service needed, this Model-method style is the right-sized
+     * match (see PipelineTemplateResolver's docblock for when THAT
+     * heavier pattern is actually warranted: a >2-level chain queried
+     * across a paginated list).
+     */
+    public function effectiveName(): ?string
+    {
+        return $this->catalog_item_id ? $this->catalogItem?->name : $this->name;
+    }
+
+    public function effectiveDescription(): ?string
+    {
+        return $this->catalog_item_id ? $this->catalogItem?->description : $this->description;
+    }
+
+    public function effectiveSpecDescription(): ?string
+    {
+        return $this->catalog_item_id ? $this->catalogItem?->spec_description : $this->spec_description;
+    }
+
+    /** @return \App\Models\Brand|\App\Models\CatalogBrand|null */
+    public function effectiveBrand(): Brand|CatalogBrand|null
+    {
+        return $this->catalog_item_id ? $this->catalogItem?->catalogBrand : $this->brand;
+    }
+
+    /** @return \App\Models\ProductCategory|\App\Models\CatalogCategory|null */
+    public function effectiveCategory(): ProductCategory|CatalogCategory|null
+    {
+        return $this->catalog_item_id ? $this->catalogItem?->catalogCategory : $this->category;
+    }
+
     /** @return BelongsTo<Company, $this> */
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
     }
 
-    /** @return BelongsTo<Brand, $this> */
+    /** @return BelongsTo<Brand, $this> this product's OWN brand row — ignored once catalog_item_id is set, see effectiveBrand(). */
     public function brand(): BelongsTo
     {
         return $this->belongsTo(Brand::class);
     }
 
-    /** @return BelongsTo<ProductCategory, $this> */
+    /** @return BelongsTo<ProductCategory, $this> this product's OWN category row — ignored once catalog_item_id is set, see effectiveCategory(). */
     public function category(): BelongsTo
     {
         return $this->belongsTo(ProductCategory::class, 'category_id');
+    }
+
+    /** @return BelongsTo<ProductCatalogItem, $this> ADR-036 §2/§3 — the shared identity this product opts into, null = standalone. */
+    public function catalogItem(): BelongsTo
+    {
+        return $this->belongsTo(ProductCatalogItem::class);
     }
 
     /** @return BelongsTo<PipelineTemplate, $this> ADR-026 §3.3 — this product's OWN template override, null = inherit. */

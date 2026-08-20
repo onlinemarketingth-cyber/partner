@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\Commission\CommissionSplitSettingService;
 use App\Services\Referral\PipelineService;
 use App\Services\Referral\ReferralService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -74,6 +75,9 @@ class ReferralController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = Referral::with(self::RELATIONS);
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()->isAgent()) {
             $query->where('agent_id', $request->user()->id);

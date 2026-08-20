@@ -7,6 +7,7 @@ use App\Http\Requests\Registration\StoreAgentInviteLinkRequest;
 use App\Http\Resources\AgentInviteLinkResource;
 use App\Models\AgentInviteLink;
 use App\Services\Registration\AgentInviteLinkService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -42,6 +43,8 @@ class AgentInviteLinkController extends Controller
         // TenantScope only knows about company_id; the agent_id narrowing is
         // the Controller's job here, exactly as Section 5 rule 4 splits it.
         $query = AgentInviteLink::query();
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()->isAgent()) {
             $query->where('agent_id', $request->user()->id);

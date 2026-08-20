@@ -35,6 +35,21 @@ class ProductService
      */
     public function update(Product $product, array $data): Product
     {
+        // ADR-036 §3 (TASK-212) — once a product is catalog-linked, its
+        // own name/brand_id/category_id/description/spec_description are
+        // vestigial: the shared catalog item owns them (see
+        // Product::effectiveName() and its siblings). This generic update
+        // path (StoreProductRequest/UpdateProductRequest — Company
+        // Admin/Super Admin editing price, commission config, etc.) must
+        // never let a stale value from the client's form state silently
+        // overwrite or resurrect local identity data that is no longer
+        // the source of truth. Setting/clearing catalog_item_id itself
+        // only ever happens through ProductCatalogLinkService::link()/
+        // unlink() (Super-Admin-only, TASK-213) — never here.
+        if ($product->catalog_item_id !== null) {
+            unset($data['name'], $data['brand_id'], $data['category_id'], $data['description'], $data['spec_description']);
+        }
+
         $product->update($data);
 
         return $product;

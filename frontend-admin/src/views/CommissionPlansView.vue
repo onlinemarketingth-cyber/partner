@@ -28,6 +28,8 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — one company scope, chosen in the header.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -84,21 +86,12 @@ const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 // ── Company scoping (Super Admin only — see file header) ──
-interface CompanyOption { id: number; name: string }
-const companyOptions = ref<CompanyOption[]>([])
-const selectedCompanyId = ref<number | null>(null)
-async function loadCompanyOptions() {
-  if (!isSuperAdmin.value || companyOptions.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companyOptions.value = res.data
-  } catch {
-    /* non-fatal — the company selector just stays empty */
-  }
-}
-const effectiveCompanyId = computed<number | null>(() =>
-  isSuperAdmin.value ? selectedCompanyId.value : (auth.user?.company?.id ?? null),
-)
+// TASK-208 — the header switcher replaced this page's own selector; the
+// alias keeps every downstream helper below unchanged.
+const activeCompany = useActiveCompanyStore()
+const selectedCompanyId = computed(() => activeCompany.companyId)
+/** Identical to the store's companyId — kept as a name the rest of the file already uses. */
+const effectiveCompanyId = computed<number | null>(() => activeCompany.companyId)
 function companyQuery(): string {
   return isSuperAdmin.value && selectedCompanyId.value ? `?company_id=${selectedCompanyId.value}` : ''
 }
@@ -208,9 +201,39 @@ interface CommissionRuleItem {
   renewal_recurs: boolean
 }
 const commissionRules = ref<CommissionRuleItem[]>([])
-const certTiers = ref<CertTierOption[]>([])
 const products = ref<ProductOption[]>([])
 const productCategories = ref<ProductCategoryOption[]>([])
+
+/**
+ * TASK-213 Phase 2 — the TEAM-LEADER rate (`commission_override_rules`),
+ * pulled onto this screen.
+ *
+ * It used to be editable in exactly one place: a tab inside
+ * /product-catalog. That is the wrong building. An admin asking "how much
+ * does the leader get" opens แผนคอมมิชชั่น, finds six tabs, and none of
+ * them is it — the tab literally named "พันธมิตร (Affiliate)" has no rate
+ * field at all, because the Affiliate override reads THIS table.
+ *
+ * Same table, same endpoint, same Policy — only the address changes.
+ */
+interface CommissionOverrideRuleItem {
+  id: number
+  company_id: number
+  // TASK-214 — the leader rate now carries the SAME scope pair as the
+  // agent rate, resolved in the same order (product > category > company),
+  // on the human's ruling of 2026-08-19.
+  product: { id: number; name: string } | null
+  product_category: { id: number; name: string } | null
+  // Legacy annotation only. Resolution stopped reading it in TASK-214
+  // ("ไม่ต้องผูก") — kept so a pre-TASK-214 row can still explain itself
+  // in this list while an operator collapses it.
+  manager_cert_tier: CertTierOption | null
+  rate_type: RateType
+  rate_value: number
+  effective_from: string
+  effective_to: string | null
+}
+const commissionOverrideRules = ref<CommissionOverrideRuleItem[]>([])
 
 // TASK-028 shipped this scoping server-side (CommissionRuleResource
 // already returns product/product_category, mutually exclusive —
@@ -255,7 +278,6 @@ const ruleForm = ref({
   scope: 'company' as RuleScope,
   product_id: '' as string | number,
   product_category_id: '' as string | number,
-  cert_tier_id: '' as string | number,
   rate_type: 'percentage' as RateType,
   rate_value_input: '' as string | number, // % if percentage, THB if fixed_satang
   effective_from: new Date().toISOString().slice(0, 10),
@@ -280,7 +302,6 @@ function resetRuleForm() {
     scope: 'company',
     product_id: '',
     product_category_id: '',
-    cert_tier_id: '',
     rate_type: 'percentage',
     rate_value_input: '',
     effective_from: ruleForm.value.effective_from,
@@ -305,7 +326,6 @@ function openEditRuleForm(r: CommissionRuleItem) {
     scope: r.product ? 'product' : r.product_category ? 'category' : 'company',
     product_id: r.product?.id ?? '',
     product_category_id: r.product_category?.id ?? '',
-    cert_tier_id: r.cert_tier?.id ?? '',
     rate_type: r.rate_type,
     rate_value_input: r.rate_type === 'percentage' ? r.rate_value / 100 : r.rate_value / 100,
     effective_from: r.effective_from,
@@ -358,10 +378,6 @@ function recheckRuleCapDebounced(): void {
 }
 
 async function submitRule() {
-  if (!ruleForm.value.cert_tier_id) {
-    ruleFormError.value = 'กรุณาเลือก Cert Tier'
-    return
-  }
   // TASK-196 §3.2 — defensive re-check alongside the disabled Save button
   // (e.g. an Enter-to-submit keypress bypassing a disabled button).
   recheckRuleCap()
@@ -377,7 +393,6 @@ async function submitRule() {
     const payload = withCompanyBody({
       product_id: ruleForm.value.scope === 'product' ? Number(ruleForm.value.product_id) : null,
       product_category_id: ruleForm.value.scope === 'category' ? Number(ruleForm.value.product_category_id) : null,
-      cert_tier_id: Number(ruleForm.value.cert_tier_id),
       rate_type: submittedRateType,
       rate_value: rateValueToBasisOrSatang(submittedRateType, ruleForm.value.rate_value_input),
       effective_from: ruleForm.value.effective_from,
@@ -416,16 +431,207 @@ async function deleteRule(r: CommissionRuleItem) {
   }
 }
 async function loadRulesTabData() {
-  const [r, ct, p, pc] = await Promise.all([
+  const [r, p, pc, o] = await Promise.all([
     api.get<{ data: CommissionRuleItem[] }>('/commission-rules'),
-    api.get<{ data: CertTierOption[] }>('/cert-tiers'),
     api.get<{ data: ProductOption[] }>('/products'),
     api.get<{ data: ProductCategoryOption[] }>('/product-categories'),
+    api.get<{ data: CommissionOverrideRuleItem[] }>('/commission-override-rules'),
   ])
   commissionRules.value = r.data
-  certTiers.value = ct.data
   products.value = p.data
   productCategories.value = pc.data
+  commissionOverrideRules.value = o.data
+  // Readiness needs the structural settings too, but only for plan types
+  // some product actually uses — see loadReadinessProbe().
+  await loadReadinessProbe()
+}
+
+/**
+ * TASK-213 Phase 2 — create/edit/delete a TEAM-LEADER rate from this
+ * screen. Same endpoint, same Policy, same table as the tab that used to
+ * live in /product-catalog; only the address changed.
+ *
+ * ONE capability is genuinely new: a รูปแบบอัตรา selector. The old form
+ * hard-coded `rate_type: 'percentage'` with no way to see or change it,
+ * even though StoreCommissionOverrideRuleRequest has always accepted
+ * `fixed_satang` and CommissionRateCalculator has always computed it — so
+ * "จ่ายหัวหน้าทีมเป็นจำนวนเงินคงที่" was a supported business case that
+ * simply had no button.
+ */
+type RateRecipient = 'agent' | 'leader'
+const rateRecipientFilter = ref<'all' | RateRecipient>('all')
+
+const showOverrideForm = ref(false)
+const editingOverrideId = ref<number | null>(null)
+const savingOverride = ref(false)
+const overrideFormError = ref('')
+const overrideForm = ref({
+  scope: 'company' as RuleScope,
+  product_id: '' as number | '',
+  product_category_id: '' as number | '',
+  rate_type: 'percentage' as RateType,
+  rate_value_input: '' as string | number,
+  effective_from: new Date().toISOString().slice(0, 10),
+  effective_to: '',
+})
+
+function resetOverrideForm(): void {
+  showOverrideForm.value = false
+  editingOverrideId.value = null
+  overrideFormError.value = ''
+  overrideForm.value = {
+    scope: 'company',
+    product_id: '',
+    product_category_id: '',
+    rate_type: 'percentage',
+    rate_value_input: '',
+    effective_from: new Date().toISOString().slice(0, 10),
+    effective_to: '',
+  }
+}
+
+function openCreateOverrideForm(): void {
+  resetOverrideForm()
+  showOverrideForm.value = true
+}
+
+function openEditOverrideForm(r: CommissionOverrideRuleItem): void {
+  editingOverrideId.value = r.id
+  overrideFormError.value = ''
+  overrideForm.value = {
+    scope: r.product ? 'product' : r.product_category ? 'category' : 'company',
+    product_id: r.product?.id ?? '',
+    product_category_id: r.product_category?.id ?? '',
+    rate_type: r.rate_type,
+    // Both units are stored ×100 (basis points / satang), so one inverse
+    // covers both — same asymmetry rateValueToBasisOrSatang() relies on.
+    rate_value_input: r.rate_value / 100,
+    effective_from: r.effective_from.slice(0, 10),
+    effective_to: r.effective_to?.slice(0, 10) ?? '',
+  }
+  showOverrideForm.value = true
+}
+
+async function submitOverrideRule(): Promise<void> {
+  const scope = overrideForm.value.scope
+  if (scope === 'product' && !overrideForm.value.product_id) {
+    overrideFormError.value = 'กรุณาเลือกสินค้า'
+
+    return
+  }
+  if (scope === 'category' && !overrideForm.value.product_category_id) {
+    overrideFormError.value = 'กรุณาเลือกหมวดหมู่'
+
+    return
+  }
+  savingOverride.value = true
+  overrideFormError.value = ''
+  try {
+    const body = {
+      // Explicit nulls, not omitted keys: an UPDATE that moves a rule from
+      // product scope back to the company default has to CLEAR the old
+      // column, and an absent key would leave it in place.
+      product_id: scope === 'product' ? Number(overrideForm.value.product_id) : null,
+      product_category_id: scope === 'category' ? Number(overrideForm.value.product_category_id) : null,
+      rate_type: overrideForm.value.rate_type,
+      rate_value: rateValueToBasisOrSatang(overrideForm.value.rate_type, overrideForm.value.rate_value_input),
+      effective_from: overrideForm.value.effective_from,
+      effective_to: overrideForm.value.effective_to || null,
+    }
+    if (editingOverrideId.value) {
+      await api.put(`/commission-override-rules/${editingOverrideId.value}`, body)
+    } else {
+      await api.post('/commission-override-rules', withCompanyBody(body))
+    }
+    resetOverrideForm()
+    await loadRulesTabData()
+  } catch (e) {
+    overrideFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingOverride.value = false
+  }
+}
+
+/** 'ทุกสินค้าในบริษัท' / 'หมวดหมู่: X' / 'สินค้า: Y' — same vocabulary as ruleScopeLabel(). */
+function overrideScopeLabel(r: CommissionOverrideRuleItem): string {
+  if (r.product) return `สินค้า: ${r.product.name}`
+  if (r.product_category) return `หมวดหมู่: ${r.product_category.name}`
+
+  return 'ทุกสินค้าในบริษัท'
+}
+
+async function deleteOverrideRule(r: CommissionOverrideRuleItem): Promise<void> {
+  if (!window.confirm(`ลบอัตราหัวหน้าทีม "${overrideScopeLabel(r)}"?`)) return
+  try {
+    await api.delete(`/commission-override-rules/${r.id}`)
+    commissionOverrideRules.value = commissionOverrideRules.value.filter((x) => x.id !== r.id)
+  } catch (e) {
+    errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
+  }
+}
+
+/**
+ * TASK-213 Phase 1 — "is this company's config actually able to pay?"
+ *
+ * Reading the commission services turned up thirteen paths where a
+ * misconfiguration means NOBODY IS PAID and the only evidence is a line in
+ * the log. Every one of them is deliberate — the sale must never be
+ * blocked by a config gap — but until now no screen said so, which meant
+ * the first person to notice was an agent asking where their money went.
+ *
+ * This probe is READ-ONLY and asks only about plan types that at least one
+ * product resolves to, so a company using nothing but Unilevel makes no
+ * extra requests at all. Failures are swallowed: a probe that cannot
+ * answer must not break the page it is only annotating.
+ */
+const structureReady = ref<Partial<Record<CommissionPlanType, boolean>>>({})
+
+async function loadReadinessProbe(): Promise<void> {
+  if (!effectiveCompanyId.value) { structureReady.value = {}; return }
+  const inUse = new Set(byCompany(products.value).map((p) => p.effective_plan_type).filter(Boolean) as CommissionPlanType[])
+  const next: Partial<Record<CommissionPlanType, boolean>> = {}
+
+  const probes: Promise<void>[] = []
+  const probe = async (key: CommissionPlanType, run: () => Promise<boolean>) => {
+    try { next[key] = await run() } catch { /* leave undefined = "unknown", never a false alarm */ }
+  }
+
+  if (inUse.has('binary')) {
+    probes.push(probe('binary', async () => {
+      const r = await api.get<{ data: BinarySettings } | ''>(`/commission-binary-settings${companyQuery()}`)
+
+      return r !== ''
+    }))
+  }
+  if (inUse.has('matrix')) {
+    probes.push(probe('matrix', async () => {
+      const r = await api.get<{ data: MatrixSettings } | ''>(`/commission-matrix-settings${companyQuery()}`)
+
+      return r !== ''
+    }))
+  }
+  if (inUse.has('generation')) {
+    probes.push(probe('generation', async () => {
+      const [s, rules] = await Promise.all([
+        api.get<{ data: GenerationSettingsData } | ''>(`/commission-generation-settings${companyQuery()}`),
+        api.get<{ data: GenerationRuleItem[] }>('/commission-generation-rules'),
+      ])
+
+      // Depth alone pays nobody — a generation slot with no rate row is
+      // consumed silently by GenerationCommissionService.
+      return s !== '' && byCompany(rules.data).length > 0
+    }))
+  }
+  if (inUse.has('stairstep_breakaway')) {
+    probes.push(probe('stairstep_breakaway', async () => {
+      const r = await api.get<{ data: AgentRankItem[] }>('/agent-ranks')
+
+      return byCompany(r.data).length > 0
+    }))
+  }
+
+  await Promise.all(probes)
+  structureReady.value = next
 }
 
 // ── Overview helpers (Option B/C — see viewMode block above) ──
@@ -455,12 +661,9 @@ function isRuleActiveOn(r: CommissionRuleItem, date: Date): boolean {
 // most-specific match wins — same order already documented above as
 // RESOLUTION_ORDER_NOTE. Pure read-only preview of already-loaded data,
 // no new backend call.
-function resolveRuleFor(product: ProductOption, certTierId: number | string): CommissionRuleItem | null {
-  if (!certTierId) return null
+function resolveRuleFor(product: ProductOption): CommissionRuleItem | null {
   const now = new Date()
-  const candidates = commissionRules.value.filter(
-    (r) => r.cert_tier?.id === Number(certTierId) && isRuleActiveOn(r, now),
-  )
+  const candidates = commissionRules.value.filter((r) => isRuleActiveOn(r, now))
   const categoryId = product.category?.id
   return (
     candidates.find((r) => r.product?.id === product.id) ??
@@ -470,22 +673,241 @@ function resolveRuleFor(product: ProductOption, certTierId: number | string): Co
   )
 }
 
+/**
+ * TASK-216 — every add/edit form on this page says WHAT IT IS EDITING.
+ *
+ * Human report, 2026-08-20: "แบบนี้ผมดูไม่ออกเลยว่าผมกำลังแก้ไขตัวไหนอยู่".
+ *
+ * The forms open INLINE AT THE TOP of the page while the row you clicked
+ * แก้ไข on can be several rows further down and scrolled off. The agent
+ * rate form had no heading at all — it opened as a bare row of inputs. The
+ * only clue to which of five rules you were about to overwrite was the
+ * product name buried in a <select> that looks exactly like the one on the
+ * create form.
+ *
+ * These labels read from the FORM, not from the record being edited, so
+ * they are also useful while creating: the moment a product is picked the
+ * heading names it, and if the wrong one was picked that is visible before
+ * บันทึก rather than after.
+ */
+// Widened to string|number because the two forms declare their id fields
+// differently (ruleForm keeps `string | number`, overrideForm `number | ''`)
+// — Number() handles both, and narrowing here would only force a cast at
+// one of the two call sites.
+function scopeTargetLabel(scope: RuleScope, productId: string | number, categoryId: string | number): string {
+  if (scope === 'product') {
+    const name = products.value.find((p) => p.id === Number(productId))?.name
+
+    return name ? `สินค้า: ${name}` : 'สินค้า: ยังไม่ได้เลือก'
+  }
+  if (scope === 'category') {
+    const name = productCategories.value.find((c) => c.id === Number(categoryId))?.name
+
+    return name ? `หมวดหมู่: ${name}` : 'หมวดหมู่: ยังไม่ได้เลือก'
+  }
+
+  return 'ค่าเริ่มต้นทั้งบริษัท'
+}
+
+const ruleFormTargetLabel = computed(() =>
+  scopeTargetLabel(ruleForm.value.scope, ruleForm.value.product_id, ruleForm.value.product_category_id))
+
+const overrideFormTargetLabel = computed(() =>
+  scopeTargetLabel(overrideForm.value.scope, overrideForm.value.product_id, overrideForm.value.product_category_id))
+
+/**
+ * TASK-213 r2 — rows that are ACTIVE AT THE SAME TIME IN THE SAME SCOPE.
+ *
+ * Human report, 2026-08-19: one product carried three live rules —
+ * 100 / 150 / 180 บาท, all starting on the same day. `resolveCommissionRule`
+ * orders by `effective_from` DESC and takes `->first()`, so with the dates
+ * tied the winner is whatever the database happens to return first. Three
+ * different payouts, no way to predict which, and the ledger is immutable
+ * once written (BR-4).
+ *
+ * Both services already forbid this (`assertNoOverlap` in
+ * CommissionRuleService and CommissionOverrideRuleService), so nothing can
+ * create it today — but ADR-035 dropped `cert_tier_id` from the rule scope
+ * on 2026-08-18, which retroactively turned rows that were legitimately
+ * distinct (one per tier) into rows that collide. The guard cannot see
+ * that; it only runs on write.
+ *
+ * So the check has to live where the existing data is read. "No rule at
+ * all" was already surfaced; "too many rules to know which one" is the
+ * same class of money bug and was not.
+ *
+ * Scope key mirrors the server's resolution levels exactly — product,
+ * category and company-default never collide with each other.
+ */
+function ruleScopeKey(r: CommissionRuleItem): string {
+  if (r.product) return `product:${r.product.id}`
+  if (r.product_category) return `category:${r.product_category.id}`
+
+  return 'company'
+}
+
+const conflictingRuleIds = computed<Set<number>>(() => {
+  const now = new Date()
+  const byScope = new Map<string, CommissionRuleItem[]>()
+  for (const r of byCompany(commissionRules.value)) {
+    if (!isRuleActiveOn(r, now)) continue
+    const key = ruleScopeKey(r)
+    byScope.set(key, [...(byScope.get(key) ?? []), r])
+  }
+  const ids = new Set<number>()
+  for (const rows of byScope.values()) {
+    if (rows.length > 1) rows.forEach((r) => ids.add(r.id))
+  }
+
+  return ids
+})
+
+/** Same invariant on the leader side, keyed by the manager's cert tier. */
+const conflictingOverrideIds = computed<Set<number>>(() => {
+  // TASK-214 — keyed by SCOPE, not by cert tier, because that is what the
+  // server now resolves on. Rows that were legitimately distinct per tier
+  // become a collision under the new key, which is exactly the situation
+  // commission:collapse-override-tiers exists to clean up — so this is the
+  // screen that has to show them.
+  const byScope = new Map<string, CommissionOverrideRuleItem[]>()
+  for (const r of activeOverrideRules.value) {
+    const key = r.product ? `product:${r.product.id}` : r.product_category ? `category:${r.product_category.id}` : 'company'
+    byScope.set(key, [...(byScope.get(key) ?? []), r])
+  }
+  const ids = new Set<number>()
+  for (const rows of byScope.values()) {
+    if (rows.length > 1) rows.forEach((r) => ids.add(r.id))
+  }
+
+  return ids
+})
+
+const totalConflicts = computed(() => conflictingRuleIds.value.size + conflictingOverrideIds.value.size)
+
+/** How many live rules share the scope this product actually resolves at. */
+function conflictCountFor(p: ProductOption): number {
+  const resolved = resolveRuleFor(p)
+  if (!resolved || !conflictingRuleIds.value.has(resolved.id)) return 0
+  const key = ruleScopeKey(resolved)
+  const now = new Date()
+
+  return byCompany(commissionRules.value).filter((r) => isRuleActiveOn(r, now) && ruleScopeKey(r) === key).length
+}
+
+/**
+ * TASK-213 — the leader rows that are live today, most-recent first.
+ *
+ * Deliberately returns a LIST, not one rate: `commission_override_rules`
+ * is keyed by the MANAGER'S OWN cert tier, so "how much does the leader
+ * get" has as many answers as there are tiers configured. Collapsing that
+ * to a single headline number would be a comfortable lie — the overview
+ * says "N อัตรา" instead when they differ.
+ */
+const activeOverrideRules = computed<CommissionOverrideRuleItem[]>(() => {
+  const now = new Date()
+
+  return byCompany(commissionOverrideRules.value)
+    .filter((r) => isOverrideActiveOn(r, now))
+    .sort((a, b) => b.effective_from.localeCompare(a.effective_from))
+})
+
+function isOverrideActiveOn(r: CommissionOverrideRuleItem, on: Date): boolean {
+  if (new Date(r.effective_from) > on) return false
+
+  return !r.effective_to || new Date(r.effective_to) >= on
+}
+
+/**
+ * TASK-214 — the leader rate FOR THIS PRODUCT, resolved with the same
+ * order the server uses (product > category > company).
+ *
+ * Before scoping existed this could only answer "there are N rates, keyed
+ * by something this card cannot see", so it printed a count. Now there is
+ * one right answer per product and the card can simply say it.
+ */
+function resolveOverrideFor(product: ProductOption): CommissionOverrideRuleItem | null {
+  const rows = activeOverrideRules.value
+  const categoryId = product.category?.id
+
+  return (
+    rows.find((r) => r.product?.id === product.id) ??
+    (categoryId ? rows.find((r) => !r.product && r.product_category?.id === categoryId) : undefined) ??
+    rows.find((r) => !r.product && !r.product_category) ??
+    null
+  )
+}
+
+/** '—' / '2.50% · สินค้า: X' for the overview card. */
+function leaderRateLabel(product: ProductOption): string {
+  const rule = resolveOverrideFor(product)
+
+  return rule ? formatRate(rule.rate_type, rule.rate_value) : '—'
+}
+
+/**
+ * TASK-213 Phase 1 — can this product actually pay, today?
+ *
+ * Ordered worst-first: a product with no base rate pays NOBODY, which
+ * makes every other observation about it irrelevant. Each level maps to a
+ * real code path in the commission services, not to a guess — see the
+ * plan doc's §3.4 table for the full list of thirteen.
+ */
+type ReadinessLevel = 'ok' | 'warn' | 'bad'
+function productReadiness(p: ProductOption): { level: ReadinessLevel; message: string } {
+  if (!resolveRuleFor(p)) {
+    return { level: 'bad', message: 'ยังไม่มีอัตราค่าคอม (ทั้งสินค้า/หมวดหมู่/บริษัท) — ดีลที่ปิดได้จะไม่มีใครได้เงินเลย' }
+  }
+
+  // Ranked right below "no rule": having several is not safer than having
+  // none — the money still moves, just at an amount nobody chose.
+  const clash = conflictCountFor(p)
+  if (clash > 1) {
+    return {
+      level: 'bad',
+      message: `มีอัตราซ้อนทับกัน ${clash} รายการในขอบเขตเดียวกัน — ระบบจะหยิบอันไหนก็ได้ ทำนายไม่ได้ และแก้ย้อนหลังไม่ได้เมื่อลงบัญชีแล้ว`,
+    }
+  }
+
+  const plan = p.effective_plan_type
+  if (plan && structureReady.value[plan] === false) {
+    return { level: 'bad', message: `บริษัทยังไม่ได้ตั้งค่าโครงสร้าง ${planTypeLabels[plan]} — ตัวแทนผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร` }
+  }
+
+  // Unilevel and Affiliate are the two plans that pay the upline out of
+  // commission_override_rules. No row = the leader is skipped silently.
+  if (plan === 'unilevel' || plan === 'affiliate') {
+    if (!resolveOverrideFor(p)) {
+      return { level: 'warn', message: 'ยังไม่มีอัตราหัวหน้าทีมที่ใช้กับสินค้านี้ — หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนี้' }
+    }
+    if (conflictingOverrideIds.value.size) {
+      return { level: 'bad', message: 'อัตราหัวหน้าทีมซ้อนทับกันใน cert tier เดียวกัน — จำนวนที่หัวหน้าได้ทำนายไม่ได้' }
+    }
+  }
+
+  return { level: 'ok', message: 'ตั้งค่าครบ พร้อมจ่าย' }
+}
+
+const readinessCounts = computed(() => {
+  const c = { ok: 0, warn: 0, bad: 0 }
+  for (const p of byCompany(products.value)) c[productReadiness(p).level]++
+
+  return c
+})
+
 // ── "ทดสอบคำนวณ" simulate modal — direct commission preview only, see
 // the caveat text rendered alongside it in the template. ──
 const simulateProduct = ref<ProductOption | null>(null)
-const simulateCertTierId = ref<string | number>('')
 const simulateAmountThb = ref<string | number>('')
 function openSimulate(p: ProductOption) {
   simulateProduct.value = p
-  simulateCertTierId.value = ''
   simulateAmountThb.value = p.price_satang ? p.price_satang / 100 : ''
 }
 function closeSimulate() {
   simulateProduct.value = null
 }
 const simulateResult = computed<{ rule: CommissionRuleItem | null; amountSatang: number } | null>(() => {
-  if (!simulateProduct.value || !simulateCertTierId.value) return null
-  const rule = resolveRuleFor(simulateProduct.value, simulateCertTierId.value)
+  if (!simulateProduct.value) return null
+  const rule = resolveRuleFor(simulateProduct.value)
   if (!rule) return { rule: null, amountSatang: 0 }
   const saleSatang = Math.round(Number(simulateAmountThb.value || 0) * 100)
   const amountSatang = rule.rate_type === 'percentage' ? Math.round((saleSatang * rule.rate_value) / 10000) : rule.rate_value
@@ -512,7 +934,7 @@ const wizardOpen = ref(false)
 const wizardStep = ref<WizardStep>(1)
 const wizardProductId = ref<number | ''>('')
 const wizardPlanChoice = ref<'inherit' | CommissionPlanType>('inherit')
-const wizardRateInputs = ref<Record<number, string | number>>({})
+const wizardRateInput = ref<string | number>('')
 const wizardSavingPlanType = ref(false)
 const wizardPlanTypeError = ref('')
 const wizardSavingRates = ref(false)
@@ -566,7 +988,7 @@ watch(wizardProductId, (id) => {
 function openWizard(preselectProductId?: number) {
   wizardOpen.value = true
   wizardStep.value = 1
-  wizardRateInputs.value = {}
+  wizardRateInput.value = ''
   wizardPlanTypeError.value = ''
   wizardRateError.value = ''
   wizardStructureError.value = ''
@@ -592,8 +1014,8 @@ function wizardGoToProductRateForm() {
   closeWizard()
   openRuleFormForProduct(p)
 }
-function findExactProductRule(productId: number, certTierId: number): CommissionRuleItem | undefined {
-  return commissionRules.value.find((r) => r.product?.id === productId && r.cert_tier?.id === certTierId)
+function findExactProductRule(productId: number): CommissionRuleItem | undefined {
+  return commissionRules.value.find((r) => r.product?.id === productId)
 }
 async function wizardConfirmProductAndPlan() {
   if (!wizardProduct.value) {
@@ -608,12 +1030,8 @@ async function wizardConfirmProductAndPlan() {
       await api.put(`/products/${wizardProduct.value.id}`, withCompanyBody({ commission_plan_type: desired }))
       await loadRulesTabData() // refresh products' effective_plan_type
     }
-    const inputs: Record<number, string | number> = {}
-    for (const ct of certTiers.value) {
-      const existing = wizardProduct.value ? findExactProductRule(wizardProduct.value.id, ct.id) : undefined
-      if (existing) inputs[ct.id] = existing.rate_type === 'percentage' ? existing.rate_value / 100 : existing.rate_value / 100
-    }
-    wizardRateInputs.value = inputs
+    const existing = wizardProduct.value ? findExactProductRule(wizardProduct.value.id) : undefined
+    wizardRateInput.value = existing ? existing.rate_value / 100 : ''
     wizardStep.value = 2
   } catch (e) {
     wizardPlanTypeError.value = apiErrorMessage(e, 'บันทึกรูปแบบแผนไม่สำเร็จ')
@@ -638,14 +1056,12 @@ async function wizardSaveRates() {
   wizardSavingRates.value = true
   wizardRateError.value = ''
   try {
-    for (const ct of certTiers.value) {
-      const input = wizardRateInputs.value[ct.id]
-      if (input === '' || input === undefined || input === null) continue
-      const existing = findExactProductRule(wizardProduct.value.id, ct.id)
+    const input = wizardRateInput.value
+    if (input !== '' && input !== undefined && input !== null) {
+      const existing = findExactProductRule(wizardProduct.value.id)
       const payload = withCompanyBody({
         product_id: wizardProduct.value.id,
         product_category_id: null,
-        cert_tier_id: ct.id,
         rate_type: 'percentage' as RateType,
         rate_value: rateValueToBasisOrSatang('percentage', input),
         effective_from: existing?.effective_from ?? new Date().toISOString().slice(0, 10),
@@ -689,11 +1105,9 @@ async function wizardSaveStructure() {
 function wizardSkipStructure() {
   wizardStep.value = 4
 }
-const wizardSummaryRates = computed(() => {
-  if (!wizardProduct.value) return []
-  return certTiers.value
-    .map((ct) => ({ tier: ct, rule: findExactProductRule(wizardProduct.value!.id, ct.id) }))
-    .filter((x) => x.rule)
+const wizardSummaryRate = computed<CommissionRuleItem | null>(() => {
+  if (!wizardProduct.value) return null
+  return findExactProductRule(wizardProduct.value.id) ?? null
 })
 
 // ══════════════════════════ Binary (TASK-029) ══════════════════════════
@@ -1119,14 +1533,20 @@ watch(activeTab, (tab) => {
   if (!loadedTabs.value.has(tab)) loadTab(tab)
   if (tab === 'rules' && !hideResolutionOrderNote.value) openResolutionOrderModal()
 })
-watch(selectedCompanyId, () => {
+watch(() => activeCompany.companyId, () => {
   // Company changed (Super Admin) — every tab's cached data is now
   // stale, force a reload next time each is viewed.
   loadedTabs.value.clear()
   if (activeTab.value !== 'rules') loadTab(activeTab.value)
+  // The rules tab is deliberately NOT refetched: it loads every company's
+  // rows once and narrows them with byCompany(). The readiness probe is
+  // the exception — it asks per-company endpoints (companyQuery()), so
+  // leaving it alone would keep showing the previous company's verdict on
+  // this company's products, which is worse than showing nothing.
+  else void loadReadinessProbe()
 })
 onMounted(async () => {
-  await loadCompanyOptions()
+  await activeCompany.loadCompanies()
   await loadTab('rules')
   if (!hideResolutionOrderNote.value) openResolutionOrderModal()
 })
@@ -1142,16 +1562,6 @@ onMounted(async () => {
       accent-color="brand"
       storage-key="commission-plans"
     >
-      <template #actions>
-        <select
-          v-if="isSuperAdmin"
-          v-model="selectedCompanyId"
-          class="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white"
-        >
-          <option :value="null" disabled>เลือกบริษัท</option>
-          <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-      </template>
       <template #tabs>
         <div class="flex gap-1 px-4 py-2">
           <button
@@ -1194,10 +1604,10 @@ onMounted(async () => {
     </div>
 
     <EmptyState
-      v-if="isSuperAdmin && !selectedCompanyId"
+      v-if="activeCompany.requiresCompanyPick"
       icon="building"
       title="กรุณาเลือกบริษัทก่อน"
-      message="เลือกบริษัทจากมุมขวาบนเพื่อดูและตั้งค่าแผนคอมมิชชั่น"
+      message="กดปุ่ม “ทุกบริษัท” มุมขวาบนของหน้าจอ แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนคอมมิชชั่น"
       class="mt-4"
     />
 
@@ -1230,6 +1640,34 @@ onMounted(async () => {
             </div>
           </div>
 
+          <!-- TASK-213 Phase 1 — the headline. Thirteen code paths can
+               leave a closed deal paying nobody, every one of them
+               silently and by design (the sale must not be blocked by a
+               config gap). This is the first screen that says so BEFORE a
+               real deal hits one of them. -->
+          <div v-if="byCompany(products).length" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex items-center gap-4 flex-wrap">
+            <div>
+              <p class="text-sm font-bold text-slate-900">ความพร้อมจ่ายค่าคอม</p>
+              <p class="text-xs text-slate-400 mt-0.5">ตรวจจากอัตราและโครงสร้างที่ตั้งไว้จริง ณ วันนี้</p>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap ml-auto">
+              <span class="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold">พร้อมจ่าย {{ readinessCounts.ok }}</span>
+              <span v-if="readinessCounts.warn" class="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-bold">ควรตรวจสอบ {{ readinessCounts.warn }}</span>
+              <span v-if="readinessCounts.bad" class="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-bold">ต้องแก้ไข {{ readinessCounts.bad }}</span>
+              <!-- Shown even when no product currently RESOLVES to the
+                   clashing scope (e.g. two live company-default rows): the
+                   collision is real and will bite the first product that
+                   falls through to it. -->
+              <button
+                v-if="totalConflicts"
+                class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
+                @click="goToSettingsTab('rules')"
+              >
+                อัตราซ้อนทับ {{ totalConflicts }} → ดูรายการ
+              </button>
+            </div>
+          </div>
+
           <p class="text-xs text-slate-400 mb-3">เลือกสินค้าเพื่อดูอัตราคอมมิชชั่นที่ใช้งานจริง และทดสอบคำนวณตัวอย่าง (ไม่ใช่การขายจริง)</p>
           <EmptyState v-if="!byCompany(products).length" icon="money" title="ยังไม่มีสินค้า" />
           <div v-else class="space-y-3">
@@ -1251,35 +1689,74 @@ onMounted(async () => {
                     <Icon name="sparkles" :size="12" />
                     Wizard
                   </button>
-                  <!-- TASK-197 §3.1 — this button IS genuinely product-scoped
-                       (openRuleFormForProduct pins scope='product' + this
-                       product's id, unlike the generic "+ เพิ่มกฎคอมมิชชั่น"
-                       button below which opens at scope='company'). Renamed
-                       to match ProductEditView.vue's equivalent action —
-                       same "adds a rate FOR A CERT TIER" meaning. -->
+                  <!-- ADR-035 — Unilevel is now flat-rate (one rate per
+                       product/category/company scope, no cert-tier
+                       dimension). Button label no longer says "ตาม tier";
+                       wording flips to "แก้ไข" once a rule already resolves
+                       for this product (openRuleFormForProduct still pins
+                       scope='product' + this product's id). -->
                   <button class="btn-primary" @click="openRuleFormForProduct(p)">
-                    + เพิ่มอัตราคอมตาม tier
+                    {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
                   </button>
                 </div>
               </div>
 
-              <div class="mt-3 flex flex-wrap gap-2">
-                <span
-                  v-for="ct in certTiers"
-                  :key="ct.id"
-                  class="text-xs px-2 py-1 rounded-lg"
-                  :class="resolveRuleFor(p, ct.id) ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'"
-                >
-                  {{ ct.name }}: {{ resolveRuleFor(p, ct.id) ? formatRate(resolveRuleFor(p, ct.id)!.rate_type, resolveRuleFor(p, ct.id)!.rate_value) + ' (' + ruleScopeLabel(resolveRuleFor(p, ct.id)!) + ')' : 'ยังไม่มีกฎ' }}
-                </span>
+              <!-- TASK-213 Phase 1 — who gets what, on one line each. The
+                   leader column used to exist nowhere on this screen. -->
+              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
+                  <p class="text-[11px] font-bold text-slate-400">ตัวแทนผู้ขายได้</p>
+                  <p class="text-sm font-bold" :class="resolveRuleFor(p) ? 'text-slate-900' : 'text-rose-600'">
+                    {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : 'ยังไม่ได้ตั้ง' }}
+                    <span v-if="resolveRuleFor(p)" class="text-[11px] font-normal text-slate-400">· {{ ruleScopeLabel(resolveRuleFor(p)!) }}</span>
+                  </p>
+                </div>
+                <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
+                  <p class="text-[11px] font-bold text-slate-400">
+                    หัวหน้าทีมได้
+                    <!-- Only these two plans pay the upline from
+                         commission_override_rules; for the others the
+                         upline is paid by that plan's own structure, so
+                         showing this number there would be wrong. -->
+                    <span v-if="p.effective_plan_type && p.effective_plan_type !== 'unilevel' && p.effective_plan_type !== 'affiliate'" class="font-normal">
+                      (ตามโครงสร้าง {{ planTypeLabels[p.effective_plan_type] }})
+                    </span>
+                  </p>
+                  <p class="text-sm font-bold text-slate-900">
+                    <template v-if="p.effective_plan_type === 'unilevel' || p.effective_plan_type === 'affiliate'">
+                      <span :class="resolveOverrideFor(p) ? '' : 'text-amber-600'">{{ leaderRateLabel(p) }}</span>
+                      <span v-if="resolveOverrideFor(p)" class="text-[11px] font-normal text-slate-400"> · {{ overrideScopeLabel(resolveOverrideFor(p)!) }}</span>
+                      <span v-if="p.effective_plan_type === 'affiliate'" class="text-[11px] font-normal text-slate-400"> · จ่ายชั้นเดียว</span>
+                      <span v-else class="text-[11px] font-normal text-slate-400"> · จ่ายทั้งสาย</span>
+                    </template>
+                    <span v-else class="text-slate-400 font-normal text-xs">ดูที่แท็บ {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}</span>
+                  </p>
+                </div>
               </div>
 
-              <div v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type]" class="mt-3 px-3 py-2 rounded-lg bg-amber-50 text-amber-700 text-xs flex items-center justify-between gap-2 flex-wrap">
-                <span>สินค้านี้ใช้รูปแบบ {{ planTypeLabels[p.effective_plan_type] }} ซึ่งมีโครงสร้างระดับบริษัท (เช่น สาย/level/อันดับ) ต้องตั้งค่าเพิ่มเติม</span>
-                <button class="font-bold whitespace-nowrap hover:underline" @click="goToSettingsTab(planTypeToTab[p.effective_plan_type]!)">
+              <!-- Replaces the old blanket amber banner, which fired for
+                   EVERY product on a structured plan whether or not the
+                   structure was actually missing — so it said nothing and
+                   was learned to be ignored. This one is silent when the
+                   config is fine. -->
+              <div
+                v-if="productReadiness(p).level !== 'ok'"
+                class="mt-3 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
+                :class="productReadiness(p).level === 'bad' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'"
+              >
+                <span class="font-bold">{{ productReadiness(p).level === 'bad' ? '●' : '!' }} {{ productReadiness(p).message }}</span>
+                <button
+                  v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false"
+                  class="font-bold whitespace-nowrap hover:underline"
+                  @click="goToSettingsTab(planTypeToTab[p.effective_plan_type]!)"
+                >
                   ไปตั้งค่า →
                 </button>
+                <button v-else class="font-bold whitespace-nowrap hover:underline" @click="goToSettingsTab('rules')">
+                  ไปตั้งอัตรา →
+                </button>
               </div>
+              <p v-else class="mt-3 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
             </div>
           </div>
 
@@ -1304,97 +1781,240 @@ onMounted(async () => {
 
         <!-- ═══════════ Commission Rules ═══════════ -->
         <section v-if="viewMode === 'settings' && activeTab === 'rules'" class="mt-4">
-          <div class="flex justify-end mb-2">
-            <button class="btn-primary" @click="openCreateRuleForm">
-              + เพิ่มกฎคอมมิชชั่น
+          <!-- TASK-213 Phase 2 — one list, filtered by WHO GETS PAID.
+               An admin thinks "ตัวแทนได้เท่าไหร่ / หัวหน้าได้เท่าไหร่",
+               not "commission_rules vs commission_override_rules" — and
+               the leader half used to live in a different route entirely
+               (/product-catalog), which is why nobody could find it. -->
+          <div class="flex flex-wrap items-center gap-2 mb-3">
+            <button
+              v-for="f in ([{ k: 'all', l: 'ทั้งหมด' }, { k: 'agent', l: 'ตัวแทนผู้ขาย' }, { k: 'leader', l: 'หัวหน้าทีม' }] as const)"
+              :key="f.k"
+              class="px-3 py-1.5 rounded-full border text-xs font-bold"
+              :class="rateRecipientFilter === f.k ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'"
+              @click="rateRecipientFilter = f.k"
+            >
+              {{ f.l }}
             </button>
-          </div>
-          <form v-if="showRuleForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 space-y-3" @submit.prevent="submitRule">
-            <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ ruleFormError }}</div>
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div class="col-span-2">
-                <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-                <select v-model="ruleForm.scope" :disabled="!!editingRuleId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
-                  <option value="category">ตามหมวดหมู่สินค้า</option>
-                  <option value="product">ตามสินค้า</option>
-                </select>
-              </div>
-              <div v-if="ruleForm.scope === 'product'" class="col-span-2">
-                <label class="text-sm font-bold text-slate-500">สินค้า</label>
-                <select v-model="ruleForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
-                  <option value="" disabled>เลือกสินค้า</option>
-                  <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
-                </select>
-              </div>
-              <div v-if="ruleForm.scope === 'category'" class="col-span-2">
-                <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
-                <select v-model="ruleForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="" disabled>เลือกหมวดหมู่</option>
-                  <option v-for="c in productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">Cert Tier</label>
-                <select v-model="ruleForm.cert_tier_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="" disabled>เลือก Tier</option>
-                  <option v-for="ct in certTiers" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
-                </select>
-              </div>
-              <!-- TASK-197 §3.4 — product-scope rules use the PRODUCT's
-                   locked-in commission_rate_type once it has one
-                   (server-enforced, §2.2): the selector only shows for
-                   company-wide/category rules (which keep their own free
-                   choice, §1 unchanged) OR the very first rule a product
-                   ever gets (nothing to inherit from yet). -->
-              <div v-if="showRuleFormRateTypeSelector">
-                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                <select v-model="ruleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
-                  <option value="percentage">% ของยอดขาย</option>
-                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">{{ effectiveRuleFormRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                <input
-                  v-model="ruleForm.rate_value_input"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  required
-                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                  @input="recheckRuleCapDebounced"
-                  @blur="recheckRuleCap"
-                />
-                <!-- TASK-197 §3.4 — when the selector above is hidden
-                     (locked-in product format), tell the admin which
-                     unit their number means instead of leaving them to
-                     guess. -->
-                <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ rateTypeLabels[effectiveRuleFormRateType] }}</p>
-                <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-                <div class="mt-1 flex flex-wrap items-start gap-2">
-                  <BuddhistDateInput v-model="ruleForm.effective_from" required />
-                  <CalendarDatePicker v-model="ruleForm.effective_from" />
-                </div>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
-                <div class="mt-1 flex flex-wrap items-start gap-2">
-                  <BuddhistDateInput v-model="ruleForm.effective_to" />
-                  <CalendarDatePicker v-model="ruleForm.effective_to" />
-                </div>
-              </div>
+            <div class="ml-auto flex flex-wrap gap-2">
+              <button v-if="rateRecipientFilter !== 'leader'" class="btn-primary" @click="openCreateRuleForm">
+                + เพิ่มอัตราตัวแทนผู้ขาย
+              </button>
+              <button v-if="rateRecipientFilter !== 'agent'" class="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100" @click="openCreateOverrideForm">
+                + เพิ่มอัตราหัวหน้าทีม
+              </button>
             </div>
-            <div class="flex justify-end gap-2">
+          </div>
+
+          <!-- TASK-213 r2 — name the collisions where they can be deleted.
+               A count on the ภาพรวม tab tells an admin something is wrong;
+               only this list can tell them WHICH ROW to remove. -->
+          <div v-if="totalConflicts" class="mb-3 p-4 rounded-xl bg-rose-50 border border-rose-200">
+            <p class="text-sm font-bold text-rose-800">พบอัตราซ้อนทับกัน {{ totalConflicts }} รายการ</p>
+            <p class="mt-1 text-xs text-rose-700 leading-relaxed">
+              แถวที่ติดป้าย <b>ซ้อนทับ</b> ด้านล่างมีผลพร้อมกันในขอบเขตเดียวกัน — ระบบเรียงตามวันที่เริ่มมีผลแล้วหยิบอันแรก
+              <b>เมื่อวันเริ่มเท่ากันจึงหยิบอันไหนก็ได้ ทำนายไม่ได้</b> · ค่าคอมที่ลงบัญชีไปแล้วแก้ย้อนหลังไม่ได้ (BR-4)
+              จึงควรลบให้เหลือรายการเดียวก่อนจะมีดีลปิดเพิ่ม
+            </p>
+            <p class="mt-1 text-xs text-rose-600">
+              ระบบไม่ยอมให้สร้างแบบนี้แล้วตั้งแต่ต้น — รายการเหล่านี้มักเป็นข้อมูลเก่าที่เคยแยกด้วย cert tier ก่อน ADR-035 (18 ส.ค. 2569)
+            </p>
+          </div>
+
+          <!-- Leader-rate form. Kept separate from the agent-rate form
+               above for an honest reason, not a lazy one: the two ask
+               different questions today — an agent rate is scoped by
+               product/หมวดหมู่/บริษัท and can carry a renewal rate, while
+               a leader rate is keyed by the MANAGER'S cert tier and has no
+               product dimension at all. Merging them into one form before
+               commission_override_rules gains product scope (Phase 4)
+               would mean a form whose fields lie about what the row can
+               express. -->
+          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
+               modal backgroud สีดำ"). Inline forms opened at the TOP of
+               the page while the row being edited sat further down and
+               often off-screen; the overlay removes the question by
+               removing everything else. -->
+          <div v-if="showOverrideForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetOverrideForm">
+            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
+            <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div class="min-w-0">
+                <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมหัวหน้าทีม</p>
+                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ overrideFormTargetLabel }}</h1>
+              </div>
+              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetOverrideForm">
+                <Icon name="x" :size="20" />
+              </button>
+            </div>
+              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+              <p class="text-xs text-amber-800">
+                จ่ายให้ "หัวหน้าทีม" ตาม cert tier ของหัวหน้าเอง ทุกครั้งที่ลูกทีมปิดการขาย ·
+                แผน <b>มาตรฐาน (Unilevel)</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว
+              </p>
+              <p class="text-xs text-amber-800">
+                <b>อัตราแยกรายสินค้าได้แล้ว</b> · ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ > หมวดหมู่ > ค่าเริ่มต้นทั้งบริษัท
+              </p>
+              <div v-if="overrideFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ overrideFormError }}</div>
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <!-- TASK-214 — the cert-tier picker that used to be here is
+                     gone: the rate no longer depends on the manager's tier
+                     (human ruling 2026-08-19). This is the scope selector
+                     that replaced it, deliberately identical to the agent
+                     rate's above so both read the same way. -->
+                <div class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
+                  <select v-model="overrideForm.scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
+                    <option value="category">ตามหมวดหมู่สินค้า</option>
+                    <option value="product">ตามสินค้า</option>
+                  </select>
+                </div>
+                <div v-if="overrideForm.scope === 'product'" class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">สินค้า</label>
+                  <select v-model="overrideForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="" disabled>เลือกสินค้า</option>
+                    <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                </div>
+                <div v-if="overrideForm.scope === 'category'" class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
+                  <select v-model="overrideForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="" disabled>เลือกหมวดหมู่</option>
+                    <option v-for="c in productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                </div>
+                <!-- TASK-213 — the field that did not exist. The old form
+                     sent rate_type: 'percentage' unconditionally. -->
+                <div>
+                  <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+                  <select v-model="overrideForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="percentage">% ของยอดขาย</option>
+                    <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">{{ overrideForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                  <input v-model="overrideForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+                  <div class="mt-1 flex flex-wrap items-start gap-2">
+                    <BuddhistDateInput v-model="overrideForm.effective_from" required />
+                    <CalendarDatePicker v-model="overrideForm.effective_from" />
+                  </div>
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
+                  <div class="mt-1 flex flex-wrap items-start gap-2">
+                    <BuddhistDateInput v-model="overrideForm.effective_to" />
+                    <CalendarDatePicker v-model="overrideForm.effective_to" />
+                  </div>
+                </div>
+              </div>
+              </div>
+            <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+              <button type="button" class="btn-secondary" @click="resetOverrideForm">ยกเลิก</button>
+              <button type="submit" :disabled="savingOverride" class="btn-primary">{{ savingOverride ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+            </div>
+            </form>
+          </div>
+          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
+               modal backgroud สีดำ"). Inline forms opened at the TOP of
+               the page while the row being edited sat further down and
+               often off-screen; the overlay removes the question by
+               removing everything else. -->
+          <div v-if="showRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRuleForm">
+            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRule">
+            <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div class="min-w-0">
+                <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมตัวแทนผู้ขาย</p>
+                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ ruleFormTargetLabel }}</h1>
+              </div>
+              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRuleForm">
+                <Icon name="x" :size="20" />
+              </button>
+            </div>
+              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+              <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ ruleFormError }}</div>
+              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
+                  <select v-model="ruleForm.scope" :disabled="!!editingRuleId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
+                    <option value="category">ตามหมวดหมู่สินค้า</option>
+                    <option value="product">ตามสินค้า</option>
+                  </select>
+                </div>
+                <div v-if="ruleForm.scope === 'product'" class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">สินค้า</label>
+                  <select v-model="ruleForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
+                    <option value="" disabled>เลือกสินค้า</option>
+                    <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                </div>
+                <div v-if="ruleForm.scope === 'category'" class="col-span-2">
+                  <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
+                  <select v-model="ruleForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                    <option value="" disabled>เลือกหมวดหมู่</option>
+                    <option v-for="c in productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                </div>
+                <!-- TASK-197 §3.4 — product-scope rules use the PRODUCT's
+                     locked-in commission_rate_type once it has one
+                     (server-enforced, §2.2): the selector only shows for
+                     company-wide/category rules (which keep their own free
+                     choice, §1 unchanged) OR the very first rule a product
+                     ever gets (nothing to inherit from yet). -->
+                <div v-if="showRuleFormRateTypeSelector">
+                  <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+                  <select v-model="ruleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
+                    <option value="percentage">% ของยอดขาย</option>
+                    <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">{{ effectiveRuleFormRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                  <input
+                    v-model="ruleForm.rate_value_input"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    required
+                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                    @input="recheckRuleCapDebounced"
+                    @blur="recheckRuleCap"
+                  />
+                  <!-- TASK-197 §3.4 — when the selector above is hidden
+                       (locked-in product format), tell the admin which
+                       unit their number means instead of leaving them to
+                       guess. -->
+                  <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ rateTypeLabels[effectiveRuleFormRateType] }}</p>
+                  <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+                  <div class="mt-1 flex flex-wrap items-start gap-2">
+                    <BuddhistDateInput v-model="ruleForm.effective_from" required />
+                    <CalendarDatePicker v-model="ruleForm.effective_from" />
+                  </div>
+                </div>
+                <div>
+                  <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
+                  <div class="mt-1 flex flex-wrap items-start gap-2">
+                    <BuddhistDateInput v-model="ruleForm.effective_to" />
+                    <CalendarDatePicker v-model="ruleForm.effective_to" />
+                  </div>
+                </div>
+              </div>
+              </div>
+            <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
               <button type="button" class="btn-secondary" @click="resetRuleForm">ยกเลิก</button>
               <button type="submit" :disabled="savingRule || ruleCapGuard.isOverCap.value" class="btn-primary">
                 {{ savingRule ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
-          </form>
+            </form>
+          </div>
 
           <!-- TASK-196 §3.3 — same blocking-alert shape as the resolution-order
                info modal below (this file's own closest existing pattern for a
@@ -1412,13 +2032,26 @@ onMounted(async () => {
             </div>
           </div>
 
-          <EmptyState v-if="!byCompany(commissionRules).length" icon="money" title="ยังไม่มีกฎคอมมิชชั่น" class="mt-2" />
+          <EmptyState
+            v-if="!byCompany(commissionRules).length && !activeOverrideRules.length"
+            icon="money"
+            title="ยังไม่มีอัตราค่าคอม"
+            message="เพิ่มอัตราของตัวแทนผู้ขายก่อน — ถ้าไม่มี ดีลที่ปิดได้จะไม่มีใครได้เงินเลย"
+            class="mt-2"
+          />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <div v-for="r in byCompany(commissionRules)" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-              <div>
+            <!-- ตัวแทนผู้ขาย -->
+            <div
+              v-for="r in (rateRecipientFilter === 'leader' ? [] : byCompany(commissionRules))"
+              :key="`agent-${r.id}`"
+              class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
+              :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+            >
+              <div class="min-w-0">
                 <p class="text-sm font-bold text-slate-900">
+                  <span class="mr-2 px-2 py-0.5 rounded-md bg-brand-50 text-brand-700 text-[11px] align-middle">ตัวแทนผู้ขาย</span>
+                  <span v-if="conflictingRuleIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
                   {{ ruleScopeLabel(r) }}
-                  <span class="text-xs font-normal text-slate-400">· {{ r.cert_tier?.name }} tier</span>
                 </p>
                 <p class="text-xs text-slate-400">
                   อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
@@ -1428,6 +2061,35 @@ onMounted(async () => {
               <div class="flex items-center gap-2 shrink-0">
                 <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditRuleForm(r)">แก้ไข</button>
                 <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRule(r)">ลบ</button>
+              </div>
+            </div>
+
+            <!-- หัวหน้าทีม (TASK-213 — moved here from /product-catalog) -->
+            <div
+              v-for="r in (rateRecipientFilter === 'agent' ? [] : byCompany(commissionOverrideRules))"
+              :key="`leader-${r.id}`"
+              class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
+              :class="conflictingOverrideIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-amber-200'"
+            >
+              <div class="min-w-0">
+                <p class="text-sm font-bold text-slate-900">
+                  <span class="mr-2 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] align-middle">หัวหน้าทีม</span>
+                  <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
+                  {{ overrideScopeLabel(r) }}
+                  <!-- Shown only on legacy rows. A row created after
+                       TASK-214 has no tier, and saying "ทุก tier" on it
+                       would imply a dimension that no longer exists. -->
+                  <span v-if="r.manager_cert_tier" class="ml-1 text-[11px] font-normal text-slate-400">
+                    (เดิมตั้งไว้ที่ tier {{ r.manager_cert_tier.name }} — ไม่ถูกใช้แล้ว)
+                  </span>
+                </p>
+                <p class="text-xs text-slate-400">
+                  อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
+                </p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
+                <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
               </div>
             </div>
           </TransitionGroup>
@@ -1535,35 +2197,57 @@ onMounted(async () => {
               + เพิ่ม Level
             </button>
           </div>
-          <form v-if="showLevelRateForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3" @submit.prevent="submitLevelRate">
-            <div>
-              <label class="text-sm font-bold text-slate-500">Level</label>
-              <input v-model="levelRateForm.level" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-              <select v-model="levelRateForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="percentage">%</option>
-                <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">{{ levelRateForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-              <input v-model="levelRateForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="levelRateForm.effective_from" required />
-                <CalendarDatePicker v-model="levelRateForm.effective_from" />
+          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
+               modal backgroud สีดำ"). Inline forms opened at the TOP of
+               the page while the row being edited sat further down and
+               often off-screen; the overlay removes the question by
+               removing everything else. -->
+          <div v-if="showLevelRateForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showLevelRateForm = false">
+            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitLevelRate">
+            <div class="col-span-2 sm:col-span-4 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div class="min-w-0">
+                <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นรายชั้น (Matrix)</p>
+                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ levelRateForm.level === '' ? 'ยังไม่ได้ระบุชั้น' : `ชั้นที่ ${levelRateForm.level}` }}</h1>
               </div>
+              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showLevelRateForm = false">
+                <Icon name="x" :size="20" />
+              </button>
             </div>
-            <div class="col-span-2 sm:col-span-4 flex justify-end">
+              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label class="text-sm font-bold text-slate-500">Level</label>
+                <input v-model="levelRateForm.level" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+                <select v-model="levelRateForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                  <option value="percentage">%</option>
+                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">{{ levelRateForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                <input v-model="levelRateForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+                <div class="mt-1 flex flex-wrap items-start gap-2">
+                  <BuddhistDateInput v-model="levelRateForm.effective_from" required />
+                  <CalendarDatePicker v-model="levelRateForm.effective_from" />
+                </div>
+              </div>
+              </div>
+            <div class="col-span-2 sm:col-span-4 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+              <!-- TASK-216 r2 — added with the modal conversion: an inline
+                   panel could be abandoned by scrolling past it, a modal
+                   cannot. -->
+              <button type="button" class="btn-secondary" @click="showLevelRateForm = false">ยกเลิก</button>
               <button type="submit" :disabled="savingLevelRate" class="btn-primary">
                 {{ savingLevelRate ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
-          </form>
+            </form>
+          </div>
           <EmptyState v-if="!matrixLevelRates.length" icon="layers" title="ยังไม่มีอัตราตาม Level" />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
             <div v-for="lr in matrixLevelRates" :key="lr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
@@ -1602,41 +2286,59 @@ onMounted(async () => {
               + เพิ่มอันดับ
             </button>
           </div>
-          <form v-if="showRankForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-3" @submit.prevent="submitRank">
-            <div class="col-span-2 sm:col-span-1">
-              <label class="text-sm font-bold text-slate-500">ชื่ออันดับ</label>
-              <input v-model="rankForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
+               modal backgroud สีดำ"). Inline forms opened at the TOP of
+               the page while the row being edited sat further down and
+               often off-screen; the overlay removes the question by
+               removing everything else. -->
+          <div v-if="showRankForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRankForm">
+            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRank">
+            <div class="col-span-2 sm:col-span-3 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div class="min-w-0">
+                <p class="text-xs font-bold tracking-wide text-slate-400">{{ editingRankId ? 'แก้ไข' : 'เพิ่ม' }}ขั้นอันดับ (Stairstep)</p>
+                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ rankForm.name ? `อันดับ: ${rankForm.name}` : 'ยังไม่ได้ตั้งชื่ออันดับ' }}</h1>
+              </div>
+              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRankForm">
+                <Icon name="x" :size="20" />
+              </button>
             </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">ยอดขั้นต่ำ (บาท)</label>
-              <input v-model="rankForm.volume_threshold_thb" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">ลำดับ (sort order)</label>
-              <input v-model="rankForm.sort_order" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-              <select v-model="rankForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="percentage">%</option>
-                <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">{{ rankForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-              <input v-model="rankForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div class="flex items-center gap-2 self-end pb-2">
-              <input id="is_breakaway" v-model="rankForm.is_breakaway_rank" type="checkbox" />
-              <label for="is_breakaway" class="text-sm font-bold text-slate-500">เป็นอันดับ Breakaway (ตัดสายบน)</label>
-            </div>
-            <div class="col-span-2 sm:col-span-3 flex justify-end gap-2">
+              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div class="col-span-2 sm:col-span-1">
+                <label class="text-sm font-bold text-slate-500">ชื่ออันดับ</label>
+                <input v-model="rankForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">ยอดขั้นต่ำ (บาท)</label>
+                <input v-model="rankForm.volume_threshold_thb" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">ลำดับ (sort order)</label>
+                <input v-model="rankForm.sort_order" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+                <select v-model="rankForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                  <option value="percentage">%</option>
+                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">{{ rankForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                <input v-model="rankForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div class="flex items-center gap-2 self-end pb-2">
+                <input id="is_breakaway" v-model="rankForm.is_breakaway_rank" type="checkbox" />
+                <label for="is_breakaway" class="text-sm font-bold text-slate-500">เป็นอันดับ Breakaway (ตัดสายบน)</label>
+              </div>
+              </div>
+            <div class="col-span-2 sm:col-span-3 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
               <button type="button" class="btn-secondary" @click="resetRankForm">ยกเลิก</button>
               <button type="submit" :disabled="savingRank" class="btn-primary">
                 {{ savingRank ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
-          </form>
+            </form>
+          </div>
           <EmptyState v-if="!agentRanks.length" icon="trophy" title="ยังไม่มีอันดับ" />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
             <div v-for="r in agentRanks" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
@@ -1676,35 +2378,54 @@ onMounted(async () => {
               + เพิ่ม Generation
             </button>
           </div>
-          <form v-if="showGenerationRuleForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3" @submit.prevent="submitGenerationRule">
-            <div>
-              <label class="text-sm font-bold text-slate-500">Generation ที่</label>
-              <input v-model="generationRuleForm.generation_number" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-              <select v-model="generationRuleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="percentage">%</option>
-                <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-              </select>
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">{{ generationRuleForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-              <input v-model="generationRuleForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="generationRuleForm.effective_from" required />
-                <CalendarDatePicker v-model="generationRuleForm.effective_from" />
+          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
+               modal backgroud สีดำ"). Inline forms opened at the TOP of
+               the page while the row being edited sat further down and
+               often off-screen; the overlay removes the question by
+               removing everything else. -->
+          <div v-if="showGenerationRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showGenerationRuleForm = false">
+            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitGenerationRule">
+            <div class="col-span-2 sm:col-span-4 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div class="min-w-0">
+                <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นราย Generation</p>
+                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ generationRuleForm.generation_number === '' ? 'ยังไม่ได้ระบุ Generation' : `Generation ที่ ${generationRuleForm.generation_number}` }}</h1>
               </div>
+              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showGenerationRuleForm = false">
+                <Icon name="x" :size="20" />
+              </button>
             </div>
-            <div class="col-span-2 sm:col-span-4 flex justify-end">
+              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label class="text-sm font-bold text-slate-500">Generation ที่</label>
+                <input v-model="generationRuleForm.generation_number" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+                <select v-model="generationRuleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                  <option value="percentage">%</option>
+                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">{{ generationRuleForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                <input v-model="generationRuleForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              </div>
+              <div>
+                <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+                <div class="mt-1 flex flex-wrap items-start gap-2">
+                  <BuddhistDateInput v-model="generationRuleForm.effective_from" required />
+                  <CalendarDatePicker v-model="generationRuleForm.effective_from" />
+                </div>
+              </div>
+              </div>
+            <div class="col-span-2 sm:col-span-4 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+              <button type="button" class="btn-secondary" @click="showGenerationRuleForm = false">ยกเลิก</button>
               <button type="submit" :disabled="savingGenerationRule" class="btn-primary">
                 {{ savingGenerationRule ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
-          </form>
+            </form>
+          </div>
           <EmptyState v-if="!generationRules.length" icon="users" title="ยังไม่มีอัตราตาม Generation" />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
             <div v-for="gr in generationRules" :key="gr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
@@ -1767,24 +2488,17 @@ onMounted(async () => {
         </div>
         <div class="space-y-3">
           <div>
-            <label class="text-sm font-bold text-slate-500">Cert Tier ของผู้ขาย</label>
-            <select v-model="simulateCertTierId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="" disabled>เลือก Tier</option>
-              <option v-for="ct in certTiers" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
-            </select>
-          </div>
-          <div>
             <label class="text-sm font-bold text-slate-500">ยอดขายสมมติ (บาท)</label>
             <input v-model="simulateAmountThb" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
-          <div v-if="simulateCertTierId" class="p-3 rounded-lg bg-slate-50 border border-slate-200">
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200">
             <template v-if="simulateResult?.rule">
               <p class="text-sm font-bold text-slate-900">คอมมิชชั่นทางตรง: {{ formatSatang(simulateResult.amountSatang) }}</p>
               <p class="text-xs text-slate-400 mt-1">
                 อิงตามกฎ: {{ ruleScopeLabel(simulateResult.rule) }} · {{ formatRate(simulateResult.rule.rate_type, simulateResult.rule.rate_value) }}
               </p>
             </template>
-            <p v-else class="text-xs text-rose-600">ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้กับสินค้านี้ + Tier นี้</p>
+            <p v-else class="text-xs text-rose-600">ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้กับสินค้านี้</p>
             <p class="text-xs text-slate-400 mt-2">
               * ตัวอย่างนี้แสดงเฉพาะคอมมิชชั่นทางตรงจากยอดขาย ไม่รวมโครงสร้าง Override/Matrix/Generation/อันดับ ซึ่งคำนวณจริงที่ฝั่งเซิร์ฟเวอร์เมื่อมีการขายจริงเท่านั้น
             </p>
@@ -1839,14 +2553,14 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- Step 2: อัตราตาม Cert Tier -->
+        <!-- Step 2: อัตราคอมมิชชั่น (flat-rate ต่อสินค้า, ADR-035) -->
         <div v-else-if="wizardStep === 2" class="space-y-3">
           <p class="text-xs text-slate-400">
-            ใส่อัตรา % สำหรับ Cert Tier ที่ต้องการ (เว้นว่างได้ถ้ายังไม่ตั้งตอนนี้) — ต้องการอัตราคงที่ (บาท) แทน % ให้ไปตั้งค่าที่ "การตั้งค่าทั้งหมด → กฎคอมมิชชั่น" แทน
+            ใส่อัตรา % สำหรับสินค้านี้ (เว้นว่างได้ถ้ายังไม่ตั้งตอนนี้) — ต้องการอัตราคงที่ (บาท) แทน % ให้ไปตั้งค่าที่ "การตั้งค่าทั้งหมด → กฎคอมมิชชั่น" แทน
           </p>
-          <div v-for="ct in certTiers" :key="ct.id" class="flex items-center gap-3">
-            <span class="text-sm font-bold text-slate-700 w-28 shrink-0">{{ ct.name }}</span>
-            <input v-model="wizardRateInputs[ct.id]" type="number" min="0" step="0.01" placeholder="% เช่น 10" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          <div class="flex items-center gap-3">
+            <span class="text-sm font-bold text-slate-700 w-28 shrink-0">อัตราคอมมิชชั่น</span>
+            <input v-model="wizardRateInput" type="number" min="0" step="0.01" placeholder="% เช่น 10" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
           <div v-if="wizardRateError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ wizardRateError }}</div>
           <div class="flex justify-between">
@@ -1943,10 +2657,8 @@ onMounted(async () => {
           </div>
           <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">
             <p class="font-bold text-slate-900">{{ wizardProduct?.name }} — {{ wizardEffectivePlanType ? planTypeLabels[wizardEffectivePlanType] : '' }}</p>
-            <ul class="mt-2 space-y-1 text-xs text-slate-500">
-              <li v-for="r in wizardSummaryRates" :key="r.tier.id">{{ r.tier.name }}: {{ formatRate(r.rule!.rate_type, r.rule!.rate_value) }}</li>
-            </ul>
-            <p v-if="!wizardSummaryRates.length" class="text-xs text-slate-400 mt-2">ยังไม่ได้ตั้งอัตราคอมมิชชั่นสำหรับ Tier ใดเลย</p>
+            <p v-if="wizardSummaryRate" class="mt-2 text-xs text-slate-500">อัตราคอมมิชชั่น: {{ formatRate(wizardSummaryRate.rate_type, wizardSummaryRate.rate_value) }}</p>
+            <p v-else class="text-xs text-slate-400 mt-2">ยังไม่ได้ตั้งอัตราคอมมิชชั่นสำหรับสินค้านี้</p>
           </div>
           <div class="flex justify-end">
             <button class="btn-primary" @click="closeWizard">เสร็จสิ้น</button>

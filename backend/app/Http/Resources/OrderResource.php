@@ -42,6 +42,17 @@ class OrderResource extends JsonResource
             'public_token' => $this->public_token,
             'public_pay_url' => self::publicPayUrl($this->resource),
             'client_name' => $this->whenLoaded('client', fn () => $this->client?->name),
+            // TASK-212 — prefills <ShareLinkModal>'s recipient field so the
+            // agent confirms an address rather than retyping one (human's
+            // answer, 2026-08-19: "ดึงอีเมลลูกค้ามาให้ แก้ไขได้").
+            //
+            // Not a new disclosure: this is the agent's OWN client, whose
+            // email they already read on the clients screen, and every
+            // reader of this Resource is inside the same company
+            // (TenantScope + OrderPolicy). whenLoaded, so a caller that did
+            // not eager-load `client` gets the key omitted rather than an
+            // N+1 per row.
+            'client_email' => $this->whenLoaded('client', fn () => $this->client?->email),
             'product_name' => $this->whenLoaded('product', fn () => $this->product?->name),
             'agent' => $this->whenLoaded('agent', fn () => [
                 'id' => $this->agent?->id,

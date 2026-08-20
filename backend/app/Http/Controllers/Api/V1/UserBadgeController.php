@@ -7,6 +7,7 @@ use App\Http\Requests\Gamification\StoreUserBadgeRequest;
 use App\Http\Resources\UserBadgeResource;
 use App\Models\UserBadge;
 use App\Services\Gamification\UserBadgeService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -21,6 +22,10 @@ class UserBadgeController extends Controller
         $this->authorize('viewAny', UserBadge::class);
 
         $query = UserBadge::with(['user', 'badge']);
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()->isAgent()) {
             $query->where('user_id', $request->user()->id);

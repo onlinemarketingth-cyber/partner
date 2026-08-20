@@ -3,8 +3,10 @@
 # scripts/deploy.sh — Sync Vision Agent one-command deploy.
 #
 # Run via `npm run deploy` from the repo root. What it does, in order:
-#   1. Refuses to run with uncommitted changes (deploy always ships an
-#      exact commit, never working-tree drift).
+#   1. Git pre-flight, so one command really is one command: offers to
+#      commit a dirty tree (interactively — never under --yes), and, if
+#      you are on a feature branch, pushes it and merges it into
+#      GIT_BRANCH, which is the branch the server actually resets to.
 #   2. Builds frontend/ and frontend-admin/ locally (vite build, which
 #      also type-checks — see each app's package.json "build" script).
 #      Hostinger shared hosting has no Node, so builds always happen
@@ -13,6 +15,7 @@
 #   4. rsync each app's dist/ to its own subdomain folder on Hostinger.
 #   5. SSH in and update the backend: git fetch + hard reset to the
 #      pushed commit, composer install --no-dev, migrate --force,
+#      re-create public/storage (gitignored, so a hard reset drops it),
 #      cache config/routes/views, restart the queue worker. Wrapped in
 #      maintenance mode (php artisan down/up) so nothing serves a
 #      half-migrated state mid-deploy.
@@ -124,18 +127,91 @@ if ! $DRY_RUN; then
 fi
 ok "SSH reachable."
 
+# ---------- git pre-flight: get the work ONTO $GIT_BRANCH ----------
+#
+# 2026-08-20 (human request: "ทำให้จบในการสั่งที่เดียวได้ไหม") — this block
+# replaces two checks that each stopped at the diagnosis and made the human
+# go and finish the job by hand.
+#
+# The second of them was worse than inconvenient, it was DANGEROUS. It
+# warned that you were on a different branch and then offered to "continue
+# anyway" — but the server does `git reset --hard origin/$GIT_BRANCH`, so
+# continuing anyway deploys whatever is on main and silently ships NONE of
+# the work you are standing on. A prompt whose "yes" answer is always
+# wrong is not a safeguard.
+START_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
 if [[ -n "$(git status --porcelain)" ]]; then
-  fail "Working tree has uncommitted changes. Commit or stash before deploying."
+  echo
+  warn "Working tree has uncommitted changes:"
+  git status --short
+  echo
+  # NEVER auto-commit unattended. Committing a file list nobody read is
+  # how a .env, a database dump or a debug script reaches a public repo,
+  # and --yes exists precisely for contexts where nobody is reading. The
+  # interactive path below is a human looking at the list above and
+  # answering for it; -y is not.
+  if $ASSUME_YES; then
+    fail "Uncommitted changes, and --yes is set. Refusing to commit files nobody has looked at. Commit or stash them yourself, then re-run."
+  fi
+  read -r -p "Commit ALL of the above as one commit and continue? [y/N] " reply
+  [[ "$reply" =~ ^[Yy]$ ]] || fail "Aborted. Commit or stash, then re-run."
+  read -r -p "Commit message: " commit_msg
+  [[ -n "${commit_msg// /}" ]] || fail "Empty commit message — aborted."
+  run git add -A
+  run git commit -m "$commit_msg"
+  ok "Committed."
 fi
 ok "Working tree clean."
 
-CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$CURRENT_BRANCH" != "$GIT_BRANCH" ]]; then
-  warn "You're on branch '$CURRENT_BRANCH', but GIT_BRANCH is '$GIT_BRANCH' in .env.deploy."
+if [[ "$START_BRANCH" != "$GIT_BRANCH" ]]; then
+  echo
+  warn "You are on '$START_BRANCH', but the server deploys '$GIT_BRANCH' (git reset --hard origin/$GIT_BRANCH)."
+  echo "     Deploying without merging would ship $GIT_BRANCH as it stands and none of this branch's work."
+  echo
   if ! $ASSUME_YES; then
-    read -r -p "Continue anyway? [y/N] " reply
-    [[ "$reply" =~ ^[Yy]$ ]] || fail "Aborted."
+    read -r -p "Merge '$START_BRANCH' into '$GIT_BRANCH' and deploy that? [Y/n] " reply
+    [[ -z "$reply" || "$reply" =~ ^[Yy]$ ]] || fail "Aborted — nothing was merged, pushed or deployed."
   fi
+
+  # Push the feature branch FIRST, before touching $GIT_BRANCH. If anything
+  # below goes wrong the work is already safe on the remote, and the branch
+  # stays on GitHub afterwards so the merge has a reviewable other side.
+  info "Pushing '$START_BRANCH' to $GIT_REMOTE..."
+  run git push -u "$GIT_REMOTE" "$START_BRANCH"
+
+  info "Merging '$START_BRANCH' into '$GIT_BRANCH'..."
+  run git checkout "$GIT_BRANCH"
+  # --ff-only: if local $GIT_BRANCH has diverged from the remote, that is a
+  # real situation needing a real decision, not something to resolve inside
+  # a deploy script.
+  run git pull --ff-only "$GIT_REMOTE" "$GIT_BRANCH"
+
+  if ! $DRY_RUN; then
+    # --no-ff so the release is ONE identifiable commit on $GIT_BRANCH —
+    # the thing you revert if this deploy turns out to be a mistake.
+    if ! git merge --no-ff -m "Merge branch '$START_BRANCH'" "$START_BRANCH"; then
+      git merge --abort || true
+      git checkout "$START_BRANCH" || true
+      fail "Merge conflict between '$START_BRANCH' and '$GIT_BRANCH'. Nothing was deployed and you are back on '$START_BRANCH'. Resolve it by hand, then re-run."
+    fi
+  fi
+  ok "Merged into $GIT_BRANCH."
+fi
+
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
+# What is about to run against the LIVE DATABASE, shown before the one
+# confirmation below rather than as a separate prompt.
+#
+# `migrate --force` further down is the single most irreversible thing this
+# script does, and until now the only way to know what it would run was to
+# SSH in and look. A schema change you did not expect is exactly the moment
+# to answer "no" — but only if you were told. Read-only, and `|| true`
+# because a failure to LIST migrations must never be a reason not to deploy.
+PENDING_MIGRATIONS=""
+if [[ "$SKIP_BACKEND" != true ]] && ! $DRY_RUN; then
+  PENDING_MIGRATIONS="$(ssh_run "cd '$BACKEND_REMOTE_PATH' && $PHP_BIN artisan migrate:status --pending 2>/dev/null | grep -Ei 'pending' || true" 2>/dev/null || true)"
 fi
 
 COMMIT_SHA="$(git rev-parse --short HEAD)"
@@ -146,6 +222,12 @@ echo "  backend:         $([ "$SKIP_BACKEND" = true ] && echo skipped || echo "$
 echo "  frontend:        $([ "$SKIP_FRONTEND" = true ] && echo skipped || echo "$FRONTEND_REMOTE_PATH")"
 echo "  frontend-admin:  $([ "$SKIP_FRONTEND_ADMIN" = true ] && echo skipped || echo "$FRONTEND_ADMIN_REMOTE_PATH")"
 echo "  github push:     $([ "$SKIP_PUSH" = true ] && echo skipped || echo "$GIT_REMOTE/$GIT_BRANCH")"
+if [[ -n "$PENDING_MIGRATIONS" ]]; then
+  echo
+  echo "  ${c_yellow}migrations that will run on the LIVE database:${c_reset}"
+  echo "$PENDING_MIGRATIONS" | sed 's/^/    /'
+  echo "  ${c_yellow}Back the database up first if any of these are unfamiliar — a migration cannot be un-run.${c_reset}"
+fi
 echo
 if ! $ASSUME_YES; then
   read -r -p "Proceed? [y/N] " reply
@@ -221,6 +303,30 @@ git checkout '$GIT_BRANCH'
 git reset --hard 'origin/$GIT_BRANCH'
 $COMPOSER_BIN install --no-dev --optimize-autoloader --no-interaction
 $PHP_BIN artisan migrate --force
+# 2026-08-20 — public/storage is GITIGNORED, so \`git reset --hard\` above
+# never restores it. On a server where it is missing, every uploaded logo,
+# avatar, banner and theme asset 404s: the file is on disk under
+# storage/app/public but nothing web-servable points at it, so the request
+# falls through to Laravel's router and renders a 404. That is exactly what
+# happened on production (theme nav logo, 2026-08-20).
+#
+# NOT \`php artisan storage:link\` — DELIBERATELY. Hostinger disables both
+# symlink() and exec() in PHP, so that command dies with
+# "Call to undefined function Illuminate\Filesystem\exec()" (Laravel's
+# link() falls back to exec('ln -s') when symlink() is missing, and then
+# that is disabled too). Verified on this server, 2026-08-20.
+#
+# The SHELL's \`ln\` has no such restriction, so the link is made here
+# instead. Idempotent: an existing correct symlink is left alone, and a
+# REAL directory at that path is reported rather than deleted — blowing
+# away a folder somebody put there on purpose is not this script's call.
+if [ -L public/storage ]; then
+  echo '  public/storage symlink already present.'
+elif [ -e public/storage ]; then
+  echo '  WARNING: public/storage exists and is NOT a symlink — left untouched. Uploaded files may 404.'
+else
+  ln -s "\$(pwd)/storage/app/public" public/storage && echo '  public/storage symlink created.'
+fi
 $PHP_BIN artisan config:cache
 $PHP_BIN artisan route:cache
 $PHP_BIN artisan view:cache
@@ -243,3 +349,11 @@ fi
 
 echo
 ok "Deploy complete — commit $COMMIT_SHA is live."
+
+# You started somewhere else and this script moved you. Say so, once —
+# silently leaving someone on a different branch than the one they were
+# working on is how the next commit lands in the wrong place.
+if [[ "$START_BRANCH" != "$GIT_BRANCH" ]]; then
+  echo "     You are now on '$GIT_BRANCH' (you started on '$START_BRANCH')."
+  echo "     Back to it with:  git checkout $START_BRANCH"
+fi

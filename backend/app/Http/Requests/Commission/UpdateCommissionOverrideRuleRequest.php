@@ -18,7 +18,22 @@ class UpdateCommissionOverrideRuleRequest extends FormRequest
      */
     public function rules(): array
     {
+        // TASK-214 — the scope is editable on update, same as the agent
+        // rate's. company_id is not: a rule never changes tenant (BR-6).
+        $companyId = $this->route('commission_override_rule')?->company_id;
+
         return [
+            'product_id' => [
+                'sometimes', 'nullable', 'integer',
+                Rule::exists('products', 'id')->where('company_id', $companyId),
+                Rule::prohibitedIf(fn () => $this->filled('product_category_id')),
+            ],
+            'product_category_id' => [
+                'sometimes', 'nullable', 'integer',
+                Rule::exists('product_categories', 'id')->where('company_id', $companyId),
+                Rule::prohibitedIf(fn () => $this->filled('product_id')),
+            ],
+            'manager_cert_tier_id' => ['sometimes', 'nullable', 'integer', 'exists:cert_tiers,id'],
             'rate_type' => ['sometimes', 'required', Rule::enum(CommissionRateType::class)],
             'rate_value' => ['sometimes', 'required', 'integer', 'min:0'],
             'effective_from' => ['sometimes', 'required', 'date'],

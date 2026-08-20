@@ -12,9 +12,20 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
 
-// TASK-025 / ADR-006 config — CommissionOverrideRulePolicy already
-// excludes Agent from every action here (viewAny too), same as
-// CommissionRuleController.
+// CommissionOverrideRulePolicy already excludes Agent from every action
+// here (viewAny too), same as CommissionRuleController.
+//
+// TASK-214 — index() returns EVERY row, not a page.
+//
+// It used to ->paginate() at Laravel's default 15 while the only client
+// (the Admin rate list) reads `data` and nothing else. That was survivable
+// while a company could hold at most one row per cert tier — three or four
+// in practice. Now that a rate can be scoped per product, a mid-sized
+// catalogue blows past 15 immediately, and the failure mode is the worst
+// kind: the sixteenth rate silently vanishes from the screen while still
+// being the one that pays. Same reasoning, same fix as BrandController's
+// (TASK-202). These are config tables read by one admin screen — bounded
+// by how many rules a human typed, not by data volume.
 class CommissionOverrideRuleController extends Controller
 {
     public function __construct()
@@ -25,7 +36,10 @@ class CommissionOverrideRuleController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         return CommissionOverrideRuleResource::collection(
-            CommissionOverrideRule::query()->with('managerCertTier')->latest('effective_from')->paginate()
+            CommissionOverrideRule::query()
+                ->with(['managerCertTier', 'product', 'productCategory'])
+                ->latest('effective_from')
+                ->get()
         );
     }
 
@@ -33,19 +47,19 @@ class CommissionOverrideRuleController extends Controller
     {
         $rule = $service->create($request->validated(), $request->user());
 
-        return new CommissionOverrideRuleResource($rule->load('managerCertTier'));
+        return new CommissionOverrideRuleResource($rule->load(['managerCertTier', 'product', 'productCategory']));
     }
 
     public function show(CommissionOverrideRule $commissionOverrideRule): CommissionOverrideRuleResource
     {
-        return new CommissionOverrideRuleResource($commissionOverrideRule->load('managerCertTier'));
+        return new CommissionOverrideRuleResource($commissionOverrideRule->load(['managerCertTier', 'product', 'productCategory']));
     }
 
     public function update(UpdateCommissionOverrideRuleRequest $request, CommissionOverrideRule $commissionOverrideRule, CommissionOverrideRuleService $service): CommissionOverrideRuleResource
     {
         $rule = $service->update($commissionOverrideRule, $request->validated());
 
-        return new CommissionOverrideRuleResource($rule->load('managerCertTier'));
+        return new CommissionOverrideRuleResource($rule->load(['managerCertTier', 'product', 'productCategory']));
     }
 
     public function destroy(CommissionOverrideRule $commissionOverrideRule): Response

@@ -57,33 +57,45 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
     }
 
     // -----------------------------------------------------------------
-    // §2.2 — a second rule for the SAME product (different cert tier, so
-    // it doesn't also trip the overlap check) with a MISMATCHED rate_type
-    // is rejected with 422, and the product's locked-in format is
-    // untouched by the rejected attempt.
+    // §2.2 — a second rule for the SAME product with a MISMATCHED
+    // rate_type is rejected with 422, and the product's locked-in format
+    // is untouched by the rejected attempt.
+    //
+    // ADR-035 (2026-08-18) update: this used to give the second/third
+    // POSTs a different cert_tier_id to dodge CommissionRuleService's
+    // overlap check (cert_tier_id used to be part of a rule's uniqueness
+    // scope). It no longer is — overlap is now purely by (company,
+    // product/category/company-default scope, date range), so two rules
+    // for the same product on overlapping dates collide regardless of
+    // any cert_tier_id sent. The rejected (mismatched-rate_type) POST
+    // still overlaps the first rule's date range on purpose — the
+    // FormRequest's rate_type-consistency check runs before the
+    // Service's overlap check, so it still fails with a `rate_type`
+    // error specifically, not an overlap one. The final (matching-type)
+    // POST is given a non-overlapping date range instead, since with
+    // cert_tier_id no longer differentiating scope that's the only way
+    // for a second rule on the same product to legitimately coexist.
     // -----------------------------------------------------------------
 
     public function test_a_second_rule_for_the_same_product_with_a_different_rate_type_is_rejected(): void
     {
         [$admin, $product] = $this->makeAdminAndProduct();
-        $basicTier = CertTier::factory()->create();
-        $highTier = CertTier::factory()->create();
 
-        // First rule locks the product into 'percentage'.
+        // First rule locks the product into 'percentage', bounded so a
+        // later non-overlapping rule can coexist with it below.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
-            'cert_tier_id' => $basicTier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 500,
-            'effective_from' => now()->toDateString(),
+            'effective_from' => '2026-01-01',
+            'effective_to' => '2026-06-30',
         ])->assertCreated();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
-            'cert_tier_id' => $highTier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
             'rate_value' => 500,
-            'effective_from' => now()->toDateString(),
+            'effective_from' => '2026-02-01',
         ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('rate_type');
@@ -93,15 +105,15 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
             $product->fresh()->commission_rate_type,
         );
 
-        // A rule for the SAME cert tier + matching rate_type is still
-        // fine — confirms the rejection above was specifically about the
-        // mismatch, not some other side effect of the second POST.
+        // A rule for a non-overlapping date range with a matching
+        // rate_type is still fine — confirms the rejection above was
+        // specifically about the mismatch, not some other side effect
+        // of the second POST.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
-            'cert_tier_id' => $highTier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 700,
-            'effective_from' => now()->toDateString(),
+            'effective_from' => '2026-07-01',
         ])->assertCreated();
     }
 

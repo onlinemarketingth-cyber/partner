@@ -19,6 +19,9 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — one company scope for the whole app.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
 import { compressImage } from '@/utils/imageCompression'
 import { generateQrDataUrl } from '@/utils/qrCode'
@@ -100,12 +103,6 @@ interface Theme {
   // to ag-lead in this task's write-up; kept here (rather than left out
   // entirely) so the UI needs no further change once that lands.
   recommended_slot_count?: number | null
-}
-
-interface CompanyItem {
-  id: number
-  name: string
-  slug: string
 }
 
 // Neutral fallbacks used ONLY to give the native color inputs a value while
@@ -359,10 +356,13 @@ const icons = reactive<Record<string, string>>(
   Object.fromEntries(NAV_ICON_FIELDS.map((f) => [f.key, ''])),
 )
 
-// Super Admin company picker.
-const companies = ref<CompanyItem[]>([])
-const selectedCompanyId = ref<number | null>(null)
-const selectedCompany = computed(() => companies.value.find((c) => c.id === selectedCompanyId.value) ?? null)
+// TASK-208 — was a local company <select> + its own /companies fetch. The
+// alias below keeps every existing read in this (very long) file working
+// unchanged while the single source of truth moves to the global store.
+const activeCompany = useActiveCompanyStore()
+const selectedCompanyId = computed(() => activeCompany.companyId)
+const selectedCompany = computed(() =>
+  activeCompany.companies.find((c) => c.id === activeCompany.companyId) ?? null)
 
 // Color <input type=color> needs a non-null value; keep the "unset ⇒ null"
 // semantic while still showing a sensible swatch. get() falls back to the
@@ -452,29 +452,14 @@ async function loadTheme(): Promise<void> {
   }
 }
 
-async function loadCompanies(): Promise<void> {
-  try {
-    const res = await api.get<{ data: CompanyItem[] }>('/companies')
-    companies.value = res.data
-    const first = res.data[0]
-    if (first) {
-      selectedCompanyId.value = first.id
-      await loadTheme()
-    }
-  } catch (e) {
-    loadError.value = e instanceof ApiError ? e.message : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
-
 onMounted(async () => {
-  if (isSuperAdmin.value) {
-    await loadCompanies()
-  } else {
-    await loadTheme()
-  }
+  await activeCompany.loadCompanies()
+  // With no company scoped (ทุกบริษัท) there is no single theme to edit —
+  // the notice in the template explains it and loadTheme() is skipped.
+  if (!activeCompany.requiresCompanyPick) await loadTheme()
 })
 
-watch(selectedCompanyId, () => { if (isSuperAdmin.value) loadTheme() })
+watch(() => activeCompany.companyId, () => { if (!activeCompany.requiresCompanyPick) loadTheme() })
 
 // TASK-063 (human-reported 2026-07-31) — the Agent Portal /login page
 // can't know which company's theme to paint until SOMEONE is logged in
@@ -806,10 +791,24 @@ const previewNavLabels = computed(() =>
  *     they send and uses their own, so sending one would only be
  *     misleading about where the data came from.
  *
- *     Still NOT possible, by the same human decision: applying one
- *     company's preset to another. The server rejects a preset whose
- *     company disagrees with the selected one, and this screen never
- *     offers it — the list only ever shows the selected company's presets.
+ *     Still NOT possible: applying one company's OWNED preset to another.
+ *     The server rejects a preset whose company disagrees with the selected
+ *     one, and this screen never offers it — the list only ever shows the
+ *     selected company's presets, plus the shared ones described next.
+ *
+ *  3. TASK-217 (human request, 2026-08-20) — a Super Admin can now save a
+ *     preset as ชุดกลาง: `company_id` NULL on the server, `is_shared` here.
+ *     Those rows appear in EVERY company's list and apply onto whichever
+ *     company is currently selected. That is the one and only way a palette
+ *     crosses a tenant boundary, and it is deliberate: a preset carries hex
+ *     values and nothing else (§3.2's colour surface — no names, no logos,
+ *     no business data), so sharing one is the platform shipping a look,
+ *     not a tenancy leak.
+ *
+ *     The checkbox that creates them is rendered for a Super Admin only,
+ *     and the server strips the flag for anybody else — so a Company Admin
+ *     who somehow sends it gets an ordinary company-scoped preset, not a
+ *     422 about a control they were never shown.
  */
 interface ThemePreset {
   id: number
@@ -823,6 +822,17 @@ interface ThemePreset {
    * server refuses both verbs with a 422 whatever the client sends.
    */
   is_system: boolean
+  /**
+   * TASK-217 — ชุดกลาง: the row has no owning company, so EVERY company
+   * sees it and may apply it. Only a Super Admin may rename or delete one
+   * (it is in use by every other tenant, and nothing on a Company Admin's
+   * screen would tell them so).
+   *
+   * Independent of `is_system`: a shared preset is normally one a Super
+   * Admin saved by hand, while the five designed palettes are per-company
+   * system rows. A row can be both, and the read-only rules simply stack.
+   */
+  is_shared: boolean
   /** Colour surface only — see §3.2 for the exact key list. */
   colors: Record<string, unknown>
 }
@@ -849,6 +859,12 @@ const presets = ref<ThemePreset[]>([])
 const presetsLoading = ref(false)
 const presetsError = ref('')
 const newPresetName = ref('')
+/**
+ * TASK-217 — "ใช้ร่วมทุกบริษัท". Reset after every successful save on
+ * purpose: sharing is the exceptional case, so it must be re-chosen each
+ * time rather than remembered and applied to the next save by surprise.
+ */
+const newPresetShared = ref(false)
 const presetNameInput = ref<HTMLInputElement | null>(null)
 const savingPreset = ref(false)
 const applyingPreset = ref(false)
@@ -865,6 +881,31 @@ const renameDraft = ref('')
  * not left to try and get a 422.
  */
 const SYSTEM_PRESET_HINT = 'ชุดสีมาตรฐานของระบบ — ใช้งานได้ แต่เปลี่ยนชื่อหรือลบไม่ได้'
+
+/**
+ * TASK-217 — the tooltip on the "ชุดกลาง" chip. Same principle as
+ * SYSTEM_PRESET_HINT above: say what IS possible first, so an admin looking
+ * at a row with fewer buttons than its neighbours learns why in one hover.
+ */
+const SHARED_PRESET_HINT = 'ชุดสีกลางที่ใช้ร่วมกันทุกบริษัท — กด "ใช้ชุดนี้" เพื่อนำมาใช้กับบริษัทนี้ได้ ส่วนการเปลี่ยนชื่อ/ลบทำได้เฉพาะ Super Admin'
+
+/**
+ * Whether THIS admin may rename or delete THIS preset — i.e. whether the
+ * pencil/bin pair is rendered at all.
+ *
+ * Mirrors ThemePresetPolicy::update() on the server, and is the reason the
+ * controls are ABSENT rather than present-and-failing: an action that is
+ * visible but always answers 422 is worse than one that was never offered
+ * (the same call TASK-164 made for system presets). The server still
+ * refuses independently — this function decides what to draw, never what is
+ * allowed.
+ */
+function canEditPreset(preset: ThemePreset): boolean {
+  if (preset.is_system) return false
+  if (preset.is_shared) return isSuperAdmin.value
+
+  return true
+}
 
 function presetErrorMessage(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback
@@ -984,8 +1025,16 @@ async function savePreset(): Promise<void> {
 
     // Name (+ the company for a Super Admin) only — the server reads the
     // colours itself, and they are now the ones just written above.
-    await api.post('/theme-presets', { name, ...presetCompanyPayload() })
+    await api.post('/theme-presets', {
+      name,
+      ...presetCompanyPayload(),
+      // TASK-217 — Super-Admin-only. Sent only when actually checked, so a
+      // Company Admin's request is byte-for-byte what it was before this
+      // task; the server strips the key for them regardless.
+      ...(isSuperAdmin.value && newPresetShared.value ? { is_shared: true } : {}),
+    })
     newPresetName.value = ''
+    newPresetShared.value = false
     // Re-list rather than push the create response: the list endpoint is
     // the one shape this screen actually depends on.
     await loadPresets()
@@ -1021,10 +1070,10 @@ async function applyPendingPreset(): Promise<void> {
 }
 
 function startRenamePreset(preset: ThemePreset): void {
-  // The button is not rendered for a system preset; this is the second
-  // check, so a future refactor that loses the v-if cannot open an editor
-  // whose save is guaranteed to 422.
-  if (preset.is_system) return
+  // The button is not rendered for a preset this admin may not change;
+  // this is the second check, so a future refactor that loses the v-if
+  // cannot open an editor whose save is guaranteed to 422.
+  if (!canEditPreset(preset)) return
   renamingPresetId.value = preset.id
   renameDraft.value = preset.name
 }
@@ -1072,7 +1121,7 @@ async function deletePendingPreset(): Promise<void> {
 // at company A's presets while every other panel on the screen has moved to
 // B, which is exactly the confusion §5.2 scopes them to avoid. Same
 // watcher shape as the video / team-visibility sections above.
-watch(selectedCompanyId, () => loadPresets())
+watch(() => activeCompany.companyId, () => loadPresets())
 
 onMounted(loadPresets)
 </script>
@@ -1142,23 +1191,13 @@ onMounted(loadPresets)
       {{ saveError || uploadError }}
     </div>
 
-    <!-- Super Admin company picker -->
-    <div v-if="isSuperAdmin" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-      <Icon name="building" :size="18" class="text-brand-600 shrink-0" />
-      <label class="text-xs font-bold text-slate-500 shrink-0">บริษัท</label>
-      <select
-        v-model.number="selectedCompanyId"
-        class="flex-1 max-w-xs px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-      >
-        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
+    <CompanyScopeNotice action="แก้ไขธีม/แบรนด์" />
 
     <p v-if="loadError" class="mt-4 text-sm font-bold text-rose-600">{{ loadError }}</p>
 
-    <div v-if="loading" class="mt-4 text-sm text-slate-400">กำลังโหลด...</div>
+    <div v-if="loading && !activeCompany.requiresCompanyPick" class="mt-4 text-sm text-slate-400">กำลังโหลด...</div>
 
-    <div v-else class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div v-else-if="!activeCompany.requiresCompanyPick" class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- ══════════ LEFT: editor (the four tab panels) ══════════
            TASK-175 §5 — `.theme-tab-panel` caps this column's height in `dvh`
            and lets it scroll on its own; see the <style> block at the bottom
@@ -1469,6 +1508,31 @@ onMounted(loadPresets)
                 </button>
               </div>
 
+              <!-- TASK-217 — Super Admin only. Placed BELOW the name row and
+                   above the list, because it modifies the button directly
+                   above it: a control that changes who a save belongs to has
+                   to be read before that save is pressed, not found
+                   afterwards. Company Admins never see it (the server also
+                   strips the flag for them). -->
+              <label
+                v-if="isSuperAdmin"
+                class="flex items-start gap-2 mb-4 -mt-2 cursor-pointer select-none"
+              >
+                <input
+                  v-model="newPresetShared"
+                  type="checkbox"
+                  class="mt-0.5 w-4 h-4 shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-200"
+                />
+                <span class="text-xs leading-relaxed">
+                  <span class="font-bold text-slate-700">บันทึกเป็นชุดกลาง — ใช้ร่วมกันทุกบริษัท</span>
+                  <span class="block text-slate-400">
+                    ชุดกลางจะขึ้นในรายการของทุกบริษัท และกด "ใช้ชุดนี้" ได้ทุกที่ ·
+                    สีที่เก็บยังคงเป็นสีของบริษัทที่เลือกอยู่ตอนนี้ ·
+                    เปลี่ยนชื่อหรือลบได้เฉพาะ Super Admin
+                  </span>
+                </span>
+              </label>
+
               <p v-if="presetsLoading" class="text-xs text-slate-400">กำลังโหลด...</p>
 
               <EmptyState
@@ -1501,7 +1565,7 @@ onMounted(loadPresets)
                   <!-- Name (inline rename) -->
                   <div class="flex-1 min-w-0">
                     <input
-                      v-if="renamingPresetId === preset.id && !preset.is_system"
+                      v-if="renamingPresetId === preset.id && canEditPreset(preset)"
                       v-model="renameDraft"
                       type="text"
                       maxlength="60"
@@ -1523,12 +1587,24 @@ onMounted(loadPresets)
                         <Icon name="shield_check" :size="11" />
                         ชุดมาตรฐาน
                       </span>
+                      <!-- TASK-217 — a palette every company shares. Its own
+                           chip rather than a variant of the one above: they
+                           answer different questions ("who made this" vs
+                           "who else is using it") and a row can carry both. -->
+                      <span
+                        v-if="preset.is_shared"
+                        :title="SHARED_PRESET_HINT"
+                        class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-brand-50 text-brand-600 text-[11px] font-bold"
+                      >
+                        <Icon name="globe" :size="11" />
+                        ชุดกลาง
+                      </span>
                     </div>
                   </div>
 
                   <!-- Actions -->
                   <div
-                    v-if="renamingPresetId === preset.id && !preset.is_system"
+                    v-if="renamingPresetId === preset.id && canEditPreset(preset)"
                     class="flex items-center gap-1 shrink-0"
                   >
                     <button
@@ -1554,11 +1630,11 @@ onMounted(loadPresets)
                     >
                       ใช้ชุดนี้
                     </button>
-                    <!-- TASK-164 §4 — rename/delete only for a preset the
-                         admin saved themselves. "ใช้ชุดนี้" above stays for
-                         every preset: a system one is read-only, not
-                         unusable. -->
-                    <template v-if="!preset.is_system">
+                    <!-- TASK-164 §4 / TASK-217 — rename/delete only for a
+                         preset THIS admin owns: not a system one, and not a
+                         ชุดกลาง unless they are Super Admin. "ใช้ชุดนี้" above
+                         stays for every preset — read-only is not unusable. -->
+                    <template v-if="canEditPreset(preset)">
                       <button
                         type="button"
                         title="เปลี่ยนชื่อ"
@@ -1587,7 +1663,8 @@ onMounted(loadPresets)
                  "the picker has not resolved a company yet". -->
             <p v-else class="text-xs text-slate-400 leading-relaxed">
               เลือกบริษัทที่ด้านบนของหน้าก่อน แล้วชุดสีของบริษัทนั้นจะแสดงที่นี่ —
-              ชุดสีเป็นของแต่ละบริษัทแยกกัน จึงนำชุดสีของบริษัทหนึ่งไปใช้กับอีกบริษัทไม่ได้
+              ชุดสีที่บันทึกไว้เป็นของแต่ละบริษัทแยกกัน จึงนำของบริษัทหนึ่งไปใช้กับอีกบริษัทไม่ได้
+              ยกเว้น "ชุดกลาง" ที่ใช้ร่วมกันได้ทุกบริษัท
             </p>
           </div>
         </section>

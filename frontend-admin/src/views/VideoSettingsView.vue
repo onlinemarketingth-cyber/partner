@@ -23,6 +23,10 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 — company scope now comes from the header switcher, not a
+// per-screen picker (ADR-038).
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -30,30 +34,10 @@ import Icon from '@/design-system/components/Icon.vue'
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
-interface CompanyItem {
-  id: number
-  name: string
-  slug: string
-}
-
-// Super Admin company picker.
-const companies = ref<CompanyItem[]>([])
-const selectedCompanyId = ref<number | null>(null)
-
-const companiesError = ref('')
-
-async function loadCompanies(): Promise<void> {
-  try {
-    const res = await api.get<{ data: CompanyItem[] }>('/companies')
-    companies.value = res.data
-    const first = res.data[0]
-    if (first) {
-      selectedCompanyId.value = first.id
-    }
-  } catch (e) {
-    companiesError.value = e instanceof ApiError ? e.message : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
+// TASK-208 — this screen used to own a company <select> and its own
+// /companies fetch. Both moved to the global store (ADR-038): one picker in
+// AdminNavigation, one persisted answer, every screen follows it.
+const activeCompany = useActiveCompanyStore()
 
 /*
  * TASK-104 (human, 2026-08-04): "ย้ายเมนูตั้งค่าวิดีโอไปที่ ธีม/แบรนด์
@@ -77,12 +61,12 @@ const videoSettingsError = ref('')
 const videoSettingsSaved = ref(false)
 
 async function loadVideoSettings(): Promise<void> {
-  if (isSuperAdmin.value && !selectedCompanyId.value) return
+  if (activeCompany.requiresCompanyPick) return
   loadingVideoSettings.value = true
   videoSettingsError.value = ''
   try {
     const path = isSuperAdmin.value
-      ? `/video-processing-settings?company_id=${selectedCompanyId.value}`
+      ? `/video-processing-settings?company_id=${activeCompany.companyId}`
       : '/video-processing-settings'
     const res = await api.get<{ data: typeof videoSettingsForm.value }>(path)
     videoSettingsForm.value = res.data
@@ -94,7 +78,7 @@ async function loadVideoSettings(): Promise<void> {
 }
 
 async function saveVideoSettings(): Promise<void> {
-  if (isSuperAdmin.value && !selectedCompanyId.value) {
+  if (activeCompany.requiresCompanyPick) {
     videoSettingsError.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
 
     return
@@ -104,7 +88,7 @@ async function saveVideoSettings(): Promise<void> {
   videoSettingsSaved.value = false
   try {
     await api.put('/video-processing-settings', {
-      ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
       ...videoSettingsForm.value,
     })
     videoSettingsSaved.value = true
@@ -118,12 +102,8 @@ async function saveVideoSettings(): Promise<void> {
 
 // Follows the company picker: changing it reloads the form, so it can
 // never end up describing a different company than what's selected.
-watch(selectedCompanyId, () => loadVideoSettings())
+watch(() => activeCompany.companyId, () => loadVideoSettings())
 onMounted(loadVideoSettings)
-
-onMounted(() => {
-  if (isSuperAdmin.value) loadCompanies()
-})
 </script>
 
 <template>
@@ -137,18 +117,9 @@ onMounted(() => {
       storage-key="admin-video-settings"
     />
 
-    <!-- Super Admin company picker -->
-    <div v-if="isSuperAdmin" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-      <Icon name="building" :size="18" class="text-brand-600 shrink-0" />
-      <label class="text-xs font-bold text-slate-500 shrink-0">บริษัท</label>
-      <select
-        v-model.number="selectedCompanyId"
-        class="flex-1 max-w-xs px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-      >
-        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
-    <p v-if="companiesError" class="mt-2 text-xs font-bold text-rose-600">{{ companiesError }}</p>
+    <!-- TASK-208 — the per-screen picker is gone; scope comes from the
+         header switcher. This only explains the blocked state. -->
+    <CompanyScopeNotice action="แก้ไขตั้งค่าวิดีโอ" />
 
     <section class="mt-4 max-w-2xl bg-white/95 border border-slate-200 rounded-2xl p-5">
       <p class="text-base font-bold text-slate-500 mb-1 flex items-center gap-1.5">
@@ -162,7 +133,7 @@ onMounted(() => {
 
       <p v-if="videoSettingsError" class="mb-2 text-xs font-bold text-rose-600">{{ videoSettingsError }}</p>
 
-      <div v-if="!isSuperAdmin || selectedCompanyId">
+      <div v-if="!activeCompany.requiresCompanyPick">
         <p v-if="loadingVideoSettings" class="text-xs text-slate-400">กำลังโหลด...</p>
         <form v-else class="grid grid-cols-1 gap-3" @submit.prevent="saveVideoSettings">
           <div>

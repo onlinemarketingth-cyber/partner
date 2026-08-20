@@ -22,6 +22,8 @@ class ProductCategoryResource extends JsonResource
             'is_active' => $this->is_active,
             // ADR-026 §3.3 (TASK-132) — category-level journey, null = inherit.
             'pipeline_template_id' => $this->pipeline_template_id,
+            // TASK-202 — see BrandResource; only present when counted.
+            'products_count' => $this->whenCounted('products'),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

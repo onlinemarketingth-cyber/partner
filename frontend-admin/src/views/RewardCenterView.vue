@@ -10,7 +10,7 @@
  * rejected/fulfilled are terminal — only the buttons valid for the
  * row's CURRENT status are ever shown.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -18,6 +18,8 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -28,22 +30,18 @@ function formatDate(iso: string): string {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 type ViewMode = 'items' | 'requests'
 const viewMode = ref<ViewMode>('items')
 
-interface CompanyOption { id: number; name: string }
-const companies = ref<CompanyOption[]>([])
-async function loadCompanyOptions() {
-  if (!isSuperAdmin.value || companies.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companies.value = res.data
-  } catch {
-    /* non-fatal — the company selector just stays empty */
-  }
-}
+// TASK-209 P4 — the company list for the item form comes from the global
+// store (one idempotent fetch for the whole app) rather than a second
+// /companies call owned by this screen.
+const companies = computed(() => activeCompany.companies)
+const loadCompanyOptions = () => activeCompany.loadCompanies()
 
 // ══════════════════════════ Tab A: Reward Items catalog ══════════════════════════
 // TASK-042 §2: reward_type is set on the item itself (App\Enums\RewardType on
@@ -69,7 +67,7 @@ async function loadRewardItems() {
   loadingItems.value = true
   itemsError.value = ''
   try {
-    const res = await api.get<{ data: RewardItem[] }>('/reward-items')
+    const res = await api.get<{ data: RewardItem[] }>(activeCompany.scopedPath('/reward-items'))
     rewardItems.value = res.data
   } catch (e) {
     itemsError.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
@@ -93,7 +91,9 @@ const itemForm = ref({
   reward_type: 'physical' as RewardType,
 })
 function resetItemForm() {
-  itemForm.value = { company_id: '', name: '', description: '', cost_points: '', stock_quantity: '', is_active: true, reward_type: 'physical' }
+  // TASK-209 §5 — default to the header scope; '' (= ทั้งแพลตฟอร์ม) remains a
+  // deliberate choice in the dropdown.
+  itemForm.value = { company_id: activeCompany.companyId ?? '', name: '', description: '', cost_points: '', stock_quantity: '', is_active: true, reward_type: 'physical' }
   editingItemId.value = null
   itemFormError.value = ''
 }
@@ -208,13 +208,17 @@ const redemptions = ref<RedemptionItem[]>([])
 const loadingRedemptions = ref(false)
 const redemptionsLoadedOnce = ref(false)
 const redemptionsError = ref('')
+// TASK-209 P3 — same scope-in-the-query-string rule as the shared copy in
+// agentEdit.ts: this walks every page, so filtering after the fetch would
+// still pull every company's rows over the wire.
 async function fetchAllPages<T>(path: string): Promise<T[]> {
-  const sep = path.includes('?') ? '&' : '?'
-  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${path}${sep}page=1`)
+  const scoped = activeCompany.scopedPath(path)
+  const sep = scoped.includes('?') ? '&' : '?'
+  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${scoped}${sep}page=1`)
   const items = [...first.data]
   const lastPage = first.meta?.last_page ?? 1
   for (let page = 2; page <= lastPage; page++) {
-    const next = await api.get<{ data: T[] }>(`${path}${sep}page=${page}`)
+    const next = await api.get<{ data: T[] }>(`${scoped}${sep}page=${page}`)
     items.push(...next.data)
   }
   return items
@@ -304,6 +308,10 @@ onMounted(() => {
   loadRewardItems()
   loadRedemptions()
 })
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadRewardItems() })
 </script>
 
 <template>
@@ -326,6 +334,8 @@ onMounted(() => {
             @click="viewMode = 'items'"
           >
             <Icon name="trophy" :size="16" />
+
+    <CompanyScopeNotice action="จัดการของรางวัล" />
             รางวัล
           </button>
           <button

@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreProductCategoryRequest;
 use App\Http\Requests\Catalog\UpdateProductCategoryRequest;
 use App\Http\Resources\ProductCategoryResource;
+use App\Models\CommissionRule;
 use App\Models\ProductCategory;
 use App\Services\Catalog\ProductCategoryService;
+use App\Support\CompanyScopeFilter;
 use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -38,7 +40,15 @@ class ProductCategoryController extends Controller
     // nothing.
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = ProductCategory::query()->orderBy('sort_order')->orderBy('name');
+        // TASK-202 — withCount feeds the "ใช้กับสินค้า N" column in the
+        // manage dialog, same purpose and same cost as
+        // BrandController::index()'s (products.category_id is likewise
+        // restrictOnDelete, so the count is what tells an admin in advance
+        // that DeletionGuard will refuse).
+        $query = ProductCategory::query()->withCount('products')->orderBy('sort_order')->orderBy('name');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()?->isAgent()) {
             $query->where('is_active', true);
@@ -69,7 +79,7 @@ class ProductCategoryController extends Controller
         // commission_rules.product_category_id.
         DeletionGuard::ensureNoDependents([
             'สินค้า' => $productCategory->products()->count(),
-            'อัตราคอมมิชชั่นที่ผูกกับหมวดหมู่นี้' => \App\Models\CommissionRule::query()
+            'อัตราคอมมิชชั่นที่ผูกกับหมวดหมู่นี้' => CommissionRule::query()
                 ->where('product_category_id', $productCategory->id)
                 ->count(),
         ]);

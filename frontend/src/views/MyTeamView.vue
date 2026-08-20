@@ -691,11 +691,14 @@ async function submitCreateLink() {
 const showShare = ref(false)
 const shareUrl = ref('')
 const shareHeading = ref('')
+// TASK-212 — the id the share sheet posts to /share-emails.
+const shareLinkId = ref<number | null>(null)
 
 function openShare(link: AgentInviteLink) {
   // Order matters: ShareLinkModal watches `show` and renders the QR from
   // `url` at that moment, so the url must already be in place.
   shareUrl.value = link.public_url
+  shareLinkId.value = link.id
   shareHeading.value = link.label || 'ลิงก์ชวนเข้าทีม'
   showShare.value = true
 }
@@ -1405,7 +1408,16 @@ watch(showCreateSheet, (open) => {
     <!-- Same share sheet product sharing and order payment links use — QR,
          copy, LINE, email, native share. It never talks to the API; it is
          handed a plain https:// URL. -->
-    <ShareLinkModal v-model:show="showShare" :url="shareUrl" :heading="shareHeading" />
+    <!-- TASK-212 — same broadcast reasoning as the product-share sheet:
+         a recruit link has no single intended reader, so the agent types
+         the recipient. -->
+    <ShareLinkModal
+      v-model:show="showShare"
+      :url="shareUrl"
+      :heading="shareHeading"
+      email-type="agent_invite"
+      :email-target-id="shareLinkId"
+    />
 
     <ConfirmDialog
       v-model:show="showRevokeConfirm"

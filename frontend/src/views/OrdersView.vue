@@ -48,6 +48,9 @@ interface Order {
   public_token: string
   public_pay_url: string
   client_name: string | null
+  // TASK-212 — prefill for the share sheet's recipient box. whenLoaded on
+  // OrderResource, hence optional here as well as nullable.
+  client_email?: string | null
   product_name: string | null
   agent?: { id: number; name: string } | null
   referral_id: number
@@ -178,9 +181,17 @@ async function submitCreate() {
 const showShareModal = ref(false)
 const shareUrl = ref('')
 const shareHeading = ref('')
+// TASK-212 — the sheet emails this link itself now (human: "ระบบ อีเมล์ให้
+// ส่งผ่านระบบ"). It needs the order's id, not its URL: /share-emails
+// rebuilds the URL from the order it has just authorized, so that a login
+// cannot be used to mail arbitrary links from the platform's address.
+const shareOrderId = ref<number | null>(null)
+const shareDefaultEmail = ref<string | null>(null)
 function openShare(order: Order) {
   shareUrl.value = order.public_pay_url
   shareHeading.value = `ชำระเงิน ${order.order_number}`
+  shareOrderId.value = order.id
+  shareDefaultEmail.value = order.client_email ?? null
   showShareModal.value = true
 }
 
@@ -475,7 +486,14 @@ const hasOrders = computed(() => orders.value.length > 0)
       </div>
     </Transition>
 
-    <ShareLinkModal v-model:show="showShareModal" :url="shareUrl" :heading="shareHeading" />
+    <ShareLinkModal
+      v-model:show="showShareModal"
+      :url="shareUrl"
+      :heading="shareHeading"
+      email-type="order"
+      :email-target-id="shareOrderId"
+      :default-email="shareDefaultEmail"
+    />
 
     <!-- TASK-079 Phase 2 (UX audit) — replaces window.confirm(). MUST stay
          INSIDE this root element: a sibling of the root turns the view into

@@ -8,6 +8,7 @@ use App\Http\Requests\Catalog\UpdateStorefrontBannerRequest;
 use App\Http\Resources\StorefrontBannerResource;
 use App\Models\StorefrontBanner;
 use App\Services\Catalog\StorefrontBannerService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -29,6 +30,9 @@ class StorefrontBannerController extends Controller
         $query = StorefrontBanner::query()
             ->with(['product.media' => fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order')])
             ->orderBy('sort_order');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         // TASK-156 §3 — "ปิดการใช้งาน ซ่อนทุกที่" (human, 2026-08-10). A
         // deactivated banner is a rule for an Agent (the storefront carousel is

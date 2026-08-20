@@ -43,26 +43,47 @@ class TenantScope implements Scope
      * to. The outer, real query still gets scoped normally once auth()
      * ->user() returns.
      */
-    private static bool $resolvingAuthUser = false;
+    protected static bool $resolvingAuthUser = false;
 
-    public function apply(Builder $builder, Model $model): void
+    /**
+     * Resolve the acting user behind the re-entrancy guard above.
+     *
+     * Extracted from apply() (TASK-217) so SharedOrTenantScope can reuse
+     * the guard rather than paste a second copy of it — two copies of a
+     * static re-entrancy flag is how one of them stops being set.
+     */
+    protected static function actor(): ?object
     {
         if (self::$resolvingAuthUser) {
-            return;
+            return null;
         }
 
         self::$resolvingAuthUser = true;
         try {
-            $user = auth()->user();
+            return auth()->user();
         } finally {
             self::$resolvingAuthUser = false;
         }
+    }
 
+    /**
+     * True when this scope must not narrow anything: no authenticated
+     * user, a re-entrant lookup, or a Super Admin (Section 5, rule 4).
+     */
+    protected static function seesEverything(?object $user): bool
+    {
         if (! $user) {
-            return;
+            return true;
         }
 
-        if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+        return method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin();
+    }
+
+    public function apply(Builder $builder, Model $model): void
+    {
+        $user = self::actor();
+
+        if (self::seesEverything($user)) {
             return;
         }
 

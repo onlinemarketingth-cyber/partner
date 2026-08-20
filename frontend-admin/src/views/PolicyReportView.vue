@@ -26,12 +26,17 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — reports follow the header's company scope too; the
+// two local "บริษัท" dropdowns this page used to own are gone.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
+// TASK-209 P4 — the platform tab is cross-company by definition.
+import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -50,18 +55,11 @@ function formatSatang(satang: number): string {
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
-// ── Company options (Super Admin filter dropdowns — Audit Log + Config Health) ──
-interface CompanyOption { id: number; name: string }
-const companyOptions = ref<CompanyOption[]>([])
-async function ensureCompanyOptionsLoaded() {
-  if (!isSuperAdmin.value || companyOptions.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companyOptions.value = res.data
-  } catch {
-    /* non-fatal — the company filter just stays empty */
-  }
-}
+// TASK-208 — the Audit Log and Config Health tabs both used to carry their
+// own "บริษัท" <select> (each with its own "ทุกบริษัท" option, each forgetting
+// the choice on navigation). Both now read the global scope: null there means
+// exactly what "ทุกบริษัท" meant here, so no behaviour is lost.
+const activeCompany = useActiveCompanyStore()
 
 // ══════════════════════════ Tabs ══════════════════════════
 type Tab = 'audit' | 'platform' | 'compliance' | 'config'
@@ -112,7 +110,6 @@ const auditError = ref('')
 const expandedAuditRowId = ref<number | null>(null)
 
 const auditFilters = ref({
-  company_id: '' as string | number,
   action: '',
   date_from: '',
   date_to: '',
@@ -121,7 +118,7 @@ const auditFilters = ref({
 function auditQuery(page: number): string {
   const params = new URLSearchParams()
   params.set('page', String(page))
-  if (isSuperAdmin.value && auditFilters.value.company_id) params.set('company_id', String(auditFilters.value.company_id))
+  if (isSuperAdmin.value && activeCompany.companyId) params.set('company_id', String(activeCompany.companyId))
   if (auditFilters.value.action) params.set('action', auditFilters.value.action)
   if (auditFilters.value.date_from) params.set('date_from', auditFilters.value.date_from)
   if (auditFilters.value.date_to) params.set('date_to', auditFilters.value.date_to)
@@ -231,13 +228,12 @@ const configComputedAt = ref('')
 const configLoading = ref(false)
 const configLoadedOnce = ref(false)
 const configError = ref('')
-const configCompanyFilter = ref<string | number>('')
 
 async function loadConfigHealthReport() {
   configLoading.value = true
   configError.value = ''
   try {
-    const query = isSuperAdmin.value && configCompanyFilter.value ? `?company_id=${configCompanyFilter.value}` : ''
+    const query = isSuperAdmin.value && activeCompany.companyId ? `?company_id=${activeCompany.companyId}` : ''
     const res = await api.get<{ data: ConfigHealthRow[]; computed_at: string }>(`/config-health-report${query}`)
     configRows.value = res.data
     configComputedAt.value = res.computed_at
@@ -248,7 +244,11 @@ async function loadConfigHealthReport() {
     configLoadedOnce.value = true
   }
 }
-watch(configCompanyFilter, () => loadConfigHealthReport())
+// TASK-208 — both tabs refetch when the header scope changes.
+watch(() => activeCompany.companyId, () => {
+  loadConfigHealthReport()
+  loadAuditLog(1)
+})
 
 // commission_rules has NO platform-default fallback (a company with
 // zero rules genuinely has no commission configured — more urgent),
@@ -279,7 +279,7 @@ watch(
   activeTab,
   (tab) => {
     loadTabIfNeeded(tab)
-    if (isSuperAdmin.value) ensureCompanyOptionsLoaded()
+    if (isSuperAdmin.value) activeCompany.loadCompanies()
   },
   { immediate: true },
 )
@@ -318,13 +318,6 @@ watch(
       </div>
 
       <div class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
-        <div v-if="isSuperAdmin">
-          <label class="block text-xs font-bold text-slate-500 mb-1">บริษัท</label>
-          <select v-model="auditFilters.company_id" class="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white min-w-[10rem]">
-            <option value="">ทุกบริษัท</option>
-            <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
-        </div>
         <div>
           <label class="block text-xs font-bold text-slate-500 mb-1">การกระทำ</label>
           <input v-model="auditFilters.action" placeholder="เช่น commission_rule.created" class="px-3 py-2 rounded-lg border border-slate-200 text-sm min-w-[14rem]" />
@@ -411,9 +404,9 @@ watch(
 
     <!-- ═══════════ Tab 2: รายงานภาพรวมแพลตฟอร์ม (Super Admin only) ═══════════ -->
     <section v-else-if="activeTab === 'platform'" class="mt-4">
-      <div class="mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-        ข้อมูลนี้เห็นได้เฉพาะ Super Admin (ข้ามทุกบริษัทในระบบ)
-      </div>
+      <!-- TASK-209 P4 — this ONE tab ignores the header scope (the other
+           three follow it); say so where the difference is visible. -->
+      <PlatformScopeBadge reason="รายงานนี้เปรียบเทียบข้ามบริษัทเป็นหลัก จึงไม่กรองตามบริษัทที่เลือก" />
       <p v-if="platformComputedAt" class="text-xs text-slate-400 mb-3">คำนวณล่าสุดเมื่อ {{ formatDateTime(platformComputedAt) }}</p>
 
       <div v-if="platformError" class="mb-3 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">{{ platformError }}</div>
@@ -506,12 +499,6 @@ watch(
     <section v-else-if="activeTab === 'config'" class="mt-4">
       <div class="mb-3 flex items-center justify-between gap-3 flex-wrap">
         <p v-if="configComputedAt" class="text-xs text-slate-400">คำนวณล่าสุดเมื่อ {{ formatDateTime(configComputedAt) }}</p>
-        <div v-if="isSuperAdmin">
-          <select v-model="configCompanyFilter" class="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white min-w-[10rem]">
-            <option value="">ทุกบริษัท</option>
-            <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-          </select>
-        </div>
       </div>
 
       <div v-if="configError" class="mb-3 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">{{ configError }}</div>

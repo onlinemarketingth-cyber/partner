@@ -23,3 +23,6 @@ npm-debug.log*
 # not the app's real history, just debris from an earlier abandoned
 # attempt. Root .git is the one real repo now.
 backend/.git_stray_unused/
+
+# Scratch bucket for files staged for manual deletion (device_bash cannot rm).
+_to_delete/

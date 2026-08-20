@@ -403,7 +403,13 @@ export const api = {
     request<T>(path, { method: 'PUT', body: data ? JSON.stringify(data) : undefined }),
   patch: <T>(path: string, data?: unknown) =>
     request<T>(path, { method: 'PATCH', body: data ? JSON.stringify(data) : undefined }),
-  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  // `data` is optional — every pre-existing caller passes none and keeps
+  // working unchanged. Added for DELETE /products/{product}/catalog-link
+  // (ADR-036 unlink), which per the backend contract must carry a JSON
+  // body (the product's new standalone name/brand_id/category_id) — the
+  // one DELETE endpoint in this app that isn't just "delete by id".
+  delete: <T>(path: string, data?: unknown) =>
+    request<T>(path, { method: 'DELETE', body: data ? JSON.stringify(data) : undefined }),
   download: (path: string, filename?: string) => requestDownload(path, filename),
   getBlob: (path: string) => requestBlob(path),
 }

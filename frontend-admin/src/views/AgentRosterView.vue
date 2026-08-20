@@ -32,7 +32,7 @@
  * (roster/active/inactive), so it is not the "fetch the same list twice"
  * case ag-lead ruled out above.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { api, ApiError } from '@/api/client'
@@ -40,6 +40,7 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
 import AgentEditModal from './AgentEditModal.vue'
 import {
   type AgentItem,
@@ -51,6 +52,8 @@ import {
   idNumberPlaceholder,
   normalizeIdNumber,
 } from './agentEdit'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 interface CompanyOption {
   id: number
@@ -74,6 +77,8 @@ interface AgentInviteLinkRef {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const route = useRoute()
 const router = useRouter()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
@@ -113,16 +118,15 @@ async function loadAgents() {
       api.get<{ data: CertTierOption[] }>('/cert-tiers'),
       api.get<{ data: UserCertificationItem[] }>('/user-certifications'),
     ]
-    if (isSuperAdmin.value) {
-      requests.push(api.get<{ data: CompanyOption[] }>('/companies'))
-    }
-    const [res, tiersRes, certsRes, companiesRes] = await Promise.all(requests)
+    // TASK-209 P4 — the company list for the create form comes from the
+    // global store now (one fetch for the whole app, idempotent), not a
+    // second /companies call per screen.
+    if (isSuperAdmin.value) requests.push(activeCompany.loadCompanies())
+    const [res, tiersRes, certsRes] = await Promise.all(requests)
     agents.value = res as AgentItem[]
     certTiers.value = (tiersRes as { data: CertTierOption[] }).data
     certifications.value = (certsRes as { data: UserCertificationItem[] }).data
-    if (companiesRes) {
-      companies.value = (companiesRes as { data: CompanyOption[] }).data
-    }
+    companies.value = activeCompany.companies
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
   } finally {
@@ -251,7 +255,19 @@ function showLinksForAgent(agentId: number) {
 
 // ═══ <AgentEditModal> (TASK-129) ═══
 const editingAgentId = ref<number | null>(null)
-async function onAgentEditorSaved(payload: { leaderChanged: boolean }) {
+
+// TASK-210 (human, 2026-08-19: "กดบันทึก หากบันทึกสำเร็จให้ขึ้นปิดหน้าจอ modal
+// นี้ และขึ้น modal ใหม่ว่าบันทึกสำเร็จ"). The confirmation is raised HERE and
+// not inside the edit modal because the edit modal closes itself on success —
+// anything it rendered goes with it.
+const savedMessage = ref('')
+const showSavedDialog = ref(false)
+
+async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string }) {
+  if (payload.successMessage) {
+    savedMessage.value = payload.successMessage
+    showSavedDialog.value = true
+  }
   await loadAgents()
   if (payload.leaderChanged) await loadInviteLinks()
 }
@@ -279,6 +295,10 @@ onMounted(() => {
   })
   loadInviteLinks()
 })
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAgents() })
 </script>
 
 <template>
@@ -314,6 +334,8 @@ onMounted(() => {
         </div>
       </template>
     </HeroHeader>
+
+    <CompanyScopeNotice action="จัดการรายชื่อตัวแทน" />
 
     <div class="bg-white/95 border border-slate-200 rounded-xl p-4 mt-4">
       <div class="flex flex-col md:flex-row gap-3">
@@ -488,5 +510,8 @@ onMounted(() => {
       @saved="onAgentEditorSaved"
       @show-links="showLinksForAgent"
     />
+
+    <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
+    <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
   </main>
 </template>

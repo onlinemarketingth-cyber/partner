@@ -32,8 +32,12 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { type AgentItem, fetchAllPages } from './agentEdit'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 const errorMessage = ref('')
@@ -144,6 +148,10 @@ async function submitRevokeApproval(item: AgentItem) {
     errorMessage.value = e instanceof ApiError ? `เพิกถอนการอนุมัติไม่สำเร็จ (${e.status})` : 'เพิกถอนการอนุมัติไม่สำเร็จ'
   }
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
 </script>
 
 <template>
@@ -155,6 +163,8 @@ async function submitRevokeApproval(item: AgentItem) {
       accent-color="brand"
       storage-key="agent-approvals"
     />
+
+    <CompanyScopeNotice action="ตรวจอนุมัติตัวแทน" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

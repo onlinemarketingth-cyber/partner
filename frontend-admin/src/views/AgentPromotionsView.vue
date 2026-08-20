@@ -26,6 +26,8 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -70,6 +72,8 @@ function payoutTimingBadgeClass(timing: PayoutTiming): string {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 interface CompanyOption { id: number; name: string }
@@ -114,7 +118,7 @@ async function loadPromotions() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const res = await api.get<{ data: PromotionItem[] }>('/agent-promotions')
+    const res = await api.get<{ data: PromotionItem[] }>(activeCompany.scopedPath('/agent-promotions'))
     promotions.value = res.data
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
@@ -136,13 +140,17 @@ const users = ref<UserOption[]>([])
 // Same paginate()-with-no-args gap already documented in
 // AgentManagementView.vue — /products and /users are Laravel-paginated,
 // reused here rather than duplicating a differently-shaped helper.
+// TASK-209 P3 — same scope-in-the-query-string rule as the shared copy in
+// agentEdit.ts: this walks every page, so filtering after the fetch would
+// still pull every company's rows over the wire.
 async function fetchAllPages<T>(path: string): Promise<T[]> {
-  const sep = path.includes('?') ? '&' : '?'
-  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${path}${sep}page=1`)
+  const scoped = activeCompany.scopedPath(path)
+  const sep = scoped.includes('?') ? '&' : '?'
+  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${scoped}${sep}page=1`)
   const items = [...first.data]
   const lastPage = first.meta?.last_page ?? 1
   for (let page = 2; page <= lastPage; page++) {
-    const next = await api.get<{ data: T[] }>(`${path}${sep}page=${page}`)
+    const next = await api.get<{ data: T[] }>(`${scoped}${sep}page=${page}`)
     items.push(...next.data)
   }
   return items
@@ -157,12 +165,13 @@ async function ensureLookupsLoaded() {
       fetchAllPages<ProductOption>('/products'),
       fetchAllPages<UserOption>('/users?include_inactive=1'),
     ]
-    if (isSuperAdmin.value) requests.push(api.get<{ data: CompanyOption[] }>('/companies'))
-    const [ct, p, u, c] = await Promise.all(requests)
+    // TASK-209 P4 — company list from the global store (see AgentRosterView).
+    if (isSuperAdmin.value) requests.push(activeCompany.loadCompanies())
+    const [ct, p, u] = await Promise.all(requests)
     certTiers.value = (ct as { data: CertTierOption[] }).data
     products.value = p as ProductOption[]
     users.value = u as UserOption[]
-    if (c) companies.value = (c as { data: CompanyOption[] }).data
+    companies.value = activeCompany.companies
     lookupsLoaded.value = true
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลประกอบไม่สำเร็จ')
@@ -368,6 +377,10 @@ function statusBadgeClass(status: PromotionItem['status']): string {
 function statusLabel(status: PromotionItem['status']): string {
   return { draft: 'ฉบับร่าง', active: 'ใช้งาน', ended: 'สิ้นสุดแล้ว' }[status]
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadPromotions() })
 </script>
 
 <template>
@@ -388,6 +401,8 @@ function statusLabel(status: PromotionItem['status']): string {
         </button>
       </template>
     </HeroHeader>
+
+    <CompanyScopeNotice action="จัดการโปรโมชั่นตัวแทน" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -447,7 +462,15 @@ function statusLabel(status: PromotionItem['status']): string {
            so it never gets uncomfortably narrow on small screens). -->
       <div class="w-[60vw] min-w-[320px] max-w-[60vw] bg-white rounded-2xl shadow-lg p-5 max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
-          <p class="text-sm font-bold text-slate-900">{{ editingId ? 'แก้ไข Promotion' : 'สร้าง Promotion ใหม่' }}</p>
+          <!-- TASK-216 — name WHICH promotion. "แก้ไข Promotion" alone
+               reads the same on all of them, and this modal is opened from
+               a list where several can look alike. -->
+          <div class="min-w-0">
+            <p class="text-sm font-bold text-slate-900">{{ editingId ? 'แก้ไข Promotion' : 'สร้าง Promotion ใหม่' }}</p>
+            <p v-if="editingId" class="mt-0.5 text-xs font-bold text-slate-500 truncate">
+              {{ form.name || '(ยังไม่ได้ตั้งชื่อ)' }}
+            </p>
+          </div>
           <button class="text-slate-400 hover:text-slate-600" @click="closeForm">
             <Icon name="x" :size="18" />
           </button>

@@ -25,6 +25,9 @@
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — company scope comes from the header switcher now.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -32,29 +35,9 @@ import Icon from '@/design-system/components/Icon.vue'
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
-interface CompanyItem {
-  id: number
-  name: string
-  slug: string
-}
-
-// Super Admin company picker.
-const companies = ref<CompanyItem[]>([])
-const selectedCompanyId = ref<number | null>(null)
-const companiesError = ref('')
-
-async function loadCompanies(): Promise<void> {
-  try {
-    const res = await api.get<{ data: CompanyItem[] }>('/companies')
-    companies.value = res.data
-    const first = res.data[0]
-    if (first) {
-      selectedCompanyId.value = first.id
-    }
-  } catch (e) {
-    companiesError.value = e instanceof ApiError ? e.message : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
+// TASK-208 — was a per-screen company <select> + its own /companies fetch;
+// both now live in the global store (ADR-038).
+const activeCompany = useActiveCompanyStore()
 
 /*
  * TASK-108 / ADR-024 §5 — "การมองเห็นข้อมูลทีม (หัวหน้าทีม)".
@@ -118,12 +101,12 @@ const teamVisibilityError = ref('')
 const teamVisibilitySaved = ref(false)
 
 async function loadTeamVisibilitySettings(): Promise<void> {
-  if (isSuperAdmin.value && !selectedCompanyId.value) return
+  if (activeCompany.requiresCompanyPick) return
   loadingTeamVisibility.value = true
   teamVisibilityError.value = ''
   try {
     const path = isSuperAdmin.value
-      ? `/team-visibility-settings?company_id=${selectedCompanyId.value}`
+      ? `/team-visibility-settings?company_id=${activeCompany.companyId}`
       : '/team-visibility-settings'
     const res = await api.get<{ data: Partial<TeamVisibilitySettings> }>(path)
     // Spread over the defaults rather than replacing: a company with no row
@@ -139,7 +122,7 @@ async function loadTeamVisibilitySettings(): Promise<void> {
 }
 
 async function saveTeamVisibilitySettings(): Promise<void> {
-  if (isSuperAdmin.value && !selectedCompanyId.value) {
+  if (activeCompany.requiresCompanyPick) {
     teamVisibilityError.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
 
     return
@@ -151,7 +134,7 @@ async function saveTeamVisibilitySettings(): Promise<void> {
     // company_id is only accepted from a Super Admin; for a Company Admin the
     // backend ignores it entirely and scopes the write to their own row (BR-6).
     await api.put('/team-visibility-settings', {
-      ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
       ...teamVisibilityForm.value,
     })
     teamVisibilitySaved.value = true
@@ -163,12 +146,8 @@ async function saveTeamVisibilitySettings(): Promise<void> {
   }
 }
 
-watch(selectedCompanyId, () => loadTeamVisibilitySettings())
+watch(() => activeCompany.companyId, () => loadTeamVisibilitySettings())
 onMounted(loadTeamVisibilitySettings)
-
-onMounted(() => {
-  if (isSuperAdmin.value) loadCompanies()
-})
 </script>
 
 <template>
@@ -182,18 +161,7 @@ onMounted(() => {
       storage-key="admin-team-visibility-settings"
     />
 
-    <!-- Super Admin company picker -->
-    <div v-if="isSuperAdmin" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-      <Icon name="building" :size="18" class="text-brand-600 shrink-0" />
-      <label class="text-xs font-bold text-slate-500 shrink-0">บริษัท</label>
-      <select
-        v-model.number="selectedCompanyId"
-        class="flex-1 max-w-xs px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-      >
-        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
-    <p v-if="companiesError" class="mt-2 text-xs font-bold text-rose-600">{{ companiesError }}</p>
+    <CompanyScopeNotice action="แก้ไขการมองเห็นข้อมูลทีม" />
 
     <section class="mt-4 max-w-2xl bg-white/95 border border-slate-200 rounded-2xl p-5">
       <p class="text-base font-bold text-slate-500 mb-1 flex items-center gap-1.5">
@@ -207,7 +175,7 @@ onMounted(() => {
 
       <p v-if="teamVisibilityError" class="mb-2 text-xs font-bold text-rose-600">{{ teamVisibilityError }}</p>
 
-      <div v-if="!isSuperAdmin || selectedCompanyId">
+      <div v-if="!activeCompany.requiresCompanyPick">
         <p v-if="loadingTeamVisibility" class="text-xs text-slate-400">กำลังโหลด...</p>
         <form v-else class="space-y-4" @submit.prevent="saveTeamVisibilitySettings">
           <!-- Master switch -->

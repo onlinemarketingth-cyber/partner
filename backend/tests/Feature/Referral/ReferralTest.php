@@ -46,6 +46,27 @@ class ReferralTest extends TestCase
         ])->assertUnprocessable()->assertJsonValidationErrors('agent_id');
     }
 
+    /**
+     * TASK-211 — human ruling 2026-08-19 ("คุณเอา * validate ออกจากสาขา").
+     * An agent recording a product of interest from the client drawer is
+     * recording INTEREST, not a booked meeting at a named location, so a
+     * branch they would have to invent is worse data than NULL. This test
+     * exists so the `required` rule cannot quietly come back.
+     */
+    public function test_agent_may_submit_a_referral_without_a_branch(): void
+    {
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $this->passBasicCert($agent, $company);
+        $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+
+        $this->actingAs($agent)->postJson('/api/v1/referrals', [
+            'client_id' => $client->id,
+            'product_id' => $product->id,
+        ])->assertCreated()->assertJsonPath('data.branch', null);
+    }
+
     public function test_agent_with_basic_cert_can_submit_referral_for_own_client(): void
     {
         $company = Company::factory()->create();

@@ -39,6 +39,19 @@ trait ResolvesPresetCompany
      */
     protected function prepareForValidation(): void
     {
+        $this->prepareCompanyForValidation();
+    }
+
+    /**
+     * The actual stripping, split out of prepareForValidation() (TASK-217)
+     * so a Request that needs to strip something ELSE as well can override
+     * the hook and still call this — a trait method is silently shadowed by
+     * a method of the same name on the using class, which would have
+     * quietly disabled this guard the moment StoreThemePresetRequest
+     * defined its own prepareForValidation().
+     */
+    protected function prepareCompanyForValidation(): void
+    {
         if ($this->user()?->isSuperAdmin()) {
             return;
         }

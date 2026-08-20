@@ -4,6 +4,7 @@ namespace Tests\Feature\Sales;
 
 use App\Enums\PaymentStatus;
 use App\Enums\PipelineStage;
+use App\Models\AgentInviteLink;
 use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\Company;
@@ -481,7 +482,12 @@ class SalesTeamOverviewTest extends TestCase
             'company_id' => $company->id,
             'agent_approval_status' => \App\Enums\AgentApprovalStatus::Pending,
         ]);
-        $adminApproved = User::factory()->agent()->create(['company_id' => $company->id]);
+        // Pre-existing bug, unrelated to ADR-035: users.agent_approval_status
+        // defaults to 'approved' at the DB level (2026_07_14_120000), so a
+        // plain User::factory()->agent()->create() is already approved and
+        // the /approve endpoint correctly 422s on it ("not pending"). Needs
+        // ->pendingApproval() explicitly, same as $pending/$rejected above.
+        $adminApproved = User::factory()->agent()->pendingApproval()->create(['company_id' => $company->id]);
         $this->actingAs($admin)->putJson("/api/v1/agent-approvals/{$adminApproved->id}/approve")->assertOk();
 
         $rejected = User::factory()->agent()->create([
@@ -491,9 +497,23 @@ class SalesTeamOverviewTest extends TestCase
         $this->actingAs($admin)->putJson("/api/v1/agent-approvals/{$rejected->id}/reject", ['reason' => 'เอกสารไม่ครบ'])->assertOk();
 
         // Leader-approved: acting as the leader through the same endpoint.
+        // Pre-existing bug, unrelated to ADR-035: LeaderRecruitScope::mayApprove()
+        // (ADR-025 §7) requires FOUR conditions, not just is_team_leader +
+        // manager_id — the target must also carry recruited_via_agent_link_id
+        // pointing at an AgentInviteLink owned by this same leader, or the
+        // Policy denies with 403 regardless of the manager_id match. A bare
+        // manager_id assignment (e.g. set by hand in an Admin edit) is NOT
+        // enough to unlock leader-scoped approval — only recruiting through
+        // the leader's own invite link is.
+        $inviteLink = AgentInviteLink::create([
+            'company_id' => $company->id,
+            'agent_id' => $leader->id,
+            'token' => \Illuminate\Support\Str::random(64),
+        ]);
         $leaderApproved = User::factory()->agent()->create([
             'company_id' => $company->id,
             'manager_id' => $leader->id,
+            'recruited_via_agent_link_id' => $inviteLink->id,
             'agent_approval_status' => \App\Enums\AgentApprovalStatus::Pending,
         ]);
         $this->actingAs($leader)->putJson("/api/v1/agent-approvals/{$leaderApproved->id}/approve")->assertOk();

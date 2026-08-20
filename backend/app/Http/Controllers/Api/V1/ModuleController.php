@@ -12,6 +12,7 @@ use App\Models\Module;
 use App\Models\User;
 use App\Services\Academy\ModuleOrderService;
 use App\Services\Academy\ModuleService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -89,9 +90,13 @@ class ModuleController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        return ModuleResource::collection(
-            $this->visibleTo($request->user())->orderBy('sort_order')->paginate()
-        );
+        $query = $this->visibleTo($request->user())->orderBy('sort_order');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL and
+        // BEFORE paginate() (narrowing a paginator would page the unfiltered set).
+        CompanyScopeFilter::apply($query, $request);
+
+        return ModuleResource::collection($query->paginate());
     }
 
     public function store(StoreModuleRequest $request, ModuleService $service): ModuleResource

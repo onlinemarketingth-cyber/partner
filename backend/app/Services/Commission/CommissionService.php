@@ -50,8 +50,7 @@ class CommissionService
         // Injected rather than resolved inline so this Service keeps
         // asking the same question every endpoint and Resource asks.
         private readonly CommissionSplitSettingService $commissionSplitSettingService,
-    ) {
-    }
+    ) {}
 
     /**
      * Idempotent: if a ledger entry already exists for this referral,
@@ -93,10 +92,15 @@ class CommissionService
             return null;
         }
 
-        $rule = $this->resolveCommissionRule($referral->product, $tier->id);
+        // ADR-035: $tier is still fetched above purely as a BR-1 safety
+        // net (an agent with no passed cert tier shouldn't be able to
+        // reach this point at all — ReferralService::submit() already
+        // gates on it, this is defense-in-depth) — it no longer feeds
+        // resolveCommissionRule(), which is flat-rate by scope only now.
+        $rule = $this->resolveCommissionRule($referral->product);
 
         if (! $rule) {
-            Log::warning("CommissionService: no commission recorded for referral {$referral->id} — no active commission_rule for product {$referral->product_id} (or its category, or a company-wide default) / cert_tier {$tier->id}. Configure one in Product Catalog (BR-2).");
+            Log::warning("CommissionService: no commission recorded for referral {$referral->id} — no active commission_rule for product {$referral->product_id} (or its category, or a company-wide default). Configure one in Product Catalog (BR-2).");
 
             return null;
         }
@@ -147,7 +151,7 @@ class CommissionService
 
         if ($effectivePlanType === CommissionPlanType::Affiliate) {
             $affiliateMode = $referral->product->effectiveAffiliateOverrideMode();
-            $affiliateOverride = $this->resolveAffiliateOverride($agent, $affiliateMode, $productPriceSatang, $amountSatang);
+            $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, $affiliateMode, $productPriceSatang, $amountSatang);
 
             if ($affiliateOverride && $affiliateMode === AffiliateOverrideMode::Deductive) {
                 // Round the manager's cut first (already done inside
@@ -316,25 +320,29 @@ class CommissionService
     {
         $manager = $sellingAgent->manager;
         $depth = 0;
+        // TASK-214 — resolved ONCE, outside the walk: the rate is now a
+        // property of the PRODUCT, identical for every manager in the
+        // chain, so re-querying it per hop would be the same answer at N
+        // times the cost.
+        $overrideRule = $this->resolveOverrideRule($referral->product);
 
         while ($manager !== null && $depth < self::MAX_OVERRIDE_CHAIN_DEPTH) {
+            // Still required, and still per-manager: holding a cert tier
+            // is what makes a manager ELIGIBLE. Only the rate stopped
+            // depending on which tier it is.
             $managerTier = $manager->highestPassedCertTier();
 
-            if ($managerTier) {
-                $overrideRule = $this->findOverrideRule($managerTier->id);
-
-                if ($overrideRule) {
-                    $this->createOverrideLedgerRow(
-                        $referral,
-                        $manager,
-                        $managerTier,
-                        $overrideRule,
-                        $this->computeAmount($overrideRule->rate_type, $overrideRule->rate_value, $productPriceSatang),
-                        $productPriceSatang,
-                        $appliedPromotion,
-                        $sellingAgent,
-                    );
-                }
+            if ($managerTier && $overrideRule) {
+                $this->createOverrideLedgerRow(
+                    $referral,
+                    $manager,
+                    $managerTier,
+                    $overrideRule,
+                    $this->computeAmount($overrideRule->rate_type, $overrideRule->rate_value, $productPriceSatang),
+                    $productPriceSatang,
+                    $appliedPromotion,
+                    $sellingAgent,
+                );
             }
 
             $manager = $manager->manager;
@@ -357,7 +365,7 @@ class CommissionService
      *
      * @return array{manager: User, managerTier: CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
      */
-    private function resolveAffiliateOverride(User $sellingAgent, AffiliateOverrideMode $mode, int $productPriceSatang, int $agentAmountSatang): ?array
+    private function resolveAffiliateOverride(User $sellingAgent, Product $product, AffiliateOverrideMode $mode, int $productPriceSatang, int $agentAmountSatang): ?array
     {
         $manager = $sellingAgent->manager;
 
@@ -371,7 +379,7 @@ class CommissionService
             return null;
         }
 
-        $overrideRule = $this->findOverrideRule($managerTier->id);
+        $overrideRule = $this->resolveOverrideRule($product);
 
         if (! $overrideRule) {
             return null;
@@ -394,19 +402,51 @@ class CommissionService
     }
 
     /**
-     * TASK-025's own manager_cert_tier_id lookup, extracted verbatim
-     * (same query, same effective_from/effective_to filter, same
-     * "most recent effective_from wins" tiebreak) so recordOverrides()
-     * (Unilevel) and resolveAffiliateOverride() (TASK-194, Affiliate)
-     * share one implementation instead of two copies of this query.
+     * TASK-214 — resolve the team-leader override rate FOR A PRODUCT.
+     *
+     * Replaces TASK-025's `findOverrideRule(int $managerCertTierId)`. Two
+     * human rulings on 2026-08-19 drove this:
+     *
+     *   1. "ไม่ต้องผูก" — the rate no longer varies by the manager's cert
+     *      tier. That was the last place certification acted as a rate
+     *      multiplier; ADR-035 had already removed it from the selling
+     *      agent's rate for the same reason (passing more exams is not a
+     *      reason to earn a higher percentage).
+     *   2. "ตามที่คุณเสนอ" — the scope order is IDENTICAL to
+     *      resolveCommissionRule()'s: product, then category, then the
+     *      company-wide default. Deliberately the same order, and
+     *      deliberately the same shape of code, because two different
+     *      resolution orders in one system is a hole nobody remembers.
+     *
+     * The manager still has to HOLD a passed cert tier to be paid at all —
+     * that check lives in the two callers and is untouched. It is a gate,
+     * not a rate key (ADR-035's own framing of what certification is for).
+     *
+     * Legacy rows keep a non-null manager_cert_tier_id and both scope
+     * columns NULL, so they resolve exactly as they always did: the
+     * company-wide default. What changes for them is that several such
+     * rows can no longer coexist unambiguously — see
+     * commission:collapse-override-tiers.
      */
-    private function findOverrideRule(int $managerCertTierId): ?CommissionOverrideRule
+    private function resolveOverrideRule(Product $product): ?CommissionOverrideRule
     {
-        return CommissionOverrideRule::where('manager_cert_tier_id', $managerCertTierId)
-            ->where('effective_from', '<=', now())
+        $baseQuery = fn () => CommissionOverrideRule::where('effective_from', '<=', now())
             ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
-            ->orderByDesc('effective_from')
-            ->first();
+            ->orderByDesc('effective_from');
+
+        $rule = $baseQuery()->where('product_id', $product->id)->first();
+        if ($rule) {
+            return $rule;
+        }
+
+        if ($product->category_id) {
+            $rule = $baseQuery()->whereNull('product_id')->where('product_category_id', $product->category_id)->first();
+            if ($rule) {
+                return $rule;
+            }
+        }
+
+        return $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
     }
 
     /**
@@ -467,6 +507,20 @@ class CommissionService
      * (product-only) query always used — this widens WHICH row can match,
      * not how a match among several candidates is picked.
      *
+     * ADR-035 — no longer filters by cert_tier_id. Research + human
+     * decision (2026-08-18): neither traditional insurance brokerage nor
+     * MLM comp plans tie RATE to certification level — cert tier is
+     * BR-1's access gate (can this agent sell at all), never a rate
+     * multiplier. "Higher commission for better results" is Stairstep/
+     * Breakaway's job (agent_ranks, ADR-011 §3c), not Unilevel's. One
+     * rate per product/category/company scope now, full stop. If more
+     * than one commission_rules row happens to match the same scope for
+     * the active date window (legacy data from before this ADR, or a
+     * scope that was never cleaned up), "most recent effective_from
+     * wins" below still picks one deterministically rather than erroring
+     * — CommissionRuleService::assertNoOverlap() is what actually
+     * prevents that ambiguity going forward for NEW rows.
+     *
      * Public — DispatchDueRenewalCommissions (TASK-024) must resolve a
      * CURRENT rule (for its renewal_rate_type/value) the exact same way
      * recordForReferral() does. Before TASK-028 that command could get
@@ -476,10 +530,9 @@ class CommissionService
      * would silently stop finding renewal rates for any referral whose
      * original sale was priced via a category/company-default rule.
      */
-    public function resolveCommissionRule(Product $product, int $certTierId): ?CommissionRule
+    public function resolveCommissionRule(Product $product): ?CommissionRule
     {
-        $baseQuery = fn () => CommissionRule::where('cert_tier_id', $certTierId)
-            ->where('effective_from', '<=', now())
+        $baseQuery = fn () => CommissionRule::where('effective_from', '<=', now())
             ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
             ->orderByDesc('effective_from');
 

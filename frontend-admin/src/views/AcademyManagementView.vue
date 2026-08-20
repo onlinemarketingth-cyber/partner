@@ -27,6 +27,9 @@ import QuizQuestionEditor from '@/design-system/components/QuizQuestionEditor.vu
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import QuizLibraryPanel from './QuizLibraryPanel.vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — the app-wide company scope.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { classifyEmbedUrl, toEmbedUrl } from '@/utils/embedUrl'
 // TASK-188 §4.B3 — the builder's copy, defined once. Four of these strings used
 // to exist twice in this file and two of the pairs had already drifted.
@@ -363,22 +366,13 @@ const exams = ref<ExamItem[]>([])
 // this screen — POST /modules and POST /exams both 422'd).
 const authStore = useAuthStore()
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
-interface CompanyOption {
-  id: number
-  name: string
-}
-const companyOptions = ref<CompanyOption[]>([])
-const selectedCompanyId = ref<number | null>(null)
-async function loadCompanyOptionsIfNeeded() {
-  if (!isSuperAdmin.value || companyOptions.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companyOptions.value = res.data
-  } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดรายชื่อบริษัทไม่สำเร็จ (${e.status})` : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
-if (isSuperAdmin.value) loadCompanyOptionsIfNeeded()
+// TASK-208 — this screen carried TWO copies of the same company <select>
+// (one for modules/quizzes/progress, one for exams) plus its own /companies
+// fetch. All of it now comes from the global store; the alias keeps the rest
+// of this 4000-line file reading unchanged.
+const activeCompany = useActiveCompanyStore()
+const selectedCompanyId = computed(() => activeCompany.companyId)
+activeCompany.loadCompanies()
 
 /**
  * Follows every page of a paginated index endpoint.
@@ -2426,16 +2420,10 @@ async function confirmGrantCertification() {
          explicit company_id from a Super Admin (BR-6 — TenantScope does not
          constrain them, so an unnamed company would mean "aggregate every
          tenant on the platform"). -->
-    <div
-      v-if="isSuperAdmin && (activeTab === 'modules' || activeTab === 'quizzes' || activeTab === 'progress')"
-      class="mt-4 flex flex-wrap items-center gap-2"
-    >
-      <label class="text-xs font-bold text-slate-500">บริษัท (Super Admin)</label>
-      <select v-model.number="selectedCompanyId" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm">
-        <option :value="null">— เลือกบริษัท —</option>
-        <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
+    <CompanyScopeNotice
+      v-if="activeTab === 'modules' || activeTab === 'quizzes' || activeTab === 'progress'"
+      action="จัดการเนื้อหา Academy"
+    />
 
     <!-- TASK-150 / ADR-030 — the quiz LIBRARY. -->
     <QuizLibraryPanel
@@ -3960,13 +3948,7 @@ async function confirmGrantCertification() {
 
     <!-- Exams -->
     <section v-if="activeTab === 'exams'" class="mt-4">
-      <div v-if="isSuperAdmin" class="mb-2 flex items-center gap-2">
-        <label class="text-xs font-bold text-slate-500">บริษัท (Super Admin)</label>
-        <select v-model.number="selectedCompanyId" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm">
-          <option :value="null">— เลือกบริษัท —</option>
-          <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-      </div>
+      <CompanyScopeNotice action="จัดการแบบประเมินผล" />
       <div class="flex justify-end mb-2">
         <button class="btn-primary" @click="showExamForm = !showExamForm">
           + เพิ่มแบบประเมินผล

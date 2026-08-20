@@ -178,33 +178,46 @@ class CommissionCalculationTest extends TestCase
         $this->assertDatabaseCount('commission_ledger', 0);
     }
 
-    public function test_rate_is_looked_up_by_the_agents_highest_passed_tier(): void
+    // ADR-035 (2026-08-18, human decision) — commission RATE no longer
+    // depends on the agent's cert tier at all; cert tier stays purely
+    // BR-1's access gate. This replaces the old
+    // test_rate_is_looked_up_by_the_agents_highest_passed_tier, which
+    // asserted the exact opposite (a higher tier resolving a different,
+    // higher-rate commission_rules row) — that behavior is gone by
+    // design, not a regression. "Higher commission for better results"
+    // is Stairstep/Breakaway's job now (agent_ranks), not Unilevel's.
+    public function test_rate_does_not_depend_on_the_agents_cert_tier_only_product_category_company_scope_does(): void
     {
         $company = Company::factory()->create();
-        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $agentBasic = User::factory()->agent()->create(['company_id' => $company->id]);
+        $agentIntermediate = User::factory()->agent()->create(['company_id' => $company->id]);
         $basic = CertTier::firstOrCreate(['key' => 'basic'], ['name' => 'Basic', 'sort_order' => 1, 'is_mandatory' => true]);
         $intermediate = CertTier::firstOrCreate(['key' => 'intermediate'], ['name' => 'Intermediate', 'sort_order' => 2, 'is_mandatory' => false]);
-        UserCertification::create(['company_id' => $company->id, 'user_id' => $agent->id, 'cert_tier_id' => $basic->id, 'passed_at' => now()]);
-        UserCertification::create(['company_id' => $company->id, 'user_id' => $agent->id, 'cert_tier_id' => $intermediate->id, 'passed_at' => now()]);
+        UserCertification::create(['company_id' => $company->id, 'user_id' => $agentBasic->id, 'cert_tier_id' => $basic->id, 'passed_at' => now()]);
+        UserCertification::create(['company_id' => $company->id, 'user_id' => $agentIntermediate->id, 'cert_tier_id' => $basic->id, 'passed_at' => now()]);
+        UserCertification::create(['company_id' => $company->id, 'user_id' => $agentIntermediate->id, 'cert_tier_id' => $intermediate->id, 'passed_at' => now()]);
 
-        $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
         $product = Product::factory()->create(['company_id' => $company->id, 'price_satang' => 1000000]);
-        CommissionRule::factory()->create(['company_id' => $company->id, 'cert_tier_id' => $basic->id, 'product_id' => $product->id, 'rate_value' => 300]);
-        CommissionRule::factory()->create(['company_id' => $company->id, 'cert_tier_id' => $intermediate->id, 'product_id' => $product->id, 'rate_value' => 500]);
+        // ONE flat rule for this product scope — no cert_tier_id dimension
+        // to it anymore; both agents below resolve to this SAME row.
+        CommissionRule::factory()->create(['company_id' => $company->id, 'cert_tier_id' => null, 'product_id' => $product->id, 'rate_value' => 500]);
 
-        $referral = Referral::create([
-            'company_id' => $company->id, 'client_id' => $client->id, 'agent_id' => $agent->id, 'product_id' => $product->id,
-            'branch' => 'Silom', 'preferred_time' => now()->addDay(), 'current_stage' => PipelineStage::CompleteRegistered,
-            'meeting_number' => null, 'submitted_at' => now(),
-        ]);
-        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+        foreach ([$agentBasic, $agentIntermediate] as $agent) {
+            $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
+            $referral = Referral::create([
+                'company_id' => $company->id, 'client_id' => $client->id, 'agent_id' => $agent->id, 'product_id' => $product->id,
+                'branch' => 'Silom', 'preferred_time' => now()->addDay(), 'current_stage' => PipelineStage::CompleteRegistered,
+                'meeting_number' => null, 'submitted_at' => now(),
+            ]);
+            $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
 
-        // Higher (Intermediate, 5%) tier's rate should win, not Basic's.
-        $this->assertDatabaseHas('commission_ledger', [
-            'referral_id' => $referral->id,
-            'cert_tier_id_at_time' => $intermediate->id,
-            'amount_satang' => 50000, // 1,000,000 * 500 / 10000
-        ]);
+            // Same rule, same amount, regardless of which tier the agent
+            // holds — 1,000,000 * 500 / 10000 = 50,000 satang either way.
+            $this->assertDatabaseHas('commission_ledger', [
+                'referral_id' => $referral->id,
+                'amount_satang' => 50000,
+            ]);
+        }
     }
 
     // ADR-011/TASK-028 — commission_rules resolution order: product ->

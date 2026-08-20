@@ -361,6 +361,8 @@ const {
   showShareModal,
   shareUrl,
   shareHeading,
+  shareOrderId,
+  shareDefaultEmail,
   ensureOrdersLoaded,
   orderFor,
   openShareFor,
@@ -1087,6 +1089,25 @@ const creatingReferral = ref(false)
 const referralForm = ref({ product_id: '', branch: '', preferred_time: '' })
 
 /**
+ * TASK-211 — human, 2026-08-19: "หน้า frontend บันทึกสินค้าไม่ได้", then
+ * "คุณเอา * validate ออกจากสาขา" — so สาขา is now optional (server-side too)
+ * and สินค้า is the only thing this can complain about.
+ *
+ * The form was not broken: สาขา was empty, and BOTH the submit handler and
+ * the button's `disabled` binding tested the same condition — so pressing
+ * บันทึก did nothing, sent nothing, and said nothing. In the dark theme
+ * `disabled:opacity-50` on a brand-coloured button is not a difference the
+ * eye reads as "disabled", so the only thing the agent could conclude was
+ * that saving is broken (confirmed from their DevTools capture: no POST
+ * /referrals was ever made).
+ *
+ * The fix is to let the press through and name the missing field. Kept as
+ * its own ref rather than the drawer-wide `errorMessage` so the sentence
+ * renders inside the form it is about.
+ */
+const referralFormError = ref('')
+
+/**
  * TASK-173 Phase 2 — product options for AppSelect. Stringified ids, so
  * `referralForm.product_id` stays the string it is initialised and RESET to
  * (`''`), the falsy guard in `submitReferral()` keeps working, and the
@@ -1099,7 +1120,16 @@ const productSelectOptions = computed(() =>
 )
 
 async function submitReferral() {
-  if (!selectedClientId.value || !referralForm.value.product_id || !referralForm.value.branch) return
+  if (!selectedClientId.value) return
+
+  referralFormError.value = ''
+  if (!referralForm.value.product_id) {
+    referralFormError.value = 'กรุณาเลือกสินค้า'
+    return
+  }
+  // สาขา is NOT checked here — human ruling 2026-08-19, TASK-211: the field
+  // is optional, and StoreReferralRequest was relaxed to `nullable` in the
+  // same change so this form and the server agree.
 
   creatingReferral.value = true
   errorMessage.value = ''
@@ -1110,10 +1140,11 @@ async function submitReferral() {
     await api.post('/referrals', {
       client_id: selectedClientId.value,
       product_id: Number(referralForm.value.product_id),
-      branch: referralForm.value.branch,
+      branch: referralForm.value.branch.trim() || undefined,
       preferred_time: referralForm.value.preferred_time || undefined,
     })
     referralForm.value = { product_id: '', branch: '', preferred_time: '' }
+    referralFormError.value = ''
     showReferralForm.value = false
     await refreshSelectedClient()
     toast.success('เพิ่มสินค้าที่สนใจแล้ว')
@@ -1936,24 +1967,51 @@ watch(isListMode, (listMode) => {
             <p v-else-if="!productSelectOptions.length" class="text-xs text-ink-warning">
               ยังไม่มีสินค้าให้เลือก — ตรวจสอบที่ Admin ว่าสินค้าถูกเปิดใช้งานแล้วหรือยัง
             </p>
-            <AppSelect
-              v-model="referralForm.product_id"
-              :options="productSelectOptions"
-              placeholder="เลือกสินค้า"
-              title="เลือกสินค้า"
-              aria-label="เลือกสินค้า"
-            />
-            <input v-model="referralForm.branch" placeholder="สาขา" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm" />
-            <BuddhistDateInput v-model="referralForm.preferred_time" type="datetime-local" />
+            <!-- TASK-211 — mark what is required and what is not BEFORE the
+                 agent fills the form, not after they press a button that
+                 does nothing. สาขา became optional on the human's ruling
+                 (2026-08-19); StoreReferralRequest was relaxed to match, so
+                 the two sides cannot disagree. -->
+            <div>
+              <p class="mb-1 text-xs font-bold text-ink-card-muted">สินค้า <span class="text-ink-danger">*</span></p>
+              <AppSelect
+                v-model="referralForm.product_id"
+                :options="productSelectOptions"
+                placeholder="เลือกสินค้า"
+                title="เลือกสินค้า"
+                aria-label="เลือกสินค้า"
+              />
+            </div>
+            <div>
+              <label for="referral-branch" class="mb-1 block text-xs font-bold text-ink-card-muted">
+                สาขา <span class="font-normal">(ไม่บังคับ)</span>
+              </label>
+              <input
+                id="referral-branch"
+                v-model="referralForm.branch"
+                placeholder="เช่น สาขาสีลม"
+                class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm"
+              />
+            </div>
+            <div>
+              <p class="mb-1 text-xs font-bold text-ink-card-muted">เวลาที่สะดวกนัด <span class="font-normal">(ไม่บังคับ)</span></p>
+              <BuddhistDateInput v-model="referralForm.preferred_time" type="datetime-local" />
+            </div>
+            <p v-if="referralFormError" class="text-xs font-bold text-ink-danger" role="alert">
+              {{ referralFormError }}
+            </p>
             <div class="flex gap-2">
+              <!-- Only `creatingReferral` disables this now. A press with a
+                   field missing has to REACH submitReferral() — that is what
+                   produces the message above. -->
               <button
-                :disabled="creatingReferral || !referralForm.product_id || !referralForm.branch"
+                :disabled="creatingReferral"
                 class="min-h-[44px] px-3 py-1.5 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform disabled:opacity-50 inline-flex items-center justify-center"
                 @click="submitReferral"
               >
                 {{ creatingReferral ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
-              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showReferralForm = false">ยกเลิก</button>
+              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showReferralForm = false; referralFormError = ''">ยกเลิก</button>
             </div>
           </div>
 
@@ -2081,7 +2139,16 @@ watch(isListMode, (listMode) => {
          "เก็บเงินเลย" opens. Same rule as the dialogs above: it MUST stay
          INSIDE <main>. Also outside the drawer's own <Transition>, so
          closing the drawer never takes the sheet with it. -->
-    <ShareLinkModal v-model:show="showShareModal" :url="shareUrl" :heading="shareHeading" />
+    <!-- TASK-212 — email-* props are what let the sheet send through the
+         platform SMTP instead of handing off to a mail client. -->
+    <ShareLinkModal
+      v-model:show="showShareModal"
+      :url="shareUrl"
+      :heading="shareHeading"
+      email-type="order"
+      :email-target-id="shareOrderId"
+      :default-email="shareDefaultEmail"
+    />
 
     <!-- TASK-085 — category filter, moved out of the header row. -->
     <FilterSheet

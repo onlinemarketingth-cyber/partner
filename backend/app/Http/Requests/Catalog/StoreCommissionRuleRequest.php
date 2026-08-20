@@ -12,16 +12,25 @@ use Illuminate\Validation\Rule;
 
 // BR-2: rate_value is always an integer (basis points for "percentage",
 // satang for "fixed_satang" — BR-3). product_id/product_category_id must
-// belong to the same company; cert_tier_id is global so no company check
-// needed there. Overlap-with-existing-rule validation lives in
-// CommissionRuleService, not here — it needs a query, not just input
+// belong to the same company. Overlap-with-existing-rule validation lives
+// in CommissionRuleService, not here — it needs a query, not just input
 // shape.
 //
 // ADR-011/TASK-028: product_id is no longer required — omitting it (and
-// product_category_id) means a company-wide default rule for the cert
-// tier. At most ONE of product_id/product_category_id may be set;
-// Rule::prohibitedIf enforces that mutual exclusion here so a malformed
-// "scoped to both" row can never reach CommissionRuleService.
+// product_category_id) means a company-wide default rule. At most ONE
+// of product_id/product_category_id may be set; Rule::prohibitedIf
+// enforces that mutual exclusion here so a malformed "scoped to both"
+// row can never reach CommissionRuleService.
+//
+// ADR-035 (2026-08-18): cert_tier_id is no longer required. Research +
+// human decision: commission RATE should never be driven by cert tier
+// (that's BR-1's access-gate job) — "higher commission for better
+// results" belongs to the Stairstep/Breakaway plan type's agent_ranks
+// mechanic instead. Still accepted if sent (nullable at the DB level
+// now — see 2026_08_18_100000_make_cert_tier_id_nullable_on_commission_rules_table)
+// purely so existing callers/data aren't broken, but the Admin UI no
+// longer collects it for new rules (TASK-209) and CommissionService's
+// resolution ignores it entirely (TASK-206).
 class StoreCommissionRuleRequest extends FormRequest
 {
     use ValidatesCommissionRateCap;
@@ -29,7 +38,24 @@ class StoreCommissionRuleRequest extends FormRequest
 
     public function authorize(): bool
     {
-        return $this->user()->can('create', CommissionRule::class);
+        if (! $this->user()->can('create', CommissionRule::class)) {
+            return false;
+        }
+
+        // ADR-036 §5/§6 — same Super-Admin-only-when-catalog-linked
+        // restriction as ProductPolicy::update(), extended to commission
+        // config: a Company Admin may not create a product-scoped rule
+        // for a product that is linked to a shared catalog item. Company-
+        // wide (no product_id) and category-scoped rules are unaffected.
+        if (! $this->user()->isSuperAdmin() && $this->filled('product_id')) {
+            $product = \App\Models\Product::find($this->integer('product_id'));
+
+            if ($product?->catalog_item_id !== null) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     protected function effectiveCompanyId(): ?int
@@ -48,7 +74,7 @@ class StoreCommissionRuleRequest extends FormRequest
 
         return [
             'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
-            'cert_tier_id' => ['required', 'integer', 'exists:cert_tiers,id'],
+            'cert_tier_id' => ['nullable', 'integer', 'exists:cert_tiers,id'],
             'product_id' => [
                 'nullable', 'integer',
                 Rule::exists('products', 'id')->where('company_id', $companyId),

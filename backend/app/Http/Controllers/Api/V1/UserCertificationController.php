@@ -10,6 +10,7 @@ use App\Models\User;
 use App\Models\UserCertification;
 use App\Services\Academy\CertificatePdfService;
 use App\Services\Academy\ManualCertificationService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -24,6 +25,10 @@ class UserCertificationController extends Controller
         $this->authorize('viewAny', UserCertification::class);
 
         $query = UserCertification::query()->with('certTier');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()->isAgent()) {
             $query->where('user_id', $request->user()->id);

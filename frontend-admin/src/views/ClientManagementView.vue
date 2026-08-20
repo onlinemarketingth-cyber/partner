@@ -11,13 +11,15 @@
  * Search: free-text `q` matches name/phone/email (partial); `national_id`
  * is EXACT match only and needs all 13 digits (PDPA — Section 6).
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 interface ReferralItem {
   id: number
@@ -78,6 +80,13 @@ const kpis = computed(() => [
 ])
 
 const route = useRoute()
+/**
+ * TASK-209 — client data is personal health data (PDPA). Human decision,
+ * 2026-08-19: this screen may NEVER list across companies, not even
+ * read-only. In ทุกบริษัท mode it fetches nothing at all and shows the
+ * notice instead — stricter than every other screen, deliberately.
+ */
+const activeCompany = useActiveCompanyStore()
 const router = useRouter()
 
 function buildClientsPath(): string {
@@ -86,16 +95,25 @@ function buildClientsPath(): string {
   if (nationalId.value.trim()) params.set('national_id', nationalId.value.trim())
   if (agentFilter.value) params.set('agent_id', agentFilter.value)
   const qs = params.toString()
-  return `/clients${qs ? `?${qs}` : ''}`
+
+  return activeCompany.scopedPath(`/clients${qs ? `?${qs}` : ''}`)
 }
 
 async function loadAll() {
+  // Hard stop: no company scoped => no request. See the store comment above.
+  if (activeCompany.requiresCompanyPick) {
+    clients.value = []
+    agents.value = []
+    hasLoadedOnce.value = true
+
+    return
+  }
   loading.value = true
   errorMessage.value = ''
   try {
     const [c, u] = await Promise.all([
       api.get<{ data: ClientItem[] }>(buildClientsPath()),
-      api.get<{ data: AgentOption[] }>('/users'),
+      api.get<{ data: AgentOption[] }>(activeCompany.scopedPath('/users')),
     ])
     clients.value = c.data
     agents.value = u.data
@@ -108,6 +126,7 @@ async function loadAll() {
 }
 
 async function search() {
+  if (activeCompany.requiresCompanyPick) return
   searching.value = true
   errorMessage.value = ''
   try {
@@ -170,6 +189,9 @@ function statusBadgeClasses(statusKey: string): string {
       return 'bg-slate-100 text-slate-600'
   }
 }
+
+// TASK-209 — refetch when the header company changes.
+watch(() => activeCompany.companyId, () => loadAll())
 </script>
 
 <template>
@@ -184,6 +206,11 @@ function statusBadgeClasses(statusKey: string): string {
       storage-key="admin-clients"
     />
 
+    <CompanyScopeNotice action="ดูข้อมูลลูกค้า" />
+
+    <!-- TASK-209 — everything below is inside this guard: no company scoped
+         means no client data on screen at all (PDPA). -->
+    <template v-if="!activeCompany.requiresCompanyPick">
     <!-- Search bar -->
     <div class="bg-white/95 border border-slate-200 rounded-xl p-4 mt-4">
       <div class="flex flex-col md:flex-row gap-3">
@@ -276,6 +303,7 @@ function statusBadgeClasses(statusKey: string): string {
           </div>
         </div>
       </TransitionGroup>
+    </template>
     </template>
   </main>
 </template>

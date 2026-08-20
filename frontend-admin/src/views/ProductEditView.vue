@@ -27,6 +27,9 @@ import { api, ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
+// TASK-208 / ADR-038 — the app-wide company scope replaces this screen's
+// create-mode company <select>.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
@@ -60,22 +63,26 @@ const authStore = useAuthStore()
 // exact isSuperAdmin/companyOptions/selectedCompanyId pattern already
 // used for video-processing settings in ProductCatalogView.vue.
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
-interface CompanyOption {
-  id: number
-  name: string
-}
-const companyOptions = ref<CompanyOption[]>([])
-const selectedCompanyId = ref<number | null>(null)
+// TASK-208 — creating a product no longer asks WHICH company inside the
+// form: it lands in whatever company the header switcher is scoped to, which
+// is also the company whose brands/categories the pickers below list. Those
+// two answers coming from one place is the point — before this, picking
+// company A in the form while the brand list showed company B's was two
+// clicks away.
+const activeCompany = useActiveCompanyStore()
+const selectedCompanyId = computed(() => activeCompany.companyId)
 
-async function loadCompanyOptionsIfNeeded() {
-  if (!isSuperAdmin.value || companyOptions.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companyOptions.value = res.data
-  } catch (e) {
-    errorMessage.value = apiErrorMessage(e, 'โหลดรายชื่อบริษัทไม่สำเร็จ')
-  }
-}
+/**
+ * Name of the company this product belongs to — products.company_id for an
+ * existing row (which can differ from the header scope if someone deep-links
+ * into another company's product), the header scope in create mode.
+ */
+const productCompanyName = computed<string | null>(() => {
+  const id = product.value?.company_id ?? activeCompany.companyId
+  if (id === null || id === undefined) return null
+
+  return activeCompany.companies.find((c) => c.id === id)?.name ?? activeCompany.companyName
+})
 
 // route name is set explicitly in router/index.ts ('product-create' has
 // no :id param at all, 'product-edit' always does) — simpler/less
@@ -162,8 +169,37 @@ interface Product {
   voucher_usage_quota: number | null
   voucher_validity_days: number | null
   requires_shipping: boolean
+  // ADR-036 (TASK-211/212/213) — non-null once this product is linked to
+  // a shared cross-company product_catalog_items row. When set, `name` /
+  // `description` / `spec_description` above are already the RESOLVED
+  // values from that catalog item (nothing to re-resolve client-side),
+  // and `brand`/`category` are the catalog's own CatalogBrand/
+  // CatalogCategory (company_id: null) — never this product's own
+  // brand_id/category_id, which is why those two fields must never be
+  // rendered as editable selects bound to THIS company's /brands and
+  // /product-categories lists while linked (see isCatalogLinked below).
+  catalog_item_id: number | null
   created_at: string
   updated_at: string
+}
+// ADR-036 — the shared catalog item a product can optionally link to.
+// Only the fields this page actually needs (brand/category picker +
+// name, for the link-picker modal's list) — the full shape (media/specs/
+// linked_product_count) lives on CatalogManagementView.vue instead.
+interface CatalogBrandRef {
+  id: number
+  name: string
+}
+interface CatalogCategoryRef {
+  id: number
+  name: string
+}
+interface ProductCatalogItemOption {
+  id: number
+  name: string
+  catalog_brand: CatalogBrandRef
+  catalog_category: CatalogCategoryRef
+  is_active: boolean
 }
 interface CertTierRef {
   id: number
@@ -258,6 +294,112 @@ const savingBasics = ref(false)
 const product = ref<Product | null>(null)
 const brands = ref<Brand[]>([])
 const categories = ref<ProductCategory[]>([])
+
+// ── ADR-036 (TASK-215) — shared cross-company catalog link ──
+// A linked product's name/brand/category/description/spec_description are
+// resolved from the catalog item server-side (already correct in `product`
+// — nothing to re-fetch/re-resolve here). Two independent locks apply:
+//  1. isCatalogLinked — those 5 identity fields render read-only for
+//     EVERY user, Super Admin included (there is nothing to "edit" here;
+//     the only way to change them is from the catalog item itself).
+//  2. readOnlyForCompanyAdmin — EVERY other tab/section (price/commission/
+//     voucher/media/specs/materials/is_active/pin) is fully read-only for
+//     a Company Admin on a linked product, mirroring the backend's
+//     ProductPolicy::update() (403 for Company Admin on any linked
+//     product) — Super Admin keeps full edit rights there.
+const isCatalogLinked = computed(() => product.value?.catalog_item_id != null)
+const readOnlyForCompanyAdmin = computed(() => isCatalogLinked.value && !isSuperAdmin.value)
+
+const showCatalogLinkPicker = ref(false)
+const catalogItemOptions = ref<ProductCatalogItemOption[]>([])
+const loadingCatalogItems = ref(false)
+const catalogLinkError = ref('')
+const catalogLinkSearch = ref('')
+const linkingCatalogItemId = ref<number | null>(null)
+
+const filteredCatalogItemOptions = computed(() => {
+  const q = catalogLinkSearch.value.trim().toLowerCase()
+  if (!q) return catalogItemOptions.value
+  return catalogItemOptions.value.filter(
+    (i) => i.name.toLowerCase().includes(q) || i.catalog_brand.name.toLowerCase().includes(q) || i.catalog_category.name.toLowerCase().includes(q),
+  )
+})
+
+async function openCatalogLinkPicker() {
+  catalogLinkError.value = ''
+  catalogLinkSearch.value = ''
+  showCatalogLinkPicker.value = true
+  if (catalogItemOptions.value.length) return
+  loadingCatalogItems.value = true
+  try {
+    const res = await api.get<{ data: ProductCatalogItemOption[] }>('/product-catalog-items')
+    catalogItemOptions.value = res.data
+  } catch (e) {
+    catalogLinkError.value = apiErrorMessage(e, 'โหลดรายการแคตตาล็อกกลางไม่สำเร็จ')
+  } finally {
+    loadingCatalogItems.value = false
+  }
+}
+function closeCatalogLinkPicker() {
+  showCatalogLinkPicker.value = false
+}
+async function linkToCatalogItem(item: ProductCatalogItemOption) {
+  if (!product.value) return
+  linkingCatalogItemId.value = item.id
+  catalogLinkError.value = ''
+  try {
+    const res = await api.post<{ data: Product }>(`/products/${product.value.id}/catalog-link`, { catalog_item_id: item.id })
+    product.value = res.data
+    syncBasicsFormFromProduct(res.data)
+    showCatalogLinkPicker.value = false
+  } catch (e) {
+    catalogLinkError.value = apiErrorMessage(e, 'เชื่อมกับแคตตาล็อกกลางไม่สำเร็จ')
+  } finally {
+    linkingCatalogItemId.value = null
+  }
+}
+
+// Unlink — the DELETE payload replaces the catalog-resolved identity with
+// a fresh standalone one, using THIS company's own /brands and
+// /product-categories lists (never catalog_brand_id/catalog_category_id —
+// those belong to a different, global table).
+const showCatalogUnlinkForm = ref(false)
+const unlinkForm = ref({ name: '', brand_id: '' as number | '', category_id: '' as number | '', description: '', spec_description: '' })
+const unlinkError = ref('')
+const unlinkingCatalog = ref(false)
+function openCatalogUnlinkForm() {
+  unlinkForm.value = { name: '', brand_id: '', category_id: '', description: '', spec_description: '' }
+  unlinkError.value = ''
+  showCatalogUnlinkForm.value = true
+}
+function closeCatalogUnlinkForm() {
+  showCatalogUnlinkForm.value = false
+}
+async function confirmUnlinkCatalog() {
+  if (!product.value) return
+  if (!unlinkForm.value.name || !unlinkForm.value.brand_id || !unlinkForm.value.category_id) {
+    unlinkError.value = 'กรุณากรอกชื่อ แบรนด์ และหมวดหมู่สำหรับสินค้านี้หลังยกเลิกการเชื่อม'
+    return
+  }
+  unlinkingCatalog.value = true
+  unlinkError.value = ''
+  try {
+    const res = await api.delete<{ data: Product }>(`/products/${product.value.id}/catalog-link`, {
+      name: unlinkForm.value.name,
+      brand_id: Number(unlinkForm.value.brand_id),
+      category_id: Number(unlinkForm.value.category_id),
+      description: unlinkForm.value.description || undefined,
+      spec_description: unlinkForm.value.spec_description || undefined,
+    })
+    product.value = res.data
+    syncBasicsFormFromProduct(res.data)
+    showCatalogUnlinkForm.value = false
+  } catch (e) {
+    unlinkError.value = apiErrorMessage(e, 'ยกเลิกการเชื่อมไม่สำเร็จ')
+  } finally {
+    unlinkingCatalog.value = false
+  }
+}
 
 // Bug fix 2026-07-20: ApiError.message now carries Laravel's real
 // validation reason (see client.ts) instead of always being the generic
@@ -528,7 +670,7 @@ function syncBasicsFormFromProduct(p: Product) {
 }
 
 async function saveBasics() {
-  if (isCreateMode.value && isSuperAdmin.value && !selectedCompanyId.value) {
+  if (isCreateMode.value && activeCompany.requiresCompanyPick) {
     errorMessage.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
     return
   }
@@ -1324,18 +1466,6 @@ function isLinkUsable(link: ShareLinkItem): boolean {
 const commissionRules = ref<CommissionRule[]>([])
 const productRules = computed(() => commissionRules.value.filter((r) => r.product?.id === product.value?.id))
 
-// Real cert tier list from GET /cert-tiers (any authenticated user) —
-// mirrors CommissionPlansView.vue's certTiers ref/loading pattern.
-const certTiers = ref<CertTierRef[]>([])
-async function loadCertTiers() {
-  try {
-    const res = await api.get<{ data: CertTierRef[] }>('/cert-tiers')
-    certTiers.value = res.data
-  } catch (e) {
-    errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูล Cert Tier ไม่สำเร็จ')
-  }
-}
-
 async function loadCommissionRules() {
   try {
     const res = await api.get<{ data: CommissionRule[] }>('/commission-rules')
@@ -1419,9 +1549,7 @@ function formatRate(rule: CommissionRule): string {
   return formatSatang(rule.rate_value)
 }
 
-const showRuleForm = ref(false)
 const ruleForm = ref({
-  cert_tier_id: '' as string | number,
   rate_value_input: '' as string | number, // % if percentage, THB if fixed_satang
   effective_from: new Date().toISOString().slice(0, 10),
   effective_to: '' as string,
@@ -1439,7 +1567,20 @@ const savingRule = ref(false)
 // before this task and the same default §2.1 specifies for the very
 // first rule a product ever gets. The per-rule rate_type selector this
 // used to read from is gone (§3.3) — every form below reads this instead.
-const resolvedRuleRateType = computed<CommissionRateType>(() => product.value?.commission_rate_type ?? 'percentage')
+// 2026-08-18 — human report: picking "จำนวนคงที่ (บาท)" in the settings
+// dropdown above left this label/hint stuck on "อัตรา (%)" until after a
+// save round-trip, since it only ever read the PERSISTED
+// product.value.commission_rate_type. Now that both blocks share a single
+// "บันทึก" button (saveCommissionTab()), that lag reads as "the fixed-
+// amount option doesn't work" even though the actual save was always
+// correct (saveBasics() persists commission_rate_type and refreshes
+// product.value BEFORE submitRule() reads this computed — see
+// saveCommissionTab()). Prefer the live, unsaved dropdown pick first so
+// the label/preview tracks what the admin just selected; fall back to the
+// persisted value, then 'percentage', for the untouched/"inherit" case.
+const resolvedRuleRateType = computed<CommissionRateType>(
+  () => basicsForm.value.commission_rate_type || product.value?.commission_rate_type || 'percentage',
+)
 
 // Same conversion for both directions — % -> basis points and THB -> satang
 // are both "multiply by 100, round" (mirrors CommissionPlansView.vue's
@@ -1477,27 +1618,20 @@ function resetRuleForm() {
   // common case. Only the fresh-page-load ref() declaration above still
   // defaults to today's date / blank.
   ruleForm.value = {
-    cert_tier_id: '',
     rate_value_input: '',
     effective_from: ruleForm.value.effective_from,
     effective_to: ruleForm.value.effective_to,
     renewal_rate_percent: '',
     renewal_recurs: false,
   }
-  showRuleForm.value = false
   createRuleCapGuard.reset()
 }
 
 async function submitRule() {
   if (!product.value) return
-  if (!ruleForm.value.cert_tier_id) {
-    ruleError.value = 'กรุณาเลือก Cert Tier'
-    return
-  }
-  // TASK-196 §3.2 — the Save button is already disabled while over the cap,
-  // this is the same defensive re-check pattern as the cert_tier_id guard
-  // directly above (e.g. an Enter-to-submit keypress bypassing a disabled
-  // button in some browsers).
+  // TASK-196 §3.2 — the Save button is already disabled while over the cap;
+  // this defensive re-check covers e.g. an Enter-to-submit keypress
+  // bypassing a disabled button in some browsers.
   recheckCreateRuleCap()
   if (createRuleCapGuard.isOverCap.value) return
   savingRule.value = true
@@ -1506,12 +1640,20 @@ async function submitRule() {
   try {
     await api.post('/commission-rules', {
       product_id: product.value.id,
-      cert_tier_id: Number(ruleForm.value.cert_tier_id),
       rate_type: submittedRateType,
       rate_value: rateValueToBasisOrSatang(ruleForm.value.rate_value_input),
       effective_from: ruleForm.value.effective_from,
       effective_to: ruleForm.value.effective_to || null,
       ...renewalPayloadFields(ruleForm.value),
+      // StoreCommissionRuleRequest requires company_id for Super Admin only
+      // (Company Admin's own company is inferred server-side) — same
+      // pattern as saveBasics()/savePin() above. Was missing here; a Super
+      // Admin saving a rate on the merged commission tab hit "The company
+      // id field is required." because this POST never sent it. This is
+      // the product's OWN company (edit-mode only — Tab 2 doesn't render
+      // in create mode), not selectedCompanyId (that's only meaningful
+      // pre-creation).
+      ...(isSuperAdmin.value ? { company_id: product.value.company_id } : {}),
     })
     // TASK-197 §2.2 — the FIRST rule for a product sets its
     // commission_rate_type server-side as a side effect. Patch it
@@ -1528,6 +1670,24 @@ async function submitRule() {
     ruleError.value = apiErrorMessage(e, 'บันทึกอัตราคอมมิชชั่นไม่สำเร็จ')
   } finally {
     savingRule.value = false
+  }
+}
+
+// 2026-08-18 — human request: one "บันทึก" button for the whole
+// คอมมิชชั่น tab, mirroring saveBasicsAndPin()'s chaining pattern above.
+// Chains saveBasics() (product-level settings: rate_type, affiliate
+// override mode) and, ONLY when the admin actually typed a rate value,
+// submitRule() (POST a new commission_rules row). The rate field's
+// `required` attribute was removed from the template specifically so a
+// settings-only submit — rate field left blank — can still go through:
+// without this guard, EVERY press of the single shared button would
+// attempt to add another commission rate, which is wrong once the admin
+// is just tweaking rate_type/affiliate mode on a product that already
+// has its rates set up.
+async function saveCommissionTab() {
+  await saveBasics()
+  if (ruleForm.value.rate_value_input !== '') {
+    await submitRule()
   }
 }
 
@@ -1585,7 +1745,6 @@ async function saveEditRule(rule: CommissionRule) {
       effective_from: editRuleForm.value.effective_from,
       effective_to: editRuleForm.value.effective_to || null,
       ...renewalPayloadFields({
-        cert_tier_id: '',
         rate_value_input: '',
         effective_from: '',
         effective_to: '',
@@ -1632,9 +1791,9 @@ async function loadInitialData() {
       product.value = p.data
       syncBasicsFormFromProduct(p.data)
 
-      await Promise.all([loadMedia(), loadSpecs(), loadSpecAttachments(), loadMaterials(), loadCommissionRules(), loadRecommendationPins(), loadCertTiers()])
+      await Promise.all([loadMedia(), loadSpecs(), loadSpecAttachments(), loadMaterials(), loadCommissionRules(), loadRecommendationPins()])
     } else if (isCreateMode.value && isSuperAdmin.value) {
-      await loadCompanyOptionsIfNeeded()
+      await activeCompany.loadCompanies()
     }
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
@@ -1715,8 +1874,9 @@ function goToVideoSettings() {
           </span>
           <button
             type="button"
+            :disabled="readOnlyForCompanyAdmin"
             @click="basicsForm.is_active = !basicsForm.is_active"
-            class="relative w-14 h-7 shrink-0 rounded-full border transition-colors flex items-center px-1"
+            class="relative w-14 h-7 shrink-0 rounded-full border transition-colors flex items-center px-1 disabled:opacity-50 disabled:cursor-not-allowed"
             :class="basicsForm.is_active ? 'bg-brand-600 border-brand-600' : 'bg-slate-100 border-slate-200'"
             :title="basicsForm.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน'"
           >
@@ -1751,6 +1911,19 @@ function goToVideoSettings() {
       </button>
     </div>
 
+    <!-- ADR-036 (TASK-215) — top-of-page notice, visible on every tab
+         regardless of which one is active, so the lock is never a
+         surprise discovered field-by-field. -->
+    <div v-if="isCatalogLinked" class="mt-4 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-700 flex items-start gap-2">
+      <Icon name="globe" :size="16" class="mt-0.5 shrink-0" />
+      <span v-if="isSuperAdmin">
+        สินค้านี้เชื่อมกับ<span class="font-bold">แคตตาล็อกกลาง</span> — ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปค อ่านได้อย่างเดียวที่นี่ (แก้ไขได้จากแคตตาล็อกกลางเท่านั้น) ส่วนราคา/คอมมิชชั่น/สื่อ/สเปค ยังแก้ไขได้ตามปกติ
+      </span>
+      <span v-else>
+        สินค้านี้เชื่อมกับ<span class="font-bold">แคตตาล็อกกลาง</span> — ข้อมูลทั้งหน้านี้เป็นแบบอ่านอย่างเดียวสำหรับบัญชีของคุณ (แก้ไขได้เฉพาะ Super Admin เท่านั้น)
+      </span>
+    </div>
+
     <LoadingSkeleton v-if="loading" type="detail" class="mt-4" />
     <template v-else>
       <!-- Tab 1 — ทั่วไป (General). Available pre-save — the only tab
@@ -1763,31 +1936,100 @@ function goToVideoSettings() {
           <Icon name="cube" :size="14" /> ข้อมูลสินค้า
         </p>
         <form class="grid grid-cols-1 sm:grid-cols-2 gap-3" @submit.prevent="saveBasicsAndPin">
-          <div v-if="isCreateMode && isSuperAdmin" class="sm:col-span-2">
-            <label class="text-sm font-bold text-slate-500">บริษัท</label>
-            <select v-model="selectedCompanyId" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-              <option :value="null" disabled>เลือกบริษัท</option>
-              <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
+          <!-- TASK-208 — read-only confirmation of the company this product
+               belongs to (or will be created in). Changing it means changing
+               the header scope, which also re-scopes the brand/category
+               pickers below — the two must never disagree. -->
+          <div v-if="isSuperAdmin" class="sm:col-span-2 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-brand-50 border border-brand-100">
+            <Icon name="building" :size="14" class="text-brand-600 shrink-0" />
+            <span class="text-xs font-bold text-brand-700">บริษัท: {{ productCompanyName ?? '— ยังไม่ได้เลือก —' }}</span>
+            <span v-if="isCreateMode" class="text-[11px] text-brand-600/70">(เปลี่ยนได้จากปุ่มบริษัทมุมขวาบน)</span>
           </div>
-          <div class="sm:col-span-2">
-            <label class="text-sm font-bold text-slate-500">ชื่อแพ็กเกจ</label>
-            <input v-model="basicsForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          <!-- ADR-036 (TASK-215) — when this product is catalog-linked,
+               name/brand/category are RESOLVED from the shared catalog
+               item (never this product's own brand_id/category_id — that
+               select would be bound to the wrong table entirely, since a
+               linked product's brand/category ids point at
+               catalog_brands/catalog_categories, not this company's own
+               /brands and /product-categories lists). Read-only display
+               for EVERY user, Super Admin included — the only way to
+               change these is to edit the catalog item itself, or unlink. -->
+          <div v-if="isCatalogLinked" class="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-start gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-bold text-slate-500 flex items-center gap-1.5">
+                ชื่อ / แบรนด์ / หมวดหมู่
+                <InfoPopover label="เชื่อมกับแคตตาล็อกกลาง">
+                  <p>
+                    ชื่อ แบรนด์ หมวดหมู่ คำอธิบาย และคำอธิบายสเปคของสินค้านี้ถูกดึงมาจาก
+                    "แคตตาล็อกกลาง" ที่ใช้ร่วมกันทุกบริษัท จึงแก้ไขจากหน้านี้ไม่ได้ —
+                    ต้องแก้ไขจากรายการในแคตตาล็อกกลางเท่านั้น (Super Admin เท่านั้นที่แก้ไขได้)
+                    ส่วนราคาและค่าคอมมิชชั่นยังคงเป็นของสินค้านี้แยกต่างหาก
+                  </p>
+                </InfoPopover>
+              </p>
+              <p class="mt-1 text-base font-bold text-slate-900 truncate">{{ product?.name }}</p>
+              <p class="mt-0.5 text-xs text-slate-500">{{ product?.brand?.name ?? '—' }} · {{ product?.category?.name ?? '—' }}</p>
+            </div>
+            <div v-if="isSuperAdmin" class="shrink-0 flex flex-col items-end gap-1.5">
+              <RouterLink
+                v-if="product?.catalog_item_id"
+                :to="{ name: 'catalog-management', query: { tab: 'items', highlight: product.catalog_item_id } }"
+                class="text-xs font-bold text-brand-600 hover:underline whitespace-nowrap"
+              >
+                ไปที่แคตตาล็อกกลาง →
+              </RouterLink>
+              <button type="button" class="text-xs font-bold text-rose-600 hover:underline whitespace-nowrap" @click="openCatalogUnlinkForm">
+                ยกเลิกการเชื่อม
+              </button>
+            </div>
           </div>
-          <div>
-            <label class="text-sm font-bold text-slate-500">แบรนด์</label>
-            <select v-model="basicsForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-              <option value="" disabled>เลือกแบรนด์</option>
-              <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
-            </select>
-          </div>
-          <div>
-            <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
-            <select v-model="basicsForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-              <option value="" disabled>เลือกหมวดหมู่</option>
-              <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
-          </div>
+          <template v-else>
+            <div class="sm:col-span-2">
+              <div class="flex items-center justify-between gap-2">
+                <label class="text-sm font-bold text-slate-500">ชื่อแพ็กเกจ</label>
+                <!-- ADR-036 — link-out to the shared catalog, Super Admin
+                     only, only meaningful once the product exists.
+
+                     Human ruling 2026-08-19: this used to be a bare text
+                     link (text-xs, brand-600, underline only on hover)
+                     sitting in the label row — on a real screen it read
+                     as a second field LABEL rather than an action, and
+                     was missed entirely. Promoted to a filled gold
+                     button with an icon: gold is the one accent in the
+                     palette that is not brand-navy (which every label
+                     and heading here already uses), so the control stops
+                     competing with the text around it. Same
+                     gold-600/gold-700 filled-button shape already used
+                     by GamificationConfigView.vue's action buttons — an
+                     existing pattern, not a new one. -->
+                <button
+                  v-if="isSuperAdmin && !isCreateMode"
+                  type="button"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs font-bold whitespace-nowrap transition-colors hover:bg-gold-700"
+                  @click="openCatalogLinkPicker"
+                >
+                  <Icon name="globe" :size="14" />
+                  เชื่อมกับแคตตาล็อกกลาง
+                </button>
+              </div>
+              <input v-model="basicsForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            </div>
+            <div>
+              <label class="text-sm font-bold text-slate-500">แบรนด์</label>
+              <select v-model="basicsForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                <option value="" disabled>เลือกแบรนด์</option>
+                <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
+              <select v-model="basicsForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+                <option value="" disabled>เลือกหมวดหมู่</option>
+                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </div>
+          </template>
+          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
           <div>
             <label class="text-sm font-bold text-slate-500">ราคา (บาท)</label>
             <input v-model="priceDisplay" type="text" inputmode="numeric" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -1910,10 +2152,11 @@ function goToVideoSettings() {
           </div>
 
           <div class="sm:col-span-2 flex justify-end">
-            <button type="submit" :disabled="savingBasics || savingPin" class="btn-primary">
+            <button type="submit" :disabled="savingBasics || savingPin || readOnlyForCompanyAdmin" class="btn-primary">
               {{ savingBasics || savingPin ? 'กำลังบันทึก...' : isCreateMode ? 'บันทึกและดำเนินการต่อ' : 'บันทึก' }}
             </button>
           </div>
+          </fieldset>
         </form>
       </section>
 
@@ -1929,6 +2172,29 @@ function goToVideoSettings() {
              payout setting, not a basic product attribute; TASK-195 §2
              Tab 2). Same isEffectivelyAffiliate computed, unchanged. -->
         <section v-if="activeTab === 'commission'" class="mt-4 bg-white/95 border border-slate-200 rounded-xl p-5">
+          <!-- ADR-036 (TASK-215) — price/commission stay per-company even
+               on a catalog-linked product, but a Company Admin loses edit
+               rights on them too once the product is linked (backend's
+               ProductPolicy::update() 403s for Company Admin on any linked
+               product). One fieldset around the whole tab (settings block +
+               rate form + the rules list's own edit/delete buttons) —
+               `display: contents` so the existing grid/flex layout is
+               untouched, native `disabled` cascade covers every input/
+               select/textarea/button inside regardless of which block it's
+               in. Super Admin is unaffected (readOnlyForCompanyAdmin is
+               always false for them). -->
+          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
+          <!-- 2026-08-18 — human request: one "บันทึก" button for the whole
+               คอมมิชชั่น tab instead of two stacked ones. This single outer
+               <form> now wraps BOTH the "การตั้งค่าคอมมิชชั่นของสินค้านี้"
+               block and the "อัตราคอมมิชชั่น" (add-a-rate) block below;
+               submit runs saveCommissionTab(), which chains saveBasics()
+               and then submitRule() — same chaining pattern as
+               saveBasicsAndPin() on Tab 1. submitRule() only runs when a
+               rate value has actually been entered (see saveCommissionTab()
+               docblock), so saving the settings alone — with the rate field
+               left blank — no longer forces a new commission_rules row. -->
+          <form class="grid grid-cols-2 gap-3" @submit.prevent="saveCommissionTab">
           <!-- TASK-197 §3.2 — "การตั้งค่าคอมมิชชั่นของสินค้านี้": one
                small block, ABOVE the per-tier rate list, grouping every
                "set once per product" commission setting — (a) the
@@ -1939,7 +2205,7 @@ function goToVideoSettings() {
                second save path. Distinct on purpose from "+ เพิ่มอัตรา
                คอมตาม tier" below, which is genuinely per-tier repeatable
                data, not a setting. -->
-          <form class="mb-5 p-4 rounded-xl bg-slate-50 border border-slate-200" @submit.prevent="saveBasics">
+          <div class="col-span-2 mb-2 p-4 rounded-xl bg-slate-50 border border-slate-200">
             <p class="text-sm font-bold text-slate-500 mb-3 flex items-center gap-1.5">
               <Icon name="settings" :size="14" /> การตั้งค่าคอมมิชชั่นของสินค้านี้
             </p>
@@ -2000,39 +2266,31 @@ function goToVideoSettings() {
                 </p>
               </div>
             </div>
-            <div class="mt-3 flex justify-end">
-              <button type="submit" :disabled="savingBasics" class="btn-primary">
-                {{ savingBasics ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-
-          <div class="flex items-center justify-between mb-2">
-            <p class="text-base font-bold text-slate-500 flex items-center gap-1.5">
-              <Icon name="dollar" :size="14" /> อัตราคอมมิชชั่น
-            </p>
-            <button class="btn-primary" @click="showRuleForm = !showRuleForm">
-              + เพิ่มอัตราคอมตาม tier
-            </button>
           </div>
+
+          <p class="text-base font-bold text-slate-500 flex items-center gap-1.5 mb-2">
+            <Icon name="dollar" :size="14" /> อัตราคอมมิชชั่น
+          </p>
           <p v-if="ruleError" class="mb-2 text-xs font-bold text-rose-600">{{ ruleError }}</p>
 
-          <form v-if="showRuleForm" class="mb-3 p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRule">
-            <div>
-              <label class="text-sm font-bold text-slate-500">Cert tier</label>
-              <select v-model="ruleForm.cert_tier_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                <option value="" disabled>เลือก tier</option>
-                <option v-for="ct in certTiers" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
-              </select>
-            </div>
-            <div>
+          <!-- ADR-035 (2026-08-18) — Unilevel commission is flat-rate per
+               product now: no Cert Tier dimension. Higher commission for
+               better results is Stairstep/Breakaway's job (agent_ranks),
+               not a per-tier row here. Form is always visible (no "+"
+               toggle) — human ruling 2026-08-18: nothing left to hide
+               behind a button once tier selection is gone. Rate value is
+               NOT required here (2026-08-18 follow-up): this block now
+               shares its submit button with the settings block above, so
+               leaving it blank must be a valid "just save settings" submit
+               — see saveCommissionTab(). -->
+          <div class="col-span-2 mb-3 p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-2 gap-3">
+            <div class="col-span-2">
               <label class="text-sm font-bold text-slate-500">{{ resolvedRuleRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
               <input
                 v-model="ruleForm.rate_value_input"
                 type="number"
                 min="0"
                 step="0.01"
-                required
                 class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
                 @input="recheckCreateRuleCapDebounced"
                 @blur="recheckCreateRuleCap"
@@ -2076,11 +2334,13 @@ function goToVideoSettings() {
                 ต่ออายุอัตโนมัติทุกปี (ไม่ติ๊ก = จ่ายคอมฯ ต่ออายุแค่ปีเดียว)
               </label>
             </div>
-            <div class="col-span-2 flex justify-end">
-              <button type="submit" :disabled="savingRule || createRuleCapGuard.isOverCap.value" class="btn-primary">
-                {{ savingRule ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
+          </div>
+
+          <div class="col-span-2 flex justify-end">
+            <button type="submit" :disabled="savingBasics || savingRule || createRuleCapGuard.isOverCap.value" class="btn-primary">
+              {{ savingBasics || savingRule ? 'กำลังบันทึก...' : 'บันทึก' }}
+            </button>
+          </div>
           </form>
 
           <EmptyState v-if="!productRules.length" icon="dollar" title="ยังไม่มีอัตราคอมมิชชั่นสำหรับสินค้านี้" />
@@ -2132,7 +2392,7 @@ function goToVideoSettings() {
               </template>
               <div v-else class="flex items-center justify-between gap-2">
                 <div>
-                  <p class="text-sm font-bold text-slate-900">{{ r.cert_tier?.name }}</p>
+                  <p class="text-sm font-bold text-slate-900">อัตราคอมมิชชั่น</p>
                   <p class="text-xs text-slate-400">มีผลตั้งแต่ {{ r.effective_from }}{{ r.effective_to ? ` ถึง ${r.effective_to}` : '' }}</p>
                   <p v-if="r.renewal_rate_type" class="text-xs text-slate-400">
                     คอมฯ ปีต่ออายุ: {{ (r.renewal_rate_value! / 100).toFixed(2) }}% · {{ r.renewal_recurs ? 'ต่อทุกปี' : 'ปีเดียว' }}
@@ -2150,6 +2410,7 @@ function goToVideoSettings() {
               </div>
             </div>
           </div>
+          </fieldset>
         </section>
 
         <!-- Tab 3 — บัตรกำนัลและจัดส่ง (Voucher & Shipping). The
@@ -2169,6 +2430,7 @@ function goToVideoSettings() {
             <Icon name="tag" :size="14" /> บัตรกำนัลหลังชำระเงิน และการจัดส่ง
           </p>
           <form class="space-y-3" @submit.prevent="saveBasics">
+          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label class="text-sm font-bold text-slate-500">จำนวนสิทธิ์การใช้บัตรกำนัล</label>
@@ -2254,10 +2516,11 @@ function goToVideoSettings() {
               </button>
             </div>
             <div class="flex justify-end">
-              <button type="submit" :disabled="savingBasics" class="btn-primary">
+              <button type="submit" :disabled="savingBasics || readOnlyForCompanyAdmin" class="btn-primary">
                 {{ savingBasics ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
+          </fieldset>
           </form>
         </section>
 
@@ -2265,6 +2528,14 @@ function goToVideoSettings() {
              "รายละเอียดสินค้า" (detail gallery + description) + the video
              quality settings link — TASK-195 §2 Tab 4. -->
         <template v-if="activeTab === 'media'">
+        <!-- ADR-036 (TASK-215) — cover photos + detail gallery stay
+             per-company/per-product even when linked, but lose edit
+             rights for a Company Admin (same reasoning as the commission
+             tab's fieldset above). The description column further down is
+             handled separately (isCatalogLinked, not readOnlyForCompanyAdmin
+             — it's read-only for EVERY user once linked, Super Admin
+             included, since its content comes from the catalog item). -->
+        <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
         <!-- Section A2 — TASK-097 product photos (รูปสินค้า), Shopee-style.
              Its OWN card and its OWN data (purpose='cover'), completely
              separate from the รายละเอียดสินค้า gallery below: uploading
@@ -2477,9 +2748,18 @@ function goToVideoSettings() {
               <div class="flex items-center gap-2 mb-2">
                 <p class="text-base font-bold text-slate-500 flex items-center gap-1.5">
                   <Icon name="document" :size="14" /> คำอธิบายสินค้า
+                  <!-- ADR-036 (TASK-215) — resolved from the catalog item
+                       once linked; NOT gated on readOnlyForCompanyAdmin
+                       (unlike the fieldset around this whole tab) because
+                       this must be read-only for EVERY user, Super Admin
+                       included — the only way to change it is to edit the
+                       catalog item itself. -->
+                  <InfoPopover v-if="isCatalogLinked" label="เชื่อมกับแคตตาล็อกกลาง">
+                    <p>คำอธิบายสินค้านี้ถูกดึงมาจากแคตตาล็อกกลาง จึงแก้ไขจากหน้านี้ไม่ได้ — ต้องแก้ไขจากรายการในแคตตาล็อกกลางเท่านั้น (Super Admin เท่านั้นที่แก้ไขได้)</p>
+                  </InfoPopover>
                 </p>
                 <button
-                  v-if="!editingDescription"
+                  v-if="!editingDescription && !isCatalogLinked"
                   class="flex items-center gap-1 px-2 py-1 rounded-lg bg-brand-600 text-white hover:bg-brand-700 transition"
                   title="แก้ไข"
                   @click="startEditDescription"
@@ -2488,7 +2768,7 @@ function goToVideoSettings() {
                   <span class="text-xs font-bold">แก้ไข</span>
                 </button>
               </div>
-              <template v-if="editingDescription">
+              <template v-if="editingDescription && !isCatalogLinked">
                 <textarea v-model="descriptionDraft" rows="8" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="คำอธิบายสินค้า..." />
                 <div class="flex justify-end gap-2 mt-2">
                   <button class="text-xs font-bold text-slate-500" @click="cancelEditDescription">ยกเลิก</button>
@@ -2502,6 +2782,7 @@ function goToVideoSettings() {
             </div>
           </div>
         </section>
+        </fieldset>
         </template>
         <!-- /Tab 4 -->
 
@@ -2517,6 +2798,11 @@ function goToVideoSettings() {
           <p class="text-base font-bold text-slate-500 mb-2 flex items-center gap-1.5">
             <Icon name="document" :size="14" /> ไฟล์แนบสเปค (รูป/PDF)
           </p>
+          <!-- ADR-036 (TASK-215) — same fieldset lock as the other tabs
+               (readOnlyForCompanyAdmin). Column 2 (spec_description) has
+               its own ADDITIONAL always-on lock (isCatalogLinked) nested
+               inside, same pattern as the description column on Tab 4. -->
+          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
           <div class="grid grid-cols-3 gap-4">
             <!-- Column 1 — attachment hero + grid + upload (same visual pattern as the media gallery) -->
             <div class="min-w-0">
@@ -2616,9 +2902,15 @@ function goToVideoSettings() {
               <div class="flex items-center gap-2 mb-2">
                 <p class="text-base font-bold text-slate-500 flex items-center gap-1.5">
                   <Icon name="note" :size="14" /> คำอธิบายสเปคสินค้า
+                  <!-- ADR-036 (TASK-215) — same always-on lock as the
+                       description column on Tab 4: resolved from the
+                       catalog item once linked, read-only for EVERY user. -->
+                  <InfoPopover v-if="isCatalogLinked" label="เชื่อมกับแคตตาล็อกกลาง">
+                    <p>คำอธิบายสเปคของสินค้านี้ถูกดึงมาจากแคตตาล็อกกลาง จึงแก้ไขจากหน้านี้ไม่ได้ — ต้องแก้ไขจากรายการในแคตตาล็อกกลางเท่านั้น (Super Admin เท่านั้นที่แก้ไขได้)</p>
+                  </InfoPopover>
                 </p>
                 <button
-                  v-if="!editingSpecDescription"
+                  v-if="!editingSpecDescription && !isCatalogLinked"
                   class="flex items-center gap-1 px-2 py-1 rounded-lg bg-brand-600 text-white hover:bg-brand-700 transition"
                   title="แก้ไข"
                   @click="startEditSpecDescription"
@@ -2627,7 +2919,7 @@ function goToVideoSettings() {
                   <span class="text-xs font-bold">แก้ไข</span>
                 </button>
               </div>
-              <template v-if="editingSpecDescription">
+              <template v-if="editingSpecDescription && !isCatalogLinked">
                 <textarea v-model="specDescriptionDraft" rows="8" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="คำอธิบายสเปคสินค้า..." />
                 <div class="flex justify-end gap-2 mt-2">
                   <button class="text-xs font-bold text-slate-500" @click="cancelEditSpecDescription">ยกเลิก</button>
@@ -2740,11 +3032,16 @@ function goToVideoSettings() {
               </div>
             </div>
           </div>
+          </fieldset>
         </section>
 
         <!-- Tab 6 — สื่อการขาย (Sales Materials). Former "Section H" as-is,
-             unchanged internally — TASK-195 §2 Tab 6. -->
+             unchanged internally — TASK-195 §2 Tab 6. Sales materials are
+             never part of ADR-036's catalog resolution (fully per-company),
+             so a single fieldset for the whole tab (readOnlyForCompanyAdmin)
+             is all this one needs — no always-on isCatalogLinked lock. -->
         <section v-if="activeTab === 'materials'" class="mt-4 bg-white/95 border border-slate-200 rounded-xl p-5">
+          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
           <p class="text-base font-bold text-slate-500 mb-2 flex items-center gap-1.5">
             <Icon name="document" :size="14" /> สื่อการขาย
           </p>
@@ -2862,6 +3159,7 @@ function goToVideoSettings() {
               </button>
             </div>
           </div>
+          </fieldset>
         </section>
 
         <!-- Section I — video settings convenience link, relocated onto
@@ -3125,6 +3423,101 @@ function goToVideoSettings() {
               + สร้างลิงก์แชร์
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADR-036 (TASK-215) — link picker: browse/search /product-catalog-items
+         and pick one to link this standalone product to. Super Admin only
+         (the "เชื่อมกับแคตตาล็อกกลาง..." trigger button is itself gated). -->
+    <div v-if="showCatalogLinkPicker" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" @click.self="closeCatalogLinkPicker">
+      <div class="w-full max-w-lg max-h-[80vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
+          <h3 class="text-sm font-bold text-slate-800">เชื่อมกับแคตตาล็อกกลาง</h3>
+          <button class="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700" @click="closeCatalogLinkPicker">
+            <Icon name="x" :size="18" />
+          </button>
+        </div>
+        <div class="px-5 pt-3 shrink-0">
+          <p class="text-xs text-slate-400 mb-3">
+            เมื่อเชื่อมแล้ว ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปคของสินค้านี้จะถูกแทนที่ด้วยข้อมูลจากรายการที่เลือก — ราคาและค่าคอมมิชชั่นยังคงเป็นของสินค้านี้แยกต่างหาก
+          </p>
+          <div class="relative">
+            <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input v-model="catalogLinkSearch" type="text" placeholder="ค้นหาชื่อ / แบรนด์ / หมวดหมู่" class="w-full h-[38px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <p v-if="catalogLinkError" class="mt-2 text-xs font-bold text-rose-600">{{ catalogLinkError }}</p>
+        </div>
+        <div class="p-5 pt-3 overflow-y-auto">
+          <p v-if="loadingCatalogItems" class="text-xs text-slate-400">กำลังโหลด...</p>
+          <EmptyState v-else-if="!filteredCatalogItemOptions.length" icon="globe" title="ไม่พบรายการในแคตตาล็อกกลาง" />
+          <div v-else class="space-y-2">
+            <button
+              v-for="item in filteredCatalogItemOptions"
+              :key="item.id"
+              type="button"
+              class="w-full text-left p-3 rounded-xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 transition disabled:opacity-50"
+              :disabled="linkingCatalogItemId !== null"
+              @click="linkToCatalogItem(item)"
+            >
+              <p class="text-sm font-bold text-slate-900">{{ item.name }}</p>
+              <p class="text-xs text-slate-400">
+                {{ item.catalog_brand.name }} · {{ item.catalog_category.name }}
+                <span v-if="!item.is_active" class="text-amber-600 font-bold">· ปิดใช้งาน</span>
+                <span v-if="linkingCatalogItemId === item.id" class="text-brand-600 font-bold">· กำลังเชื่อม...</span>
+              </p>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADR-036 (TASK-215) — unlink form: replaces the catalog-resolved
+         identity with a fresh standalone one, using THIS company's own
+         /brands and /product-categories lists (unlinkForm.brand_id/
+         category_id — never catalog_brand_id/catalog_category_id). -->
+    <div v-if="showCatalogUnlinkForm" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" @click.self="closeCatalogUnlinkForm">
+      <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl p-5">
+        <h3 class="text-sm font-bold text-slate-800 mb-1">ยกเลิกการเชื่อมกับแคตตาล็อกกลาง</h3>
+        <p class="text-xs text-slate-400 mb-4">
+          กรอกชื่อ แบรนด์ และหมวดหมู่ใหม่สำหรับสินค้านี้ (เป็นข้อมูลของบริษัทนี้เอง แยกจากแคตตาล็อกกลาง) — สินค้าจะกลับไปเป็นสินค้าอิสระของบริษัทนี้ทันทีที่ยืนยัน
+        </p>
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500">ชื่อแพ็กเกจ</label>
+            <input v-model="unlinkForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-bold text-slate-500">แบรนด์</label>
+              <select v-model="unlinkForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>เลือกแบรนด์</option>
+                <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs font-bold text-slate-500">หมวดหมู่</label>
+              <select v-model="unlinkForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>เลือกหมวดหมู่</option>
+                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500">คำอธิบาย (ไม่บังคับ)</label>
+            <textarea v-model="unlinkForm.description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500">คำอธิบายสเปค (ไม่บังคับ)</label>
+            <textarea v-model="unlinkForm.spec_description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+          </div>
+          <p v-if="unlinkError" class="text-xs font-bold text-rose-600">{{ unlinkError }}</p>
+        </div>
+        <div class="flex justify-end gap-2 mt-4">
+          <button type="button" class="btn-secondary" @click="closeCatalogUnlinkForm">ยกเลิก</button>
+          <button type="button" :disabled="unlinkingCatalog" class="px-4 py-2 rounded-xl bg-rose-600 text-white font-bold hover:bg-rose-700 text-sm disabled:opacity-50" @click="confirmUnlinkCatalog">
+            {{ unlinkingCatalog ? 'กำลังบันทึก...' : 'ยืนยันยกเลิกการเชื่อม' }}
+          </button>
         </div>
       </div>
     </div>

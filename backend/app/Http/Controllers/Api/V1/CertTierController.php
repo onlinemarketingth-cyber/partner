@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CertTierResource;
 use App\Models\CertTier;
+use App\Support\CompanyScopeFilter;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
 // Read-only. cert_tiers is global/platform-wide config (ERD-001 open
@@ -14,8 +16,15 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 // form — this also closes the TODO gap flagged in TASK-002).
 class CertTierController extends Controller
 {
-    public function index(): AnonymousResourceCollection
+    public function index(Request $request): AnonymousResourceCollection
     {
-        return CertTierResource::collection(CertTier::query()->orderBy('sort_order')->get());
+        $query = CertTier::query()->orderBy('sort_order');
+
+        // TASK-209 — cert tiers are per-company (cert_tiers.company_id), so the
+        // Super Admin's header scope applies here too. The Request parameter is
+        // new: this action never needed one before.
+        CompanyScopeFilter::apply($query, $request);
+
+        return CertTierResource::collection($query->get());
     }
 }

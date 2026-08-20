@@ -27,8 +27,18 @@ class ThemePresetPolicy
         return $user->isSuperAdmin() || $user->isCompanyAdmin();
     }
 
+    /**
+     * TASK-217 — a ชุดกลาง (company_id = NULL) is visible to every admin:
+     * it belongs to the platform, so there is no tenant for the check to
+     * disagree with. Owned presets are unchanged — company A still cannot
+     * see company B's.
+     */
     public function view(User $user, ThemePreset $themePreset): bool
     {
+        if ($themePreset->company_id === null) {
+            return $user->isSuperAdmin() || $user->isCompanyAdmin();
+        }
+
         return $user->isSuperAdmin()
             || ($user->isCompanyAdmin() && $user->company_id === $themePreset->company_id);
     }
@@ -72,6 +82,22 @@ class ThemePresetPolicy
     {
         if (! $this->view($user, $themePreset)) {
             return false;
+        }
+
+        /*
+         * TASK-217 — a Company Admin may SEE and APPLY a shared palette (the
+         * check above just let them through) but may not rename or delete
+         * one: it is in use by every other company on the platform, and
+         * nothing on their screen would tell them so.
+         *
+         * Ordered BEFORE the is_system check so the message an admin gets
+         * names the reason that is actually actionable for them. A shared
+         * preset that is also a system preset would otherwise report the
+         * system rule, sending a Super Admin to look for a flag they cannot
+         * clear when the relevant fact is who owns the row.
+         */
+        if ($themePreset->company_id === null && ! $user->isSuperAdmin()) {
+            return Response::denyWithStatus(422, ThemePresetService::SHARED_PRESET_READ_ONLY_MESSAGE);
         }
 
         return $themePreset->is_system

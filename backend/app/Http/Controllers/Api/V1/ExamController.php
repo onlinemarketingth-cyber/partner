@@ -8,6 +8,7 @@ use App\Http\Requests\Academy\UpdateExamRequest;
 use App\Http\Resources\ExamResource;
 use App\Models\Exam;
 use App\Services\Academy\ExamService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -21,7 +22,12 @@ class ExamController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        return ExamResource::collection(Exam::query()->with('certTier')->paginate());
+        $query = Exam::query()->with('certTier');
+
+        // TASK-209 — see ModuleController::index() for the before-paginate rule.
+        CompanyScopeFilter::apply($query, $request);
+
+        return ExamResource::collection($query->paginate());
     }
 
     public function store(StoreExamRequest $request, ExamService $service): ExamResource

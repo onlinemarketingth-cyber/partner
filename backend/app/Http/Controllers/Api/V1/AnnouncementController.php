@@ -8,10 +8,10 @@ use App\Http\Requests\Engagement\UpdateAnnouncementRequest;
 use App\Http\Resources\AnnouncementResource;
 use App\Models\Announcement;
 use App\Services\Engagement\AnnouncementService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
-use Illuminate\Support\Facades\DB;
 
 // Agent-view IA item 1.6. index() shape mirrors BadgeController: shared
 // read (own company or platform default), Company Admin/Super Admin
@@ -29,6 +29,9 @@ class AnnouncementController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = Announcement::query();
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request, includePlatformWide: true);
 
         $user = $request->user();
         if (! $user->isSuperAdmin()) {

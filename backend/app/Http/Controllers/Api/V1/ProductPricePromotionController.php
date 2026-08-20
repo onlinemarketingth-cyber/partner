@@ -8,6 +8,7 @@ use App\Http\Requests\Engagement\UpdateProductPricePromotionRequest;
 use App\Http\Resources\ProductPricePromotionResource;
 use App\Models\ProductPricePromotion;
 use App\Services\Engagement\ProductPricePromotionService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -24,6 +25,8 @@ class ProductPricePromotionController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = ProductPricePromotion::with('product');
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->filled('product_id')) {
             $query->where('product_id', $request->integer('product_id'));

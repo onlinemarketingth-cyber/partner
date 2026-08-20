@@ -11,50 +11,26 @@
  * TASK-026's co-agent commission split, a company-wide feature switch (not
  * a per-plan rate, so it does not live on CommissionPlansView). All of its
  * behavior lives in `CommissionSplitSettingCard.vue` (design-system) —
- * this page is only the shell + the Super Admin company picker it needs;
- * the card's internals are untouched by this move.
+ * this page is only the shell.
  *
- * Same Super Admin company-picker pattern this codebase already repeats on
- * ThemeSettingsView / ProductCatalogView / AcademyManagementView — kept
- * duplicated here rather than extracted (scope creep beyond TASK-202).
+ * TASK-208 / ADR-038 — the Super Admin company picker this page used to
+ * carry (and the nine copies of it on other screens) is gone: scope now
+ * comes from the single switcher in AdminNavigation, via the activeCompany
+ * store. The old header comment here even flagged the duplication as
+ * deliberate scope-creep avoidance; this is the task that paid it off.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
-import { api, ApiError } from '@/api/client'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
-import Icon from '@/design-system/components/Icon.vue'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import CommissionSplitSettingCard from '@/design-system/components/CommissionSplitSettingCard.vue'
 
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
+const activeCompany = useActiveCompanyStore()
 
-interface CompanyItem {
-  id: number
-  name: string
-  slug: string
-}
-
-// Super Admin company picker.
-const companies = ref<CompanyItem[]>([])
-const selectedCompanyId = ref<number | null>(null)
-const companiesError = ref('')
-
-async function loadCompanies(): Promise<void> {
-  try {
-    const res = await api.get<{ data: CompanyItem[] }>('/companies')
-    companies.value = res.data
-    const first = res.data[0]
-    if (first) {
-      selectedCompanyId.value = first.id
-    }
-  } catch (e) {
-    companiesError.value = e instanceof ApiError ? e.message : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
-
-onMounted(() => {
-  if (isSuperAdmin.value) loadCompanies()
-})
+onMounted(() => activeCompany.loadCompanies())
 </script>
 
 <template>
@@ -68,21 +44,16 @@ onMounted(() => {
       storage-key="admin-commission-split-settings"
     />
 
-    <!-- Super Admin company picker -->
-    <div v-if="isSuperAdmin" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-      <Icon name="building" :size="18" class="text-brand-600 shrink-0" />
-      <label class="text-xs font-bold text-slate-500 shrink-0">บริษัท</label>
-      <select
-        v-model.number="selectedCompanyId"
-        class="flex-1 max-w-xs px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-      >
-        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
-    <p v-if="companiesError" class="mt-2 text-xs font-bold text-rose-600">{{ companiesError }}</p>
+    <CompanyScopeNotice action="แก้ไขการแบ่งคอมมิชชั่น" />
 
-    <div class="mt-4 max-w-2xl">
-      <CommissionSplitSettingCard :company-id="selectedCompanyId" :is-super-admin="isSuperAdmin" />
+    <div v-if="!activeCompany.requiresCompanyPick" class="mt-4 max-w-2xl">
+      <!-- key: remount the card when the company changes, so it refetches
+           instead of showing the previous company's switch state. -->
+      <CommissionSplitSettingCard
+        :key="activeCompany.companyId ?? 'own'"
+        :company-id="activeCompany.companyId"
+        :is-super-admin="isSuperAdmin"
+      />
     </div>
   </main>
 </template>

@@ -11,6 +11,7 @@ use App\Http\Resources\RewardRedemptionResource;
 use App\Models\RewardItem;
 use App\Models\RewardRedemption;
 use App\Services\Engagement\RewardRedemptionService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -30,6 +31,8 @@ class RewardRedemptionController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = RewardRedemption::with(['user', 'rewardItem', 'decidedBy']);
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()->isAgent()) {
             $query->where('user_id', $request->user()->id);

@@ -37,6 +37,21 @@ const router = createRouter({
       name: 'product-edit',
       component: () => import('../views/ProductEditView.vue'),
     },
+    // ADR-036 (TASK-214) — Super-Admin-only shared cross-company product
+    // catalog (catalog_brands / catalog_categories / product_catalog_items).
+    // `requiresSuperAdmin: true` mirrors '/companies' below: reading the
+    // underlying endpoints is permissive server-side (any authenticated
+    // user can GET), but every write is Super-Admin-only and a Company
+    // Admin has no action they could take here (linking a product is ALSO
+    // Super-Admin-only, even for the product's own company) — so the whole
+    // screen is gated client-side too, same reasoning CompanyManagementView
+    // already established for an admin-only config screen.
+    {
+      path: '/catalog',
+      name: 'catalog-management',
+      component: () => import('../views/CatalogManagementView.vue'),
+      meta: { navLabel: 'แคตตาล็อกกลาง', requiresSuperAdmin: true },
+    },
     {
       path: '/academy',
       name: 'academy-management',

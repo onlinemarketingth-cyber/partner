@@ -47,7 +47,16 @@ class AffiliateOverrideCommissionTest extends TestCase
     }
 
     /** @return array{company: Company, basic: CertTier, managerTier: CertTier, manager: User, agent: User} */
-    private function makeAgentWithManager(Company $company, int $overrideRateBasisPoints): array
+    /**
+     * TASK-214 — `$scopeProductId` exists because the override rate is no
+     * longer keyed by the manager's cert tier. A test that builds several
+     * managers in one company and expects each to get a different rate now
+     * has to say WHICH PRODUCT each rate belongs to; before, "a different
+     * tier" was enough to keep them apart. Passing null keeps the old
+     * behaviour (one company-wide rate), which is what the single-manager
+     * tests below want.
+     */
+    private function makeAgentWithManager(Company $company, int $overrideRateBasisPoints, ?int $scopeProductId = null): array
     {
         $basic = CertTier::firstOrCreate(['key' => 'basic'], ['name' => 'Basic', 'sort_order' => 1, 'is_mandatory' => true]);
         $managerTier = CertTier::factory()->create(['sort_order' => 2]);
@@ -56,6 +65,7 @@ class AffiliateOverrideCommissionTest extends TestCase
         $this->passCert($manager, $company, $managerTier);
         CommissionOverrideRule::factory()->create([
             'company_id' => $company->id, 'manager_cert_tier_id' => $managerTier->id,
+            'product_id' => $scopeProductId,
             'rate_type' => CommissionRateType::Percentage, 'rate_value' => $overrideRateBasisPoints,
         ]);
 
@@ -193,12 +203,18 @@ class AffiliateOverrideCommissionTest extends TestCase
         ];
 
         foreach ($cases as [$agentAmountSatang, $overrideRateBasisPoints, $expectedManagerSatang]) {
-            ['basic' => $basic, 'manager' => $manager, 'agent' => $agent] = $this->makeAgentWithManager($company, $overrideRateBasisPoints);
-
+            // The product comes FIRST now: each case's override rate is
+            // scoped to its own product so the three cases stay independent.
+            // Under TASK-214 three company-wide rates in one company would
+            // be an ambiguous overlap, and all three cases would silently
+            // share whichever one resolved.
             $product = Product::factory()->create([
                 'company_id' => $company->id, 'price_satang' => 5000000,
                 'affiliate_override_mode' => AffiliateOverrideMode::Deductive->value,
             ]);
+
+            ['basic' => $basic, 'manager' => $manager, 'agent' => $agent] = $this->makeAgentWithManager($company, $overrideRateBasisPoints, $product->id);
+
             CommissionRule::factory()->create([
                 'company_id' => $company->id, 'cert_tier_id' => $basic->id, 'product_id' => $product->id,
                 'rate_type' => CommissionRateType::FixedSatang, 'rate_value' => $agentAmountSatang,

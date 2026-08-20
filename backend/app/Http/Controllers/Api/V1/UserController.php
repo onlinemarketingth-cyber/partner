@@ -11,6 +11,7 @@ use App\Http\Requests\Platform\UpdateUserRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Services\Platform\UserService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -31,6 +32,9 @@ class UserController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = User::query()->with(['company', 'manager'])->where('role', '!=', 'super_admin');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->boolean('include_inactive')) {
             $query->withTrashed();

@@ -13,6 +13,7 @@ use App\Models\Company;
 use App\Models\ThemePreset;
 use App\Services\Theme\ThemePresetService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
 
@@ -44,9 +45,26 @@ class ThemePresetController extends Controller
      */
     public function index(IndexThemePresetRequest $request): AnonymousResourceCollection
     {
+        $companyId = $request->effectiveCompanyId();
+
         return ThemePresetResource::collection(
             ThemePreset::query()
-                ->where('company_id', $request->effectiveCompanyId())
+                // TASK-217 — the selected company's own presets PLUS every
+                // ชุดกลาง (company_id = NULL, owned by the platform).
+                //
+                // Nested closure, not a bare ->orWhereNull(): appended flat
+                // to a builder that may already carry other conditions, the
+                // OR would bind to the whole preceding chain. Same rule and
+                // same reason as SharedOrTenantScope — this explicit filter
+                // is what scopes a SUPER ADMIN, whom that scope does not
+                // constrain, so getting the precedence wrong here would show
+                // them every tenant's presets at once.
+                ->where(fn ($q) => $q->where('company_id', $companyId)->orWhereNull('company_id'))
+                // Shared palettes first: they are the platform's offer, and
+                // burying them under a company's own saved looks is how a
+                // feature meant to be reused goes unnoticed. Within each
+                // group, newest first as before.
+                ->orderByRaw('company_id is null desc')
                 ->orderByDesc('id')
                 ->get()
         );
@@ -58,12 +76,19 @@ class ThemePresetController extends Controller
      */
     public function store(StoreThemePresetRequest $request, ThemePresetService $service): ThemePresetResource
     {
+        $validated = $request->validated();
+
         return new ThemePresetResource($service->snapshot(
             // Already validated to exist (§5.2) — findOrFail is the
             // belt-and-braces half, not the check itself.
             Company::findOrFail($request->effectiveCompanyId()),
-            $request->validated()['name'],
+            $validated['name'],
             $request->user(),
+            // TASK-217 — Super-Admin-only, and absent from validated() for
+            // anyone else because StoreThemePresetRequest strips it before
+            // the rules run. Defaulting to false here is therefore the
+            // Company Admin path, not a fallback.
+            (bool) ($validated['is_shared'] ?? false),
         ));
     }
 
@@ -91,7 +116,10 @@ class ThemePresetController extends Controller
     public function update(UpdateThemePresetRequest $request, ThemePreset $themePreset, ThemePresetService $service): ThemePresetResource
     {
         return new ThemePresetResource(
-            $service->rename($themePreset, $request->validated()['name'])
+            // TASK-217 — the actor is passed so the Service can re-check the
+            // shared-preset rule itself (guardMayChangeShared), not only the
+            // Policy that already ran on the way in.
+            $service->rename($themePreset, $request->validated()['name'], $request->user())
         );
     }
 
@@ -101,9 +129,9 @@ class ThemePresetController extends Controller
      * `can:delete` middleware. `$themePreset->delete()` inline is precisely
      * the shape that leaves a Policy as the single point of failure.
      */
-    public function destroy(ThemePreset $themePreset, ThemePresetService $service): Response
+    public function destroy(Request $request, ThemePreset $themePreset, ThemePresetService $service): Response
     {
-        $service->delete($themePreset);
+        $service->delete($themePreset, $request->user());
 
         return response()->noContent();
     }

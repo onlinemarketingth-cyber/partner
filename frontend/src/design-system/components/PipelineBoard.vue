@@ -939,7 +939,7 @@ function formatDateTime(iso: string): string {
                              UI decision; the column stays NULL so a real
                              branch can never be confused with one. -->
                         <p class="text-xs text-ink-card-muted mt-0.5">
-                          {{ r.product?.name }} · {{ r.branch ?? 'ผ่านลิงก์ออนไลน์' }}
+                          {{ r.product?.name }} · {{ r.branch ?? 'ไม่ระบุสาขา' }}
                           <span v-if="r.current_stage.key === 'ongoing_next_meeting' && r.meeting_number"> · นัดหมายครั้งที่ {{ r.meeting_number }}</span>
                         </p>
                         <!-- TASK-177 §4.5 — the order behind this deal, so the
@@ -1074,7 +1074,7 @@ function formatDateTime(iso: string): string {
           </div>
 
           <p class="text-sm text-ink-card-muted">
-            {{ selectedReferral.product?.name }} · {{ selectedReferral.branch ?? 'ผ่านลิงก์ออนไลน์' }}
+            {{ selectedReferral.product?.name }} · {{ selectedReferral.branch ?? 'ไม่ระบุสาขา' }}
           </p>
           <p class="text-xs text-ink-card-subtle mt-1">สถานะปัจจุบัน: {{ stageLabelTh(selectedReferral.current_stage) }}</p>
           <!-- ADR-026 — the whole journey this referral was stamped with, so

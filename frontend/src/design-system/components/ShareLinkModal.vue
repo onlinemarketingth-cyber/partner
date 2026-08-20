@@ -3,9 +3,29 @@
  * ShareLinkModal — TASK-056 P3
  * Reusable share sheet: Link tab (copy + LINE + Email) and QR tab
  * (image + download + native share sheet). Used by ProductBrowseView
- * (product-share links) and OrdersView (order payment links) — the
- * caller only ever hands over a plain https:// URL, this component
- * never talks to the API itself.
+ * (product-share links), OrdersView/ClientsView (order payment links)
+ * and MyTeamView (recruit links).
+ *
+ * TASK-212 — this component USED TO be purely presentational ("the caller
+ * only ever hands over a plain https:// URL, this component never talks to
+ * the API itself"). The Email button now does, deliberately (human,
+ * 2026-08-19: "ระบบ อีเมล์ให้ส่งผ่านระบบ").
+ *
+ * `mailto:` never did what the button implied on the surface this app runs
+ * on. On a phone it hands off to whatever mail client is installed — or to
+ * nothing at all, silently, when none is — the message leaves from the
+ * agent's personal address, and the platform has no record it happened.
+ * The button now posts to /share-emails, which sends through the SMTP row
+ * a Super Admin configured.
+ *
+ * The alternative shape — emit an event and let each host do the POST —
+ * was rejected: it would put the same recipient field, the same in-flight
+ * flag and the same error handling in four views. The endpoint is generic
+ * by design (one route, a type + an id), so one caller here is enough.
+ *
+ * A host that passes no `emailType`/`emailTargetId` still gets the old
+ * `mailto:` behaviour, so an unwired call site degrades instead of
+ * rendering a button that cannot work.
  *
  * TASK-079 Phase 3 (UX audit): every action in this sheet was a ~40px
  * box with no `active:` press state — this is the single most-tapped
@@ -14,21 +34,38 @@
  *
  * Usage:
  *   <ShareLinkModal v-model:show="showShare" :url="link.public_url"
- *                    :heading="product.name" />
+ *                    :heading="product.name"
+ *                    email-type="product_share" :email-target-id="link.id" />
  */
 import { ref, computed, watch } from 'vue'
 import Icon from './Icon.vue'
+import { api, ApiError } from '@/api/client'
 import { useI18n } from '../../composables/useI18n'
 import { generateQrDataUrl } from '../../utils/qrCode'
+
+type ShareEmailType = 'order' | 'product_share' | 'agent_invite'
 
 const props = withDefaults(defineProps<{
     show?: boolean
     url?: string
     heading?: string
+    /**
+     * What the server should look up to rebuild this URL for itself. The
+     * browser never sends the URL to be emailed — see the endpoint's
+     * ShareLinkType docblock: mailing a caller-supplied URL from the
+     * platform's own From: address would be an authenticated open relay.
+     */
+    emailType?: ShareEmailType | null
+    emailTargetId?: number | null
+    /** Prefill for the recipient box. The agent can always change it. */
+    defaultEmail?: string | null
 }>(), {
     show: false,
     url: '',
     heading: '',
+    emailType: null,
+    emailTargetId: null,
+    defaultEmail: null,
 })
 
 const emit = defineEmits<{ 'update:show': [value: boolean] }>()
@@ -64,10 +101,63 @@ const shareViaLine = () => {
     window.open(lineUrl, '_blank', 'noopener,noreferrer')
 }
 
+// ── Email, sent by the platform (TASK-212) ───────────────────────────
+const canSendViaSystem = computed(() => !!props.emailType && !!props.emailTargetId)
+const showEmailPanel = ref(false)
+const emailTo = ref('')
+const emailSending = ref(false)
+const emailError = ref('')
+const emailSent = ref('')
+
 const shareViaEmail = () => {
-    const subject = props.heading || t('shareEmailSubject', 'ลิงก์ที่แชร์ให้คุณ', 'A link shared with you')
-    const body = `${props.heading ? props.heading + '\n\n' : ''}${props.url}`
-    window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    if (!canSendViaSystem.value) {
+        // Unwired host — degrade to the pre-TASK-212 handoff rather than
+        // render a form that has nothing to post to.
+        const subject = props.heading || t('shareEmailSubject', 'ลิงก์ที่แชร์ให้คุณ', 'A link shared with you')
+        const body = `${props.heading ? props.heading + '\n\n' : ''}${props.url}`
+        window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+
+        return
+    }
+
+    emailError.value = ''
+    emailSent.value = ''
+    emailTo.value = props.defaultEmail ?? ''
+    showEmailPanel.value = true
+}
+
+const sendEmail = async () => {
+    if (!canSendViaSystem.value || emailSending.value) return
+
+    const to = emailTo.value.trim()
+    if (!to) {
+        emailError.value = t('shareEmailRequired', 'กรุณากรอกอีเมลผู้รับ', 'Enter a recipient email')
+
+        return
+    }
+
+    emailSending.value = true
+    emailError.value = ''
+    try {
+        // No `url` in this body, on purpose — the server rebuilds it from
+        // the target it just authorized.
+        await api.post('/share-emails', {
+            type: props.emailType,
+            id: props.emailTargetId,
+            email: to,
+        })
+        emailSent.value = to
+        showEmailPanel.value = false
+    } catch (e) {
+        // The endpoint answers 422 with a Thai sentence for both things the
+        // agent can act on — mail not configured yet, and SMTP refused the
+        // address — so it is shown verbatim rather than replaced.
+        emailError.value = e instanceof ApiError
+            ? ((e.body as { message?: string } | undefined)?.message ?? `ส่งอีเมลไม่สำเร็จ (${e.status})`)
+            : t('shareEmailFailed', 'ส่งอีเมลไม่สำเร็จ', 'Could not send the email')
+    } finally {
+        emailSending.value = false
+    }
 }
 
 const shareLinkNative = async () => {
@@ -114,6 +204,13 @@ watch(() => props.show, (val) => {
     if (val) {
         tab.value = 'link'
         copied.value = false
+        // A reopened sheet is a new send; leaving the previous target's
+        // address and its "ส่งแล้ว" line on screen would be a lie about
+        // the link now being shown.
+        showEmailPanel.value = false
+        emailTo.value = ''
+        emailError.value = ''
+        emailSent.value = ''
         loadQr()
     }
 })
@@ -207,6 +304,35 @@ watch(() => props.show, (val) => {
                             {{ t('shareEmail', 'อีเมล', 'Email') }}
                         </button>
                     </div>
+
+                    <!-- TASK-212 — the recipient box, shown only after the
+                         Email button is pressed so the sheet still opens as
+                         four taps, not a form. -->
+                    <div v-if="showEmailPanel" class="mb-2 p-3 rounded-xl border border-line-card bg-surface-chip">
+                        <label for="share-email-to" class="mb-1 block text-xs font-bold text-ink-chip">
+                            {{ t('shareEmailTo', 'ส่งไปที่อีเมล', 'Send to email') }}
+                        </label>
+                        <input id="share-email-to" v-model="emailTo" type="email" inputmode="email"
+                               autocomplete="email" placeholder="name@example.com"
+                               class="w-full min-h-[44px] px-3 py-2.5 rounded-lg border border-line-card bg-surface-card text-sm text-ink-card"
+                               @keyup.enter="sendEmail">
+                        <p v-if="emailError" class="mt-1.5 text-xs font-bold text-ink-danger" role="alert">{{ emailError }}</p>
+                        <div class="mt-2 flex gap-2">
+                            <button :disabled="emailSending" @click="sendEmail"
+                                    class="flex-1 min-h-[44px] py-2.5 rounded-xl text-sm font-bold bg-brand-600 hover:bg-brand-700 text-ink-primary transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                <Icon name="mail" :size="16" />
+                                {{ emailSending ? t('shareEmailSending', 'กำลังส่ง...', 'Sending...') : t('shareEmailSend', 'ส่งอีเมล', 'Send email') }}
+                            </button>
+                            <button class="min-h-[44px] px-3 py-2.5 rounded-xl text-sm font-bold text-ink-chip active:scale-95 transition-all"
+                                    @click="showEmailPanel = false">
+                                {{ t('cancel', 'ยกเลิก', 'Cancel') }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <p v-if="emailSent" class="mb-2 px-3 py-2 rounded-xl bg-surface-chip text-xs font-bold text-ink-chip">
+                        {{ t('shareEmailSentTo', 'ส่งอีเมลไปที่', 'Emailed to') }} {{ emailSent }}
+                    </p>
 
                     <button v-if="canNativeShare" @click="shareLinkNative"
                             class="w-full min-h-[44px] py-2.5 rounded-xl text-sm font-bold bg-brand-600 hover:bg-brand-700 text-ink-primary transition-all active:scale-95 flex items-center justify-center gap-1.5">

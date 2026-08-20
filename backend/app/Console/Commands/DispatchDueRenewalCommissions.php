@@ -92,9 +92,14 @@ class DispatchDueRenewalCommissions extends Command
                 // bare product_id lookup: the original sale may well
                 // have been priced via a category or company-wide
                 // default rule (no product_id on that row at all).
+                // ADR-035 — resolveCommissionRule() no longer takes a
+                // cert tier: the original sale's cert_tier_id_at_time
+                // stays on the ledger row as a historical snapshot (BR-4
+                // immutability), it just doesn't feed rate resolution
+                // anymore.
                 $originalProduct = Product::withoutGlobalScopes()->find($originalLedger->product_id);
                 $rule = $originalProduct
-                    ? $commissionService->resolveCommissionRule($originalProduct, $originalLedger->cert_tier_id_at_time)
+                    ? $commissionService->resolveCommissionRule($originalProduct)
                     : null;
 
                 if (! $rule || ! $rule->renewal_rate_type) {
