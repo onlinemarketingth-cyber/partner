@@ -11,10 +11,16 @@
 #     bash scripts/release-commits-2.sh
 #     git push
 #
-# HONEST LIMITATION, same as batch 1: two files carry more than one task.
-#   - scripts/deploy.sh          → storage-link fix only (clean)
-#   - frontend/src/router/index.ts → TASK-218 only (clean)
-# This batch happens to split cleanly; nothing is smeared across commits.
+# HONEST LIMITATION, same as batch 1. Most of this batch splits cleanly,
+# but THREE spec files carry changes from two tasks each, and git commits
+# whole files — so their TASK-227 edits land in the EARLIER commit whose
+# message does not mention them:
+#   - frontend-admin/.../ThemeSettingsView.spec.ts        → in the TASK-225 commit
+#   - frontend-admin/.../useAuthenticatedMedia.spec.ts    → in the TASK-224 commit
+#   - frontend/.../useAuthenticatedMedia.spec.ts          → in the TASK-224 commit
+# In each case the TASK-227 part is the same two lines: dropping a
+# localStorage.clear() or an unused @ts-expect-error. Splitting them would
+# need index surgery this script cannot do; saying so is the better trade.
 
 set -euo pipefail
 
@@ -399,17 +405,182 @@ difference in correctness — a revoked object URL is invalid everywhere.
 Both copies of the composable are changed; frontend and frontend-admin
 keep them in sync deliberately (CI-001/CI-002).
 
-Proven rather than assumed: the new spec has five cases, and three of them
-FAIL against the previous implementation, including the one that describes
-the reported symptom. Run npm run test:unit in both apps — the sandbox
+TASK-224 rides along in the same commit because it touches the same two
+files and only makes sense on top of this change: a failed fetch used to
+leave a dead red triangle until the component happened to remount. Now a
+TRANSIENT failure (dropped connection, 408, 429, 5xx) is retried twice
+with a short backoff, a PERMANENT one (404/403/401) is not — retrying an
+answer costs three requests per image to arrive at the same place, and a
+grid of twelve missing thumbnails would make that thirty-six — and the
+error placeholder became a tappable retry button for the cases auto-retry
+deliberately skips: a 404 the admin has since re-uploaded, a 403 a
+re-login cleared. The two error messages are now distinguishable, so
+'file is gone' no longer reads the same as 'network hiccuped'.
+
+Proven rather than assumed: the spec has ten cases. Three fail against
+the implementation before TASK-223 (including the one describing the
+reported symptom) and five more fail against the implementation before
+TASK-224. Run npm run test:unit in both apps — the sandbox
 cannot run this project's vitest (rolldown native binding is a macOS
 build), so the spec was verified against a clean vue+vitest install with
 the real composable." \
   frontend/src/composables/useAuthenticatedMedia.ts \
   frontend/src/composables/__tests__/useAuthenticatedMedia.spec.ts \
+  frontend/src/design-system/components/AuthenticatedMedia.vue \
   frontend-admin/src/composables/useAuthenticatedMedia.ts \
   frontend-admin/src/composables/__tests__/useAuthenticatedMedia.spec.ts \
-  docs/tasks/TASK-223-authenticated-media-race.md
+  frontend-admin/src/design-system/components/AuthenticatedMedia.vue \
+  docs/tasks/TASK-223-authenticated-media-race.md \
+  docs/tasks/TASK-224-media-retry.md
+
+commit "test(admin): repair a suite that had been red since 2026-08-17 (TASK-225)
+
+npm run test:unit in frontend-admin reported 56 failed / 50 passed. None
+of it was new: SalesTeamView.vue last changed 2026-08-20 while its spec
+last changed 2026-08-17, and the same gap holds for the other four. The
+suite has been red for three days and nobody ran it.
+
+That matters more than the number. A red suite hides its own regressions
+— it is the same reason TASK-222's 500 sat in
+RoleGateCharacterizationTest for weeks marked 'Recorded, NOT fixed'.
+
+ONE cause took out five files. ADR-038/TASK-209 gave the app a global
+active-company store, and every scopable view now calls
+useActiveCompanyStore() in setup(), so mounting any of them without a
+Pinia throws. Fixed in one place — vitest.setup.ts — rather than five
+copies of the same four lines, because 'a mounted view has a Pinia' is a
+property of the app, not of each spec; pasting it five times leaves the
+sixth view to rediscover this the same way. A FRESH Pinia per test, never
+one shared instance: a company selected in one test leaking into the next
+is an order-dependent failure that costs an afternoon.
+
+The last remaining failure was a different kind, and worth reading. The
+test asserted that the video / team-visibility / commission-split cards
+still live on ThemeSettingsView — but TASK-202 moved all three onto their
+own routes on 2026-08-17. The assertion had been false since that day and
+the red suite hid it. Replaced rather than deleted, asserting the
+opposite: re-absorbing those cards would undo TASK-202 silently, so 'they
+are not here' is still worth pinning.
+
+frontend-admin: 9 files, 106 passed. frontend: 13 files, 132 passed
+(already green, including TASK-224's new spec).
+
+Verified by installing node_modules fresh on Linux in the sandbox and
+running both suites — the same 56/50 reproduced first, then went green.
+This project's macOS node_modules cannot run here (rolldown native
+binding), which is why earlier frontend work could only be type-checked." \
+  frontend-admin/vitest.setup.ts \
+  frontend-admin/vitest.config.ts \
+  frontend-admin/src/views/__tests__/ThemeSettingsView.spec.ts \
+  docs/tasks/TASK-225-admin-test-suite-repair.md
+
+commit "fix(uploads): honour the selected company's video size ceiling (TASK-226)
+
+human set 300 MB for a company in production, saved it, and the upload
+still came back 'ไฟล์ใหญ่เกินขนาดที่บริษัทกำหนด (200 MB)'. 200 is the
+platform default, not the value that was saved — the server never read
+that company's row at all.
+
+TASK-222 is why. It stopped /uploads/init from throwing a TypeError on a
+Super Admin by making forCompany() accept null, and null correctly
+returns the platform default. But init() still passed \$user->company_id
+straight through, and a Super Admin's company_id is NULL by design — so
+he got the default EVERY time, no matter which company the header picker
+was showing. Invisible to a Company Admin, whose company_id is never
+null. Exactly the account human was using.
+
+The fix sends the active company with /uploads/init. Three deliberate
+calls: a Company Admin's supplied company_id is IGNORED, not rejected —
+trusting it would let one tenant borrow another's larger cap (BR-6), and
+403 punishes a field that changes nothing. 'sometimes' not 'required' —
+'ทุกบริษัท' is a real state of that picker and refusing to upload in it
+is a worse answer than the platform default. exists:companies,id so a
+typo cannot silently mean 'no company'. The resolved id feeds BOTH the
+ceiling and the stored row, so a file's owner and its cap can never come
+from different companies.
+
+utils/activeCompanyStorage.ts exists because api/client.ts cannot import
+the store — the store imports the client to fetch the company list, and
+that cycle resolves to undefined at module-evaluation time and fails only
+in a production build. The leaf imports nothing of the app. It has a
+reader and NO writer on purpose: the store keeps sole ownership of the
+value and every rule around it, this file owns only the key.
+
+3 tests: the named company's 300 MB ceiling (fails on the old code with
+the 200 MB message), 'ทุกบริษัท' still uploading, and a Company Admin's
+company_id being ignored. backend 1665 passed / 6231 assertions;
+frontend-admin 106 passed, vue-tsc and eslint clean." \
+  backend/app/Http/Controllers/Api/V1/ChunkedUploadController.php \
+  backend/tests/Feature/Catalog/ChunkedUploadTest.php \
+  frontend-admin/src/utils/activeCompanyStorage.ts \
+  frontend-admin/src/stores/activeCompany.ts \
+  frontend-admin/src/api/client.ts \
+  docs/tasks/TASK-226-video-upload-ceiling.md
+
+commit "fix(storage): route every saved preference through safeStorage (TASK-227)
+
+human's npm run test:unit: 42 failed, 42 passed. Same commit passed
+106/106 in the sandbox — same vitest 4.1.10, same jsdom 29.1.1, same
+config, identical line numbers in the spec files. Node 22 and Node 24
+both passed here too. The code was byte-identical; only the environment
+differed.
+
+Proved it rather than guessed: replacing localStorage with a bare {}
+before the suite ran reproduced 42 failed across exactly 3 files, with
+both of human's messages verbatim. So on that machine localStorage exists
+as an object carrying none of the Storage methods. It looked scattered
+only because every file that touches Storage died and every file that
+does not passed.
+
+This project already answered this. safeStorage.js was written on
+2026-08-12 for a localStorage 'whose getItem was not a function', and its
+docblock names 'a test environment can supply a partial object' outright.
+ADR-003 keeps a copy in frontend-admin — but only useI18n and useFontSize
+ever used it. The lesson was applied to half the codebase.
+
+I first wrote an in-memory Storage into vitest.setup.ts and threw it
+away. It masks the property the project deliberately relies on to catch
+this class of bug, and — the part that matters — it fixes nothing real.
+AcademyManagementView reads storage during setup(), so Safari private
+mode, a sandboxed iframe, or site data switched off WHITE-SCREENS the
+Academy page. CommissionPlansView has the same read and no spec at all.
+activeCompany's setItem has no guard, so choosing a company throws. Those
+red tests were reporting a production bug; making them green without
+fixing it would have been silencing them.
+
+HeroHeader in BOTH apps had a hand-rolled try/catch. It guards a storage
+that THROWS, not one that exists without working methods — which is the
+case that actually occurs. That is the same wrong guard safeStorage's
+docblock calls out, so both copies now go through it. seenAnnouncements
+is left alone: its catch also covers a JSON.parse that can fail
+independently, and it reads lazily.
+
+The two specs calling localStorage.clear() directly lost that line, with
+the same note the agent portal's PipelineBoardConfirmOrder.spec.ts
+already carries. Neither suite writes to storage.
+
+Also fixes TS2578 in both copies of useAuthenticatedMedia.spec.ts, mine
+from TASK-223/224. vue-tsc --noEmit -p tsconfig.app.json does not see
+test files; npm run type-check (vue-tsc --build) does, and I had only run
+the first. TypeScript was reporting the @ts-expect-error as UNUSED — i.e.
+the document fallback it guarded could never be reached — so the fallback
+went, not just the directive.
+
+frontend-admin 106 passed, frontend 132 passed — both normally AND with
+the broken-Storage environment simulated. vue-tsc --build and eslint
+clean in both apps.
+
+NOT fixed: why macOS hands jsdom a method-less localStorage when every
+package version matches. Proved what happens and made the code tolerate
+it; did not prove why." \
+  frontend-admin/src/utils/activeCompanyStorage.ts \
+  frontend-admin/src/stores/activeCompany.ts \
+  frontend-admin/src/views/AcademyManagementView.vue \
+  frontend-admin/src/views/CommissionPlansView.vue \
+  frontend-admin/src/design-system/components/HeroHeader.vue \
+  frontend-admin/src/views/__tests__/ReferralPipelineManagementView.spec.ts \
+  frontend/src/design-system/components/HeroHeader.vue \
+  docs/tasks/TASK-227-safe-storage-admin.md
 
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.
