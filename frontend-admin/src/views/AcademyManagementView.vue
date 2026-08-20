@@ -1371,13 +1371,77 @@ async function saveEditLesson(lessonId: number) {
     editLessonUploadProgress.value = 0
   }
 }
-async function deleteLesson(lessonId: number) {
+/**
+ * TASK-230 — deleting a lesson now goes through ConfirmDialog.
+ *
+ * It never did. `deleteLesson` fired straight off the click, taking the
+ * lesson AND every learner's recorded progress on it with no way back —
+ * while deleting a SECTION, whose blast radius is strictly larger, has
+ * been confirmed since TASK-066. That gap was survivable only because the
+ * button was buried in a card the admin had to select a lesson to reach.
+ * Moving it onto every outline row removes exactly that accidental
+ * protection, so the confirmation is part of the same change rather than
+ * a follow-up: shipping the easier-to-reach button first would be
+ * shipping the regression first.
+ */
+const pendingDeleteLesson = ref<ModuleLessonItem | null>(null)
+const deletingLesson = ref(false)
+
+function requestDeleteLesson(l: ModuleLessonItem) {
+  pendingDeleteLesson.value = l
+}
+
+/**
+ * States the consequence in the terms THIS lesson actually carries,
+ * rather than one fixed sentence. An unpublished lesson nobody can see
+ * yet and a published one with a 12-question quiz on it are not the same
+ * decision, and a warning that cannot tell them apart teaches the admin
+ * to click through it.
+ */
+const deleteLessonWarningBody = computed(() => {
+  const l = pendingDeleteLesson.value
+  if (!l) return ''
+
+  const parts = [`ลบบทเรียน "${l.title}"`]
+  if (l.quiz_question_count) parts.push(`พร้อมแบบทดสอบ ${l.quiz_question_count} คำถาม`)
+  parts.push(
+    l.is_published
+      ? 'บทเรียนนี้เผยแพร่แล้ว — ความคืบหน้าของผู้เรียนทุกคนในบทนี้จะถูกลบไปด้วย'
+      : 'บทเรียนนี้ยังเป็นฉบับร่าง ผู้เรียนจึงยังไม่เห็น',
+  )
+  parts.push('การลบย้อนกลับไม่ได้ ยืนยันหรือไม่?')
+
+  return parts.join(' · ')
+})
+
+async function confirmDeleteLesson() {
+  const l = pendingDeleteLesson.value
+  if (!l) return
+  deletingLesson.value = true
   try {
-    await api.delete(`/module-lessons/${lessonId}`)
+    await api.delete(`/module-lessons/${l.id}`)
+    // Selecting a row that no longer exists leaves the inspector rendering
+    // a lesson that is gone until the next click.
+    if (selectedLessonId.value === l.id) selectedLessonId.value = null
+    if (editingLessonId.value === l.id) editingLessonId.value = null
+    pendingDeleteLesson.value = null
     await loadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
+  } finally {
+    deletingLesson.value = false
   }
+}
+
+/**
+ * TASK-230 — the outline's pencil. Selects the lesson first so the form
+ * it opens is the one already on screen; jumping straight into edit mode
+ * on a lesson the inspector is not showing would put the admin in a form
+ * with no visible context.
+ */
+function startEditLessonFromOutline(m: ModuleItem, l: ModuleLessonItem) {
+  selectLesson(m, l)
+  startEditLesson(l)
 }
 
 // ── Recorded learner progress per lesson (ADR-028 §4) ───────────────
@@ -2710,7 +2774,7 @@ async function confirmGrantCertification() {
                   <div
                     v-for="l in m.lessons"
                     :key="l.id"
-                    class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                    class="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                     :class="[
                       isLessonSelected(l) ? 'bg-brand-50 border-brand-200' : 'bg-white border-slate-100 hover:bg-slate-50',
                       dragOverLessonId === l.id ? 'border-brand-400 bg-brand-50/50' : '',
@@ -2766,6 +2830,46 @@ async function confirmGrantCertification() {
                       class="shrink-0 px-1.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-bold"
                       :title="`มีแบบทดสอบท้ายบทเรียน ${l.quiz_question_count} คำถาม`"
                     >แบบทดสอบ {{ l.quiz_question_count }}</span>
+                    <!--
+                      TASK-230 (human-requested 2026-08-20, after reviewing a
+                      mockup) — แก้ไข/ลบ live at the END OF THE ROW, so a
+                      lesson can be acted on without selecting it first.
+
+                      HIDDEN UNTIL hover / selected / keyboard focus (the
+                      human's choice of the two options offered): a delete
+                      icon repeated down every row of a long outline reads as
+                      clutter and invites the misclick. `group-focus-within`
+                      is what keeps it reachable by Tab — without it these
+                      buttons would be focusable but invisible, which is worse
+                      than not having them.
+
+                      `.stop` on BOTH: the row itself is a click target that
+                      selects, so without it deleting would also select the
+                      row it just removed.
+                    -->
+                    <span
+                      class="shrink-0 flex items-center gap-0.5 pl-1 ml-0.5 border-l border-slate-200"
+                      :class="isLessonSelected(l) ? 'visible' : 'invisible group-hover:visible group-focus-within:visible'"
+                    >
+                      <button
+                        type="button"
+                        title="แก้ไข"
+                        data-test="outline-edit-lesson"
+                        class="p-1 rounded-md text-slate-400 hover:bg-slate-100 hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                        @click.stop="startEditLessonFromOutline(m, l)"
+                      >
+                        <Icon name="pencil" :size="13" />
+                      </button>
+                      <button
+                        type="button"
+                        title="ลบ"
+                        data-test="outline-delete-lesson"
+                        class="p-1 rounded-md text-rose-500 hover:bg-rose-50 hover:text-rose-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                        @click.stop="requestDeleteLesson(l)"
+                      >
+                        <Icon name="trash" :size="13" />
+                      </button>
+                    </span>
                   </div>
                 </div>
                 <p v-else class="px-2 pb-2 pl-9 text-[11px] text-slate-400">ยังไม่มีบทเรียน</p>
@@ -3443,12 +3547,24 @@ async function confirmGrantCertification() {
                         <Icon name="chart" :size="13" />
                         {{ expandedProgressLessonId === l.id ? 'ซ่อนความคืบหน้า' : 'ความคืบหน้าผู้เรียน' }}
                       </button>
-                      <button title="แก้ไข" data-test="edit-lesson" class="text-slate-400 hover:text-brand-600" @click="startEditLesson(l)">
-                        <Icon name="pencil" :size="15" />
-                      </button>
-                      <button title="ลบ" class="text-rose-600 hover:text-rose-700" @click="deleteLesson(l.id)">
-                        <Icon name="trash" :size="15" />
-                      </button>
+                      <!--
+                        TASK-230 — these moved to the outline row. They stay
+                        here for the NARROW layout only, where the outline
+                        panel does not exist at all (`v-if="isWideLayout"`):
+                        removing them outright would leave a tablet with no
+                        way to edit or delete a lesson. Two copies on ONE
+                        screen is what the human asked to end, and this is
+                        never that — the two are mutually exclusive by
+                        viewport.
+                      -->
+                      <template v-if="!isWideLayout">
+                        <button title="แก้ไข" data-test="edit-lesson" class="text-slate-400 hover:text-brand-600" @click="startEditLesson(l)">
+                          <Icon name="pencil" :size="15" />
+                        </button>
+                        <button title="ลบ" data-test="card-delete-lesson" class="text-rose-600 hover:text-rose-700" @click="requestDeleteLesson(l)">
+                          <Icon name="trash" :size="15" />
+                        </button>
+                      </template>
                     </div>
                   </div>
 
@@ -4315,6 +4431,17 @@ async function confirmGrantCertification() {
       body="ลบ Section นี้จะลบบทเรียนทั้งหมดภายในไปด้วย ยืนยันหรือไม่?"
       @confirm="confirmDeleteModule"
       @update:show="(v) => { if (!v) pendingDeleteModuleId = null }"
+    />
+    <!-- TASK-230 — see requestDeleteLesson() for why this did not exist
+         before and why it ships in the same change as the row buttons. -->
+    <ConfirmDialog
+      :show="pendingDeleteLesson !== null"
+      variant="danger"
+      title="ลบบทเรียน"
+      :body="deleteLessonWarningBody"
+      :busy="deletingLesson"
+      @confirm="confirmDeleteLesson"
+      @update:show="(v) => { if (!v) pendingDeleteLesson = null }"
     />
     <!--
       ADR-030 §2.3 / §4 item 2 — detaching is not destructive to the QUIZ, but

@@ -582,6 +582,148 @@ it; did not prove why." \
   frontend/src/design-system/components/HeroHeader.vue \
   docs/tasks/TASK-227-safe-storage-admin.md
 
+commit "fix(announcements): show the popup image whole instead of cropping it (TASK-228)
+
+human sent a screenshot of the announcement popup with the bottom third
+of the banner missing — the 'โซนดีล GENESENN' strip, which is the part
+the announcement existed to show.
+
+One line: the image was 'h-56 sm:h-64 object-cover' (h-72 on
+full_screen). A fixed-height box that object-cover then filled by
+CROPPING the overflow, so every image was cut to the same 224/256/288px
+regardless of its real shape.
+
+Now w-full + h-auto with no object-* at all, so the browser derives the
+height from the intrinsic ratio and nothing can be cropped. NOT
+object-contain: contain keeps the fixed box and letterboxes inside it,
+which shows the whole image but leaves dead bars above and below.
+Dropping the height gives neither crop nor bars.
+
+Left UNCAPPED by human's explicit choice when asked. Overflow is still
+impossible because the CARD already carries max-h-[85vh]/max-h-[92vh]
+with overflow-y-auto — a tall image scrolls the content, it cannot grow
+the modal past the viewport. Accepted trade-off: with a very tall
+portrait image the title and body sit below the fold.
+
+Popup only, also human's choice. AnnouncementBanner.vue keeps
+object-cover: those are preview cards in a grid where equal heights are
+the point.
+
+Adds the component's FIRST spec. Four display styles, three callers and
+no test at all is how object-cover survived from TASK-075 until a human
+had to screenshot it. The 12 tests assert the rule rather than the
+utility strings — no object-cover AND no object-contain, and h-auto as
+the only permitted h-* utility so a 'sm:h-64' cannot creep back — so
+restyling stays free as long as the image still shows in full. Run
+against the old markup they fail 8 of 12; against the fix, 12 pass.
+
+frontend 144 passed (14 files), vue-tsc --build and eslint clean.
+
+NOT fixed: one reflow when the image loads, since its height is not known
+in advance and the API does not send dimensions. bg-surface-chip keeps
+that moment from flashing, but does not remove the reflow." \
+  frontend/src/design-system/components/AnnouncementModal.vue \
+  frontend/src/design-system/components/__tests__/AnnouncementModal.spec.ts \
+  docs/tasks/TASK-228-announcement-image-full.md
+
+commit "fix(deploy): stop index.html being served from cache (TASK-229)
+
+human: video uploads still capped at 200 MB hours after TASK-226 went
+live. The code was right and it WAS deployed. The browser was running the
+pre-deploy bundle.
+
+Checked through the live admin session rather than guessing. localStorage
+held company 1, /me said super_admin, and
+/video-processing-settings?company_id=1 returned max_upload_mb 300 — so
+every server-side layer was correct. The chunk carrying /uploads/init in
+the RUNNING page (Icon-MiqkDfgl.js) had size_bytes but no company_id. The
+chunk on the server (Icon-CoUDrwZ_.js) had both. index.html on the server
+pointed at index-Ds3ax1IP.js; the page had loaded index-8p9WGQoD.js.
+
+Root cause: index.html is served with NO Cache-Control at all, while
+assets get public, max-age=604800. Vite fingerprints everything under
+assets/, so long caching there is correct — but index.html is the only
+file that says WHICH hash is current, and with no header the browser
+falls back to heuristic caching off Last-Modified and picks a lifetime
+itself. Deploys land, and users keep loading last week's JS until
+something makes them hard-refresh. This did not just hide TASK-226; it
+has been hiding every frontend deploy.
+
+no-cache, must-revalidate on *.html in both apps' public/.htaccess.
+no-cache does not mean do not store — it means revalidate first, and with
+Last-Modified already sent an unchanged page costs a 304. The assets
+policy is deliberately untouched: those are content-hashed and caching
+them a week is the right answer.
+
+public/ specifically, not placed on the server by hand: deploy.sh rsyncs
+with --delete, so anything not shipped from public/ is removed on the
+next deploy. Vite copies public/ into dist/ verbatim, so this now ships
+with every npm run deploy.
+
+The doc records the 10-second check (compare the script tags the page
+loaded against the ones index.html currently names) that should be run
+FIRST next time production looks unchanged after a deploy — I reached for
+it last, after two wrong hypotheses.
+
+Verified live: forced a cache-bypassing reload and the tab now runs
+index-Ds3ax1IP.js. The 200 MB ceiling itself still needs a real >200 MB
+upload to call proven." \
+  frontend/public/.htaccess \
+  frontend-admin/public/.htaccess \
+  docs/tasks/TASK-229-index-html-cache.md
+
+commit "feat(academy): lesson แก้ไข/ลบ on the outline row, behind a confirm (TASK-230)
+
+human asked how to delete or edit a lesson. The answer was 'select it
+first, then look at the card header on the right' — which is why they
+could not find it. They asked for the pair to move onto the end of each
+row in the course outline, and for a mockup before any code. Mockup
+approved with three choices: reveal on hover/selection rather than
+always, drop the card copy, and add the missing delete confirmation in
+the same change.
+
+ONE DELIBERATE DEPARTURE from 'drop the card copy': it is dropped only in
+the WIDE layout. Below 1024px the outline panel does not exist at all
+(v-if=isWideLayout), so removing both copies would leave a tablet unable
+to edit or delete a lesson. The two sets are mutually exclusive by
+viewport, so what human actually asked for — never two delete buttons on
+one screen — still holds exactly.
+
+Three details in the row markup that are easy to lose later.
+group-focus-within alongside group-hover: without it the buttons are
+Tab-focusable but invisible, which is worse than absent. .stop on both:
+the row is itself a click target that selects, so deleting would
+otherwise also select the row it just removed — nothing throws, the
+inspector just renders a lesson that is gone. And the SELECTED row shows
+them permanently, because a touch device has no hover and that is its
+only route.
+
+The confirmation is not a nice-to-have bundled in. deleteLesson fired
+straight off the click, taking the lesson and every learner's progress
+with it, while deleting a SECTION — strictly larger blast radius — has
+been confirmed since TASK-066. That gap survived only because the button
+was buried behind a selection. Putting it on every row removes exactly
+that accidental protection, so shipping the easier button without the
+dialog would be shipping the regression first. The body is computed from
+the lesson: a published lesson with a 12-question quiz and an unseen
+draft are not the same decision, and a warning that cannot tell them
+apart trains admins to click through it.
+
+11 tests. Visibility is asserted through the class contract, not
+exists(), so a later 'tidy the outline row' pass that drops the
+group-hover utilities fails instead of silently shipping unclickable
+buttons. Both widths are covered — the same trap TASK-188's tests already
+document. Run against the old markup they fail 10 of 26; against this,
+26 pass. frontend-admin 117 passed, vue-tsc --build and eslint clean.
+
+NOT done: never rendered on a real screen — hover feel is something you
+have to look at. The dialog also does not name how many learners have
+progress; that needs an extra GET per delete, so it says only what is
+free to know." \
+  frontend-admin/src/views/AcademyManagementView.vue \
+  frontend-admin/src/views/__tests__/AcademyManagementView.spec.ts \
+  docs/tasks/TASK-230-lesson-row-actions.md
+
 # Catch-all: anything the explicit lists above missed still belongs on
 # this branch. Loud, so it is never a silent surprise.
 if [[ -n "$(git status --porcelain)" ]]; then

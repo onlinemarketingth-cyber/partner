@@ -50,6 +50,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 const get = vi.fn()
 const put = vi.fn()
 const post = vi.fn()
+const del = vi.fn()
 
 const { FakeApiError } = vi.hoisted(() => ({
   FakeApiError: class extends Error {
@@ -68,7 +69,7 @@ vi.mock('@/api/client', () => ({
     put: (...args: unknown[]) => put(...args),
     post: (...args: unknown[]) => post(...args),
     patch: vi.fn(),
-    delete: vi.fn(),
+    delete: (...args: unknown[]) => del(...args),
     postForm: vi.fn(),
     postFileWithProgress: vi.fn(),
   },
@@ -219,6 +220,8 @@ beforeEach(() => {
   get.mockReset()
   put.mockReset()
   post.mockReset()
+  del.mockReset()
+  del.mockResolvedValue({})
   stubMatchMedia(false)
 })
 
@@ -473,5 +476,178 @@ describe('AcademyManagementView — TASK-188 §6, changing a lesson content type
     expect(put).toHaveBeenCalledTimes(1)
     const [, payload] = put.mock.calls[0] as [string, Record<string, unknown>]
     expect(payload.content_type).toBeUndefined()
+  })
+})
+
+/**
+ * TASK-230 (human-requested 2026-08-20, after approving a mockup) — the
+ * แก้ไข/ลบ pair moved onto each outline row, and deleting a lesson became a
+ * confirmed action.
+ *
+ * WHY THESE ARE WORTH PINNING. Two of the three things this change bought are
+ * invisible to anyone reading the diff later:
+ *
+ *   1. The buttons are `invisible` until hover/selection. A future "clean up
+ *      the outline row" pass that drops the `group-hover:` utilities leaves
+ *      buttons that are IN the DOM and pass any exists() check while being
+ *      permanently unclickable. So visibility is asserted through the class
+ *      contract, not just presence.
+ *   2. `@click.stop`. Without it, deleting also selects the row being removed.
+ *      Nothing throws; the inspector just renders a lesson that is gone.
+ *   3. The narrow layout has NO outline panel, so removing the card's copy of
+ *      the buttons outright would leave a tablet with no way to delete at all.
+ *      Asserted at BOTH widths for that reason — the same trap §5's tests
+ *      already document.
+ */
+describe('AcademyManagementView — TASK-230, lesson actions on the outline row', () => {
+  /**
+   * Narrow layout only: the Section card starts collapsed, so its lesson rows
+   * — and the action buttons on them — are not in the DOM until "จัดการบทเรียน"
+   * is pressed. Same step openLessonEditForm() takes for the same reason.
+   */
+  async function expandSectionCard(wrapper: Awaited<ReturnType<typeof mountView>>) {
+    const manage = wrapper.findAll('button').find((b) => b.text().includes('จัดการบทเรียน'))
+    expect(manage).toBeDefined()
+    await manage!.trigger('click')
+    await flushPromises()
+  }
+  it('puts แก้ไข and ลบ on every outline row, without selecting anything first', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="outline-edit-lesson"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="outline-delete-lesson"]').exists()).toBe(true)
+  })
+
+  it('hides them until the row is hovered, focused or selected', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    const cluster = wrapper.find('[data-test="outline-delete-lesson"]').element.parentElement!
+    const classes = cluster.className
+
+    // Present but not shown, and reachable again by all three routes. A row
+    // that is hover-only is unusable by keyboard, which is why focus-within is
+    // named here too.
+    expect(classes).toContain('invisible')
+    expect(classes).toContain('group-hover:visible')
+    expect(classes).toContain('group-focus-within:visible')
+  })
+
+  it('shows them permanently on the SELECTED row — the only route a touch device has', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    await wrapper.findAll('[role="button"]').find((n) => n.text().includes('วิดีโอแนะนำแพ็กเกจ'))!.trigger('click')
+
+    const cluster = wrapper.find('[data-test="outline-delete-lesson"]').element.parentElement!
+    expect(cluster.className).toContain('visible')
+    expect(cluster.className).not.toContain('invisible')
+  })
+
+  it('deletes NOTHING on the click — the dialog has to be accepted first', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="outline-delete-lesson"]').trigger('click')
+    await flushPromises()
+
+    expect(del).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('ลบบทเรียน')
+  })
+
+  it('names what is actually at stake: the title, the quiz and the published state', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule({ lessons: [makeLesson({ quiz_question_count: 12, is_published: true })] })])
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="outline-delete-lesson"]').trigger('click')
+
+    const text = openDialogText(wrapper)
+    expect(text).toContain('วิดีโอแนะนำแพ็กเกจ')
+    expect(text).toContain('12')
+    expect(text).toContain('เผยแพร่แล้ว')
+  })
+
+  it('says the opposite for a draft — a warning that cannot tell them apart gets clicked through', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule({ lessons: [makeLesson({ is_published: false, quiz_question_count: 0 })] })])
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="outline-delete-lesson"]').trigger('click')
+
+    const text = openDialogText(wrapper)
+    expect(text).toContain('ฉบับร่าง')
+    expect(text).not.toContain('ความคืบหน้าของผู้เรียนทุกคน')
+  })
+
+  it('sends the DELETE once the dialog is confirmed', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="outline-delete-lesson"]').trigger('click')
+    // This screen mounts SEVERAL ConfirmDialogs (Section delete, quiz detach,
+    // completion override...). Picking the first would confirm whichever
+    // happens to be declared earliest, so take the one actually open.
+    const dialog = wrapper
+      .findAllComponents({ name: 'ConfirmDialog' })
+      .find((d) => d.props('show') === true)
+    expect(dialog).toBeDefined()
+    await dialog!.vm.$emit('confirm')
+    await flushPromises()
+
+    expect(del).toHaveBeenCalledWith('/module-lessons/501')
+  })
+
+  it('does not also SELECT the row it is deleting (@click.stop)', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    // Nothing selected yet, so the inspector shows its empty-state prompt.
+    // If the delete click bubbled to the row, that prompt would be replaced by
+    // the doomed lesson's settings card.
+    await wrapper.find('[data-test="outline-delete-lesson"]').trigger('click')
+
+    expect(wrapper.text()).toContain('เลือก Section หรือบทเรียนจากรายการด้านซ้าย')
+  })
+
+  it('keeps the card copy in the NARROW layout, where no outline exists', async () => {
+    stubMatchMedia(false)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+    await expandSectionCard(wrapper)
+
+    expect(wrapper.find('[data-test="outline-delete-lesson"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="card-delete-lesson"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="edit-lesson"]').exists()).toBe(true)
+  })
+
+  it('drops the card copy in the WIDE layout, so one screen never shows two delete buttons', async () => {
+    stubMatchMedia(true)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+
+    await wrapper.findAll('[role="button"]').find((n) => n.text().includes('วิดีโอแนะนำแพ็กเกจ'))!.trigger('click')
+
+    expect(wrapper.find('[data-test="card-delete-lesson"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="outline-delete-lesson"]').exists()).toBe(true)
+  })
+
+  it('confirms before deleting from the narrow layout too', async () => {
+    stubMatchMedia(false)
+    stubLoads([makeModule()])
+    const wrapper = await mountView()
+    await expandSectionCard(wrapper)
+
+    await wrapper.find('[data-test="card-delete-lesson"]').trigger('click')
+    await flushPromises()
+
+    expect(del).not.toHaveBeenCalled()
   })
 })

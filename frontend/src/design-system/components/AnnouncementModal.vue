@@ -104,7 +104,31 @@ const cardClasses = computed(() => {
       return 'w-full sm:max-w-lg sm:rounded-3xl rounded-t-3xl max-h-[92vh]'
   }
 })
-const imageClasses = computed(() => (displayStyle.value === 'full_screen' ? 'h-72 object-cover' : 'h-56 sm:h-64 object-cover rounded-t-3xl'))
+/**
+ * TASK-228 (2026-08-20, human-reported with a screenshot) — the banner
+ * image is shown WHOLE, at its own aspect ratio.
+ *
+ * It used to be `h-56 sm:h-64 object-cover` (and `h-72` on full_screen):
+ * a fixed-height box that `object-cover` then filled by CROPPING whatever
+ * did not fit. Every announcement image was cut to 224/256/288px tall
+ * regardless of its real shape, so a wide product banner lost its bottom
+ * strip — in the reported case the "โซนดีล GENESENN" line, i.e. the part
+ * the announcement existed to show.
+ *
+ * `w-full` + `h-auto` and no `object-*` at all: the browser derives the
+ * height from the intrinsic ratio, so nothing is ever cropped. Note this
+ * is NOT `object-contain` — contain would keep the fixed box and letterbox
+ * the image inside it, which shows the whole image but leaves dead bars
+ * above and below. Dropping the height instead means no bars and no crop.
+ *
+ * DELIBERATELY UNCAPPED (human's choice when asked): a tall portrait image
+ * renders at full height and the card scrolls to it. Overflow is still
+ * impossible because the CARD carries `max-h-[85vh]`/`max-h-[92vh]` plus
+ * `overflow-y-auto` — the modal can never grow past the viewport behind
+ * it, only its content can scroll. The trade-off the human accepted: with
+ * a very tall image the title and body sit below the fold.
+ */
+const imageClasses = computed(() => (displayStyle.value === 'full_screen' ? '' : 'rounded-t-3xl'))
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -156,7 +180,17 @@ function formatDate(iso: string): string {
           <Icon name="x" :size="16" />
         </button>
 
-        <img v-if="announcement.image_url" :src="announcement.image_url" alt="" class="w-full" :class="imageClasses" />
+        <!-- `block` kills the inline-image baseline gap that would otherwise
+             show a sliver of card between the image and the panel edge.
+             `bg-surface-chip` gives the area a themed placeholder while the
+             image is still loading, instead of a flash of card colour. -->
+        <img
+          v-if="announcement.image_url"
+          :src="announcement.image_url"
+          alt=""
+          class="w-full h-auto block bg-surface-chip"
+          :class="imageClasses"
+        />
 
         <div class="p-5 space-y-3">
           <div class="flex items-center gap-1.5">
