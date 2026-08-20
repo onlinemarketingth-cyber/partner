@@ -1,0 +1,42 @@
+fix(ui): full-size announcement image, lesson row actions, no-cache index.html
+
+Three changes from the 2026-08-20 review round.
+
+TASK-228 — the announcement popup cropped its own banner. The image was
+'h-56 sm:h-64 object-cover' (h-72 on full_screen): a fixed-height box
+that object-cover filled by cutting the overflow away, so every image
+lost whatever did not fit. In the reported case that was the bottom
+strip of a product banner. Now w-full + h-auto with no object-* at all,
+so the browser takes the height from the intrinsic ratio. Not
+object-contain, which keeps the box and letterboxes instead. Left
+uncapped by choice: the CARD already has max-h-[85vh]/[92vh] with
+overflow-y-auto, so a tall image scrolls rather than growing the modal.
+Adds the component's first spec — four display styles, three callers and
+no test is how this survived since TASK-075. 12 tests, asserting the rule
+(no crop, h-auto only) rather than the utility strings.
+
+TASK-229 — index.html was served with no Cache-Control at all while
+assets got max-age=604800. Vite fingerprints everything under assets/,
+but index.html is the only file that names the current hash, so with no
+header the browser cached it heuristically off Last-Modified and kept
+loading pre-deploy JS from an up-to-date server. That is why the
+TASK-226 upload fix appeared not to work for hours after it shipped, and
+it was silently hiding every frontend deploy before that. no-cache,
+must-revalidate on *.html in both apps. Shipped from public/ because
+deploy.sh rsyncs with --delete and anything placed on the server by hand
+is removed on the next run.
+
+TASK-230 — lesson แก้ไข/ลบ moved onto each outline row, revealed on
+hover / selection / focus-within, so a lesson can be acted on without
+selecting it first. The card copy stays for the narrow layout only,
+where the outline panel does not exist and removing it would leave a
+tablet unable to delete at all. Deleting a lesson now goes through
+ConfirmDialog: it never did, taking the lesson and every learner's
+progress straight off the click, while deleting a SECTION has been
+confirmed since TASK-066. Putting the button on every row removes the
+accidental protection of it being hard to reach, so the dialog ships in
+the same change. 11 tests; visibility is asserted through the class
+contract so a later tidy-up cannot ship invisible-but-focusable buttons.
+
+frontend-admin 117 passed, frontend 144 passed, vue-tsc --build and
+eslint clean in both.
