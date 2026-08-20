@@ -11,13 +11,21 @@ use Illuminate\Validation\ValidationException;
 
 // BR-2: "rate = cert tier x package sold... from commission_rules config
 // — never hardcode." The one piece of real business logic here: two
-// rules for the same (company, cert_tier, SCOPE) must never have
-// overlapping effective date ranges, or CommissionService (BR-4)
-// wouldn't know which rate to apply at ledger-creation time. ADR-011/
-// TASK-028 widened "scope" from just product_id to the (product_id,
-// product_category_id) pair — a product-specific rule, a category-wide
-// rule, and the company-wide default are three independent scopes that
-// may each separately have their own non-overlapping date ranges.
+// rules for the same (company, SCOPE) must never have overlapping
+// effective date ranges, or CommissionService (BR-4) wouldn't know
+// which rate to apply at ledger-creation time. ADR-011/TASK-028 widened
+// "scope" from just product_id to the (product_id, product_category_id)
+// pair — a product-specific rule, a category-wide rule, and the
+// company-wide default are three independent scopes that may each
+// separately have their own non-overlapping date ranges.
+//
+// ADR-035 — cert_tier_id dropped from the overlap scope entirely
+// (previously part of the uniqueness key alongside company+scope).
+// Since CommissionService::resolveCommissionRule() no longer filters by
+// cert_tier_id, two "different tier" rows covering the same
+// company/scope/date-range would now be genuinely ambiguous at
+// resolution time, not just redundant — so overlap-checking must catch
+// that regardless of what cert_tier_id each row happens to carry.
 class CommissionRuleService
 {
     /**
@@ -39,7 +47,6 @@ class CommissionRuleService
 
         $this->assertNoOverlap(
             $data['company_id'],
-            $data['cert_tier_id'],
             $data['product_id'] ?? null,
             $data['product_category_id'] ?? null,
             $data['effective_from'],
@@ -109,7 +116,6 @@ class CommissionRuleService
         // the overlap check always uses the row's OWN existing scope.
         $this->assertNoOverlap(
             $commissionRule->company_id,
-            $commissionRule->cert_tier_id,
             $commissionRule->product_id,
             $commissionRule->product_category_id,
             $effectiveFrom,
@@ -159,7 +165,6 @@ class CommissionRuleService
 
     private function assertNoOverlap(
         int $companyId,
-        int $certTierId,
         ?int $productId,
         ?int $productCategoryId,
         string $effectiveFrom,
@@ -168,11 +173,14 @@ class CommissionRuleService
     ): void {
         $overlaps = CommissionRule::query()
             ->where('company_id', $companyId)
-            ->where('cert_tier_id', $certTierId)
             // Laravel translates where('col', null) into whereNull('col'),
-            // so this correctly scopes to the SAME triple as the row being
+            // so this correctly scopes to the SAME pair as the row being
             // created/updated — product-specific, category-specific, and
             // company-wide (both null) never collide with each other here.
+            // ADR-035: cert_tier_id dropped from this scope — resolution
+            // no longer filters by it, so two rows differing only by
+            // cert_tier_id would now be a genuine ambiguity, not a
+            // legitimate independent scope.
             ->where('product_id', $productId)
             ->where('product_category_id', $productCategoryId)
             ->when($excludeId, fn ($query) => $query->where('id', '!=', $excludeId))
@@ -187,7 +195,11 @@ class CommissionRuleService
 
         if ($overlaps) {
             throw ValidationException::withMessages([
-                'effective_from' => 'This cert tier + scope (product/category/company-default) already has a commission rule covering this date range.',
+                // Thai — same reason as CommissionOverrideRuleService's
+                // twin message (UAT-016). This one is older and was always
+                // English; the admin UI renders a 422's field message
+                // verbatim, so it was always going to surface untranslated.
+                'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าคอมครอบคลุมช่วงเวลานี้อยู่แล้ว',
             ]);
         }
     }
