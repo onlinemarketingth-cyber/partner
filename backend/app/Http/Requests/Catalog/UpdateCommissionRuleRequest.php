@@ -16,7 +16,22 @@ class UpdateCommissionRuleRequest extends FormRequest
 
     public function authorize(): bool
     {
-        return $this->user()->can('update', $this->route('commission_rule'));
+        $commissionRule = $this->route('commission_rule');
+
+        if (! $this->user()->can('update', $commissionRule)) {
+            return false;
+        }
+
+        // ADR-036 §5/§6 — same restriction as StoreCommissionRuleRequest;
+        // checked against the rule's own (immutable) product_id since
+        // CommissionRuleService::update() never lets product_id change.
+        if (! $this->user()->isSuperAdmin() && $commissionRule->product_id !== null) {
+            if ($commissionRule->product?->catalog_item_id !== null) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

@@ -20,12 +20,33 @@ class ProductResource extends JsonResource
         return [
             'id' => $this->id,
             'company_id' => $this->company_id,
-            'brand' => new BrandResource($this->whenLoaded('brand')),
-            'category' => new ProductCategoryResource($this->whenLoaded('category')),
-            'name' => $this->name,
+            // ADR-036 §2/§3 (TASK-212) — null = standalone (today's
+            // behavior, every existing row). When set, 'name'/'brand'/
+            // 'category'/'description'/'spec_description' below are the
+            // RESOLVED (effective_) values from the shared catalog item,
+            // never this product's own (now-vestigial) columns — see
+            // Product::effectiveName() and its siblings. ag-ui never has
+            // to know or care which source it came from; only
+            // 'catalog_item_id' itself tells it whether editing those
+            // fields here would even do anything (TASK-215: read-only
+            // when set).
+            'catalog_item_id' => $this->catalog_item_id,
+            'brand' => $this->when(
+                $this->catalog_item_id ? $this->relationLoaded('catalogItem') : $this->relationLoaded('brand'),
+                fn () => $this->catalog_item_id
+                    ? new CatalogBrandResource($this->catalogItem?->catalogBrand)
+                    : new BrandResource($this->brand)
+            ),
+            'category' => $this->when(
+                $this->catalog_item_id ? $this->relationLoaded('catalogItem') : $this->relationLoaded('category'),
+                fn () => $this->catalog_item_id
+                    ? new CatalogCategoryResource($this->catalogItem?->catalogCategory)
+                    : new ProductCategoryResource($this->category)
+            ),
+            'name' => $this->effectiveName(),
             'price_satang' => $this->price_satang,
-            'description' => $this->description,
-            'spec_description' => $this->spec_description,
+            'description' => $this->effectiveDescription(),
+            'spec_description' => $this->effectiveSpecDescription(),
             'is_active' => $this->is_active,
             // TASK-056 P3 — only present when 'media' is eager-loaded
             // (ProductController::index()); never a raw storage path

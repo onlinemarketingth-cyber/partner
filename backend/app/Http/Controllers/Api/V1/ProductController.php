@@ -6,10 +6,13 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreProductRequest;
 use App\Http\Requests\Catalog\UpdateProductRequest;
 use App\Http\Resources\ProductResource;
+use App\Models\CommissionLedger;
 use App\Models\Product;
+use App\Models\Referral;
 use App\Services\Catalog\ProductGradingService;
 use App\Services\Catalog\ProductRecommendationService;
 use App\Services\Catalog\ProductService;
+use App\Support\CompanyScopeFilter;
 use App\Support\DeletionGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -53,9 +56,17 @@ class ProductController extends Controller
         $query = Product::query()
             ->with([
                 'brand', 'category', 'company',
+                // ADR-036 §2/§3 (TASK-212) — needed for ProductResource's
+                // 'brand'/'category' keys to resolve from the shared
+                // catalog item when catalog_item_id is set, without an
+                // N+1 per row.
+                'catalogItem.catalogBrand', 'catalogItem.catalogCategory',
                 'media' => fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order'),
             ])
             ->orderBy('name');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->filled('q')) {
             $query->where('name', 'like', '%'.$request->string('q')->trim().'%');
@@ -108,7 +119,7 @@ class ProductController extends Controller
     {
         $product = $service->create($request->validated(), $request->user());
 
-        return new ProductResource($product->load(['brand', 'category', 'company']));
+        return new ProductResource($product->load(['brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory']));
     }
 
     /**
@@ -132,14 +143,14 @@ class ProductController extends Controller
     {
         abort_if($request->user()?->isAgent() && ! $product->is_active, 404);
 
-        return new ProductResource($product->load(['brand', 'category', 'company']));
+        return new ProductResource($product->load(['brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory']));
     }
 
     public function update(UpdateProductRequest $request, Product $product, ProductService $service): ProductResource
     {
         $product = $service->update($product, $request->validated());
 
-        return new ProductResource($product->load(['brand', 'category', 'company']));
+        return new ProductResource($product->load(['brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory']));
     }
 
     public function destroy(Product $product): Response
@@ -149,8 +160,8 @@ class ProductController extends Controller
         // are BR-4 money records: hiding the product they point at would
         // leave a paid commission describing a package no report can name.
         DeletionGuard::ensureNoDependents([
-            'Referral / การขาย' => \App\Models\Referral::query()->where('product_id', $product->id)->count(),
-            'รายการคอมมิชชั่น' => \App\Models\CommissionLedger::query()->where('product_id', $product->id)->count(),
+            'Referral / การขาย' => Referral::query()->where('product_id', $product->id)->count(),
+            'รายการคอมมิชชั่น' => CommissionLedger::query()->where('product_id', $product->id)->count(),
             'อัตราคอมมิชชั่น' => $product->commissionRules()->count(),
             'บทเรียน Academy' => $product->modules()->count(),
         ]);

@@ -21,28 +21,50 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
-import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import IconPicker from '@/design-system/components/IconPicker.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+// TASK-203 — tick-box company picker for the brand/category create forms.
+import CompanyMultiSelect from '@/design-system/components/CompanyMultiSelect.vue'
 import { compressImageToFit } from '@/utils/imageCompression'
 import { useAuthStore } from '@/stores/auth'
-// TASK-196 §3 — live commission-rate-cap guard, one shared implementation
-// with ProductEditView.vue and CommissionPlansView.vue.
-import { useCommissionRateCapGuard } from '@/composables/useCommissionRateCap'
+// TASK-208 / ADR-038 — one company scope for the whole Admin app.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+
+// TASK-208 / ADR-038 — the app-wide company scope. Declared HERE (not beside
+// the rest of the company code far below) because top-level watchers further
+// up this file read it during setup(); see the note at the old location.
+const activeCompany = useActiveCompanyStore()
+const selectedCatalogCompanyId = computed(() => activeCompany.companyId)
+const companyOptions = computed(() => activeCompany.companies)
 
 interface Brand {
   id: number
+  // TASK-202 (human, 2026-08-19: "ต้องแสดงชัดเจนว่าแบรนด์ไหนอยู่บริษัทอะไร").
+  // BrandResource has always sent this — this interface simply dropped it,
+  // so the manage dialog rendered a flat cross-company list (TenantScope
+  // does not narrow a Super Admin) with nothing saying which row belonged
+  // to whom. Same field, same reason, as Product.company_id below.
+  company_id: number
   name: string
   is_active: boolean
+  // TASK-202 — withCount('products') on the index query only; absent on
+  // show/store/update payloads, hence optional.
+  products_count?: number
+  // TASK-205 — brand logo. logo_url is the resolved public-disk URL
+  // (BrandResource), null when no logo has been uploaded.
+  logo_path?: string | null
+  logo_url?: string | null
 }
 interface ProductCategory {
   id: number
+  company_id: number
   name: string
   // TASK-068 / ADR-020 row 3 — Icon.vue name from the curated whitelist
   // (App\Support\CuratedIcons::WHITELIST), or null if unset.
   icon: string | null
   sort_order: number
   is_active: boolean
+  products_count?: number
 }
 interface Product {
   id: number
@@ -123,32 +145,6 @@ interface CertTierRef {
   key: string
   name: string
 }
-interface CommissionRule {
-  id: number
-  cert_tier: CertTierRef | null
-  product: Product | null
-  rate_type: 'percentage' | 'fixed_satang'
-  rate_value: number
-  effective_from: string
-  effective_to: string | null
-  // TASK-024 (ADR-006) — null/null/false unless an admin has opted a
-  // rule into renewal-year commission.
-  renewal_rate_type: 'percentage' | 'fixed_satang' | null
-  renewal_rate_value: number | null
-  renewal_recurs: boolean
-}
-// TASK-025 / ADR-006 — keyed by the MANAGER's own cert tier (not
-// product-scoped, unlike CommissionRule above): a manager earns this
-// rate whenever anyone in their downline closes a direct sale.
-interface CommissionOverrideRule {
-  id: number
-  manager_cert_tier: CertTierRef | null
-  rate_type: 'percentage' | 'fixed_satang'
-  rate_value: number
-  effective_from: string
-  effective_to: string | null
-}
-
 type Tab = 'brands' | 'categories' | 'products' | 'banners' | 'commission_rules' | 'override_rules'
 const route = useRoute()
 const VALID_TABS: Tab[] = ['brands', 'categories', 'products', 'banners', 'commission_rules', 'override_rules']
@@ -183,16 +179,15 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   // TASK-068 / ADR-020 row 2 — storefront carousel banners (Agent Portal
   // row 2), colocated here since every banner links to a product.
   { key: 'banners', label: 'แบนเนอร์', icon: 'image' },
-  { key: 'commission_rules', label: 'อัตราคอมมิชชั่น', icon: 'dollar' },
+  // TASK-213 Phase 3 — 'commission_rules' and 'override_rules' stay VALID
+  // (deep links still resolve, and land on the signpost section below) but
+  // are no longer offered as tabs: both now live in แผนคอมมิชชั่น.
   // TASK-104 — the video-compression config tab MOVED to
   // ThemeSettingsView ("ตั้งค่าระบบ"). It was never product-scoped; it is
   // a company-wide media setting that also governs Academy clips and
   // announcement attachments, so sitting in the product catalogue meant
   // an admin looking for it had to guess "products" for something that
   // is not about products.
-  // TASK-025 / ADR-006 — Unilevel manager override rate, separate from
-  // the per-product rate above (this one has no product dimension).
-  { key: 'override_rules', label: 'ค่าคอมหัวหน้าทีม (Override)', icon: 'branch' },
 ]
 
 const loading = ref(false)
@@ -202,8 +197,6 @@ const errorMessage = ref('')
 const brands = ref<Brand[]>([])
 const categories = ref<ProductCategory[]>([])
 const products = ref<Product[]>([])
-const commissionRules = ref<CommissionRule[]>([])
-const commissionOverrideRules = ref<CommissionOverrideRule[]>([])
 const banners = ref<StorefrontBanner[]>([])
 // Real cert tier list from GET /cert-tiers (any authenticated user) —
 // mirrors CommissionPlansView.vue's certTiers ref/loading pattern.
@@ -214,10 +207,12 @@ async function loadAll() {
   errorMessage.value = ''
   try {
     const [b, c, p, sb, ct] = await Promise.all([
-      api.get<{ data: Brand[] }>('/brands'),
-      api.get<{ data: ProductCategory[] }>('/product-categories'),
-      api.get<{ data: Product[] }>('/products'),
-      api.get<{ data: StorefrontBanner[] }>('/storefront-banners'),
+      // TASK-209 — narrowed server-side. Client-side narrowing of a page of
+      // results is what silently dropped rows in TASK-202.
+      api.get<{ data: Brand[] }>(activeCompany.scopedPath('/brands')),
+      api.get<{ data: ProductCategory[] }>(activeCompany.scopedPath('/product-categories')),
+      api.get<{ data: Product[] }>(activeCompany.scopedPath('/products')),
+      api.get<{ data: StorefrontBanner[] }>(activeCompany.scopedPath('/storefront-banners')),
       api.get<{ data: CertTierRef[] }>('/cert-tiers'),
     ])
     brands.value = b.data
@@ -226,25 +221,10 @@ async function loadAll() {
     banners.value = sb.data
     certTiers.value = ct.data
 
-    // Commission rules is Company Admin/Super Admin only (403 for
-    // Agent) — load it separately so one 403 doesn't blank the rest of
-    // the page for a role that isn't allowed to see it anyway (this
-    // view itself is Admin-app-only, but defensive regardless).
-    try {
-      const cr = await api.get<{ data: CommissionRule[] }>('/commission-rules')
-      commissionRules.value = cr.data
-    } catch (e) {
-      if (!(e instanceof ApiError && e.status === 403)) throw e
-    }
-
-    // TASK-025 / ADR-006 — same Company Admin/Super Admin-only access
-    // shape as commission-rules above (CommissionOverrideRulePolicy).
-    try {
-      const cor = await api.get<{ data: CommissionOverrideRule[] }>('/commission-override-rules')
-      commissionOverrideRules.value = cor.data
-    } catch (e) {
-      if (!(e instanceof ApiError && e.status === 403)) throw e
-    }
+    // TASK-213 Phase 3 — /commission-rules and /commission-override-rules
+    // used to be fetched here for two tabs that now live in แผนคอมมิชชั่น.
+    // Dropped rather than left in: they were two extra requests on every
+    // load of a page that no longer renders a single field from either.
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
   } finally {
@@ -255,6 +235,10 @@ async function loadAll() {
 
 onMounted(loadAll)
 
+// TASK-209 — the header scope is part of every list query above, so a change
+// has to refetch; nothing on this screen can be re-derived client-side.
+watch(() => activeCompany.companyId, () => loadAll())
+
 // ── Brand ──
 // BrandService::create() requires company_id in the payload when the
 // actor is Super Admin (Company Admin's own company_id is inferred
@@ -264,19 +248,190 @@ onMounted(loadAll)
 const showBrandForm = ref(false)
 const brandForm = ref({ name: '' })
 const brandFormError = ref('')
+const savingBrand = ref(false)
+
+/**
+ * TASK-203 (human, 2026-08-19): the create form picks its OWN target
+ * companies with tick boxes ("ติ๊ก All หรือ clear all และติ๊กเลือกบริษัทได้"),
+ * independent of the list's scope picker at the top of the dialog.
+ *
+ * Brands are per-company rows (BR-6), so "this brand in three companies"
+ * is three POSTs — fanned out below, never one request with an array,
+ * because BrandService::create() is the single place that stamps
+ * company_id and it stamps exactly one.
+ */
+const brandCompanyIds = ref<number[]>([])
+const categoryCompanyIds = ref<number[]>([])
+
+/**
+ * ── TASK-205 — brand logo upload (human, 2026-08-19: "ผมต้องการเฉพาะแบรนด์
+ * มีการ upload รูปแบรนด์ได้" — brands only, categories keep their icon
+ * picker) ──
+ *
+ * Same client-side pipeline as the banner uploader further down this file:
+ * compress before the network, refuse what is still too big afterwards,
+ * multipart POST (with _method=PUT for updates, since browsers cannot send
+ * multipart on a real PUT). 2 MB mirrors StoreBrandRequest's max:2048.
+ */
+const BRAND_LOGO_MAX_BYTES = 2 * 1024 * 1024
+const brandLogoFile = ref<File | null>(null)
+const brandLogoPreview = ref<string | null>(null)
+const editBrandLogoFile = ref<File | null>(null)
+const editBrandLogoPreview = ref<string | null>(null)
+const editBrandRemoveLogo = ref(false)
+const compressingBrandLogo = ref(false)
+
+function formatMb(bytes: number): string {
+  return (bytes / 1024 / 1024).toFixed(1)
+}
+
+function resetBrandLogo(which: 'create' | 'edit'): void {
+  const preview = which === 'create' ? brandLogoPreview : editBrandLogoPreview
+  if (preview.value) URL.revokeObjectURL(preview.value)
+  preview.value = null
+  if (which === 'create') brandLogoFile.value = null
+  else {
+    editBrandLogoFile.value = null
+    editBrandRemoveLogo.value = false
+  }
+}
+
+async function onBrandLogoChange(e: Event, which: 'create' | 'edit'): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+
+  const errorRef = which === 'create' ? brandFormError : editBrandError
+  errorRef.value = ''
+  compressingBrandLogo.value = true
+  try {
+    const compressed = await compressImageToFit(file, BRAND_LOGO_MAX_BYTES)
+    if (compressed.size > BRAND_LOGO_MAX_BYTES) {
+      errorRef.value = `รูปโลโก้ขนาด ${formatMb(compressed.size)} MB ใหญ่เกินไปแม้บีบอัดแล้ว (สูงสุด ${formatMb(BRAND_LOGO_MAX_BYTES)} MB)`
+      return
+    }
+
+    resetBrandLogo(which)
+    if (which === 'create') {
+      brandLogoFile.value = compressed
+      brandLogoPreview.value = URL.createObjectURL(compressed)
+    } else {
+      editBrandLogoFile.value = compressed
+      editBrandLogoPreview.value = URL.createObjectURL(compressed)
+      // Picking a replacement cancels a pending "remove".
+      editBrandRemoveLogo.value = false
+    }
+  } finally {
+    compressingBrandLogo.value = false
+    // Let the same file be re-picked after an error.
+    input.value = ''
+  }
+}
+
+/** Multipart body for create — brands always post as FormData now, file or not. */
+function buildBrandCreateFormData(companyId: number | null, file: File | null, isActive = true): FormData {
+  const fd = new FormData()
+  fd.append('name', brandForm.value.name)
+  fd.append('is_active', isActive ? '1' : '0')
+  if (companyId !== null) fd.append('company_id', String(companyId))
+  if (file) fd.append('logo', file)
+
+  return fd
+}
+
+/**
+ * Fan a create out over every ticked company and report per-company
+ * outcomes. A partial failure must NOT read as a total failure: if 4 of
+ * 5 companies got the row, saying "บันทึกไม่สำเร็จ" would send the admin
+ * back to create 5 duplicates.
+ *
+ * @returns '' on full success, otherwise a message naming what failed.
+ */
+async function createForEachCompany(
+  companyIds: number[],
+  post: (companyId: number | null) => Promise<unknown>,
+): Promise<string> {
+  // Company Admin: one call, no company_id — the Service infers it.
+  const targets: (number | null)[] = isSuperAdmin.value ? companyIds : [null]
+  const failed: string[] = []
+
+  for (const companyId of targets) {
+    try {
+      await post(companyId)
+    } catch (e) {
+      const label = companyId === null ? '' : `${companyName(companyId) ?? `#${companyId}`}: `
+      failed.push(`${label}${saveFailureMessage(e)}`)
+    }
+  }
+
+  if (!failed.length) return ''
+
+  const okCount = targets.length - failed.length
+
+  return okCount > 0
+    ? `บันทึกสำเร็จ ${okCount} จาก ${targets.length} บริษัท — ที่ไม่สำเร็จ: ${failed.join(' / ')}`
+    : failed.join(' / ')
+}
+
+/**
+ * Human-reported 2026-08-19: "บันทึกไม่สำเร็จ" with no explanation, and a
+ * stale "กรุณาเลือกบริษัทก่อนบันทึก" still showing AFTER a company had
+ * been picked. Two separate defects, both fixed here and mirrored in
+ * submitCategory below:
+ *
+ *   1. Neither create handler had a try/catch, unlike saveEditBrand()
+ *      right below them. Any failed POST — a 422, or the request never
+ *      reaching Laravel at all (backend down / wrong port) — became an
+ *      unhandled promise rejection: the form just sat there with no
+ *      message, no cleared state, nothing in the UI at all.
+ *   2. The "เลือกบริษัทก่อน" guard message was only ever cleared on the
+ *      NEXT successful submit, so it kept contradicting the company
+ *      dropdown the user had already fixed. It is now cleared the moment
+ *      the company changes (watcher below).
+ */
+function saveFailureMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    // Laravel's own field message (422) is far more useful than a code —
+    // same reasoning as deleteFailureMessage() below.
+    return e.status === 422 && e.message ? e.message : `บันทึกไม่สำเร็จ (${e.status})`
+  }
+
+  // Not an ApiError at all => fetch itself rejected, i.e. the request
+  // never reached the API (backend not running, wrong port, CORS, offline).
+  return 'บันทึกไม่สำเร็จ — ติดต่อ API ไม่ได้ ตรวจสอบว่า backend กำลังทำงานอยู่'
+}
+
 async function submitBrand() {
-  if (isSuperAdmin.value && !selectedCatalogCompanyId.value) {
-    brandFormError.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
+  if (isSuperAdmin.value && !brandCompanyIds.value.length) {
+    brandFormError.value = 'ติ๊กเลือกอย่างน้อย 1 บริษัทก่อนบันทึก'
     return
   }
   brandFormError.value = ''
-  await api.post('/brands', {
-    name: brandForm.value.name,
-    ...(isSuperAdmin.value ? { company_id: selectedCatalogCompanyId.value } : {}),
-  })
-  brandForm.value = { name: '' }
-  showBrandForm.value = false
-  await loadAll()
+  savingBrand.value = true
+  try {
+    // TASK-205 — multipart so the same submit can carry the logo file. A
+    // fresh FormData per company: the same brand mark is uploaded once per
+    // company row, which is what "this brand exists in 3 companies" means.
+    const problem = await createForEachCompany(brandCompanyIds.value, (companyId) =>
+      api.postForm('/brands', buildBrandCreateFormData(companyId, brandLogoFile.value)))
+
+    // Reload either way: on a partial failure the rows that DID save must
+    // appear, or the admin re-creates them.
+    await loadAll()
+
+    if (problem) {
+      // Form deliberately stays open with its typed value intact so the
+      // admin can correct and retry, rather than losing what they typed.
+      brandFormError.value = problem
+      return
+    }
+
+    brandForm.value = { name: '' }
+    resetBrandLogo('create')
+    showBrandForm.value = false
+  } finally {
+    savingBrand.value = false
+  }
 }
 
 // ── Category ──
@@ -287,21 +442,35 @@ const showCategoryForm = ref(false)
 // create payload entirely, matching every other optional field here.
 const categoryForm = ref({ name: '', icon: '', sort_order: 0 })
 const categoryFormError = ref('')
+const savingCategory = ref(false)
 async function submitCategory() {
-  if (isSuperAdmin.value && !selectedCatalogCompanyId.value) {
-    categoryFormError.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
+  if (isSuperAdmin.value && !categoryCompanyIds.value.length) {
+    categoryFormError.value = 'ติ๊กเลือกอย่างน้อย 1 บริษัทก่อนบันทึก'
     return
   }
   categoryFormError.value = ''
-  await api.post('/product-categories', {
-    name: categoryForm.value.name,
-    sort_order: categoryForm.value.sort_order,
-    ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
-    ...(isSuperAdmin.value ? { company_id: selectedCatalogCompanyId.value } : {}),
-  })
-  categoryForm.value = { name: '', icon: '', sort_order: 0 }
-  showCategoryForm.value = false
-  await loadAll()
+  savingCategory.value = true
+  try {
+    const problem = await createForEachCompany(categoryCompanyIds.value, (companyId) =>
+      api.post('/product-categories', {
+        name: categoryForm.value.name,
+        sort_order: categoryForm.value.sort_order,
+        ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
+        ...(companyId === null ? {} : { company_id: companyId }),
+      }))
+
+    await loadAll()
+
+    if (problem) {
+      categoryFormError.value = problem
+      return
+    }
+
+    categoryForm.value = { name: '', icon: '', sort_order: 0 }
+    showCategoryForm.value = false
+  } finally {
+    savingCategory.value = false
+  }
 }
 
 // TASK-068 / ADR-020 row 3 — category edit (this screen previously had
@@ -350,94 +519,233 @@ function deleteFailureMessage(e: unknown): string {
   return 'ลบไม่สำเร็จ'
 }
 
-const editingBrandId = ref<number | null>(null)
+/**
+ * TASK-204 — brand edit is now NAME-level and carries the same tick-box
+ * company picker as create (human, 2026-08-19: "แก้ edit ทั้งแบรนด์และ
+ * หมวดหมู่ให้มีการเลือกบริษัทแบบเดียวกับการเพิ่ม").
+ *
+ * Saving reconciles the ticked set against the rows that exist:
+ *   ticked & exists    -> PUT   (rename / activate)
+ *   ticked & missing   -> POST  (add this brand to that company)
+ *   unticked & exists  -> DELETE (remove it from that company; soft delete,
+ *                         and DeletionGuard still refuses while products
+ *                         use it — reported per company, never swallowed)
+ */
+const editingBrandKey = ref<string | null>(null)
 const editBrandForm = ref({ name: '', is_active: true })
+const editBrandCompanyIds = ref<number[]>([])
+const editBrandRows = ref<Brand[]>([])
 const editBrandError = ref('')
 const savingBrandEdit = ref(false)
 
-function startEditBrand(brand: Brand): void {
-  editingBrandId.value = brand.id
-  editBrandForm.value = { name: brand.name, is_active: brand.is_active }
+function startEditBrand(group: RefNameGroup<Brand>): void {
+  editingBrandKey.value = group.key
+  editBrandForm.value = { name: group.name, is_active: group.rows.every((r) => r.is_active) }
+  editBrandCompanyIds.value = [...group.companyIds]
+  editBrandRows.value = [...group.rows]
   editBrandError.value = ''
+  resetBrandLogo('edit')
 }
 
 function cancelEditBrand(): void {
-  editingBrandId.value = null
+  editingBrandKey.value = null
+  resetBrandLogo('edit')
 }
 
+/** First logo found in the group being edited — what the form shows as "current". */
+const editBrandCurrentLogoUrl = computed(() => editBrandRows.value.find((r) => r.logo_url)?.logo_url ?? null)
+
 async function saveEditBrand(): Promise<void> {
-  if (!editingBrandId.value) return
+  if (editingBrandKey.value === null) return
+  if (isSuperAdmin.value && !editBrandCompanyIds.value.length) {
+    // Untick-everything is a delete in disguise; make the admin say so with
+    // the delete button, which asks for confirmation.
+    editBrandError.value = 'ต้องเหลืออย่างน้อย 1 บริษัท — ถ้าต้องการเอาออกทุกบริษัท ให้ใช้ปุ่มลบ'
+    return
+  }
+
   savingBrandEdit.value = true
   editBrandError.value = ''
+  const rows = editBrandRows.value
+  const ticked = isSuperAdmin.value ? editBrandCompanyIds.value : rows.map((r) => r.company_id)
+  const failures: string[] = []
+  const label = (companyId: number) => `${companyName(companyId) ?? `#${companyId}`}: `
+
   try {
-    await api.put(`/brands/${editingBrandId.value}`, {
-      name: editBrandForm.value.name,
-      is_active: editBrandForm.value.is_active,
-    })
-    editingBrandId.value = null
+    // TASK-205 — multipart, so a logo can be replaced or cleared in the same
+    // save. _method=PUT because browsers cannot send multipart on a PUT.
+    const editFormData = (companyId: number | null): FormData => {
+      const fd = new FormData()
+      if (companyId === null) fd.append('_method', 'PUT')
+      else fd.append('company_id', String(companyId))
+      fd.append('name', editBrandForm.value.name)
+      fd.append('is_active', editBrandForm.value.is_active ? '1' : '0')
+      if (editBrandLogoFile.value) fd.append('logo', editBrandLogoFile.value)
+      // remove_logo only makes sense on an existing row; a brand-new row has
+      // nothing to clear.
+      else if (editBrandRemoveLogo.value && companyId === null) fd.append('remove_logo', '1')
+
+      return fd
+    }
+
+    for (const row of rows.filter((r) => ticked.includes(r.company_id))) {
+      try {
+        await api.postForm(`/brands/${row.id}`, editFormData(null))
+      } catch (e) {
+        failures.push(label(row.company_id) + saveFailureMessage(e))
+      }
+    }
+
+    for (const companyId of ticked.filter((id) => !rows.some((r) => r.company_id === id))) {
+      try {
+        await api.postForm('/brands', editFormData(companyId))
+      } catch (e) {
+        failures.push(label(companyId) + saveFailureMessage(e))
+      }
+    }
+
+    for (const row of rows.filter((r) => !ticked.includes(r.company_id))) {
+      try {
+        await api.delete(`/brands/${row.id}`)
+      } catch (e) {
+        failures.push(label(row.company_id) + deleteFailureMessage(e))
+      }
+    }
+
     await loadAll()
-  } catch (e) {
-    editBrandError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
+
+    if (failures.length) {
+      editBrandError.value = failures.join(' / ')
+      return
+    }
+
+    editingBrandKey.value = null
   } finally {
     savingBrandEdit.value = false
   }
 }
 
 // TASK-066 convention — ConfirmDialog, never native window.confirm().
-const pendingDeleteBrand = ref<Brand | null>(null)
-function deleteBrand(brand: Brand): void {
-  pendingDeleteBrand.value = brand
+// TASK-204 — the unit is the name, so delete removes it from every company
+// that has it; the dialog body says how many.
+const pendingDeleteBrand = ref<RefNameGroup<Brand> | null>(null)
+function deleteBrand(group: RefNameGroup<Brand>): void {
+  pendingDeleteBrand.value = group
 }
 async function confirmDeleteBrand(): Promise<void> {
-  const brand = pendingDeleteBrand.value
-  if (!brand) return
-  try {
-    await api.delete(`/brands/${brand.id}`)
-    brands.value = brands.value.filter((b) => b.id !== brand.id)
-  } catch (e) {
-    errorMessage.value = deleteFailureMessage(e)
-  } finally {
-    pendingDeleteBrand.value = null
+  const group = pendingDeleteBrand.value
+  if (!group) return
+  const failures: string[] = []
+
+  for (const row of group.rows) {
+    try {
+      await api.delete(`/brands/${row.id}`)
+    } catch (e) {
+      failures.push(`${companyName(row.company_id) ?? `#${row.company_id}`}: ${deleteFailureMessage(e)}`)
+    }
   }
+
+  await loadAll()
+  errorMessage.value = failures.join(' / ')
+  pendingDeleteBrand.value = null
 }
 
 // pattern used nowhere else on this page yet, closest precedent is
 // ProductEditView.vue's pencil-edit-toggle sections.
-const editingCategoryId = ref<number | null>(null)
+// TASK-204 — name-level edit with the same tick-box company picker as
+// brands above; see saveEditBrand()'s docblock for the reconcile rules.
+const editingCategoryKey = ref<string | null>(null)
 const editCategoryForm = ref({ name: '', icon: '', sort_order: 0, is_active: true })
+const editCategoryCompanyIds = ref<number[]>([])
+const editCategoryRows = ref<ProductCategory[]>([])
 const editCategoryError = ref('')
 const savingCategoryEdit = ref(false)
-function startEditCategory(category: ProductCategory): void {
-  editingCategoryId.value = category.id
+function startEditCategory(group: RefNameGroup<ProductCategory>): void {
+  // A group only exists because it has rows (see groupByName), so [0] is
+  // always there — but noUncheckedIndexedAccess does not know that, and a
+  // non-null assertion would be a claim rather than a guard.
+  const first = group.rows[0]
+  if (!first) return
+  editingCategoryKey.value = group.key
   editCategoryForm.value = {
-    name: category.name,
-    icon: category.icon ?? '',
-    sort_order: category.sort_order,
-    is_active: category.is_active,
+    name: group.name,
+    // icon/sort_order are per row too, but they are presentation-only and in
+    // practice identical across companies for the same category name — take
+    // the first row's and write it to all, rather than pretending the form
+    // can hold three different icons for one name.
+    icon: first.icon ?? '',
+    sort_order: first.sort_order,
+    is_active: group.rows.every((r) => r.is_active),
   }
+  editCategoryCompanyIds.value = [...group.companyIds]
+  editCategoryRows.value = [...group.rows]
   editCategoryError.value = ''
 }
 function cancelEditCategory(): void {
-  editingCategoryId.value = null
+  editingCategoryKey.value = null
 }
 async function saveEditCategory(): Promise<void> {
-  if (!editingCategoryId.value) return
+  if (editingCategoryKey.value === null) return
+  if (isSuperAdmin.value && !editCategoryCompanyIds.value.length) {
+    editCategoryError.value = 'ต้องเหลืออย่างน้อย 1 บริษัท — ถ้าต้องการเอาออกทุกบริษัท ให้ใช้ปุ่มลบ'
+    return
+  }
+
   savingCategoryEdit.value = true
   editCategoryError.value = ''
+  const rows = editCategoryRows.value
+  const ticked = isSuperAdmin.value ? editCategoryCompanyIds.value : rows.map((r) => r.company_id)
+  const failures: string[] = []
+  const label = (companyId: number) => `${companyName(companyId) ?? `#${companyId}`}: `
+  const payload = {
+    name: editCategoryForm.value.name,
+    // Explicit null (not omitted) so a cleared icon actually clears
+    // server-side — UpdateProductCategoryRequest's own comment: "null
+    // clears the icon back to 'none chosen'".
+    icon: editCategoryForm.value.icon || null,
+    sort_order: editCategoryForm.value.sort_order,
+    is_active: editCategoryForm.value.is_active,
+  }
+
   try {
-    await api.put(`/product-categories/${editingCategoryId.value}`, {
-      name: editCategoryForm.value.name,
-      // Explicit null (not omitted) so a cleared icon actually clears
-      // server-side — UpdateProductCategoryRequest's own comment: "null
-      // clears the icon back to 'none chosen'".
-      icon: editCategoryForm.value.icon || null,
-      sort_order: editCategoryForm.value.sort_order,
-      is_active: editCategoryForm.value.is_active,
-    })
-    editingCategoryId.value = null
+    for (const row of rows.filter((r) => ticked.includes(r.company_id))) {
+      try {
+        await api.put(`/product-categories/${row.id}`, payload)
+      } catch (e) {
+        failures.push(label(row.company_id) + saveFailureMessage(e))
+      }
+    }
+
+    for (const companyId of ticked.filter((id) => !rows.some((r) => r.company_id === id))) {
+      try {
+        // StoreProductCategoryRequest treats icon as nullable+optional; send
+        // it only when set, matching submitCategory()'s create payload.
+        await api.post('/product-categories', {
+          ...payload,
+          ...(payload.icon ? {} : { icon: undefined }),
+          company_id: companyId,
+        })
+      } catch (e) {
+        failures.push(label(companyId) + saveFailureMessage(e))
+      }
+    }
+
+    for (const row of rows.filter((r) => !ticked.includes(r.company_id))) {
+      try {
+        await api.delete(`/product-categories/${row.id}`)
+      } catch (e) {
+        failures.push(label(row.company_id) + deleteFailureMessage(e))
+      }
+    }
+
     await loadAll()
-  } catch (e) {
-    editCategoryError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
+
+    if (failures.length) {
+      editCategoryError.value = failures.join(' / ')
+      return
+    }
+
+    editingCategoryKey.value = null
   } finally {
     savingCategoryEdit.value = false
   }
@@ -458,21 +766,26 @@ async function saveEditCategory(): Promise<void> {
  * `products.category_id` is `restrictOnDelete`, so a hard delete of a
  * category still in use would be refused by the database.
  */
-const pendingDeleteCategory = ref<ProductCategory | null>(null)
-function deleteCategory(category: ProductCategory): void {
-  pendingDeleteCategory.value = category
+const pendingDeleteCategory = ref<RefNameGroup<ProductCategory> | null>(null)
+function deleteCategory(group: RefNameGroup<ProductCategory>): void {
+  pendingDeleteCategory.value = group
 }
 async function confirmDeleteCategory(): Promise<void> {
-  const category = pendingDeleteCategory.value
-  if (!category) return
-  try {
-    await api.delete(`/product-categories/${category.id}`)
-    categories.value = categories.value.filter((c) => c.id !== category.id)
-  } catch (e) {
-    errorMessage.value = deleteFailureMessage(e)
-  } finally {
-    pendingDeleteCategory.value = null
+  const group = pendingDeleteCategory.value
+  if (!group) return
+  const failures: string[] = []
+
+  for (const row of group.rows) {
+    try {
+      await api.delete(`/product-categories/${row.id}`)
+    } catch (e) {
+      failures.push(`${companyName(row.company_id) ?? `#${row.company_id}`}: ${deleteFailureMessage(e)}`)
+    }
   }
+
+  await loadAll()
+  errorMessage.value = failures.join(' / ')
+  pendingDeleteCategory.value = null
 }
 
 // ── Banners (TASK-068 / ADR-020 row 2) ──────────────────────────────────
@@ -706,173 +1019,9 @@ async function confirmDeleteProduct(): Promise<void> {
   }
 }
 
-const pendingDeleteCommissionRule = ref<CommissionRule | null>(null)
-function deleteCommissionRule(rule: CommissionRule): void {
-  pendingDeleteCommissionRule.value = rule
-}
-async function confirmDeleteCommissionRule(): Promise<void> {
-  const rule = pendingDeleteCommissionRule.value
-  if (!rule) return
-  try {
-    await api.delete(`/commission-rules/${rule.id}`)
-    commissionRules.value = commissionRules.value.filter((r) => r.id !== rule.id)
-  } catch (e) {
-    errorMessage.value = deleteFailureMessage(e)
-  } finally {
-    pendingDeleteCommissionRule.value = null
-  }
-}
-
-const pendingDeleteOverrideRule = ref<CommissionOverrideRule | null>(null)
-function deleteOverrideRule(rule: CommissionOverrideRule): void {
-  pendingDeleteOverrideRule.value = rule
-}
-async function confirmDeleteOverrideRule(): Promise<void> {
-  const rule = pendingDeleteOverrideRule.value
-  if (!rule) return
-  try {
-    await api.delete(`/commission-override-rules/${rule.id}`)
-    commissionOverrideRules.value = commissionOverrideRules.value.filter((r) => r.id !== rule.id)
-  } catch (e) {
-    errorMessage.value = deleteFailureMessage(e)
-  } finally {
-    pendingDeleteOverrideRule.value = null
-  }
-}
-
-// ── Commission rule ──
-const showRuleForm = ref(false)
-const ruleForm = ref({
-  product_id: '',
-  cert_tier_id: '' as string | number,
-  // TASK-197 §3.5 — renamed from rate_percent: this input no longer
-  // always means "a percent" (see effectiveRuleFormRateType below), it
-  // is % OR THB depending on the selected product's own
-  // commission_rate_type. rateValueToBasisOrSatang's math is identical
-  // either way (both are "multiply by 100, round"), only the unit label
-  // and the rate_type sent to the API differ.
-  rate_value_input: '' as string | number,
-  effective_from: new Date().toISOString().slice(0, 10),
-  // TASK-024 (ADR-006) — optional. Empty string = "no renewal rate",
-  // never sent to the API at all (opt-in, never a $0 rate).
-  renewal_rate_percent: '' as string | number,
-  renewal_recurs: false,
-})
-
-// TASK-197 §3.5 (human decision) — the "ใช้อัตรานี้กับทุกแพ็กเกจ" bulk-apply
-// checkbox and its applyRateToAllProducts() code path are REMOVED
-// entirely, not just hidden: one entered number can no longer mean the
-// same thing across every product once each product can have its own %
-// vs fixed-THB format — a bulk value could silently be wrong for any
-// product whose format differs from what the admin had in mind. Only
-// the per-product form (below) remains.
-
-// TASK-197 §3.5 — the selected product's OWN locked-in rate_type
-// (server-authoritative, set either via ProductEditView's settings
-// block or as a side effect of this product's first rule, §2.2). This
-// form used to hardcode rate_type: 'percentage' unconditionally (see
-// the superseded TASK-196 comment this replaces) — it now reads and
-// respects the product's real format, falling back to 'percentage' only
-// when the product has never had a rule before (§2.1's null default,
-// same as every other form in this task).
-const ruleFormSelectedProduct = computed<Product | null>(() => {
-  if (ruleForm.value.product_id === '') return null
-  return products.value.find((p) => p.id === Number(ruleForm.value.product_id)) ?? null
-})
-const effectiveRuleFormRateType = computed<'percentage' | 'fixed_satang'>(() => ruleFormSelectedProduct.value?.commission_rate_type ?? 'percentage')
-
-const ruleCapGuard = useCommissionRateCapGuard()
-const ruleFormProductPriceSatang = computed<number | null>(() => {
-  if (ruleForm.value.product_id === '') return null
-  return products.value.find((p) => p.id === Number(ruleForm.value.product_id))?.price_satang ?? null
-})
-function recheckRuleCap(): void {
-  ruleCapGuard.recheck(effectiveRuleFormRateType.value, rateValueToBasisOrSatang(ruleForm.value.rate_value_input), ruleFormProductPriceSatang.value)
-}
-function recheckRuleCapDebounced(): void {
-  ruleCapGuard.recheckDebounced(effectiveRuleFormRateType.value, rateValueToBasisOrSatang(ruleForm.value.rate_value_input), ruleFormProductPriceSatang.value)
-}
-function rateValueToBasisOrSatang(input: string | number): number {
-  return Math.round(Number(input) * 100)
-}
-
-async function submitRule() {
-  if (!ruleForm.value.cert_tier_id) {
-    errorMessage.value = 'กรุณาเลือก Cert Tier'
-    return
-  }
-  if (!ruleForm.value.product_id) {
-    errorMessage.value = 'กรุณาเลือกแพ็กเกจ'
-    return
-  }
-  const certTierId = Number(ruleForm.value.cert_tier_id)
-
-  // TASK-196 §3.2 — defensive re-check alongside the disabled Save button.
-  recheckRuleCap()
-  if (ruleCapGuard.isOverCap.value) return
-
-  await api.post('/commission-rules', {
-    product_id: Number(ruleForm.value.product_id),
-    cert_tier_id: certTierId,
-    rate_type: effectiveRuleFormRateType.value,
-    rate_value: rateValueToBasisOrSatang(ruleForm.value.rate_value_input),
-    effective_from: ruleForm.value.effective_from,
-    ...renewalPayloadFields(),
-  })
-  resetRuleForm()
-  await loadAll()
-}
-
-// TASK-024 (ADR-006) — spreads in only when a renewal % was actually
-// entered; omitted entirely otherwise so a plain rule stays exactly as
-// before (renewal_rate_type stays null server-side, BR-7 opt-in).
-function renewalPayloadFields(): Record<string, unknown> {
-  if (ruleForm.value.renewal_rate_percent === '') return {}
-  return {
-    renewal_rate_type: 'percentage',
-    renewal_rate_value: Math.round(Number(ruleForm.value.renewal_rate_percent) * 100),
-    renewal_recurs: ruleForm.value.renewal_recurs,
-  }
-}
-
-function resetRuleForm() {
-  ruleForm.value = {
-    product_id: '',
-    cert_tier_id: '',
-    rate_value_input: '',
-    effective_from: new Date().toISOString().slice(0, 10),
-    renewal_rate_percent: '',
-    renewal_recurs: false,
-  }
-  showRuleForm.value = false
-  ruleCapGuard.reset()
-}
 
 function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 0 }) + ' บาท'
-}
-function formatRate(rule: CommissionRule | CommissionOverrideRule): string {
-  if (rule.rate_type === 'percentage') return (rule.rate_value / 100).toFixed(2) + '%'
-  return formatSatang(rule.rate_value)
-}
-
-// ── Commission override rule (TASK-025 / ADR-006) ──
-const showOverrideRuleForm = ref(false)
-const overrideRuleForm = ref({ cert_tier_id: '' as string | number, rate_percent: '' as string | number, effective_from: new Date().toISOString().slice(0, 10) })
-async function submitOverrideRule() {
-  if (!overrideRuleForm.value.cert_tier_id) {
-    errorMessage.value = 'กรุณาเลือก Cert Tier'
-    return
-  }
-  await api.post('/commission-override-rules', {
-    manager_cert_tier_id: Number(overrideRuleForm.value.cert_tier_id),
-    rate_type: 'percentage',
-    rate_value: Math.round(Number(overrideRuleForm.value.rate_percent) * 100), // % -> basis points
-    effective_from: overrideRuleForm.value.effective_from,
-  })
-  overrideRuleForm.value = { cert_tier_id: '', rate_percent: '', effective_from: new Date().toISOString().slice(0, 10) }
-  showOverrideRuleForm.value = false
-  await loadAll()
 }
 
 // ── Video processing settings (ADR-007) — per-company override of
@@ -882,14 +1031,32 @@ async function submitOverrideRule() {
 // company first (mirrors CompanyManagementView's /companies list). ──
 const authStore = useAuthStore()
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
-interface CompanyOption {
-  id: number
-  name: string
-}
-const companyOptions = ref<CompanyOption[]>([])
-// TASK-104 — `selectedCompanyId` went with the video-settings tab; the
-// only company picker left on this page is the catalogue one below.
-const selectedCatalogCompanyId = ref<number | null>(null)
+// TASK-208 — this page used to own THREE company controls: the scope bar in
+// the brand/category dialog, the "บริษัท: ทั้งหมด" filter on the package
+// toolbar, and the banners tab's own picker. All three are gone; the header
+// switcher is the only one, and the aliases below keep the rest of this file
+// (including TASK-203's multi-company create forms) reading unchanged.
+// TASK-209 bugfix (browser QA, 2026-08-19): these three MUST stay at the top
+// of the script. They used to live ~1000 lines down, next to the other
+// company code — but `watch(() => activeCompany.companyId, ...)` near
+// loadAll() runs during setup(), so a `const` declared later put
+// activeCompany in the temporal dead zone and the whole view threw
+// ReferenceError before it ever rendered (symptom: a blank page under the
+// nav bar). Declaration order is load-bearing in <script setup>; the moved
+// block is below, right after the imports.
+
+// Defect 2 of submitBrand()'s docblock (human-reported 2026-08-19): the
+// "กรุณาเลือกบริษัทก่อนบันทึก" guard message must not outlive the
+// condition that produced it. Clearing it when the company changes
+// (instead of only on the next successful submit) makes it disappear the
+// instant the admin fixes what it complained about, rather than sitting
+// there contradicting the dropdown right above it.
+// Declared HERE, not next to submitBrand(): watch() runs during setup, so
+// it must come after selectedCatalogCompanyId's own declaration.
+watch(selectedCatalogCompanyId, () => {
+  brandFormError.value = ''
+  categoryFormError.value = ''
+})
 
 /**
  * Super Admin company list for the Brand / Category / Banner create
@@ -900,31 +1067,28 @@ const selectedCatalogCompanyId = ref<number | null>(null)
  * Errors land in the page-level `errorMessage` now that the
  * video-settings error ref it used to write to has gone.
  */
-async function loadCompanyOptionsIfNeeded() {
-  if (!isSuperAdmin.value || companyOptions.value.length) return
-  try {
-    const res = await api.get<{ data: CompanyOption[] }>('/companies')
-    companyOptions.value = res.data
-  } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดรายชื่อบริษัทไม่สำเร็จ (${e.status})` : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
+// TASK-208 — the fetch itself moved into the store (idempotent), so every
+// call site below is now just "make sure it has happened".
+const loadCompanyOptionsIfNeeded = () => activeCompany.loadCompanies()
 watch(activeTab, (tab) => {
   // Brand/Category/Banner create forms need the same company picker —
   // load it lazily the first time any of these tabs is opened, not just
   // Banners need it to scope the product-picker dropdown
   // to one company (TASK-069 — Super Admin sees every company's products
   // in the flat /products response, TenantScope only auto-filters for
-  // non-Super-Admin actors).
-  if ((tab === 'brands' || tab === 'categories' || tab === 'banners') && isSuperAdmin.value) {
+  // non-Super-Admin actors). 'products' added (2026-08-18, human report):
+  // Super Admin's own package list is the same flat cross-company
+  // response, and the list needed a "บริษัท" filter + label for the same
+  // reason the Banner product-picker did.
+  if ((tab === 'brands' || tab === 'categories' || tab === 'banners' || tab === 'products') && isSuperAdmin.value) {
     loadCompanyOptionsIfNeeded()
   }
 })
 // Cover the case where the page loads directly on the brands/categories/
-// banners tab (deep link, or it's just the default initial tab) for
-// Super Admin — the watch(activeTab) above only fires on a change, not
-// on the initial value.
-if (isSuperAdmin.value && (activeTab.value === 'brands' || activeTab.value === 'categories' || activeTab.value === 'banners')) {
+// banners/products tab (deep link, or it's just the default initial tab —
+// 'products' IS the default, see initialTab() above) for Super Admin — the
+// watch(activeTab) above only fires on a change, not on the initial value.
+if (isSuperAdmin.value && (activeTab.value === 'brands' || activeTab.value === 'categories' || activeTab.value === 'banners' || activeTab.value === 'products')) {
   loadCompanyOptionsIfNeeded()
 }
 
@@ -997,7 +1161,13 @@ if (typeof route.query.tab === 'string' && (route.query.tab === 'brands' || rout
  * package was deleted.
  */
 const FILTER_KEY = 'sv_admin_catalog_filters'
-type CatalogFilters = { q: string; brandId: number | null; categoryId: number | null }
+// companyId (2026-08-18, human report) — Super Admin sees every company's
+// products in this one flat list (TenantScope skips the company_id filter
+// entirely for Super Admin, per TenantScope::apply()); meaningless for
+// Company Admin, who only ever has one company's rows here regardless, so
+// it stays null and unused/hidden for them (see the v-if="isSuperAdmin"
+// guards on the filter control and the row label below).
+type CatalogFilters = { q: string; brandId: number | null; categoryId: number | null; companyId: number | null }
 
 function readStoredFilters(): CatalogFilters {
   try {
@@ -1009,13 +1179,14 @@ function readStoredFilters(): CatalogFilters {
         q: typeof parsed.q === 'string' ? parsed.q : '',
         brandId: typeof parsed.brandId === 'number' ? parsed.brandId : null,
         categoryId: typeof parsed.categoryId === 'number' ? parsed.categoryId : null,
+        companyId: typeof parsed.companyId === 'number' ? parsed.companyId : null,
       }
     }
   } catch {
     /* private mode / corrupt value — fall through to defaults */
   }
 
-  return { q: '', brandId: null, categoryId: null }
+  return { q: '', brandId: null, categoryId: null, companyId: null }
 }
 
 const productFilters = reactive<CatalogFilters>(readStoredFilters())
@@ -1040,6 +1211,8 @@ const filteredProducts = computed(() => {
   return products.value.filter((p) => {
     if (productFilters.brandId !== null && p.brand?.id !== productFilters.brandId) return false
     if (productFilters.categoryId !== null && p.category?.id !== productFilters.categoryId) return false
+    // TASK-208 — narrowing by company is the header switcher's job now.
+    if (activeCompany.companyId !== null && p.company_id !== activeCompany.companyId) return false
     if (q && !p.name.toLowerCase().includes(q)) return false
 
     return true
@@ -1051,10 +1224,167 @@ const productFilterCount = computed(
     + (productFilters.q.trim() ? 1 : 0),
 )
 
+// companyId -> name lookup for the row label below. companyOptions is
+// only ever populated for Super Admin (loadCompanyOptionsIfNeeded() is a
+// no-op otherwise), so this naturally returns undefined and the label
+// stays hidden for Company Admin — nothing to look up when every row is
+// already their own one company.
+function companyName(companyId: number): string | undefined {
+  return activeCompany.companies.find((c) => c.id === companyId)?.name
+}
+
+/**
+ * TASK-209 (browser QA, 2026-08-19: "ระบบ Filter brand ในโหมดทุกบริษัท ควรมี
+ * ชื่อบริษัทนำหน้าใน Select box ผู้ใช้สับสน").
+ *
+ * In ทุกบริษัท mode the brand/category lists are cross-company, so the same
+ * name legitimately appears once per company — three identical
+ * "QA Test Category" entries with nothing to tell them apart.
+ *
+ * The company name is prefixed onto the LABEL (the human's own instruction),
+ * not just carried in an <optgroup>: a native select shows only the chosen
+ * option's text once it is closed, so an optgroup alone would answer the
+ * question while the list is open and lose it the moment you pick one.
+ * Options are also grouped, so the open list reads company-by-company.
+ *
+ * With a company scoped there is only one company on screen — the prefix
+ * would be noise, so the plain name is used exactly as before.
+ */
+function groupOptionsByCompany<T extends { id: number, name: string, company_id: number }>(items: T[]) {
+  const buckets = new Map<number, T[]>()
+  for (const item of items) {
+    const bucket = buckets.get(item.company_id)
+    if (bucket) bucket.push(item)
+    else buckets.set(item.company_id, [item])
+  }
+
+  return [...buckets.entries()]
+    .map(([id, list]) => ({
+      companyId: id,
+      companyName: companyName(id) ?? `บริษัท #${id}`,
+      items: [...list].sort((a, b) => a.name.localeCompare(b.name, 'th')),
+    }))
+    .sort((a, b) => a.companyName.localeCompare(b.companyName, 'th'))
+}
+
+const brandFilterGroups = computed(() => groupOptionsByCompany(brands.value))
+const categoryFilterGroups = computed(() => groupOptionsByCompany(categories.value))
+
 function clearProductFilters() {
   productFilters.q = ''
   productFilters.brandId = null
   productFilters.categoryId = null
+}
+
+/**
+ * ── TASK-202 / TASK-204 — the brand & category list, grouped by NAME ──
+ *
+ * TASK-202 grouped rows under company headings. Human, 2026-08-19, after
+ * seeing it: "ui list แสดงแบบนี้สับสนได้ง่าย ให้ปรับเป็นชื่อ...นำ และมีชื่อ
+ * บริษัทอยู่ใต้ชื่อแบรนด์ — Brand 1 / company1 company2 company3".
+ *
+ * So the unit on screen is now the NAME, not the row: one card per distinct
+ * brand (or category) name, with a chip per company that has it. The same
+ * "sss" existing in three companies is three `brands` rows (BR-6 —
+ * company-scoped, and they must stay separate rows), but reads as one thing
+ * with three chips, which is how the admin actually thinks about it.
+ *
+ * Consequences that follow from that choice, all handled below:
+ *   - edit is name-level: rename/activate applies to every ticked company,
+ *     ticking a new company CREATES its row, unticking one DELETES that
+ *     company's row (soft delete — DeletionGuard still refuses if products
+ *     use it, and the refusal is reported per company).
+ *   - delete is name-level too: it removes the name from every company it
+ *     is in, which the confirm dialog states explicitly.
+ *
+ * Grouping/keying is client-side on the trimmed name; the scope picker
+ * filters to names present in that company but chips still show ALL the
+ * companies that have the name (that cross-company view is the point).
+ */
+const refSearch = ref('')
+
+interface RefNameGroup<T> {
+  /** Trimmed name — also the v-for key and the "is this group being edited" token. */
+  key: string
+  name: string
+  /** One row per company that has this name. */
+  rows: T[]
+  companyIds: number[]
+  totalProducts: number
+}
+
+function matchesRefSearch(name: string): boolean {
+  const q = refSearch.value.trim().toLowerCase()
+  return q === '' || name.toLowerCase().includes(q)
+}
+
+function groupByName<T extends { company_id: number, name: string, is_active: boolean, products_count?: number }>(items: T[]): RefNameGroup<T>[] {
+  const scope = selectedCatalogCompanyId.value
+  const buckets = new Map<string, T[]>()
+  for (const item of items) {
+    if (!matchesRefSearch(item.name)) continue
+    const key = item.name.trim()
+    const bucket = buckets.get(key)
+    if (bucket) bucket.push(item)
+    else buckets.set(key, [item])
+  }
+
+  return [...buckets.entries()]
+    // Scoped: only names this company actually has. The chips below still
+    // list every company holding the name — hiding those would put us back
+    // at "why does this name exist twice".
+    .filter(([, rows]) => scope === null || rows.some((r) => r.company_id === scope))
+    .map(([key, rows]) => ({
+      key,
+      // `rows` came from a bucket created by pushing its first element, so
+      // it is never empty; the fallback keeps noUncheckedIndexedAccess happy
+      // without an assertion that claims more than the code proves.
+      name: rows[0]?.name ?? key,
+      rows: [...rows].sort((a, b) => (companyName(a.company_id) ?? '').localeCompare(companyName(b.company_id) ?? '', 'th')),
+      companyIds: rows.map((r) => r.company_id),
+      totalProducts: rows.reduce((n, r) => n + (r.products_count ?? 0), 0),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'th'))
+}
+
+const brandGroups = computed(() => groupByName(brands.value))
+const categoryGroups = computed(() => groupByName(categories.value))
+
+/** "ใช้งาน" / "ปิดใช้งาน" / "ใช้งาน 2/3 บริษัท" — is_active is per row, so a name can be mixed. */
+function refStatusLabel(rows: { is_active: boolean }[]): string {
+  const active = rows.filter((r) => r.is_active).length
+  if (active === rows.length) return 'ใช้งาน'
+  if (active === 0) return 'ปิดใช้งาน'
+
+  return `ใช้งาน ${active}/${rows.length} บริษัท`
+}
+
+function refStatusClass(rows: { is_active: boolean }[]): string {
+  const active = rows.filter((r) => r.is_active).length
+  if (active === rows.length) return 'text-emerald-600'
+
+  return active === 0 ? 'text-slate-400' : 'text-amber-600'
+}
+
+/**
+ * TASK-203 — the create button is no longer gated on the list's scope
+ * picker: the form carries its own company tick boxes now. Opening the
+ * form pre-ticks whatever the list is scoped to, since "I am looking at
+ * GENESENN Health and clicked add" almost always means "add it there" —
+ * but every tick stays editable, including adding more companies.
+ */
+function toggleBrandForm(): void {
+  showBrandForm.value = !showBrandForm.value
+  if (showBrandForm.value && isSuperAdmin.value && !brandCompanyIds.value.length && selectedCatalogCompanyId.value !== null) {
+    brandCompanyIds.value = [selectedCatalogCompanyId.value]
+  }
+}
+
+function toggleCategoryForm(): void {
+  showCategoryForm.value = !showCategoryForm.value
+  if (showCategoryForm.value && isSuperAdmin.value && !categoryCompanyIds.value.length && selectedCatalogCompanyId.value !== null) {
+    categoryCompanyIds.value = [selectedCatalogCompanyId.value]
+  }
 }
 </script>
 
@@ -1113,65 +1443,181 @@ function clearProductFilters() {
     <Teleport to="body">
       <Transition name="fade">
         <!-- Human follow-up (2026-08-04): "เลื่อนมาให้สุด Screen เลย ไม่ทำ
-             menu และ tab" — full-screen, covering the top nav and the tab
-             bar rather than a side panel over a dimmed page. A sliver of
-             greyed-out page behind a panel invites clicks that do nothing;
-             at this width it was also squeezing the brand rows. The
-             content still sits in a centred column so a 1500px monitor
-             does not stretch a two-row list across the whole desk. -->
-        <div v-if="refDrawerOpen" class="fixed inset-0 z-[1000] bg-white overflow-y-auto">
-          <div class="max-w-3xl mx-auto px-5 py-5">
+             menu และ tab" — was full-screen white, covering the top nav
+             and the tab bar rather than a panel over a dimmed page.
+             SUPERSEDED by the human's later ruling (2026-08-19): "แก้ UI
+             ให้คลิ๊กแล้วเป็น Modal แบบ pop up" — a centred dialog over a
+             dimmed page, the same shape as this app's other dialogs (the
+             ADR-036 catalog-link picker in ProductEditView.vue, and every
+             ConfirmDialog). Full-screen-white made a two-row brand list
+             look like a whole new page with nowhere to go back to; the
+             dimmed backdrop keeps the catalogue visible behind it so the
+             edit reads as a side trip, not a navigation. Click on the
+             backdrop now closes it, alongside the X and Esc. -->
+        <div
+          v-if="refDrawerOpen"
+          class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4"
+          @click.self="closeRefDrawer"
+        >
+          <div class="w-full max-w-3xl max-h-[85vh] overflow-y-auto bg-white rounded-2xl shadow-2xl px-5 py-5">
             <div class="flex items-center gap-3 mb-4">
               <h2 class="flex-1 text-base font-bold text-slate-900">จัดการแบรนด์ / หมวดหมู่</h2>
               <button class="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100" title="ปิด (Esc)" @click="closeRefDrawer">
                 <Icon name="x" :size="18" />
               </button>
             </div>
+            <!-- TASK-202 — company scope bar, ABOVE the tabs on purpose: it
+                 scopes both tabs, and sitting inside one tab's panel made it
+                 look like it only applied to that tab. Tinted + a heavier
+                 border so it reads as the control the whole dialog hangs off,
+                 not one more field. -->
+            <!-- TASK-208 — the dialog's own scope <select> is gone; this
+                 states which scope the header is on so the grouping below is
+                 never a surprise. -->
+            <div v-if="isSuperAdmin" class="flex items-center gap-2 mb-3 px-3 py-2.5 rounded-xl bg-brand-50 border border-brand-100">
+              <Icon name="building" :size="14" class="text-brand-600 shrink-0" />
+              <span class="text-xs font-bold text-brand-700">
+                {{ activeCompany.companyName ?? 'ทุกบริษัท (จัดกลุ่มให้)' }}
+              </span>
+              <span class="text-[11px] text-brand-600/70">เปลี่ยนบริษัทได้จากปุ่มมุมขวาบนของหน้าจอ</span>
+            </div>
+            <!-- TASK-207 (human, 2026-08-19): the badge counted ROWS, so 4
+                 brands existing in 2 companies each read "8". The unit on this
+                 screen is the NAME (TASK-204), so the badge now counts name
+                 groups — exactly the number of cards below it. It therefore
+                 follows the company scope and the search box too, which is the
+                 point: it always states what is on screen, never a hidden
+                 total. (The duplicate "แสดง N รายการ" text that used to sit in
+                 the company bar is gone with it.) -->
             <div class="flex gap-1 p-1 rounded-xl bg-slate-100">
               <button
-                v-for="opt in ([{ key: 'brands', label: 'แบรนด์', count: brands.length }, { key: 'categories', label: 'หมวดหมู่', count: categories.length }] as const)"
+                v-for="opt in ([{ key: 'brands', label: 'แบรนด์', count: brandGroups.length }, { key: 'categories', label: 'หมวดหมู่', count: categoryGroups.length }] as const)"
                 :key="opt.key"
                 type="button"
                 class="flex-1 h-[36px] rounded-lg text-sm font-bold transition"
                 :class="refDrawerTab === opt.key ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500'"
                 @click="refDrawerTab = opt.key"
               >
-                {{ opt.label }} {{ opt.count }}
+                <!-- Human-reported 2026-08-19: "แบรนด์ 2" read as "brand
+                     number 2", not "2 brands" — a bare number welded to a
+                     noun is ambiguous in Thai. Human's chosen form: a
+                     notification-style badge lifted above the label's
+                     top-right corner, blue fill / white text — the count
+                     is then unmistakably a quantity ON the label, never
+                     part of its name. Absolutely positioned against the
+                     label span (not the button) so it hugs the text
+                     regardless of how wide the tab stretches. -->
+                <span class="relative inline-flex items-center">
+                  {{ opt.label }}
+                  <span
+                    class="absolute -top-2 -right-5 min-w-[18px] h-[18px] px-1 inline-flex items-center justify-center rounded-full bg-brand-600 text-white text-[10px] font-bold leading-none"
+                  >{{ opt.count }}</span>
+                </span>
               </button>
             </div>
 
     <section v-if="refDrawerTab === 'brands'" class="mt-4">
-      <div v-if="isSuperAdmin" class="mb-2 flex items-center gap-2">
-        <label class="text-xs font-bold text-slate-500">บริษัท (Super Admin)</label>
-        <select v-model.number="selectedCatalogCompanyId" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm">
-          <option :value="null">— เลือกบริษัท —</option>
-          <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
+      <!-- TASK-202 — search + a create button that names the company it will
+           create in, and refuses to open the form at all until one is picked
+           (the old flow let you fill the form and only told you at save). -->
+      <div class="flex items-center gap-2 mb-2">
+        <div class="relative flex-1 min-w-0">
+          <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input v-model="refSearch" type="text" placeholder="ค้นหาแบรนด์..." class="w-full h-[34px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm" />
+        </div>
+        <button class="btn-primary" @click="toggleBrandForm">+ เพิ่มแบรนด์</button>
       </div>
-      <div class="flex justify-end mb-2">
-        <button class="btn-primary" @click="showBrandForm = !showBrandForm">
-          + เพิ่มแบรนด์
-        </button>
-      </div>
-      <form v-if="showBrandForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex gap-2 items-end" @submit.prevent="submitBrand">
-        <div class="flex-1">
+      <!-- TASK-203 — the create form owns its target companies (tick boxes,
+           เลือกทั้งหมด / ล้างทั้งหมด). One submit = one POST per ticked
+           company, because brands.company_id makes each one its own row. -->
+      <form v-if="showBrandForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 space-y-3" @submit.prevent="submitBrand">
+        <div>
           <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
           <input v-model="brandForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
         </div>
-        <button type="submit" class="btn-primary">บันทึก</button>
+        <CompanyMultiSelect
+          v-if="isSuperAdmin"
+          v-model="brandCompanyIds"
+          :options="companyOptions"
+          label="สร้างในบริษัท (เลือกได้หลายบริษัท)"
+          placeholder="ติ๊กเลือกบริษัท..."
+        />
+        <!-- TASK-205 — brand logo (brands only; categories keep the icon picker). -->
+        <div>
+          <label class="text-xs font-bold text-slate-500 block mb-1">โลโก้แบรนด์ (ไม่บังคับ)</label>
+          <div class="flex items-center gap-3">
+            <span class="w-14 h-14 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+              <img v-if="brandLogoPreview" :src="brandLogoPreview" alt="" class="w-full h-full object-contain" />
+              <Icon v-else name="tag" :size="18" class="text-slate-300" />
+            </span>
+            <div class="flex-1 min-w-0">
+              <input type="file" accept="image/jpeg,image/png,image/webp" class="block w-full text-xs text-slate-500 file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-brand-50 file:text-brand-700 file:text-xs file:font-bold" @change="onBrandLogoChange($event, 'create')" />
+              <p class="mt-1 text-[11px] text-slate-400">JPG / PNG / WEBP — ระบบย่อให้อัตโนมัติ สูงสุด 2 MB</p>
+            </div>
+            <button v-if="brandLogoPreview" type="button" class="text-[11px] font-bold text-rose-600 hover:underline shrink-0" @click="resetBrandLogo('create')">
+              เอารูปออก
+            </button>
+          </div>
+        </div>
+        <div class="flex justify-end">
+          <button type="submit" :disabled="savingBrand || compressingBrandLogo" class="btn-primary">
+            {{ compressingBrandLogo ? 'กำลังย่อรูป...' : (savingBrand ? 'กำลังบันทึก...' : 'บันทึก') }}
+          </button>
+        </div>
       </form>
       <p v-if="brandFormError" class="mb-3 text-xs font-bold text-rose-600">{{ brandFormError }}</p>
-      <EmptyState v-if="!brands.length" icon="tag" title="ยังไม่มีแบรนด์" />
+      <EmptyState v-if="!brandGroups.length" icon="tag" :title="refSearch ? 'ไม่พบแบรนด์ที่ค้นหา' : 'ยังไม่มีแบรนด์'" />
+      <!-- TASK-204 — one card per NAME: name on top, the companies that have
+           it as chips underneath (human's own sketch: "Brand 1 / company1
+           company2 company3"). -->
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="b in brands" :key="b.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
-          <template v-if="editingBrandId === b.id">
+        <div
+          v-for="g in brandGroups"
+          :key="g.key"
+          class="border rounded-xl p-4"
+          :class="editingBrandKey === g.key ? 'bg-white border-brand-500 ring-2 ring-brand-100' : 'bg-white/95 border-slate-200'"
+        >
+          <template v-if="editingBrandKey === g.key">
             <div class="space-y-3">
+              <p class="text-[11px] font-bold text-brand-700">กำลังแก้ไข · {{ g.name }}</p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
                 <input v-model="editBrandForm.name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
+              <!-- TASK-204 — same picker as create. Unticking a company
+                   REMOVES the brand from it (soft delete); the hint says so
+                   because the tick box alone does not. -->
+              <CompanyMultiSelect
+                v-if="isSuperAdmin"
+                v-model="editBrandCompanyIds"
+                :options="companyOptions"
+                label="บริษัทที่มีแบรนด์นี้ (ติ๊กเพิ่ม = สร้างให้, เอาติ๊กออก = ลบออกจากบริษัทนั้น)"
+                placeholder="ติ๊กเลือกบริษัท..."
+              />
+              <!-- TASK-205 — replace / clear the logo. Leaving both alone
+                   keeps whatever is already stored (the backend only touches
+                   logo_path when a file or remove_logo arrives). -->
+              <div>
+                <label class="text-xs font-bold text-slate-500 block mb-1">โลโก้แบรนด์</label>
+                <div class="flex items-center gap-3">
+                  <span class="w-14 h-14 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+                    <img v-if="editBrandLogoPreview" :src="editBrandLogoPreview" alt="" class="w-full h-full object-contain" />
+                    <img v-else-if="editBrandCurrentLogoUrl && !editBrandRemoveLogo" :src="editBrandCurrentLogoUrl" alt="" class="w-full h-full object-contain" />
+                    <Icon v-else name="tag" :size="18" class="text-slate-300" />
+                  </span>
+                  <div class="flex-1 min-w-0">
+                    <input type="file" accept="image/jpeg,image/png,image/webp" class="block w-full text-xs text-slate-500 file:mr-2 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-brand-50 file:text-brand-700 file:text-xs file:font-bold" @change="onBrandLogoChange($event, 'edit')" />
+                    <p class="mt-1 text-[11px] text-slate-400">
+                      {{ editBrandLogoPreview ? 'จะแทนที่รูปเดิมเมื่อกดบันทึก' : 'เลือกไฟล์เพื่อเปลี่ยนรูป — ไม่เลือก = ใช้รูปเดิม' }}
+                    </p>
+                  </div>
+                </div>
+                <label v-if="editBrandCurrentLogoUrl && !editBrandLogoPreview" class="mt-2 flex items-center gap-2 text-[11px] font-bold text-rose-600 cursor-pointer">
+                  <input v-model="editBrandRemoveLogo" type="checkbox" class="rounded border-slate-300" /> ลบรูปโลโก้ออก (ทุกบริษัทที่ติ๊กไว้)
+                </label>
+              </div>
               <label class="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-                <input v-model="editBrandForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน
+                <input v-model="editBrandForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน (มีผลกับทุกบริษัทที่ติ๊กไว้)
               </label>
               <p v-if="editBrandError" class="text-xs font-bold text-rose-600">{{ editBrandError }}</p>
               <div class="flex justify-end gap-2">
@@ -1182,14 +1628,35 @@ function clearProductFilters() {
               </div>
             </div>
           </template>
-          <div v-else class="flex items-center justify-between gap-3">
-            <span class="text-sm font-bold text-slate-900 truncate">{{ b.name }}</span>
+          <div v-else class="flex items-start justify-between gap-3">
+            <!-- TASK-205 — the logo leads the row when there is one, so the
+                 list is scannable by mark as well as by name. -->
+            <span class="w-10 h-10 rounded-lg border border-slate-100 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0">
+              <img v-if="g.rows.find((r) => r.logo_url)" :src="g.rows.find((r) => r.logo_url)?.logo_url ?? ''" :alt="g.name" class="w-full h-full object-contain" />
+              <Icon v-else name="tag" :size="16" class="text-slate-300" />
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-bold text-slate-900 truncate">{{ g.name }}</p>
+              <div v-if="isSuperAdmin" class="mt-1.5 flex flex-wrap gap-1">
+                <span
+                  v-for="row in g.rows"
+                  :key="row.id"
+                  class="text-[11px] font-bold px-2 py-0.5 rounded-full border"
+                  :class="row.company_id === selectedCatalogCompanyId
+                    ? 'bg-brand-600 text-white border-brand-600'
+                    : 'bg-brand-50 text-brand-700 border-brand-100'"
+                  :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
+                >{{ companyName(row.company_id) ?? `#${row.company_id}` }}<template v-if="!row.is_active"> (ปิด)</template></span>
+              </div>
+            </div>
             <div class="flex items-center gap-3 shrink-0">
-              <span :class="b.is_active ? 'text-emerald-600' : 'text-slate-400'" class="text-xs font-bold">{{ b.is_active ? 'ใช้งาน' : 'ปิดใช้งาน' }}</span>
-              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditBrand(b)">
+              <!-- products_count summed across every company holding this name. -->
+              <span class="text-[11px] text-slate-400 whitespace-nowrap">ใช้กับสินค้า {{ g.totalProducts }}</span>
+              <span :class="refStatusClass(g.rows)" class="text-xs font-bold whitespace-nowrap">{{ refStatusLabel(g.rows) }}</span>
+              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditBrand(g)">
                 <Icon name="pencil" :size="14" />
               </button>
-              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteBrand(b)">
+              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteBrand(g)">
                 <Icon name="trash" :size="14" />
               </button>
             </div>
@@ -1200,41 +1667,59 @@ function clearProductFilters() {
 
     <!-- Categories -->
     <section v-if="refDrawerTab === 'categories'" class="mt-4">
-      <div v-if="isSuperAdmin" class="mb-2 flex items-center gap-2">
-        <label class="text-xs font-bold text-slate-500">บริษัท (Super Admin)</label>
-        <select v-model.number="selectedCatalogCompanyId" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm">
-          <option :value="null">— เลือกบริษัท —</option>
-          <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-      </div>
-      <div class="flex justify-end mb-2">
-        <button class="btn-primary" @click="showCategoryForm = !showCategoryForm">
-          + เพิ่มหมวดหมู่
-        </button>
+      <!-- TASK-202 — mirrors the brands toolbar above, deliberately identical:
+           two adjacent tabs behaving differently would be its own bug. -->
+      <div class="flex items-center gap-2 mb-2">
+        <div class="relative flex-1 min-w-0">
+          <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input v-model="refSearch" type="text" placeholder="ค้นหาหมวดหมู่..." class="w-full h-[34px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm" />
+        </div>
+        <button class="btn-primary" @click="toggleCategoryForm">+ เพิ่มหมวดหมู่</button>
       </div>
       <form v-if="showCategoryForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 space-y-3" @submit.prevent="submitCategory">
         <div>
           <label class="text-xs font-bold text-slate-500">ชื่อหมวดหมู่</label>
           <input v-model="categoryForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
         </div>
+        <CompanyMultiSelect
+          v-if="isSuperAdmin"
+          v-model="categoryCompanyIds"
+          :options="companyOptions"
+          label="สร้างในบริษัท (เลือกได้หลายบริษัท)"
+          placeholder="ติ๊กเลือกบริษัท..."
+        />
         <div>
           <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Agent Portal)</label>
           <IconPicker v-model="categoryForm.icon" fallback-icon="box" fallback-label="ยังไม่ได้เลือกไอคอน" clear-label="ล้างไอคอน" />
         </div>
         <div class="flex justify-end">
-          <button type="submit" class="btn-primary">บันทึก</button>
+          <button type="submit" :disabled="savingCategory" class="btn-primary">{{ savingCategory ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
         </div>
       </form>
       <p v-if="categoryFormError" class="mb-3 text-xs font-bold text-rose-600">{{ categoryFormError }}</p>
-      <EmptyState v-if="!categories.length" icon="layers" title="ยังไม่มีหมวดหมู่" />
+      <EmptyState v-if="!categoryGroups.length" icon="layers" :title="refSearch ? 'ไม่พบหมวดหมู่ที่ค้นหา' : 'ยังไม่มีหมวดหมู่'" />
+      <!-- TASK-204 — same name-first card as the brands tab. -->
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="c in categories" :key="c.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
-          <template v-if="editingCategoryId === c.id">
+        <div
+          v-for="g in categoryGroups"
+          :key="g.key"
+          class="border rounded-xl p-4"
+          :class="editingCategoryKey === g.key ? 'bg-white border-brand-500 ring-2 ring-brand-100' : 'bg-white/95 border-slate-200'"
+        >
+          <template v-if="editingCategoryKey === g.key">
             <div class="space-y-3">
+              <p class="text-[11px] font-bold text-brand-700">กำลังแก้ไข · {{ g.name }}</p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อหมวดหมู่</label>
                 <input v-model="editCategoryForm.name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
+              <CompanyMultiSelect
+                v-if="isSuperAdmin"
+                v-model="editCategoryCompanyIds"
+                :options="companyOptions"
+                label="บริษัทที่มีหมวดหมู่นี้ (ติ๊กเพิ่ม = สร้างให้, เอาติ๊กออก = ลบออกจากบริษัทนั้น)"
+                placeholder="ติ๊กเลือกบริษัท..."
+              />
               <div>
                 <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Agent Portal)</label>
                 <IconPicker v-model="editCategoryForm.icon" fallback-icon="box" fallback-label="ยังไม่ได้เลือกไอคอน" clear-label="ล้างไอคอน" />
@@ -1245,7 +1730,7 @@ function clearProductFilters() {
                   <input v-model.number="editCategoryForm.sort_order" type="number" min="0" class="w-20 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" />
                 </div>
                 <label class="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer ml-auto">
-                  <input v-model="editCategoryForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน
+                  <input v-model="editCategoryForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน (ทุกบริษัทที่ติ๊กไว้)
                 </label>
               </div>
               <p v-if="editCategoryError" class="text-xs font-bold text-rose-600">{{ editCategoryError }}</p>
@@ -1257,19 +1742,33 @@ function clearProductFilters() {
               </div>
             </div>
           </template>
-          <div v-else class="flex items-center justify-between gap-3">
-            <div class="flex items-center gap-3 min-w-0">
+          <div v-else class="flex items-start justify-between gap-3">
+            <div class="flex items-start gap-3 min-w-0">
               <span class="w-9 h-9 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-                <Icon :name="c.icon || 'layers'" :size="16" class="text-slate-600" />
+                <Icon :name="g.rows[0]?.icon || 'layers'" :size="16" class="text-slate-600" />
               </span>
-              <span class="text-sm font-bold text-slate-900 truncate">{{ c.name }}</span>
+              <div class="min-w-0">
+                <p class="text-sm font-bold text-slate-900 truncate">{{ g.name }}</p>
+                <div v-if="isSuperAdmin" class="mt-1.5 flex flex-wrap gap-1">
+                  <span
+                    v-for="row in g.rows"
+                    :key="row.id"
+                    class="text-[11px] font-bold px-2 py-0.5 rounded-full border"
+                    :class="row.company_id === selectedCatalogCompanyId
+                      ? 'bg-brand-600 text-white border-brand-600'
+                      : 'bg-brand-50 text-brand-700 border-brand-100'"
+                    :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
+                  >{{ companyName(row.company_id) ?? `#${row.company_id}` }}<template v-if="!row.is_active"> (ปิด)</template></span>
+                </div>
+              </div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
-              <span :class="c.is_active ? 'text-emerald-600' : 'text-slate-400'" class="text-xs font-bold">{{ c.is_active ? 'ใช้งาน' : 'ปิดใช้งาน' }}</span>
-              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditCategory(c)">
+              <span class="text-[11px] text-slate-400 whitespace-nowrap">ใช้กับสินค้า {{ g.totalProducts }}</span>
+              <span :class="refStatusClass(g.rows)" class="text-xs font-bold whitespace-nowrap">{{ refStatusLabel(g.rows) }}</span>
+              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditCategory(g)">
                 <Icon name="pencil" :size="14" />
               </button>
-              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteCategory(c)">
+              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteCategory(g)">
                 <Icon name="trash" :size="14" />
               </button>
             </div>
@@ -1299,14 +1798,33 @@ function clearProductFilters() {
             class="w-full h-[40px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm"
           />
         </div>
+        <!-- TASK-209 — in ทุกบริษัท mode the same brand/category name exists
+             once per company; group by company so the options are
+             distinguishable. Scoped mode has one group, so it renders flat. -->
         <select v-model.number="productFilters.brandId" class="h-[40px] px-3 rounded-lg border border-slate-200 text-sm">
           <option :value="null">แบรนด์: ทั้งหมด</option>
-          <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+          <template v-if="activeCompany.isAllCompanies">
+            <optgroup v-for="g in brandFilterGroups" :key="g.companyId" :label="g.companyName">
+              <option v-for="b in g.items" :key="b.id" :value="b.id">{{ g.companyName }} · {{ b.name }}</option>
+            </optgroup>
+          </template>
+          <option v-for="b in brands" v-else :key="b.id" :value="b.id">{{ b.name }}</option>
         </select>
         <select v-model.number="productFilters.categoryId" class="h-[40px] px-3 rounded-lg border border-slate-200 text-sm">
           <option :value="null">หมวดหมู่: ทั้งหมด</option>
-          <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+          <template v-if="activeCompany.isAllCompanies">
+            <optgroup v-for="g in categoryFilterGroups" :key="g.companyId" :label="g.companyName">
+              <option v-for="c in g.items" :key="c.id" :value="c.id">{{ g.companyName }} · {{ c.name }}</option>
+            </optgroup>
+          </template>
+          <option v-for="c in categories" v-else :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
+        <!-- 2026-08-18 (human report) — Super Admin's package list is the
+             same flat cross-company response the Banner product-picker
+             already had to filter (TenantScope skips the company filter
+             entirely for Super Admin). Hidden for Company Admin: they only
+             ever see their own one company here, so a company filter would
+             have exactly one option and answer nothing. -->
         <button
           v-if="productFilterCount"
           class="h-[40px] px-3 rounded-lg text-xs font-bold text-slate-500 hover:text-slate-700"
@@ -1336,7 +1854,14 @@ function clearProductFilters() {
         <div v-for="p in filteredProducts" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
           <div>
             <p class="text-sm font-bold text-slate-900">{{ p.name }}</p>
-            <p class="text-xs text-slate-400">{{ p.brand?.name }} · {{ p.category?.name }}</p>
+            <p class="text-xs text-slate-400">
+              {{ p.brand?.name }} · {{ p.category?.name }}
+              <!-- Company name only for Super Admin (2026-08-18, human
+                   report): they're the only role who sees rows spanning
+                   more than one company here, so it's the only role this
+                   label disambiguates anything for — see companyName(). -->
+              <template v-if="isSuperAdmin && companyName(p.company_id)"> · {{ companyName(p.company_id) }}</template>
+            </p>
           </div>
           <div class="flex items-center gap-3">
             <span :class="p.is_active ? 'text-emerald-600' : 'text-slate-400'" class="text-xs font-bold">{{ p.is_active ? 'ใช้งาน' : 'ปิดใช้งาน' }}</span>
@@ -1357,13 +1882,6 @@ function clearProductFilters() {
 
     <!-- Banners (TASK-068 / ADR-020 row 2) -->
     <section v-if="activeTab === 'banners'" class="mt-4">
-      <div v-if="isSuperAdmin" class="mb-2 flex items-center gap-2">
-        <label class="text-xs font-bold text-slate-500">บริษัท (Super Admin)</label>
-        <select v-model.number="selectedCatalogCompanyId" class="px-3 py-1.5 rounded-lg border border-slate-200 text-sm">
-          <option :value="null">— เลือกบริษัท —</option>
-          <option v-for="c in companyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
-      </div>
       <p class="text-xs text-slate-400 mb-2">
         แบนเนอร์หน้าร้าน Agent Portal (สไลด์ได้ 3 ตำแหน่ง) — คลิกแล้วพาไปหน้าสินค้า, URL ภายนอก, หรือหน้าภายในระบบ ตามที่ตั้งค่าไว้ · เลือกหลายรูปพร้อมกันเพื่อสร้างหลายแบนเนอร์ในครั้งเดียว
       </p>
@@ -1512,163 +2030,45 @@ function clearProductFilters() {
     </section>
 
     <!-- Commission rules -->
-    <section v-if="activeTab === 'commission_rules'" class="mt-4">
-      <div class="flex justify-end mb-2">
-        <button class="btn-primary" @click="showRuleForm = !showRuleForm">
-          + เพิ่มอัตราคอมตาม tier
-        </button>
-      </div>
-      <form v-if="showRuleForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRule">
-        <div>
-          <label class="text-xs font-bold text-slate-500">แพ็กเกจ</label>
-          <select v-model="ruleForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" @change="recheckRuleCap">
-            <option value="" disabled>เลือกแพ็กเกจ</option>
-            <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
-        </div>
-        <div>
-          <label class="text-xs font-bold text-slate-500">Cert tier</label>
-          <select v-model="ruleForm.cert_tier_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-            <option value="" disabled>เลือก tier</option>
-            <option v-for="ct in certTiers" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
-          </select>
-        </div>
-        <div>
-          <label class="text-xs font-bold text-slate-500">{{ effectiveRuleFormRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-          <input
-            v-model="ruleForm.rate_value_input"
-            type="number"
-            min="0"
-            step="0.01"
-            required
-            class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-            @input="recheckRuleCapDebounced"
-            @blur="recheckRuleCap"
-          />
-          <!-- TASK-197 §3.5 — this form has no rate_type selector of its
-               own (it never did): the unit is fully determined by the
-               selected package's own commission_rate_type, so this is
-               purely informational, not a choice. -->
-          <p v-if="ruleForm.product_id" class="mt-1 text-xs text-slate-400">
-            จะบันทึกเป็น: {{ effectiveRuleFormRateType === 'percentage' ? '% ของยอดขาย' : 'จำนวนคงที่ (บาท)' }}
-          </p>
-          <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
-        </div>
-        <div>
-          <label class="text-xs font-bold text-slate-500">มีผลตั้งแต่ (คีย์วันที่เป็น พ.ศ.)</label>
-          <div class="mt-1">
-            <BuddhistDateInput v-model="ruleForm.effective_from" required />
-          </div>
-        </div>
-        <!-- TASK-024 (ADR-006) — optional renewal-year rate, separate from the direct-sale rate above -->
-        <div class="col-span-2 pt-2 border-t border-slate-100">
-          <label class="text-xs font-bold text-slate-500">อัตราคอมมิชชั่นปีต่ออายุ (%) — ไม่บังคับ</label>
-          <input
-            v-model="ruleForm.renewal_rate_percent"
-            type="number"
-            min="0"
-            step="0.01"
-            placeholder="เว้นว่างถ้าไม่มีคอมฯ ปีต่ออายุ"
-            class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-          />
-          <label v-if="ruleForm.renewal_rate_percent !== ''" class="mt-2 flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
-            <input v-model="ruleForm.renewal_recurs" type="checkbox" class="rounded border-slate-300" />
-            ต่ออายุอัตโนมัติทุกปี (ไม่ติ๊ก = จ่ายคอมฯ ต่ออายุแค่ปีเดียว)
-          </label>
-        </div>
-        <div class="col-span-2 flex justify-end">
-          <button type="submit" :disabled="ruleCapGuard.isOverCap.value" class="btn-primary">
-            บันทึก
-          </button>
-        </div>
-      </form>
+    <!-- ═══ TASK-213 Phase 3 — both commission tabs MOVED ═══
+         `commission_rules` was editable from four different forms
+         (the wizard, แผนคอมมิชชั่น → กฎคอมมิชชั่น, this tab, and the
+         product edit page) and they did not have the same powers: only
+         แผนคอมมิชชั่น could author a หมวดหมู่- or company-wide rule, and
+         the form here could only ever do a single product. Four doors to
+         one table, three of them narrower than the widest, with nothing
+         on screen saying so.
 
-      <!-- TASK-196 §3.3 — same single-button blocking-alert shape reused
-           across all 3 commission-rule forms (see ProductEditView.vue /
-           CommissionPlansView.vue for the same pattern; ConfirmDialog.vue
-           has no alert-only mode, this is the app's closest existing
-           informational-modal shape instead). -->
-      <div v-if="ruleCapGuard.modalOpen.value" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="ruleCapGuard.closeModal">
-        <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
-          <div class="flex items-center gap-2 mb-2">
-            <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
-            <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
-          </div>
-          <p class="text-xs text-slate-500 mb-4">{{ ruleCapGuard.violationMessage.value }}</p>
-          <div class="flex justify-end">
-            <button class="btn-primary" @click="ruleCapGuard.closeModal">เข้าใจแล้ว</button>
-          </div>
-        </div>
-      </div>
+         The leader-rate tab was worse: it was the ONLY place that rate
+         could be set anywhere in the product, and it was filed under the
+         product catalogue — so the one screen named after commissions did
+         not contain it.
 
-      <EmptyState v-if="!commissionRules.length" icon="dollar" title="ยังไม่มีอัตราคอมมิชชั่น" message="Agent จะไม่เห็นข้อมูลส่วนนี้ (ตาม CommissionRulePolicy)" />
-      <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="r in commissionRules" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <p class="text-sm font-bold text-slate-900">{{ r.product?.name }} · {{ r.cert_tier?.name }}</p>
-            <p class="text-xs text-slate-400">มีผลตั้งแต่ {{ r.effective_from }}{{ r.effective_to ? ` ถึง ${r.effective_to}` : '' }}</p>
-            <!-- TASK-024 (ADR-006) -->
-            <p v-if="r.renewal_rate_type" class="text-xs text-slate-400">
-              คอมฯ ปีต่ออายุ: {{ (r.renewal_rate_value! / 100).toFixed(2) }}% · {{ r.renewal_recurs ? 'ต่อทุกปี' : 'ปีเดียว' }}
+         The sections are not hidden, they are gone. What stays is this
+         signpost, because deep links (?tab=commission_rules) and muscle
+         memory both still land here. -->
+    <section v-if="activeTab === 'commission_rules' || activeTab === 'override_rules'" class="mt-4">
+      <div class="p-5 rounded-xl bg-white/95 border border-slate-200">
+        <div class="flex items-start gap-3">
+          <span class="w-10 h-10 rounded-xl bg-brand-50 text-brand-700 flex items-center justify-center shrink-0">
+            <Icon name="money" :size="18" />
+          </span>
+          <div class="min-w-0">
+            <p class="text-sm font-bold text-slate-900">ย้ายไปหน้า "แผนคอมมิชชั่น" แล้ว</p>
+            <p class="mt-1 text-xs text-slate-500 leading-relaxed">
+              อัตราค่าคอมของ<b>ตัวแทนผู้ขาย</b>และของ<b>หัวหน้าทีม</b> ตอนนี้อยู่ในหน้าเดียวกัน
+              ที่แท็บ "อัตราค่าคอม" — กรองด้วยปุ่ม <b>ตัวแทนผู้ขาย / หัวหน้าทีม</b> ได้
+              และหน้านั้นมีแท็บ "ภาพรวม" ที่บอกด้วยว่าสินค้าไหน<b>ตั้งค่ายังไม่ครบจนจะไม่มีใครได้เงิน</b>
             </p>
-          </div>
-          <div class="flex items-center gap-3 shrink-0">
-            <span class="text-sm font-bold text-slate-900">{{ formatRate(r) }}</span>
-            <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteCommissionRule(r)">
-              <Icon name="trash" :size="14" />
-            </button>
+            <RouterLink
+              :to="{ name: 'commission-plan-settings' }"
+              class="mt-3 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700"
+            >
+              ไปที่แผนคอมมิชชั่น →
+            </RouterLink>
           </div>
         </div>
-      </TransitionGroup>
-    </section>
-
-    <!-- Commission override rules (TASK-025 / ADR-006 — Unilevel manager chain) -->
-    <section v-if="activeTab === 'override_rules'" class="mt-4">
-      <p class="text-xs text-slate-400 mb-2">
-        อัตรานี้จ่ายให้ "หัวหน้าทีม" ตาม cert tier ของหัวหน้าเอง (ไม่ผูกกับสินค้า) — ทุกครั้งที่ลูกทีมปิดการขายโดยตรง
-      </p>
-      <div class="flex justify-end mb-2">
-        <button class="btn-primary" @click="showOverrideRuleForm = !showOverrideRuleForm">
-          + เพิ่มอัตรา Override
-        </button>
       </div>
-      <form v-if="showOverrideRuleForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitOverrideRule">
-        <div>
-          <label class="text-xs font-bold text-slate-500">Cert tier ของหัวหน้าทีม</label>
-          <select v-model="overrideRuleForm.cert_tier_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-            <option value="" disabled>เลือก tier</option>
-            <option v-for="ct in certTiers" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
-          </select>
-        </div>
-        <div>
-          <label class="text-xs font-bold text-slate-500">อัตรา (%)</label>
-          <input v-model="overrideRuleForm.rate_percent" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-        </div>
-        <div>
-          <label class="text-xs font-bold text-slate-500">มีผลตั้งแต่ (คีย์วันที่เป็น พ.ศ.)</label>
-          <div class="mt-1">
-            <BuddhistDateInput v-model="overrideRuleForm.effective_from" required />
-          </div>
-        </div>
-        <div class="col-span-2 flex justify-end">
-          <button type="submit" class="btn-primary">บันทึก</button>
-        </div>
-      </form>
-      <EmptyState v-if="!commissionOverrideRules.length" icon="branch" title="ยังไม่มีอัตรา Override" message="Agent จะไม่เห็นข้อมูลส่วนนี้ (ตาม CommissionOverrideRulePolicy)" />
-      <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="r in commissionOverrideRules" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <p class="text-sm font-bold text-slate-900">หัวหน้าทีม · {{ r.manager_cert_tier?.name }}</p>
-            <p class="text-xs text-slate-400">มีผลตั้งแต่ {{ r.effective_from }}{{ r.effective_to ? ` ถึง ${r.effective_to}` : '' }}</p>
-          </div>
-          <div class="flex items-center gap-3 shrink-0">
-            <span class="text-sm font-bold text-slate-900">{{ formatRate(r) }}</span>
-            <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteOverrideRule(r)">
-              <Icon name="trash" :size="14" />
-            </button>
-          </div>
-        </div>
-      </TransitionGroup>
     </section>
 
     <!-- Video processing settings (ADR-007) — per-company override of config/media.php -->
@@ -1694,7 +2094,7 @@ function clearProductFilters() {
     <ConfirmDialog
       :show="pendingDeleteBrand !== null"
       variant="danger"
-      :body='pendingDeleteBrand ? `ซ่อนแบรนด์ "${pendingDeleteBrand.name}" จากรายการ? สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ` : ""'
+      :body='pendingDeleteBrand ? `ซ่อนแบรนด์ "${pendingDeleteBrand.name}" จาก ${pendingDeleteBrand.rows.length} บริษัท (${pendingDeleteBrand.rows.map((r) => companyName(r.company_id) ?? `#${r.company_id}`).join(", ")})? สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ` : ""'
       @confirm="confirmDeleteBrand"
       @update:show="(v) => { if (!v) pendingDeleteBrand = null }"
     />
@@ -1703,7 +2103,7 @@ function clearProductFilters() {
     <ConfirmDialog
       :show="pendingDeleteCategory !== null"
       variant="danger"
-      :body='pendingDeleteCategory ? `ซ่อนหมวดหมู่ "${pendingDeleteCategory.name}" จากรายการ? สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ` : ""'
+      :body='pendingDeleteCategory ? `ซ่อนหมวดหมู่ "${pendingDeleteCategory.name}" จาก ${pendingDeleteCategory.rows.length} บริษัท (${pendingDeleteCategory.rows.map((r) => companyName(r.company_id) ?? `#${r.company_id}`).join(", ")})? สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ` : ""'
       @confirm="confirmDeleteCategory"
       @update:show="(v) => { if (!v) pendingDeleteCategory = null }"
     />
@@ -1717,20 +2117,6 @@ function clearProductFilters() {
       :body='pendingDeleteProduct ? `ซ่อนแพ็กเกจ "${pendingDeleteProduct.name}" จากรายการ? Agent จะไม่เห็นแพ็กเกจนี้บนหน้าร้านอีก (ถ้ามีการขาย/คอมมิชชั่นผูกอยู่ ระบบจะไม่ยอมให้ลบ)` : ""'
       @confirm="confirmDeleteProduct"
       @update:show="(v) => { if (!v) pendingDeleteProduct = null }"
-    />
-    <ConfirmDialog
-      :show="pendingDeleteCommissionRule !== null"
-      variant="danger"
-      body="ลบอัตราคอมมิชชั่นนี้? รายการคอมมิชชั่นที่คำนวณไปแล้วจะไม่เปลี่ยนแปลง (BR-4 — ledger เป็นข้อมูลถาวร)"
-      @confirm="confirmDeleteCommissionRule"
-      @update:show="(v) => { if (!v) pendingDeleteCommissionRule = null }"
-    />
-    <ConfirmDialog
-      :show="pendingDeleteOverrideRule !== null"
-      variant="danger"
-      body="ลบอัตรา Override นี้? รายการคอมมิชชั่นที่คำนวณไปแล้วจะไม่เปลี่ยนแปลง (BR-4)"
-      @confirm="confirmDeleteOverrideRule"
-      @update:show="(v) => { if (!v) pendingDeleteOverrideRule = null }"
     />
   </main>
 </template>

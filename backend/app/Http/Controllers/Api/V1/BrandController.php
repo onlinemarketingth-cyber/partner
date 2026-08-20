@@ -8,6 +8,7 @@ use App\Http\Requests\Catalog\UpdateBrandRequest;
 use App\Http\Resources\BrandResource;
 use App\Models\Brand;
 use App\Services\Catalog\BrandService;
+use App\Support\CompanyScopeFilter;
 use App\Support\DeletionGuard;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -37,20 +38,43 @@ class BrandController extends Controller
      * what they switched off. Same split as ModuleController::visibleTo()
      * (TASK-155).
      */
+    /**
+     * TASK-202 (human-reported 2026-08-19) — two fixes on one line.
+     *
+     * 1. `paginate()` -> `get()`. A brand list is a reference/lookup list:
+     *    every consumer (ProductCatalogView's manage drawer, the product
+     *    form's brand <select>, the Agent Portal's filter chips) reads
+     *    `data` and renders all of it — none of them has ever rendered a
+     *    pager. With the default 15-per-page that meant brand #16 onward
+     *    silently did not exist in the UI, which for a Super Admin (whose
+     *    list spans EVERY company, since TenantScope does not narrow them)
+     *    is reachable with only a handful of companies. Matches
+     *    ProductCategoryController::index(), which already uses get().
+     * 2. withCount('products') feeds the "ใช้กับสินค้า N" column so an
+     *    admin can see before clicking delete whether DeletionGuard will
+     *    refuse (products.brand_id is restrictOnDelete). Counted, never
+     *    loaded — one extra sub-select, no N+1.
+     */
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Brand::query()->orderBy('name');
+        $query = Brand::query()->withCount('products')->orderBy('name');
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         if ($request->user()?->isAgent()) {
             $query->where('is_active', true);
         }
 
-        return BrandResource::collection($query->paginate());
+        return BrandResource::collection($query->get());
     }
 
+    // TASK-205 — the uploaded logo travels as a file, not a validated
+    // scalar, so it is handed to the Service separately (identical shape to
+    // StorefrontBannerController::store/update).
     public function store(StoreBrandRequest $request, BrandService $service): BrandResource
     {
-        $brand = $service->create($request->validated(), $request->user());
+        $brand = $service->create($request->validated(), $request->user(), $request->file('logo'));
 
         return new BrandResource($brand);
     }
@@ -62,7 +86,7 @@ class BrandController extends Controller
 
     public function update(UpdateBrandRequest $request, Brand $brand, BrandService $service): BrandResource
     {
-        return new BrandResource($service->update($brand, $request->validated()));
+        return new BrandResource($service->update($brand, $request->validated(), $request->file('logo')));
     }
 
     public function destroy(Brand $brand): Response

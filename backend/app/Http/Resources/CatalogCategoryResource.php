@@ -5,7 +5,11 @@ namespace App\Http\Resources;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
-class ProductCategoryResource extends JsonResource
+// ADR-036 — mirrors ProductCategoryResource's shape (company_id and
+// pipeline_template_id always null here — catalog_categories has neither
+// column) so a catalog-linked product's category renders identically to
+// a standalone product's on the frontend.
+class CatalogCategoryResource extends JsonResource
 {
     /**
      * @return array<string, mixed>
@@ -14,16 +18,12 @@ class ProductCategoryResource extends JsonResource
     {
         return [
             'id' => $this->id,
-            'company_id' => $this->company_id,
+            'company_id' => null,
             'name' => $this->name,
-            // TASK-068 / ADR-020 row 3 — Icon.vue icon-name string, null = none chosen.
             'icon' => $this->icon,
             'sort_order' => $this->sort_order,
             'is_active' => $this->is_active,
-            // ADR-026 §3.3 (TASK-132) — category-level journey, null = inherit.
-            'pipeline_template_id' => $this->pipeline_template_id,
-            // TASK-202 — see BrandResource; only present when counted.
-            'products_count' => $this->whenCounted('products'),
+            'pipeline_template_id' => null,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];
