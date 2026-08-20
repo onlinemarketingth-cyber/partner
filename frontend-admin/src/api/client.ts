@@ -9,6 +9,8 @@
  * file only handles transport (CSRF cookie handshake, headers, JSON).
  */
 
+import { readPersistedActiveCompanyId } from '@/utils/activeCompanyStorage'
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string
 
 function getCookie(name: string): string | null {
@@ -296,12 +298,23 @@ function uploadInChunks(
   let aborted = false
 
   const promise = (async (): Promise<string> => {
+    // TASK-226 - a Super Admin belongs to no company, so the server cannot
+    // read the size ceiling off the session alone; without this it fell
+    // back to the platform default (200 MB) and ignored whatever the
+    // company's own "ขนาดไฟล์สูงสุด" setting said. Read straight from
+    // storage rather than the store: stores/activeCompany imports THIS
+    // module, so importing it back would be a cycle - see
+    // utils/activeCompanyStorage for the full reasoning.
+    // null = "ทุกบริษัท": send nothing and let the platform default apply.
+    const activeCompanyId = readPersistedActiveCompanyId()
+
     const init = await request<{ data: { token: string; chunk_bytes: number } }>('/uploads/init', {
       method: 'POST',
       body: JSON.stringify({
         filename: file.name,
         mime_type: file.type || null,
         size_bytes: file.size,
+        ...(activeCompanyId === null ? {} : { company_id: activeCompanyId }),
       }),
     })
 

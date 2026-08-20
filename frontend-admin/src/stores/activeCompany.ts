@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { ACTIVE_COMPANY_STORAGE_KEY, readPersistedActiveCompanyId } from '@/utils/activeCompanyStorage'
+import { writeStored } from '@/utils/safeStorage'
 
 /**
  * activeCompany — TASK-208 / ADR-038: the ONE "which company am I working
@@ -42,7 +44,10 @@ export interface CompanyOption {
   slug: string
 }
 
-const STORAGE_KEY = 'sva.admin.activeCompanyId'
+// TASK-226 — the key moved to a leaf module so api/client.ts can read the
+// same value without importing this store (which imports the client, and
+// would therefore be a cycle). This store is still the only WRITER.
+const STORAGE_KEY = ACTIVE_COMPANY_STORAGE_KEY
 
 export const useActiveCompanyStore = defineStore('activeCompany', () => {
   const auth = useAuthStore()
@@ -58,28 +63,19 @@ export const useActiveCompanyStore = defineStore('activeCompany', () => {
    * else the getter below pins it to their own company, because TenantScope
    * has already made every other value a lie.
    */
-  const selectedId = ref<number | null>(readPersisted())
+  // Reading is shared with api/client.ts (TASK-226) so the two can never
+  // disagree about what 'all' means.
+  const selectedId = ref<number | null>(readPersistedActiveCompanyId())
 
-  function readPersisted(): number | null {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (raw === null || raw === '' || raw === 'all') return null
-      const n = Number(raw)
-
-      return Number.isFinite(n) ? n : null
-    } catch {
-      // Private-mode Safari and friends throw on localStorage access.
-      return null
-    }
-  }
-
+  /**
+   * Writes go through safeStorage for the same reason the read does: a
+   * storage that exists but cannot be written to must cost the user their
+   * remembered choice, not their click. `writeStored` already swallows the
+   * quota / disabled-storage cases, so there is no try/catch here to keep
+   * in step with it.
+   */
   function persist(value: number | null): void {
-    try {
-      if (value === null) localStorage.setItem(STORAGE_KEY, 'all')
-      else localStorage.setItem(STORAGE_KEY, String(value))
-    } catch {
-      // Non-fatal: the picker still works for this session.
-    }
+    writeStored(STORAGE_KEY, value === null ? 'all' : String(value))
   }
 
   /** The company every screen should scope to. null = ทุกบริษัท (Super Admin only). */
