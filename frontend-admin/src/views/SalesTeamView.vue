@@ -40,7 +40,7 @@
  * `SalesTeamPartition` and `partitionRoots()` in salesTeam.ts — read that
  * before changing this.
  */
-import { computed, onMounted, provide, ref } from 'vue'
+import { computed, onMounted, provide, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -48,6 +48,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
 import SalesTeamGrid from './SalesTeamGrid.vue'
 // TASK-129 — the SAME edit form จัดการตัวแทน uses, mounted here so the card's
 // pencil opens it in place (human request 2026-08-05). It loads the agent
@@ -85,8 +86,12 @@ import {
   APPROVAL_ERROR,
   APPROVAL_ERROR_AGENT_ID,
 } from './salesTeam'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 const router = useRouter()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 
 const loading = ref(false)
 const hasLoadedOnce = ref(false)
@@ -316,9 +321,9 @@ async function loadAll() {
     const [a, t, c] = await Promise.all([
       // §3.6 — `meta.clients_total` is the company-level DISTINCT client
       // count; `data` is unchanged (one row per agent).
-      api.get<{ data: SalesAgent[]; meta?: { clients_total: number } }>('/sales-team-overview'),
+      api.get<{ data: SalesAgent[]; meta?: { clients_total: number } }>(activeCompany.scopedPath('/sales-team-overview')),
       api.get<{ data: CertTierOption[] }>('/cert-tiers'),
-      api.get<{ data: CertificationRow[] }>('/user-certifications'),
+      api.get<{ data: CertificationRow[] }>(activeCompany.scopedPath('/user-certifications')),
     ])
     agents.value = a.data
     clientsTotal.value = a.meta?.clients_total ?? 0
@@ -355,7 +360,7 @@ async function confirmGrantCertification() {
   grantErrorAgentId.value = null
   try {
     await api.post('/user-certifications', { user_id: agentId, cert_tier_id: tier.id })
-    const res = await api.get<{ data: CertificationRow[] }>('/user-certifications')
+    const res = await api.get<{ data: CertificationRow[] }>(activeCompany.scopedPath('/user-certifications'))
     certifications.value = res.data
   } catch (e) {
     grantErrorAgentId.value = agentId
@@ -465,7 +470,7 @@ provide(STRUCTURE_ERROR_AGENT_ID, structureErrorAgentId)
  * untouched by either mutation.
  */
 async function reloadRoster(): Promise<void> {
-  const res = await api.get<{ data: SalesAgent[]; meta?: { clients_total: number } }>('/sales-team-overview')
+  const res = await api.get<{ data: SalesAgent[]; meta?: { clients_total: number } }>(activeCompany.scopedPath('/sales-team-overview'))
   agents.value = res.data
   // Re-parenting an agent does not change the company's client count, but a
   // stale header next to a re-shaped tree is exactly the kind of drift §3.6
@@ -645,7 +650,16 @@ provide(OPEN_AGENT_EDITOR, openAgentEditor)
  * reloadRoster). A changed name/manager/leader flag re-shapes the grid
  * immediately rather than after a manual refresh.
  */
-function onAgentEditorSaved(): void {
+// TASK-210 — the modal closes itself on a successful write, so the "it
+// worked" confirmation has to be raised by the host that outlives it.
+const savedMessage = ref('')
+const showSavedDialog = ref(false)
+
+function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string }): void {
+  if (payload.successMessage) {
+    savedMessage.value = payload.successMessage
+    showSavedDialog.value = true
+  }
   void reloadRoster()
 }
 
@@ -661,6 +675,10 @@ function statusBadgeClasses(statusKey: string): string {
       return 'bg-slate-100 text-slate-600'
   }
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAll() })
 </script>
 
 <template>
@@ -689,6 +707,8 @@ function statusBadgeClasses(statusKey: string): string {
             @click="activeTab = t.key"
           >
             <Icon :name="t.icon" :size="14" />
+
+    <CompanyScopeNotice action="ดูทีมขาย" />
             {{ t.label }} ({{ t.count }})
           </button>
         </div>
@@ -910,5 +930,8 @@ function statusBadgeClasses(statusKey: string): string {
       @close="editingAgentId = null"
       @saved="onAgentEditorSaved"
     />
+
+    <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
+    <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
   </main>
 </template>
