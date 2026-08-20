@@ -199,4 +199,64 @@ class ChunkedUploadTest extends TestCase
         $this->assertDatabaseMissing('chunked_uploads', ['token' => $token]);
         Storage::disk('local')->assertMissing($upload->part_path);
     }
+
+    /**
+     * TASK-222 — a SUPER ADMIN has users.company_id = NULL (deliberately;
+     * see the users migration). Passing that into forCompany() used to be a
+     * fatal TypeError, so `POST /uploads/init` 500'd and a Super Admin could
+     * not upload ANY file large enough to be chunked. Found on production
+     * with a 198 MB video, 2026-08-20.
+     */
+    public function test_a_super_admin_with_no_company_can_start_a_chunked_upload(): void
+    {
+        Storage::fake('local');
+        $super = User::factory()->superAdmin()->create(['company_id' => null]);
+        $this->assertNull($super->company_id, 'the fixture must reproduce the real Super Admin state');
+
+        $response = $this->actingAs($super)
+            ->postJson('/api/v1/uploads/init', [
+                'filename' => 'big.mov',
+                'mime_type' => 'video/quicktime',
+                'size_bytes' => 198 * 1024 * 1024,
+            ])
+            ->assertCreated();
+
+        $token = $response->json('data.token');
+        $this->assertIsString($token);
+
+        // The row exists and is UNBOUND — not silently attached to some
+        // company the operator never chose.
+        $this->assertDatabaseHas('chunked_uploads', ['token' => $token, 'company_id' => null]);
+
+        // The ceiling falls back to the platform default, which is what an
+        // actor belonging to no company should get.
+        $response->assertJsonPath('data.max_bytes', config('media.video.max_upload_mb') * 1024 * 1024);
+    }
+
+    /**
+     * The BR-6 half of the same change: a NULL company_id must not become a
+     * row every tenant can reach. TenantScope narrows a Company Admin with
+     * `where company_id = :own`, which excludes NULL — so an unbound
+     * staging file is invisible to them, token or no token.
+     */
+    public function test_a_company_admin_cannot_touch_a_super_admins_unbound_upload(): void
+    {
+        Storage::fake('local');
+        $super = User::factory()->superAdmin()->create(['company_id' => null]);
+
+        $token = $this->actingAs($super)
+            ->postJson('/api/v1/uploads/init', ['filename' => 'big.mov', 'size_bytes' => 1024])
+            ->assertCreated()
+            ->json('data.token');
+
+        $admin = User::factory()->companyAdmin()->create([
+            'company_id' => Company::factory()->create()->id,
+        ]);
+
+        $this->actingAs($admin)
+            ->post("/api/v1/uploads/{$token}/chunk", [
+                'chunk' => UploadedFile::fake()->create('part', 1),
+            ])
+            ->assertNotFound();
+    }
 }

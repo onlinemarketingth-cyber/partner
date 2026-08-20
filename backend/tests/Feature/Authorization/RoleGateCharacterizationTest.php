@@ -104,17 +104,26 @@ class RoleGateCharacterizationTest extends TestCase
             'settings.agent_rank.view' => [403, 204, 204, 204],
             /*
              * VideoProcessingSettingController.php:17.
-             * TODO: CONFIRM (behaviour recorded, not endorsed) — a Super Admin
-             * with NO ?company_id gets a 500, not a 200/204. The controller
-             * resolves $companyId to null for a Super Admin who did not name a
-             * company and hands it to
-             * VideoProcessingSettingService::forCompany(int $companyId), which
-             * is not nullable → TypeError. Its six sibling settings endpoints
-             * all tolerate null. Recorded, NOT fixed (TASK-185 §4); with a
-             * ?company_id it answers 200 — pinned in
+             * WAS 500, NOW 200 — TASK-222 fixed it, and this line is the
+             * proof the characterization suite earned its keep.
+             *
+             * TASK-185 §4 recorded the crash without endorsing it: a Super
+             * Admin who named no company resolved $companyId to null and
+             * handed it to forCompany(int $companyId) -> TypeError. The note
+             * said "Recorded, NOT fixed" and carried a TODO: CONFIRM.
+             *
+             * It went unfixed until the SAME null reached
+             * ChunkedUploadController::init() through a different door and a
+             * human hit it on production: every large upload a Super Admin
+             * attempted died at POST /uploads/init before a byte was sent
+             * (198 MB video, 2026-08-20). forCompany() now accepts null and
+             * answers with the platform defaults, which is what its six
+             * sibling settings endpoints already did.
+             *
+             * The company-named path is still pinned separately by
              * test_super_admin_video_processing_read_succeeds_when_a_company_is_named().
              */
-            'settings.video_processing.view' => [403, 200, 500, 200],
+            'settings.video_processing.view' => [403, 200, 200, 200],
             // CompanyThemeController.php:48
             'settings.company_theme.upload_asset' => [403, 200, 200, 200],
 

@@ -15,9 +15,27 @@ class VideoProcessingSettingService
     /**
      * @return array{max_upload_mb: int, target_resolution: string, target_bitrate_kbps: int}
      */
-    public function forCompany(int $companyId): array
+    /**
+     * TASK-222 — `$companyId` is NULLABLE.
+     *
+     * A SUPER ADMIN has `users.company_id = NULL` (deliberately: they are
+     * not scoped to any single company — see the users migration). Passing
+     * that straight in used to be a fatal TypeError, and the one caller
+     * that did it was ChunkedUploadController::init() — so every large
+     * upload a Super Admin attempted died with a 500 at
+     * `POST /uploads/init` before a single byte was sent. Reported from
+     * production, 2026-08-20, on a 198 MB video.
+     *
+     * Null means "no company, so no per-company override can apply", which
+     * is exactly the answer the body below already produces for a company
+     * that has never customised its settings. The platform defaults from
+     * config/media.php are the correct ceiling for a platform operator.
+     */
+    public function forCompany(?int $companyId): array
     {
-        $override = VideoProcessingSetting::withoutGlobalScopes()->where('company_id', $companyId)->first();
+        $override = $companyId === null
+            ? null
+            : VideoProcessingSetting::withoutGlobalScopes()->where('company_id', $companyId)->first();
 
         if ($override) {
             return [

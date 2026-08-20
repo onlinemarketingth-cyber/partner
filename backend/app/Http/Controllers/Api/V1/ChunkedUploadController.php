@@ -64,6 +64,15 @@ class ChunkedUploadController extends Controller
         // admin-editable, never hardcoded). It is applied to every file
         // type here purely as a disk guard; the REAL per-type limit is
         // still the `max:` rule on the create endpoint's Form Request.
+        //
+        // TASK-222 — `$user->company_id` is NULL for a Super Admin, which
+        // is a legitimate state (see the users migration). It used to be
+        // passed to an `int` parameter and killed this endpoint with a
+        // TypeError, so a Super Admin could not upload ANY file large
+        // enough to be chunked; reported from production on a 198 MB
+        // video. forCompany() now accepts null and answers with the
+        // platform defaults, which is the right ceiling for an actor who
+        // belongs to no company.
         $maxBytes = $this->videoSettings->forCompany($user->company_id)['max_upload_mb'] * 1024 * 1024;
 
         if (($data['size_bytes'] ?? 0) > $maxBytes) {
@@ -75,6 +84,11 @@ class ChunkedUploadController extends Controller
         $token = Str::random(64);
 
         $upload = ChunkedUpload::create([
+            // NULL for a Super Admin — "staged by a platform operator, not
+            // yet bound to a company". See the TASK-222 migration for why
+            // that does not weaken BR-6: TenantScope's
+            // `where company_id = :own` excludes NULL, so no tenant can
+            // reach this row.
             'company_id' => $user->company_id,
             'user_id' => $user->id,
             'token' => $token,
