@@ -36,17 +36,20 @@ class StoreReferralRequest extends FormRequest
                 'integer',
                 Rule::exists('products', 'id')->where('company_id', $this->user()->company_id),
             ],
-            // STAYS REQUIRED, on purpose. TASK-134a widened
-            // referrals.branch to nullable (ag-lead ruling 2026-08-08,
-            // TASK-132 spec §"Decision — referrals.branch") ONLY so
-            // TASK-136's anonymous public checkout — which has no agent
-            // to type a branch and no customer who could know one — can
-            // leave it NULL. This is the AUTHENTICATED agent path:
-            // agents still know their branch, so nothing about their UX
-            // changes. The column being nullable is not an invitation to
-            // relax the rule here; the public endpoint gets its own Form
-            // Request rather than this one growing a conditional.
-            'branch' => ['required', 'string', 'max:255'],
+            // OPTIONAL since TASK-211 (human ruling 2026-08-19: "คุณเอา *
+            // validate ออกจากสาขา"). This REVERSES the TASK-134a-era note
+            // that "agents still know their branch" — in practice they do
+            // not always: an agent adding a product of interest from the
+            // client drawer is recording INTEREST, not a booked meeting at
+            // a named location, and being forced to invent a branch string
+            // produced worse data than leaving it NULL.
+            //
+            // The column has been nullable since TASK-134a, so nothing in
+            // the schema changes. What DOES change is that `branch IS NULL`
+            // is no longer a reliable "sold through a shared link" marker —
+            // see TASK-211 §4; the four UI labels that inferred that have
+            // been corrected to say "ไม่ระบุสาขา" instead.
+            'branch' => ['nullable', 'string', 'max:255'],
             // No longer required — human request (2026-07-13):
             // "เวลาที่สะดวกนัดไม่ต้อง validate".
             'preferred_time' => ['nullable', 'date'],
