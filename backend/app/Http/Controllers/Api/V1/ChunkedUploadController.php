@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\ChunkedUpload;
+use App\Models\User;
 use App\Services\Catalog\VideoProcessingSettingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -55,10 +56,16 @@ class ChunkedUploadController extends Controller
             'filename' => ['required', 'string', 'max:255'],
             'mime_type' => ['nullable', 'string', 'max:255'],
             'size_bytes' => ['nullable', 'integer', 'min:1'],
+            // TASK-226 — Super-Admin-only, and validated to exist. See
+            // resolveCompanyId() for why it is optional rather than
+            // required, and why nobody else can influence it.
+            'company_id' => ['sometimes', 'nullable', 'integer', 'exists:companies,id'],
         ]);
 
-        /** @var \App\Models\User $user */
+        /** @var User $user */
         $user = $request->user();
+
+        $companyId = $this->resolveCompanyId($request, $user);
 
         // The ceiling is the company's own configured video cap (BR-7 —
         // admin-editable, never hardcoded). It is applied to every file
@@ -70,10 +77,15 @@ class ChunkedUploadController extends Controller
         // passed to an `int` parameter and killed this endpoint with a
         // TypeError, so a Super Admin could not upload ANY file large
         // enough to be chunked; reported from production on a 198 MB
-        // video. forCompany() now accepts null and answers with the
-        // platform defaults, which is the right ceiling for an actor who
-        // belongs to no company.
-        $maxBytes = $this->videoSettings->forCompany($user->company_id)['max_upload_mb'] * 1024 * 1024;
+        // video. forCompany() now accepts null.
+        //
+        // TASK-226 — but null is only the LAST resort. A Super Admin is
+        // working inside one company (the header picker, ADR-038), and
+        // that company's configured ceiling is the one that should apply:
+        // a human raised Thai Life's cap to 300 MB and still got
+        // "ไฟล์ใหญ่เกินขนาดที่บริษัทกำหนด (200 MB)" because this line asked
+        // about a company nobody had named.
+        $maxBytes = $this->videoSettings->forCompany($companyId)['max_upload_mb'] * 1024 * 1024;
 
         if (($data['size_bytes'] ?? 0) > $maxBytes) {
             throw ValidationException::withMessages([
@@ -84,12 +96,12 @@ class ChunkedUploadController extends Controller
         $token = Str::random(64);
 
         $upload = ChunkedUpload::create([
-            // NULL for a Super Admin — "staged by a platform operator, not
-            // yet bound to a company". See the TASK-222 migration for why
-            // that does not weaken BR-6: TenantScope's
-            // `where company_id = :own` excludes NULL, so no tenant can
-            // reach this row.
-            'company_id' => $user->company_id,
+            // The company the operator is working in, or NULL when there
+            // genuinely is none — a Super Admin on "ทุกบริษัท". See the
+            // TASK-222 migration for why NULL does not weaken BR-6:
+            // TenantScope's `where company_id = :own` excludes it, so no
+            // tenant can reach the row.
+            'company_id' => $companyId,
             'user_id' => $user->id,
             'token' => $token,
             'original_filename' => $data['filename'],
@@ -112,6 +124,30 @@ class ChunkedUploadController extends Controller
                 'max_bytes' => $maxBytes,
             ],
         ], 201);
+    }
+
+    /**
+     * TASK-226 — which company's ceiling applies to this upload.
+     *
+     * A COMPANY ADMIN or AGENT: always their own, and any `company_id`
+     * they send is ignored outright. Trusting it would let one tenant
+     * borrow another's (possibly larger) cap, and BR-6 gives them no say
+     * in the matter anyway.
+     *
+     * A SUPER ADMIN: the company they named, because they belong to none.
+     * The parameter is OPTIONAL rather than required — "ทุกบริษัท" is a
+     * real state of the header picker, and refusing to start an upload in
+     * it would be a worse answer than falling back to the platform
+     * default. `exists:companies,id` in the rules above is what stops a
+     * typo silently selecting nothing.
+     */
+    private function resolveCompanyId(Request $request, User $user): ?int
+    {
+        if (! $user->isSuperAdmin()) {
+            return $user->company_id;
+        }
+
+        return $request->filled('company_id') ? $request->integer('company_id') : null;
     }
 
     /**

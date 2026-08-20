@@ -8,6 +8,7 @@ use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\User;
+use App\Models\VideoProcessingSetting;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -258,5 +259,83 @@ class ChunkedUploadTest extends TestCase
                 'chunk' => UploadedFile::fake()->create('part', 1),
             ])
             ->assertNotFound();
+    }
+
+    /**
+     * TASK-226 — the company's own ceiling, not the platform default.
+     *
+     * Reported from production: a human raised Thai Life's video cap to
+     * 300 MB in ตั้งค่าวิดีโอ and still got "ไฟล์ใหญ่เกินขนาดที่บริษัทกำหนด
+     * (200 MB)". TASK-222 had turned the Super Admin's null company from a
+     * 500 into a fallback, and the fallback was the platform default — a
+     * better failure, but still the wrong number.
+     */
+    public function test_a_super_admin_gets_the_named_companys_ceiling_not_the_platform_default(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        VideoProcessingSetting::create([
+            'company_id' => $company->id,
+            'max_upload_mb' => 300,
+            'target_resolution' => '480p',
+            'target_bitrate_kbps' => 2500,
+        ]);
+
+        $super = User::factory()->superAdmin()->create(['company_id' => null]);
+
+        $this->actingAs($super)
+            ->postJson('/api/v1/uploads/init', [
+                'filename' => 'big.mov',
+                'size_bytes' => 250 * 1024 * 1024,
+                'company_id' => $company->id,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.max_bytes', 300 * 1024 * 1024);
+
+        // ...and the staging row is bound to that company, not left unowned.
+        $this->assertDatabaseHas('chunked_uploads', ['company_id' => $company->id]);
+    }
+
+    /** "ทุกบริษัท" is a real state of the picker — it must not block an upload. */
+    public function test_a_super_admin_who_names_no_company_still_gets_the_platform_default(): void
+    {
+        Storage::fake('local');
+        $super = User::factory()->superAdmin()->create(['company_id' => null]);
+
+        $this->actingAs($super)
+            ->postJson('/api/v1/uploads/init', ['filename' => 'big.mov', 'size_bytes' => 1024])
+            ->assertCreated()
+            ->assertJsonPath('data.max_bytes', config('media.video.max_upload_mb') * 1024 * 1024);
+    }
+
+    /**
+     * BR-6: a Company Admin does not get to name a company. Borrowing
+     * another tenant's (larger) cap would be the whole point of trying.
+     */
+    public function test_a_company_admins_supplied_company_id_is_ignored(): void
+    {
+        Storage::fake('local');
+        $own = Company::factory()->create();
+        $other = Company::factory()->create();
+        VideoProcessingSetting::create([
+            'company_id' => $other->id,
+            'max_upload_mb' => 900,
+            'target_resolution' => '480p',
+            'target_bitrate_kbps' => 2500,
+        ]);
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $own->id]);
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/uploads/init', [
+                'filename' => 'big.mov',
+                'size_bytes' => 1024,
+                'company_id' => $other->id,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.max_bytes', config('media.video.max_upload_mb') * 1024 * 1024);
+
+        $this->assertDatabaseHas('chunked_uploads', ['company_id' => $own->id]);
+        $this->assertDatabaseMissing('chunked_uploads', ['company_id' => $other->id]);
     }
 }
