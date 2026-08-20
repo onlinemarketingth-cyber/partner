@@ -217,7 +217,13 @@ function saveButton(wrapper: Wrapper) {
 describe('ThemeSettingsView — TASK-175 four tabs, one form', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    localStorage.clear()
+    // No `localStorage.clear()` here. The `localStorage` some machines give
+    // this suite is not a working Storage — `clear` is not a function, and
+    // neither is `getItem` (2026-08-12, and again on 2026-08-20 when this
+    // file reported 42 failures on the human's Mac while passing in CI).
+    // That is exactly why every module reading a saved preference now goes
+    // through `utils/safeStorage`. Nothing in this suite writes to storage,
+    // so there is nothing to clear.
   })
 
   it('offers exactly the four tabs of §4, opening on สี', async () => {
@@ -344,30 +350,42 @@ describe('ThemeSettingsView — TASK-175 four tabs, one form', () => {
     }
   })
 
-  it('leaves the three per-company setting cards outside the tabs (§3 D2)', async () => {
+  /*
+   * TASK-225 — REPLACES "leaves the three per-company setting cards outside
+   * the tabs (§3 D2)".
+   *
+   * That test pinned a requirement a later human decision reversed. TASK-175
+   * §3 D2 put ตั้งค่าวิดีโอ / การมองเห็นข้อมูลทีม / คอมมิชชั่นตัวแทนร่วม on this
+   * page BELOW the tabbed editor, and the old test proved they had not been
+   * absorbed INTO a tab. TASK-202 (human request, 2026-08-17) then moved all
+   * three off this page entirely, onto their own routes under "ตั้งค่าระบบ",
+   * because stacked cards on one screen were undiscoverable.
+   *
+   * So the old assertion had been false since 2026-08-17 and nobody saw it:
+   * this suite has been red since the same date for an unrelated reason (no
+   * Pinia — see vitest.setup.ts), and a red suite hides its own regressions.
+   *
+   * It is REPLACED rather than deleted. "These three are not here" is still
+   * worth pinning: re-absorbing them would undo TASK-202 silently, and the
+   * routes they moved to are named here so the reader can find them.
+   */
+  it('no longer carries the three per-company setting cards — they have their own routes (TASK-202)', async () => {
     const wrapper = await mountView()
 
-    // Not `wrapper.text()`: textContent reads through `display: none`, so a
-    // card that HAD been absorbed into a tab would still "contain" its title.
-    // Ask where it sits in the tree instead.
     const videoCard = wrapper.findAll('section').find((s) => s.text().includes('ตั้งค่าวิดีโอ'))
     const teamCard = wrapper.findAll('section').find((s) => s.text().includes('การมองเห็นข้อมูลทีม'))
     const splitCard = wrapper.find('[data-test="commission-split-card"]')
 
-    expect(videoCard).toBeDefined()
-    expect(teamCard).toBeDefined()
-    expect(splitCard.exists()).toBe(true)
+    expect(videoCard).toBeUndefined()
+    expect(teamCard).toBeUndefined()
+    expect(splitCard.exists()).toBe(false)
 
-    for (const el of [videoCard!.element, teamCard!.element, splitCard.element]) {
-      expect(el.closest('.theme-tab-panel')).toBeNull()
-      expect((el as HTMLElement).style.display).not.toBe('none')
-    }
-
-    // Each still owns its own save button, writing to its own endpoint — one
-    // "บันทึก" spanning three endpoints is what D2 refuses.
+    // ...and neither do their save buttons, which is the half that would
+    // actually break: a stray "บันทึกค่าวิดีโอ" here would write to a second
+    // endpoint from a screen whose own save button says "บันทึกธีม/แบรนด์".
     const buttons = wrapper.findAll('button').map((b) => b.text())
-    expect(buttons).toContain('บันทึกค่าวิดีโอ')
-    expect(buttons).toContain('บันทึกการมองเห็นทีม')
+    expect(buttons).not.toContain('บันทึกค่าวิดีโอ')
+    expect(buttons).not.toContain('บันทึกการมองเห็นทีม')
   })
 
   /*
