@@ -32,6 +32,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { classifyEmbedUrl, toEmbedUrl } from '@/utils/embedUrl'
+import { readStored, writeStored } from '@/utils/safeStorage'
 // TASK-188 §4.B3 — the builder's copy, defined once. Four of these strings used
 // to exist twice in this file and two of the pairs had already drifted.
 import {
@@ -2114,8 +2115,14 @@ function questionHasNoCorrectAnswer(q: QuestionLike): boolean {
 // localStorage (this is a pure UI nag, not business data — no backend
 // needed, matches this app's existing localStorage usage for
 // UI-only preferences like HeroHeader's storage-key).
+//
+// Via safeStorage, not localStorage: this read runs during setup(), so a
+// storage that exists but is unusable (Safari private mode, sandboxed
+// iframe, a partial object in a test environment) took the entire Academy
+// screen down with "localStorage.getItem is not a function" rather than
+// losing a dismissed nag. See safeStorage.js.
 const HIDE_INCOMPLETE_WARNING_KEY = 'academy-hide-incomplete-answer-warning'
-const hideIncompleteWarning = ref(localStorage.getItem(HIDE_INCOMPLETE_WARNING_KEY) === '1')
+const hideIncompleteWarning = ref(readStored(HIDE_INCOMPLETE_WARNING_KEY) === '1')
 const showIncompleteWarningModal = ref(false)
 const incompleteWarningQuestions = ref<QuestionLike[]>([])
 const dontShowIncompleteWarningAgain = ref(false)
@@ -2123,7 +2130,7 @@ const dontShowIncompleteWarningAgain = ref(false)
 function closeIncompleteWarningModal() {
   if (dontShowIncompleteWarningAgain.value) {
     hideIncompleteWarning.value = true
-    localStorage.setItem(HIDE_INCOMPLETE_WARNING_KEY, '1')
+    writeStored(HIDE_INCOMPLETE_WARNING_KEY, '1')
   }
   showIncompleteWarningModal.value = false
 }
