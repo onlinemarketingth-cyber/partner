@@ -49,6 +49,7 @@ import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 // BuddhistDateInput (TASK-199) dropped that affordance, so this restores it
 // consistently everywhere in this file.
 import CalendarDatePicker from '@/design-system/components/CalendarDatePicker.vue'
+import { readStored, writeStored } from '@/utils/safeStorage'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -256,8 +257,11 @@ const RESOLUTION_ORDER_NOTE = 'ลำดับการใช้ค่า: ส�
 // Same pure-UI-nag/localStorage pattern already used in
 // AcademyManagementView.vue's HIDE_INCOMPLETE_WARNING_KEY (not business
 // data, no backend needed).
+// Via safeStorage for the same reason as AcademyManagementView's copy of
+// this pattern: read at setup() time, so an unusable storage must not be
+// able to take the screen down. See safeStorage.js.
 const HIDE_RESOLUTION_ORDER_NOTE_KEY = 'commission-rules-hide-resolution-order-note'
-const hideResolutionOrderNote = ref(localStorage.getItem(HIDE_RESOLUTION_ORDER_NOTE_KEY) === '1')
+const hideResolutionOrderNote = ref(readStored(HIDE_RESOLUTION_ORDER_NOTE_KEY) === '1')
 const showResolutionOrderModal = ref(false)
 const dontShowResolutionOrderAgain = ref(false)
 
@@ -268,7 +272,7 @@ function openResolutionOrderModal() {
 function closeResolutionOrderModal() {
   if (dontShowResolutionOrderAgain.value) {
     hideResolutionOrderNote.value = true
-    localStorage.setItem(HIDE_RESOLUTION_ORDER_NOTE_KEY, '1')
+    writeStored(HIDE_RESOLUTION_ORDER_NOTE_KEY, '1')
   }
   showResolutionOrderModal.value = false
 }

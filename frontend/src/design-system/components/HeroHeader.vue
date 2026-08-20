@@ -40,6 +40,7 @@ import { ref, computed, onMounted, onUnmounted, watch, type PropType } from 'vue
 import { useRouter } from 'vue-router'
 import Icon from './Icon.vue'
 import { usePageHeaderStore } from '@/stores/pageHeader'
+import { readStored, writeStored } from '@/utils/safeStorage'
 
 export interface HeroKpi {
     label: string
@@ -70,13 +71,12 @@ function checkMobile() { isMobile.value = window.innerWidth < 640 }
 
 function loadCollapsedState() {
     if (!props.storageKey) return props.defaultCollapsed
-    try {
-        const v = localStorage.getItem(`sv_hero_${props.storageKey}`)
-        if (v === '1') return true
-        if (v === '0') return false
-    } catch {
-        /* localStorage unavailable — ignore */
-    }
+    // safeStorage rather than a local try/catch: the optional-catch idiom
+    // here only covered a THROWING storage, not one that exists without
+    // working methods — the case that actually occurs. See safeStorage.js.
+    const v = readStored(`sv_hero_${props.storageKey}`)
+    if (v === '1') return true
+    if (v === '0') return false
     return props.defaultCollapsed
 }
 
@@ -86,11 +86,7 @@ function toggleCollapsed() {
     if (isMobile.value) return
     isCollapsed.value = !isCollapsed.value
     if (props.storageKey) {
-        try {
-            localStorage.setItem(`sv_hero_${props.storageKey}`, isCollapsed.value ? '1' : '0')
-        } catch {
-            /* localStorage unavailable — ignore */
-        }
+        writeStored(`sv_hero_${props.storageKey}`, isCollapsed.value ? '1' : '0')
     }
 }
 

@@ -237,7 +237,13 @@ function dialogConfirm(wrapper: Wrapper) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  localStorage.clear()
+  // No `localStorage.clear()` here. The `localStorage` some machines give
+  // this suite is not a working Storage — `clear` is not a function, and
+  // neither is `getItem` (2026-08-12, and again on 2026-08-20 when this
+  // file reported 42 failures on the human's Mac while passing in CI).
+  // That is exactly why every module reading a saved preference now goes
+  // through `utils/safeStorage`. Nothing in this suite writes to storage,
+  // so there is nothing to clear.
   nextId = 1
 })
 
