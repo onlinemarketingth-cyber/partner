@@ -22,7 +22,7 @@
  * arrives here as a real navigation with a query param, instead of an
  * internal tab+filter flip on the same page.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -31,6 +31,8 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { type AgentItem, fetchAllPages } from './agentEdit'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 /**
  * TASK-113 — AgentInviteLinkResource, field for field.
@@ -63,6 +65,8 @@ interface AgentInviteLink {
 }
 
 const route = useRoute()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 
 const errorMessage = ref('')
 
@@ -166,6 +170,10 @@ onMounted(() => {
   if (Number.isFinite(agentParam) && agentParam > 0) linkFilterAgentId.value = agentParam
   loadInviteLinks()
 })
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadInviteLinks() })
 </script>
 
 <template>
@@ -177,6 +185,8 @@ onMounted(() => {
       accent-color="brand"
       storage-key="agent-invite-links"
     />
+
+    <CompanyScopeNotice action="จัดการลิงก์ชวนทีม" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

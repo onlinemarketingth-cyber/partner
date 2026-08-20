@@ -22,6 +22,9 @@ import { useAuthStore } from '@/stores/auth'
 import AppLogo from './AppLogo.vue'
 import Icon from './Icon.vue'
 import NotificationBell from './NotificationBell.vue'
+// TASK-208 / ADR-038 — the single company-scope control for the whole Admin
+// app, mounted here so it is on screen on every route.
+import CompanySwitcher from './CompanySwitcher.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -101,7 +104,20 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { name: 'product-catalog', icon: 'cube', label: { th: 'สินค้า', en: 'Product catalog' }, subMenus: [{ name: 'product-catalog', icon: 'cube', label: { th: 'สินค้า', en: 'Product catalog' } }] },
+  {
+    name: 'product-catalog',
+    icon: 'cube',
+    label: { th: 'สินค้า', en: 'Product catalog' },
+    subMenus: [
+      { name: 'product-catalog', icon: 'cube', label: { th: 'สินค้า', en: 'Product catalog' } },
+      // ADR-036 (TASK-214) — shared cross-company catalog. Same
+      // per-sub-item `superAdminOnly` pattern as "ตั้งค่า Email SMTP"
+      // under theme-settings below (see SubMenuItem's own docblock): the
+      // pillar itself stays open to Company Admin (their own "สินค้า"
+      // list), only this one sub-item is Super-Admin-only.
+      { name: 'catalog-management', icon: 'globe', label: { th: 'แคตตาล็อกกลาง', en: 'Global Catalog' }, superAdminOnly: true },
+    ],
+  },
   { name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' }, subMenus: [{ name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' } }] },
   {
     name: 'agent-management',
@@ -282,6 +298,12 @@ const activeSubMenus = computed(() => {
         </div>
 
         <div class="flex items-center gap-3 shrink-0">
+          <!-- TASK-208 — placed immediately left of the search button per the
+               human's own instruction ("บน Head ข้างปุ่มค้นหาด้านขวามือ"). It
+               is the first thing in the actions cluster on purpose: which
+               company you are working in outranks every other control here. -->
+          <CompanySwitcher />
+
           <button
             type="button"
             class="w-10 h-10 flex items-center justify-center rounded-full transition-all text-slate-500 hover:bg-slate-100 hover:text-brand-600"

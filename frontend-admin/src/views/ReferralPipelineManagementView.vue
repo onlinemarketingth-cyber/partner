@@ -54,6 +54,8 @@ import {
   PAYMENT_STAGE_KEY,
   type PipelineStageRef,
 } from '@/utils/pipelineStages'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 /**
  * TASK-176 §1.2 — the ONE order this card may act on, as
@@ -189,13 +191,15 @@ const kpis = computed(() => [
 ])
 
 const route = useRoute()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const router = useRouter()
 
 async function loadAll() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const res = await api.get<{ data: ReferralItem[] }>('/referrals')
+    const res = await api.get<{ data: ReferralItem[] }>(activeCompany.scopedPath('/referrals'))
     referrals.value = res.data
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
@@ -489,6 +493,10 @@ function goToClient(clientId: number) {
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAll() })
 </script>
 
 <template>
@@ -502,6 +510,8 @@ function formatDateTime(iso: string): string {
       accent-color="brand"
       storage-key="admin-pipeline"
     />
+
+    <CompanyScopeNotice action="จัดการ pipeline" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -612,7 +622,7 @@ function formatDateTime(iso: string): string {
                 <p class="text-sm font-bold text-slate-900 truncate">{{ r.client?.name }}</p>
                 <!-- TASK-134a — NULL branch = sold through a shared link. -->
                 <p class="text-xs text-slate-400 truncate mt-0.5">
-                  {{ r.product?.name }} · {{ r.branch ?? 'ผ่านลิงก์ออนไลน์' }}
+                  {{ r.product?.name }} · {{ r.branch ?? 'ไม่ระบุสาขา' }}
                 </p>
                 <p class="text-xs text-slate-400 truncate">
                   Agent: {{ r.agent?.name ?? '—' }}
@@ -698,7 +708,7 @@ function formatDateTime(iso: string): string {
             <Icon name="user" :size="12" /> ดูโปรไฟล์ลูกค้า
           </button>
           <p class="text-sm text-slate-600">
-            {{ selectedReferral.product?.name }} · {{ selectedReferral.branch ?? 'ผ่านลิงก์ออนไลน์' }}
+            {{ selectedReferral.product?.name }} · {{ selectedReferral.branch ?? 'ไม่ระบุสาขา' }}
           </p>
           <p class="text-xs text-slate-400 mt-1">
             Agent: {{ selectedReferral.agent?.name ?? '—' }} · สถานะปัจจุบัน: {{ stageLabelTh(selectedReferral.current_stage) }}

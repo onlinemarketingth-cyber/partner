@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\CommissionLedgerResource;
 use App\Models\CommissionLedger;
 use App\Services\Notification\NotificationService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Validation\Rule;
@@ -27,6 +28,9 @@ class CommissionLedgerController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = CommissionLedger::with(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime']);
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         // TASK-046 — the Admin's per-agent drill-down on the Commission
         // Summary page reuses this SAME endpoint rather than a new one

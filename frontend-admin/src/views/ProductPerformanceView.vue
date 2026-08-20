@@ -33,6 +33,8 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -46,6 +48,8 @@ function formatSatang(satang: number): string {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 // ══════════════════════════ Section A: ABC grading ══════════════════════════
@@ -122,7 +126,7 @@ async function loadPromotions() {
   promoLoading.value = true
   promoError.value = ''
   try {
-    const res = await api.get<{ data: PricePromotion[] }>('/product-price-promotions')
+    const res = await api.get<{ data: PricePromotion[] }>(activeCompany.scopedPath('/product-price-promotions'))
     promotions.value = res.data
   } catch (e) {
     promoError.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
@@ -141,13 +145,17 @@ const loadingLookups = ref(false)
 const companies = ref<CompanyOption[]>([])
 const products = ref<ProductOption[]>([])
 
+// TASK-209 P3 — same scope-in-the-query-string rule as the shared copy in
+// agentEdit.ts: this walks every page, so filtering after the fetch would
+// still pull every company's rows over the wire.
 async function fetchAllPages<T>(path: string): Promise<T[]> {
-  const sep = path.includes('?') ? '&' : '?'
-  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${path}${sep}page=1`)
+  const scoped = activeCompany.scopedPath(path)
+  const sep = scoped.includes('?') ? '&' : '?'
+  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${scoped}${sep}page=1`)
   const items = [...first.data]
   const lastPage = first.meta?.last_page ?? 1
   for (let page = 2; page <= lastPage; page++) {
-    const next = await api.get<{ data: T[] }>(`${path}${sep}page=${page}`)
+    const next = await api.get<{ data: T[] }>(`${scoped}${sep}page=${page}`)
     items.push(...next.data)
   }
   return items
@@ -158,10 +166,11 @@ async function ensureLookupsLoaded() {
   loadingLookups.value = true
   try {
     const requests: Promise<unknown>[] = [fetchAllPages<ProductOption>('/products')]
-    if (isSuperAdmin.value) requests.push(api.get<{ data: CompanyOption[] }>('/companies'))
-    const [p, c] = await Promise.all(requests)
+    // TASK-209 P4 — company list from the global store (see AgentRosterView).
+    if (isSuperAdmin.value) requests.push(activeCompany.loadCompanies())
+    const [p] = await Promise.all(requests)
     products.value = p as ProductOption[]
-    if (c) companies.value = (c as { data: CompanyOption[] }).data
+    companies.value = activeCompany.companies
     lookupsLoaded.value = true
   } catch (e) {
     promoError.value = apiErrorMessage(e, 'โหลดข้อมูลประกอบไม่สำเร็จ')
@@ -302,6 +311,10 @@ function statusBadgeClass(status: PricePromotion['status']): string {
 function statusLabel(status: PricePromotion['status']): string {
   return { draft: 'ฉบับร่าง', active: 'ใช้งาน', ended: 'สิ้นสุดแล้ว' }[status]
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAbcGrades(); loadPromotions() })
 </script>
 
 <template>
@@ -313,6 +326,8 @@ function statusLabel(status: PricePromotion['status']): string {
       accent-color="brand"
       storage-key="product-performance"
     />
+
+    <CompanyScopeNotice action="ดูผลงานสินค้า" />
 
     <!-- Link-out disambiguation note vs. /agent-promotions -->
     <div class="mt-4 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">

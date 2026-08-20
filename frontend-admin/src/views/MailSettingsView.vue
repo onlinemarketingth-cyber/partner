@@ -29,6 +29,8 @@ import { api, ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
+// TASK-209 P4 — this screen ignores the header company scope on purpose.
+import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
 // Same per-file helper pattern as AnnouncementsView.vue's apiErrorMessage()
 // (no shared export for this yet — each screen keeps its own copy). Prefers
@@ -222,6 +224,8 @@ onMounted(loadSettings)
       accent-color="brand"
       storage-key="admin-mail-settings"
     />
+
+    <PlatformScopeBadge reason="ค่า SMTP มีชุดเดียวสำหรับทั้งระบบ" />
 
     <div v-if="loading" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-5 text-sm text-slate-400">
       กำลังโหลด...

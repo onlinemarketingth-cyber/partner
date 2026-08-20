@@ -19,6 +19,9 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+// TASK-208 / ADR-038 — one company scope for the whole app.
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
 import { compressImage } from '@/utils/imageCompression'
 import { generateQrDataUrl } from '@/utils/qrCode'
@@ -100,12 +103,6 @@ interface Theme {
   // to ag-lead in this task's write-up; kept here (rather than left out
   // entirely) so the UI needs no further change once that lands.
   recommended_slot_count?: number | null
-}
-
-interface CompanyItem {
-  id: number
-  name: string
-  slug: string
 }
 
 // Neutral fallbacks used ONLY to give the native color inputs a value while
@@ -359,10 +356,13 @@ const icons = reactive<Record<string, string>>(
   Object.fromEntries(NAV_ICON_FIELDS.map((f) => [f.key, ''])),
 )
 
-// Super Admin company picker.
-const companies = ref<CompanyItem[]>([])
-const selectedCompanyId = ref<number | null>(null)
-const selectedCompany = computed(() => companies.value.find((c) => c.id === selectedCompanyId.value) ?? null)
+// TASK-208 — was a local company <select> + its own /companies fetch. The
+// alias below keeps every existing read in this (very long) file working
+// unchanged while the single source of truth moves to the global store.
+const activeCompany = useActiveCompanyStore()
+const selectedCompanyId = computed(() => activeCompany.companyId)
+const selectedCompany = computed(() =>
+  activeCompany.companies.find((c) => c.id === activeCompany.companyId) ?? null)
 
 // Color <input type=color> needs a non-null value; keep the "unset ⇒ null"
 // semantic while still showing a sensible swatch. get() falls back to the
@@ -452,29 +452,14 @@ async function loadTheme(): Promise<void> {
   }
 }
 
-async function loadCompanies(): Promise<void> {
-  try {
-    const res = await api.get<{ data: CompanyItem[] }>('/companies')
-    companies.value = res.data
-    const first = res.data[0]
-    if (first) {
-      selectedCompanyId.value = first.id
-      await loadTheme()
-    }
-  } catch (e) {
-    loadError.value = e instanceof ApiError ? e.message : 'โหลดรายชื่อบริษัทไม่สำเร็จ'
-  }
-}
-
 onMounted(async () => {
-  if (isSuperAdmin.value) {
-    await loadCompanies()
-  } else {
-    await loadTheme()
-  }
+  await activeCompany.loadCompanies()
+  // With no company scoped (ทุกบริษัท) there is no single theme to edit —
+  // the notice in the template explains it and loadTheme() is skipped.
+  if (!activeCompany.requiresCompanyPick) await loadTheme()
 })
 
-watch(selectedCompanyId, () => { if (isSuperAdmin.value) loadTheme() })
+watch(() => activeCompany.companyId, () => { if (!activeCompany.requiresCompanyPick) loadTheme() })
 
 // TASK-063 (human-reported 2026-07-31) — the Agent Portal /login page
 // can't know which company's theme to paint until SOMEONE is logged in
@@ -1072,7 +1057,7 @@ async function deletePendingPreset(): Promise<void> {
 // at company A's presets while every other panel on the screen has moved to
 // B, which is exactly the confusion §5.2 scopes them to avoid. Same
 // watcher shape as the video / team-visibility sections above.
-watch(selectedCompanyId, () => loadPresets())
+watch(() => activeCompany.companyId, () => loadPresets())
 
 onMounted(loadPresets)
 </script>
@@ -1142,23 +1127,13 @@ onMounted(loadPresets)
       {{ saveError || uploadError }}
     </div>
 
-    <!-- Super Admin company picker -->
-    <div v-if="isSuperAdmin" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-4 flex items-center gap-3">
-      <Icon name="building" :size="18" class="text-brand-600 shrink-0" />
-      <label class="text-xs font-bold text-slate-500 shrink-0">บริษัท</label>
-      <select
-        v-model.number="selectedCompanyId"
-        class="flex-1 max-w-xs px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
-      >
-        <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-      </select>
-    </div>
+    <CompanyScopeNotice action="แก้ไขธีม/แบรนด์" />
 
     <p v-if="loadError" class="mt-4 text-sm font-bold text-rose-600">{{ loadError }}</p>
 
-    <div v-if="loading" class="mt-4 text-sm text-slate-400">กำลังโหลด...</div>
+    <div v-if="loading && !activeCompany.requiresCompanyPick" class="mt-4 text-sm text-slate-400">กำลังโหลด...</div>
 
-    <div v-else class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div v-else-if="!activeCompany.requiresCompanyPick" class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
       <!-- ══════════ LEFT: editor (the four tab panels) ══════════
            TASK-175 §5 — `.theme-tab-panel` caps this column's height in `dvh`
            and lets it scroll on its own; see the <style> block at the bottom

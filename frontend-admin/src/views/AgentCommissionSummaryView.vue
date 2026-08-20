@@ -64,13 +64,17 @@
  * easy-to-change cosmetic default, same as TASK-045 handled non-blocking
  * cosmetic choices.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 
 interface AgentSummaryItem {
   agent_id: number
@@ -181,7 +185,9 @@ async function loadAll() {
   try {
     const query = buildQuery()
     const res = await api.get<{ data: AgentSummaryItem[]; computed_at: string }>(
-      `/agent-commission-summary${query ? `?${query}` : ''}`,
+      // TASK-209 — /agent-commission-summary has accepted company_id
+      // server-side all along; it just was never sent.
+      activeCompany.scopedPath(`/agent-commission-summary${query ? `?${query}` : ''}`),
     )
     summaries.value = res.data
   } catch (e) {
@@ -271,7 +277,7 @@ async function toggleDetail(agent: AgentSummaryItem) {
     const params = new URLSearchParams(buildQuery())
     params.set('agent_id', String(agent.agent_id))
     const [ledgerRes, userRes] = await Promise.all([
-      api.get<{ data: LedgerItem[]; meta?: { total: number } }>(`/commission-ledger?${params.toString()}`),
+      api.get<{ data: LedgerItem[]; meta?: { total: number } }>(activeCompany.scopedPath(`/commission-ledger?${params.toString()}`)),
       api.get<{ data: AgentDetail }>(`/users/${agent.agent_id}`),
     ])
     detailEntries.value = ledgerRes.data
@@ -368,6 +374,10 @@ const kpis = computed(() => [
 function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH') + ' บาท'
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAll() })
 </script>
 
 <template>
@@ -381,6 +391,8 @@ function formatSatang(satang: number): string {
       accent-color="brand"
       storage-key="agent-commission-summary"
     />
+
+    <CompanyScopeNotice action="ดูสรุปคอมมิชชั่น" />
 
     <div class="mt-4 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
       <DateRangeFilter v-model:date-from="filters.date_from" v-model:date-to="filters.date_to" :years-back="3" :years-forward="0" />

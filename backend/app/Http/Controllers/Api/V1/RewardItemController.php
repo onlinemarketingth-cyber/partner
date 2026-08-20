@@ -8,6 +8,7 @@ use App\Http\Requests\Engagement\UpdateRewardItemRequest;
 use App\Http\Resources\RewardItemResource;
 use App\Models\RewardItem;
 use App\Services\Engagement\RewardItemService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -25,6 +26,9 @@ class RewardItemController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = RewardItem::query();
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request, includePlatformWide: true);
 
         if (! $request->user()->isSuperAdmin()) {
             $query->where(fn ($q) => $q->where('company_id', $request->user()->company_id)->orWhereNull('company_id'));

@@ -21,6 +21,7 @@
  */
 
 import { api } from '@/api/client'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 /**
  * TASK-123 (backend TASK-122) — mirrors App\Enums\IdDocumentType exactly.
@@ -212,13 +213,23 @@ export function normalizeIdNumber(type: IdDocumentTypeChoice, raw: string): stri
 // live: Thai Life has 27 users, only 15 were ever shown there. Same
 // paginate()-with-no-args pattern exists on /referrals and /commission-ledger,
 // so this loop is written once and reused rather than fixed in one place only.
+/**
+ * TASK-209 P3 — every caller of this helper fetches a COMPANY-scoped
+ * resource (/users, /agent-approvals, /agent-invite-links, /products,
+ * /reward-redemptions, /modules), so the Super Admin's header scope is
+ * applied here once rather than at each of the ~10 call sites. Scoping in
+ * the query string (not after the fetch) is the whole point: this helper
+ * walks EVERY page, so a client-side filter would still download every
+ * company's rows first — including personal data.
+ */
 export async function fetchAllPages<T>(path: string): Promise<T[]> {
-  const sep = path.includes('?') ? '&' : '?'
-  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${path}${sep}page=1`)
+  const scoped = useActiveCompanyStore().scopedPath(path)
+  const sep = scoped.includes('?') ? '&' : '?'
+  const first = await api.get<{ data: T[]; meta?: { last_page: number } }>(`${scoped}${sep}page=1`)
   const items = [...first.data]
   const lastPage = first.meta?.last_page ?? 1
   for (let page = 2; page <= lastPage; page++) {
-    const next = await api.get<{ data: T[] }>(`${path}${sep}page=${page}`)
+    const next = await api.get<{ data: T[] }>(`${scoped}${sep}page=${page}`)
     items.push(...next.data)
   }
   return items

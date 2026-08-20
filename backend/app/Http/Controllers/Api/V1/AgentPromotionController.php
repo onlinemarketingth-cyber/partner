@@ -8,6 +8,7 @@ use App\Http\Requests\Engagement\UpdateAgentPromotionRequest;
 use App\Http\Resources\AgentPromotionResource;
 use App\Models\AgentPromotion;
 use App\Services\Engagement\AgentPromotionService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -30,6 +31,9 @@ class AgentPromotionController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         $query = AgentPromotion::with(['product', 'targetCertTier', 'targetAgents']);
+
+        // TASK-209 — Super Admin's header company scope, applied in SQL.
+        CompanyScopeFilter::apply($query, $request);
 
         $user = $request->user();
         if ($user->isAgent()) {

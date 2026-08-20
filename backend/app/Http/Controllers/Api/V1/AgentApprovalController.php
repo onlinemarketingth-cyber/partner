@@ -9,6 +9,7 @@ use App\Http\Resources\PendingRecruitResource;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Services\Registration\AgentApprovalService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -56,16 +57,20 @@ class AgentApprovalController extends Controller
 
         $status = AgentApprovalStatus::from($validated['status'] ?? AgentApprovalStatus::Pending->value);
 
-        $users = User::query()
+        $query = User::query()
             ->where('agent_approval_status', $status)
             // approvedBy powers UserResource's `approved_by` block — the
             // "with the approver named" half of ADR-025 §7's mitigation.
             // Eager-loaded so a queue of N rows is not N+1 lookups.
             ->with(['company', 'approvedBy'])
-            ->orderBy('created_at')
-            ->paginate();
+            ->orderBy('created_at');
 
-        return UserResource::collection($users);
+        // TASK-209 — Super Admin's header company scope. Applied BEFORE
+        // paginate(): narrowing a paginator after the fact would page over
+        // the unfiltered set.
+        CompanyScopeFilter::apply($query, $request);
+
+        return UserResource::collection($query->paginate());
     }
 
     /**

@@ -21,13 +21,15 @@
  * delete here are Super-Admin-only; a Company Admin can still view the
  * curve (read-only) since it affects their own agents' displayed level.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 interface GamificationRule {
   id: number
@@ -80,6 +82,8 @@ function sourceLabel(value: string): string {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 type Tab = 'rules' | 'badges' | 'levels'
@@ -100,11 +104,11 @@ async function loadAll() {
   errorMessage.value = ''
   try {
     const [r, b, u, ub, lt] = await Promise.all([
-      api.get<{ data: GamificationRule[] }>('/gamification-rules'),
-      api.get<{ data: Badge[] }>('/badges'),
-      api.get<{ data: AgentOption[] }>('/users'),
-      api.get<{ data: UserBadgeItem[] }>('/user-badges'),
-      api.get<{ data: LevelThresholdItem[] }>('/level-thresholds'),
+      api.get<{ data: GamificationRule[] }>(activeCompany.scopedPath('/gamification-rules')),
+      api.get<{ data: Badge[] }>(activeCompany.scopedPath('/badges')),
+      api.get<{ data: AgentOption[] }>(activeCompany.scopedPath('/users')),
+      api.get<{ data: UserBadgeItem[] }>(activeCompany.scopedPath('/user-badges')),
+      api.get<{ data: LevelThresholdItem[] }>(activeCompany.scopedPath('/level-thresholds')),
     ])
     rules.value = r.data
     badges.value = b.data
@@ -302,6 +306,10 @@ async function submitAward() {
     awarding.value = false
   }
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAll() })
 </script>
 
 <template>
@@ -325,6 +333,8 @@ async function submitAward() {
             @click="activeTab = t.key as Tab"
           >
             <Icon :name="t.icon" :size="14" />
+
+    <CompanyScopeNotice action="ตั้งค่า Gamification" />
             {{ t.label }}
           </button>
         </div>

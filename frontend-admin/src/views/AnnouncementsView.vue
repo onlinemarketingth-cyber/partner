@@ -17,6 +17,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import { compressImageToFit } from '@/utils/imageCompression'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 // Mirrors StoreAnnouncementRequest/UpdateAnnouncementRequest's
 // 'image' => [...'max:5120'...] rule (5120 KB). Kept as a named
@@ -50,6 +52,8 @@ function toDatetimeLocal(iso: string): string {
 }
 
 const auth = useAuthStore()
+// TASK-209 — the header company scope (ADR-038).
+const activeCompany = useActiveCompanyStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 
 interface CompanyOption { id: number; name: string }
@@ -109,7 +113,7 @@ async function loadAnnouncements() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const res = await api.get<{ data: AnnouncementItem[] }>('/announcements')
+    const res = await api.get<{ data: AnnouncementItem[] }>(activeCompany.scopedPath('/announcements'))
     announcements.value = res.data
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
@@ -126,10 +130,11 @@ async function ensureLookupsLoaded() {
   if (lookupsLoaded.value) return
   try {
     const requests: Promise<unknown>[] = [api.get<{ data: CertTierOption[] }>('/cert-tiers')]
-    if (isSuperAdmin.value) requests.push(api.get<{ data: CompanyOption[] }>('/companies'))
-    const [ct, c] = await Promise.all(requests)
+    // TASK-209 P4 — company list from the global store (see AgentRosterView).
+    if (isSuperAdmin.value) requests.push(activeCompany.loadCompanies())
+    const [ct] = await Promise.all(requests)
     certTiers.value = (ct as { data: CertTierOption[] }).data
-    if (c) companies.value = (c as { data: CompanyOption[] }).data
+    companies.value = activeCompany.companies
     lookupsLoaded.value = true
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลประกอบไม่สำเร็จ')
@@ -364,7 +369,10 @@ watch(
 
 function resetForm() {
   form.value = {
-    company_id: '',
+    // TASK-209 §5 — default to the header scope; '' (= ทั้งแพลตฟอร์ม) stays
+    // selectable, because platform-wide is a business choice, not the
+    // absence of one.
+    company_id: activeCompany.companyId ?? '',
     title: '',
     content: '',
     audience: 'all_agents',
@@ -562,6 +570,10 @@ function bannerPagesLabel(item: AnnouncementItem): string {
 function contentPreview(content: string): string {
   return content.length > 140 ? content.slice(0, 140) + '…' : content
 }
+
+// TASK-209 — every list above is scoped server-side, so a change of the
+// header company has to refetch; nothing here can be re-derived locally.
+watch(() => activeCompany.companyId, () => { loadAnnouncements() })
 </script>
 
 <template>
@@ -577,6 +589,8 @@ function contentPreview(content: string): string {
           @click="openSettingsModal"
         >
           <Icon name="settings" :size="18" />
+
+    <CompanyScopeNotice action="จัดการประกาศ" />
         </button>
         <button
           class="btn-primary"
