@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -10,12 +10,25 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 /**
  * TASK-161 §3.2 — a named snapshot of a company's colour surface.
  *
- * §5 rules 1–2 / BR-6: business table → `company_id` + the shared
- * TenantScope, no exception for "it's only colours". Combined with
- * ThemePresetPolicy this is what makes company A's preset unreachable
- * (list AND apply AND rename AND delete) from company B — the scope turns
- * a guessed id into a 404 at route-model-binding time, the Policy turns a
- * Super-Admin-visible one into a 403 for the wrong role.
+ * §5 rules 1–2 / BR-6: business table → `company_id` + a tenant scope, no
+ * exception for "it's only colours". Combined with ThemePresetPolicy this
+ * is what makes company A's preset unreachable (list AND apply AND rename
+ * AND delete) from company B — the scope turns a guessed id into a 404 at
+ * route-model-binding time, the Policy turns a Super-Admin-visible one
+ * into a 403 for the wrong role.
+ *
+ * TASK-217 — `company_id` is now NULLABLE, and NULL means ชุดกลาง: a
+ * palette the PLATFORM owns, usable by every company. That is why the
+ * scope here is SharedOrTenantScope and not TenantScope: a plain
+ * `where company_id = :own` excludes NULL, which would hide every shared
+ * preset from the admins it exists for. Owned rows are still filtered
+ * exactly as before — see SharedOrTenantScope's own docblock, and the
+ * migration for why a colour surface is shareable when business data is
+ * not.
+ *
+ * Reading a shared preset and CHANGING one are separate questions. This
+ * scope only answers the first; ThemePresetPolicy answers the second, and
+ * the answer is Super Admin only.
  *
  * `colors` is a whitelisted map written ONLY by ThemePresetService from
  * the company's own already-validated company_theme_settings row — never
@@ -27,7 +40,7 @@ class ThemePreset extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(new TenantScope);
+        static::addGlobalScope(new SharedOrTenantScope);
     }
 
     /**

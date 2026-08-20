@@ -4,7 +4,7 @@ namespace App\Services\Theme;
 
 use App\Models\Company;
 use App\Models\CompanyThemeSetting;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\ThemePreset;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -67,6 +67,17 @@ class ThemePresetService
      */
     public const SYSTEM_PRESET_READ_ONLY_MESSAGE = 'ชุดสีนี้เป็นชุดมาตรฐานของระบบ จึงเปลี่ยนชื่อหรือลบไม่ได้ — กด "ใช้ชุดนี้" เพื่อนำไปใช้ได้ตามปกติ';
 
+    /**
+     * TASK-217 — the refusal a COMPANY ADMIN sees when they try to rename
+     * or delete a ชุดกลาง (company_id = NULL).
+     *
+     * 422 and not 403, for the same reason as the system message above:
+     * the row is legitimately theirs to SEE and to APPLY, and a 403 would
+     * wrongly suggest they are looking at another tenant's data. What they
+     * may not do is change a palette every other company is also using.
+     */
+    public const SHARED_PRESET_READ_ONLY_MESSAGE = 'ชุดสีนี้เป็นชุดกลางที่ใช้ร่วมกันทุกบริษัท จึงเปลี่ยนชื่อหรือลบได้เฉพาะ Super Admin — กด "ใช้ชุดนี้" เพื่อนำไปใช้กับบริษัทนี้ได้ตามปกติ';
+
     public function __construct(private ThemeService $themeService) {}
 
     /**
@@ -112,7 +123,21 @@ class ThemePresetService
      * A company with no theme row yet snapshots all-nulls, which is a
      * legitimate preset: "back to the platform defaults".
      */
-    public function snapshot(Company $company, string $name, ?User $actor = null): ThemePreset
+    /**
+     * @param  Company  $company  the company whose CURRENT colours are captured.
+     *                            Always required, even for a shared preset:
+     *                            a palette has to be a snapshot OF something.
+     * @param  bool  $shared  TASK-217 — store it as ชุดกลาง (company_id =
+     *                        NULL) instead of as this company's own. The
+     *                        colours are identical either way; only the
+     *                        ownership of the resulting row differs. Whether
+     *                        the CALLER is allowed to ask for this is
+     *                        StoreThemePresetRequest's question, not this
+     *                        method's — it is a Super-Admin-only parameter
+     *                        there, stripped for everyone else before
+     *                        validation.
+     */
+    public function snapshot(Company $company, string $name, ?User $actor = null, bool $shared = false): ThemePreset
     {
         /*
          * RESOLVED colours, the same as provisionDefault() — ag-lead, closing
@@ -135,7 +160,10 @@ class ThemePresetService
          * auto-provisioned preset already does.
          */
         return ThemePreset::create([
-            'company_id' => $company->id,
+            // TASK-217 — NULL is not "missing", it is the ownership
+            // statement: this palette belongs to the platform, not to
+            // $company. $company still decides what COLOURS get captured.
+            'company_id' => $shared ? null : $company->id,
             'name' => $name,
             'colors' => $this->resolvedColors($company),
             'created_by' => $actor?->id,
@@ -177,7 +205,7 @@ class ThemePresetService
          * the durable identifier going forward, the name is the only thing
          * an un-migrated row has.
          */
-        $existing = ThemePreset::withoutGlobalScope(TenantScope::class)
+        $existing = ThemePreset::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('company_id', $company->id)
             ->where(fn ($q) => $q
                 ->where('key', self::DEFAULT_PRESET_KEY)
@@ -229,7 +257,7 @@ class ThemePresetService
     public function provisionDesignedPalettes(Company $company): void
     {
         foreach ($this->designedPalettes() as $palette) {
-            $exists = ThemePreset::withoutGlobalScope(TenantScope::class)
+            $exists = ThemePreset::withoutGlobalScope(SharedOrTenantScope::class)
                 ->where('company_id', $company->id)
                 ->where('key', $palette['key'])
                 ->exists();
@@ -316,21 +344,40 @@ class ThemePresetService
          * wins" — quietly ignoring the caller's stated target is how you
          * get an admin who is certain they edited company B.
          */
-        if ($preset->company_id !== $companyId) {
+        /*
+         * TASK-217 — a SHARED preset (company_id = NULL) is exempt from the
+         * match: belonging to nobody, it cannot disagree with anybody. It
+         * lands on the company the caller named, which is the entire point
+         * of a ชุดกลาง.
+         *
+         * The exemption is written as an explicit `!== null` test rather
+         * than by comparing $preset->company_id ?? $companyId — that
+         * spelling would ALSO silently pass a shared preset through a check
+         * whose whole job is to catch mistakes, and it would read as if the
+         * two cases were the same. They are not: one is "no owner", the
+         * other is "the wrong owner".
+         */
+        if ($preset->company_id !== null && $preset->company_id !== $companyId) {
             throw ValidationException::withMessages([
                 'company_id' => 'ชุดสีนี้ไม่ได้เป็นของบริษัทที่เลือกอยู่',
             ]);
         }
 
+        // Owned preset → its own company (unchanged: the two are equal by
+        // the guard above). Shared preset → the company the caller is
+        // acting in, validated by ApplyThemePresetRequest.
+        $targetCompanyId = $preset->company_id ?? $companyId;
+
         return DB::transaction(fn () => CompanyThemeSetting::updateOrCreate(
-            ['company_id' => $preset->company_id],
+            ['company_id' => $targetCompanyId],
             $this->sanitize($preset->colors),
         ));
     }
 
-    public function rename(ThemePreset $preset, string $name): ThemePreset
+    public function rename(ThemePreset $preset, string $name, ?User $actor = null): ThemePreset
     {
         $this->guardNotSystem($preset);
+        $this->guardMayChangeShared($preset, $actor);
 
         $preset->update(['name' => $name]);
 
@@ -345,9 +392,10 @@ class ThemePresetService
      * used to call `$themePreset->delete()` directly, which is the shape
      * that leaves a Policy as the only line of defence.
      */
-    public function delete(ThemePreset $preset): void
+    public function delete(ThemePreset $preset, ?User $actor = null): void
     {
         $this->guardNotSystem($preset);
+        $this->guardMayChangeShared($preset, $actor);
 
         $preset->delete();
     }
@@ -377,6 +425,40 @@ class ThemePresetService
 
         throw ValidationException::withMessages([
             'preset' => self::SYSTEM_PRESET_READ_ONLY_MESSAGE,
+        ]);
+    }
+
+    /**
+     * TASK-217 — the SERVICE half of "a ชุดกลาง is Super-Admin-only to
+     * change", mirroring guardNotSystem() above and re-checking what
+     * ThemePresetPolicy already refused at the HTTP edge.
+     *
+     * Same reasoning as its sibling, and the same reason that sibling
+     * exists: a Policy guards a route, this guards the method. Without it,
+     * a future console command or job that renames a preset outside a Gate
+     * could rename the palette every company on the platform is using.
+     *
+     * $actor is NULLABLE and a null actor is ALLOWED THROUGH — deliberately.
+     * The callers with no user are provisioning, migrations and seeders,
+     * i.e. the platform acting on its own rows; refusing those would break
+     * the only legitimate way a shared preset can be created by code. Every
+     * HTTP path passes the real actor (ThemePresetController), so the guard
+     * is armed exactly where an untrusted caller exists.
+     *
+     * @throws ValidationException
+     */
+    private function guardMayChangeShared(ThemePreset $preset, ?User $actor): void
+    {
+        if ($preset->company_id !== null) {
+            return;
+        }
+
+        if ($actor === null || $actor->isSuperAdmin()) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'preset' => self::SHARED_PRESET_READ_ONLY_MESSAGE,
         ]);
     }
 

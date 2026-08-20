@@ -56,6 +56,220 @@ class ThemePresetTest extends TestCase
         ]);
     }
 
+    // --- TASK-217: shared presets (ชุดกลาง, company_id = NULL) ---------
+    //
+    // The rule this block pins down: a shared preset is READABLE and
+    // APPLICABLE by every company, and WRITABLE by nobody but a Super
+    // Admin. The dangerous half is the second one — a feature that lets
+    // one tenant edit a palette every other tenant is using looks
+    // identical to a working one until somebody renames it.
+
+    private function sharedPreset(string $name = 'ชุดกลางบริษัท'): ThemePreset
+    {
+        return ThemePreset::create([
+            'company_id' => null,
+            'name' => $name,
+            'colors' => self::COLOURS,
+            'created_by' => null,
+        ]);
+    }
+
+    public function test_a_super_admin_can_save_a_preset_as_shared(): void
+    {
+        $company = Company::factory()->create();
+        $this->themeFor($company);
+        $super = User::factory()->superAdmin()->create();
+
+        $this->actingAs($super)->postJson('/api/v1/theme-presets', [
+            'name' => 'โทนกลางแพลตฟอร์ม',
+            'company_id' => $company->id,
+            'is_shared' => true,
+        ])->assertCreated()
+            ->assertJsonPath('data.company_id', null)
+            ->assertJsonPath('data.is_shared', true)
+            // The COLOURS still come from the named company — a shared
+            // preset is a snapshot of something, not an empty row.
+            ->assertJsonPath('data.colors.primary_hex', '#111111');
+
+        $this->assertDatabaseHas('theme_presets', ['name' => 'โทนกลางแพลตฟอร์ม', 'company_id' => null]);
+    }
+
+    /**
+     * The whole point of the feature: company B applies a palette that has
+     * no owner, and it lands on B.
+     */
+    public function test_every_company_sees_and_can_apply_a_shared_preset(): void
+    {
+        $shared = $this->sharedPreset();
+
+        foreach ([Company::factory()->create(), Company::factory()->create()] as $company) {
+            $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+            $this->actingAs($admin)->getJson('/api/v1/theme-presets')
+                ->assertOk()
+                ->assertJsonFragment(['id' => $shared->id, 'is_shared' => true]);
+
+            $this->actingAs($admin)->postJson("/api/v1/theme-presets/{$shared->id}/apply")
+                ->assertOk();
+
+            $this->assertDatabaseHas('company_theme_settings', [
+                'company_id' => $company->id,
+                'primary_hex' => '#111111',
+                'card_bg_hex' => '#666666',
+            ]);
+        }
+    }
+
+    /**
+     * Applying a shared preset must not invent a theme row for company
+     * NULL, and must not touch any company other than the caller's.
+     */
+    public function test_applying_a_shared_preset_writes_only_the_callers_company(): void
+    {
+        $mine = Company::factory()->create();
+        $other = Company::factory()->create();
+        $this->themeFor($other);
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $mine->id]);
+
+        $shared = ThemePreset::create([
+            'company_id' => null,
+            'name' => 'กลาง',
+            'colors' => ['primary_hex' => '#abcdef'] + self::COLOURS,
+            'created_by' => null,
+        ]);
+
+        $this->actingAs($admin)->postJson("/api/v1/theme-presets/{$shared->id}/apply")->assertOk();
+
+        $this->assertDatabaseHas('company_theme_settings', ['company_id' => $mine->id, 'primary_hex' => '#abcdef']);
+        $this->assertDatabaseMissing('company_theme_settings', ['company_id' => null]);
+        // The bystander company keeps the colours it had.
+        $this->assertDatabaseHas('company_theme_settings', ['company_id' => $other->id, 'primary_hex' => '#111111']);
+    }
+
+    /** THE test of this task. A tenant must not be able to edit a platform palette. */
+    public function test_a_company_admin_cannot_rename_or_delete_a_shared_preset(): void
+    {
+        $shared = $this->sharedPreset('ห้ามแก้');
+        $admin = User::factory()->companyAdmin()->create([
+            'company_id' => Company::factory()->create()->id,
+        ]);
+
+        $this->actingAs($admin)
+            ->putJson("/api/v1/theme-presets/{$shared->id}", ['name' => 'โดนแก้แล้ว'])
+            ->assertStatus(422);
+
+        $this->actingAs($admin)
+            ->deleteJson("/api/v1/theme-presets/{$shared->id}")
+            ->assertStatus(422);
+
+        $this->assertDatabaseHas('theme_presets', ['id' => $shared->id, 'name' => 'ห้ามแก้']);
+    }
+
+    public function test_a_super_admin_can_rename_and_delete_a_shared_preset(): void
+    {
+        $shared = $this->sharedPreset();
+        $super = User::factory()->superAdmin()->create();
+
+        $this->actingAs($super)
+            ->putJson("/api/v1/theme-presets/{$shared->id}", ['name' => 'ชื่อใหม่'])
+            ->assertOk()
+            ->assertJsonPath('data.name', 'ชื่อใหม่');
+
+        $this->actingAs($super)->deleteJson("/api/v1/theme-presets/{$shared->id}")->assertNoContent();
+        $this->assertDatabaseMissing('theme_presets', ['id' => $shared->id]);
+    }
+
+    /**
+     * `is_shared` is a Super-Admin-only parameter. A Company Admin who
+     * sends it must get an ordinary company-scoped preset — NOT a 422, and
+     * above all not a shared one.
+     */
+    public function test_a_company_admins_is_shared_flag_is_ignored(): void
+    {
+        $company = Company::factory()->create();
+        $this->themeFor($company);
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $this->actingAs($admin)->postJson('/api/v1/theme-presets', [
+            'name' => 'ของฉันเอง',
+            'is_shared' => true,
+        ])->assertCreated()
+            ->assertJsonPath('data.company_id', $company->id)
+            ->assertJsonPath('data.is_shared', false);
+
+        $this->assertDatabaseMissing('theme_presets', ['name' => 'ของฉันเอง', 'company_id' => null]);
+    }
+
+    /**
+     * Widening the list must not have widened it too far: adding the
+     * shared rows must not drag another TENANT's presets in with them.
+     */
+    public function test_the_list_adds_shared_presets_without_leaking_another_companys(): void
+    {
+        $mine = Company::factory()->create();
+        $theirs = Company::factory()->create();
+        $shared = $this->sharedPreset();
+
+        $ours = ThemePreset::create(['company_id' => $mine->id, 'name' => 'ของเรา', 'colors' => self::COLOURS]);
+        $hers = ThemePreset::create(['company_id' => $theirs->id, 'name' => 'ของเขา', 'colors' => self::COLOURS]);
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $mine->id]);
+
+        $ids = collect($this->actingAs($admin)->getJson('/api/v1/theme-presets')->assertOk()->json('data'))
+            ->pluck('id');
+
+        $this->assertTrue($ids->contains($shared->id));
+        $this->assertTrue($ids->contains($ours->id));
+        $this->assertFalse($ids->contains($hers->id), 'another company\'s preset leaked into the list');
+    }
+
+    /** Same question for a SUPER ADMIN, whom the global scope does not constrain. */
+    public function test_a_super_admin_list_is_still_one_company_plus_the_shared_ones(): void
+    {
+        $a = Company::factory()->create();
+        $b = Company::factory()->create();
+        $shared = $this->sharedPreset();
+        $ofA = ThemePreset::create(['company_id' => $a->id, 'name' => 'A', 'colors' => self::COLOURS]);
+        $ofB = ThemePreset::create(['company_id' => $b->id, 'name' => 'B', 'colors' => self::COLOURS]);
+
+        $super = User::factory()->superAdmin()->create();
+
+        $ids = collect($this->actingAs($super)->getJson("/api/v1/theme-presets?company_id={$a->id}")
+            ->assertOk()->json('data'))->pluck('id');
+
+        $this->assertTrue($ids->contains($shared->id));
+        $this->assertTrue($ids->contains($ofA->id));
+        $this->assertFalse($ids->contains($ofB->id));
+    }
+
+    /** An Agent gets nothing here, shared or not. */
+    public function test_an_agent_still_sees_no_shared_preset(): void
+    {
+        $shared = $this->sharedPreset();
+        $agent = User::factory()->agent()->create([
+            'company_id' => Company::factory()->create()->id,
+        ]);
+
+        $this->actingAs($agent)->getJson('/api/v1/theme-presets')->assertForbidden();
+        $this->actingAs($agent)->postJson("/api/v1/theme-presets/{$shared->id}/apply")->assertForbidden();
+    }
+
+    /**
+     * The SERVICE half of the guard, reached without any Gate — the shape a
+     * console command or job would take.
+     */
+    public function test_the_service_refuses_a_company_admin_changing_a_shared_preset_even_without_a_gate(): void
+    {
+        $shared = $this->sharedPreset();
+        $admin = User::factory()->companyAdmin()->create([
+            'company_id' => Company::factory()->create()->id,
+        ]);
+        $service = app(ThemePresetService::class);
+
+        $this->expectException(ValidationException::class);
+        $service->rename($shared, 'เปลี่ยนสิ', $admin);
+    }
+
     // --- Snapshot -----------------------------------------------------
 
     public function test_saving_a_preset_reads_the_companys_current_colours_server_side(): void

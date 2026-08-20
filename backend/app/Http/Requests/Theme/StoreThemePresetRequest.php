@@ -40,12 +40,44 @@ class StoreThemePresetRequest extends FormRequest
     }
 
     /**
+     * TASK-217 — `is_shared` is a SUPER-ADMIN-ONLY parameter, stripped for
+     * everyone else before validation.
+     *
+     * Stripped rather than rejected, matching how ResolvesPresetCompany
+     * already treats `company_id` for a Company Admin: a field that has no
+     * meaning for this actor should not produce a 422 about a control they
+     * were never shown. What must never happen is a Company Admin creating
+     * a palette that lands on every other tenant's screen, and that is what
+     * this removal guarantees — validated() cannot contain a key that was
+     * deleted from the input bag.
+     *
+     * Both bags, same reason as the trait's own note: JSON body here, query
+     * string defensively.
+     */
+    protected function prepareForValidation(): void
+    {
+        // The trait's copy handles company_id; calling it keeps that
+        // behaviour instead of shadowing it.
+        $this->prepareCompanyForValidation();
+
+        if ($this->user()?->isSuperAdmin()) {
+            return;
+        }
+
+        $this->getInputSource()->remove('is_shared');
+        $this->query->remove('is_shared');
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function rules(): array
     {
         return $this->companyRules() + [
             'name' => ['required', 'string', 'max:100'],
+            // Optional: omitting it means "save it for this company only",
+            // which is the behaviour every caller had before this task.
+            'is_shared' => ['sometimes', 'boolean'],
         ];
     }
 }

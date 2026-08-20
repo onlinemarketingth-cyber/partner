@@ -146,13 +146,6 @@ const navItems: NavItem[] = [
     ],
   },
   { name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' }, subMenus: [{ name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' } }] },
-  {
-    name: 'company-management',
-    icon: 'building',
-    label: { th: 'จัดการบริษัท', en: 'Companies' },
-    superAdminOnly: true,
-    subMenus: [{ name: 'company-management', icon: 'building', label: { th: 'จัดการบริษัท', en: 'Companies' } }],
-  },
   // TASK-048 / ADR-012 — Client (Contact) + Referral/Pipeline (Deal) are
   // one sales workflow, so they live under a single "การขาย" pillar with
   // two sub-menus, mirroring the standard CRM two-object model
@@ -172,23 +165,55 @@ const navItems: NavItem[] = [
   },
   // Untouched by TASK-043 (spec §4/§5) — stays a distinct top-level
   // pillar, not folded into agent-management's submenu.
-  { name: 'commission-management', icon: 'money', label: { th: 'Commission', en: 'Commission' }, subMenus: [{ name: 'commission-management', icon: 'money', label: { th: 'Commission', en: 'Commission' } }] },
-  // ADR-011 (TASK-034) — also untouched by TASK-043.
+  //
+  // TASK-219 (human request, 2026-08-20) — "แผนคอมมิชชั่น" used to be its
+  // OWN top-level pillar sitting next to this one. Two neighbouring
+  // pillars both about commission, one holding the money that was paid and
+  // one holding the rules that decide it, is a distinction the top bar
+  // could not express: the icons said "money" and "layers" and nothing
+  // said they were two halves of the same subject.
+  //
+  // They are now one pillar with two sub-items, which is what row 2 is
+  // for. The human's own framing — "แยกระหว่าง จ่ายคอมมิชชั่น กับตั้งค่า" —
+  // is why the FIRST sub-item is relabelled too: leaving it as
+  // "Commission" beside "ตั้งค่า" would name the parent twice and still
+  // never say what the page actually holds (the payout ledger).
+  //
+  // Route names are UNCHANGED (/commission and /commission-plans), so
+  // every existing link and bookmark keeps working — including the
+  // signpost ProductCatalogView renders (TASK-213) and the readiness
+  // links inside CommissionPlansView itself.
   {
-    name: 'commission-plan-settings',
-    icon: 'layers',
-    label: { th: 'แผนคอมมิชชั่น', en: 'Commission Plans' },
-    subMenus: [{ name: 'commission-plan-settings', icon: 'layers', label: { th: 'แผนคอมมิชชั่น', en: 'Commission Plans' } }],
+    name: 'commission-management',
+    icon: 'money',
+    label: { th: 'Commission', en: 'Commission' },
+    subMenus: [
+      { name: 'commission-management', icon: 'money', label: { th: 'จ่ายคอมมิชชั่น', en: 'Payouts' } },
+      // ADR-011 (TASK-034) — moved in from its own top-level pillar. NOT
+      // superAdminOnly: a Company Admin has always been able to set their
+      // own company's commission rules, and folding the page into another
+      // pillar must not quietly take that away.
+      { name: 'commission-plan-settings', icon: 'layers', label: { th: 'ตั้งค่า', en: 'Settings' } },
+    ],
   },
   // TASK-055 / ADR-018 — per-company white-label of the Agent Portal. Its own
-  // top-level pillar: no existing pillar is a home for a Company-Admin-facing
-  // branding screen ("จัดการบริษัท" is Super-Admin-only, the rest are unrelated
-  // business domains). 'display_cog' (monitor + gear) isn't used elsewhere.
+  // top-level pillar: no existing pillar was a home for a Company-Admin-facing
+  // branding screen (the rest are unrelated business domains). 'display_cog'
+  // (monitor + gear) isn't used elsewhere. As of 2026-08-20 this pillar is
+  // also where "จัดการบริษัท" lives (see its sub-item below).
   {
     name: 'theme-settings',
     icon: 'display_cog',
     label: { th: 'ตั้งค่าระบบ', en: 'System settings' },
     subMenus: [
+      // 2026-08-20 (human request) — "จัดการบริษัท" used to be its own
+      // top-level pillar. Moved in here, ABOVE "ธีม / แบรนด์", because
+      // that is the order the human asked for and because it reads
+      // correctly: pick/inspect the company first, then style it. It
+      // stays Super-Admin-only via the per-sub-item flag (same mechanism
+      // as "ตั้งค่า Email SMTP" below) — the pillar itself must remain
+      // open to Company Admin, who still needs "ธีม / แบรนด์".
+      { name: 'company-management', icon: 'building', label: { th: 'จัดการบริษัท', en: 'Companies' }, superAdminOnly: true },
       { name: 'theme-settings', icon: 'display_cog', label: { th: 'ธีม / แบรนด์', en: 'Theme / Brand' } },
       // TASK-202 (human request, 2026-08-17) — these 3 used to be per-company
       // setting cards stacked below ThemeSettingsView's tabbed editor. Split

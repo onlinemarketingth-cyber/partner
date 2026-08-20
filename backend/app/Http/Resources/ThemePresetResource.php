@@ -38,6 +38,12 @@ class ThemePresetResource extends JsonResource
             // enforcement: the server refuses both regardless (Policy +
             // Service), so a client that ignores this flag gets a 422.
             'is_system' => (bool) $this->is_system,
+            // TASK-217 — ชุดกลาง: company_id is NULL, so this palette
+            // belongs to the platform and every company may apply it. The
+            // frontend needs it as a flag rather than inferring it from a
+            // null company_id, because "no company" and "the company field
+            // was not loaded" look identical from there.
+            'is_shared' => $this->company_id === null,
             // The seeding handle. Useful to a support engineer asking
             // "which palette is this row", and harmless to expose — it
             // names a platform palette, not anything tenant-specific.

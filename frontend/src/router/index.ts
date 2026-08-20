@@ -12,6 +12,16 @@ const router = createRouter({
       component: () => import('../views/LoginView.vue'),
       meta: { public: true },
     },
+    // TASK-218 (human decision, 2026-08-20) — where a Super Admin lands
+    // instead of the agent dashboard. `public: true` so the guard below
+    // does not bounce it back into itself; see the guard's own comment,
+    // and SuperAdminNoticeView's docblock for why the screen exists.
+    {
+      path: '/admin-account',
+      name: 'super-admin-notice',
+      component: () => import('../views/SuperAdminNoticeView.vue'),
+      meta: { public: true },
+    },
     // ADR-005 / TASK-018 — public self-registration + email verification.
     // Both must be reachable by an anonymous visitor, hence `public: true`
     // like /login above (see the router.beforeEach guard below).
@@ -257,8 +267,41 @@ router.beforeEach(async (to) => {
   // either way; this branch never runs for them.
   const hasRefToken = typeof to.query.ref === 'string' && to.query.ref.trim().length > 0
 
+  /*
+   * TASK-218 — the Agent Portal is for agents. A Super Admin gets the
+   * notice screen instead of an agent dashboard rendered from their own
+   * (admin) identity: zero XP, no team, no orders — which reads as a
+   * broken app rather than as "wrong role for this door". Full reasoning,
+   * including why the two apps share one session at all, is in
+   * SuperAdminNoticeView.vue's docblock.
+   *
+   * Scoped to `!to.meta.public` DELIBERATELY. The public token pages
+   * (/p/:token product share, /pay/:token, /l/:token affiliate) must stay
+   * openable by anyone holding the link — including a Super Admin
+   * checking that a link works, which is the single most likely reason
+   * they would ever open this app. Blocking those would recreate the exact
+   * "opened my own link and it looked broken" complaint the /register?ref=
+   * exception below already exists to prevent.
+   *
+   * NOT a security boundary — a client-side guard never is. Every endpoint
+   * is gated server-side by Policies/Abilities (CLAUDE.md §5). This removes
+   * confusion, nothing more.
+   *
+   * super_admin ONLY, not company_admin: nobody has reported the same
+   * confusion for that role, and locking a role out of a whole app on a
+   * guess is not a call to make for the human (BR-7).
+   */
+  if (!to.meta.public && authStore.user?.role === 'super_admin') {
+    return { name: 'super-admin-notice' }
+  }
+
   if (to.name === 'login' && authStore.isAuthenticated) {
-    return { name: 'home' }
+    // A Super Admin who just signed in here would otherwise be sent to
+    // 'home' only for the rule above to bounce them again on the next
+    // pass — one hop, stated directly.
+    return authStore.user?.role === 'super_admin'
+      ? { name: 'super-admin-notice' }
+      : { name: 'home' }
   }
 
   if (to.name === 'register' && authStore.isAuthenticated && !hasRefToken) {
