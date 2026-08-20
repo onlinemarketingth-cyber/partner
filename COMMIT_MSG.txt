@@ -1,0 +1,105 @@
+feat(links): one short-link system across all seven link types, with stats
+
+Seven kinds of public link existed in six unrelated tables, none of them
+connected. Token lengths were 64, 40 and unbounded; four revoked softly,
+affiliate links HARD DELETED, pay links could not be switched off at all;
+one had per-click history, two had a bare counter, four counted nothing.
+Nobody could answer "how many links does this company have out in the
+world, and are any of them working".
+
+THE COMPANY SIGNUP LINK DID NOT EXIST. company_invite_codes has been in
+the schema since ADR-005 and the app has only ever READ it: no route, no
+controller, no service, no policy, no screen, and no code anywhere that
+could create one. Setting a company up meant typing an INSERT against
+production, and what it produced was not a link — a recruit reached
+/register on their own and typed the code in. The branded
+/login?company=<slug> link people were already sharing only themed the
+login page; RegisterView never read that parameter. That is the whole of
+what "it does not exist" meant, and it is built here.
+
+The design adds a SECOND DOOR rather than replacing the first. The 40-
+and 64-character URLs are in LINE conversations, customers' inboxes and
+posts that were shared onward; rewriting them breaks links the CUSTOMER
+is holding, and they just see a dead page. So tracked_links is a registry
+that resolves to the same rows, resolvers try the short code first and
+fall back to the legacy token, and both stay open indefinitely. Tests
+pin that, so a later "nobody uses the old ones now" has to argue.
+
+Bot previews cannot inflate the counts, and that is the point rather
+than a detail. Counting happens when the SPA calls the resolve API, and
+LINE/Facebook take the HTML without running the JavaScript — they never
+reach it. Not filtered afterwards; out of reach from the start. The
+redirect-service design we did not build would have needed a
+hand-maintained crawler list forever, and an agent who shares a link and
+immediately sees "5 opens" before any human looked stops believing the
+number permanently.
+
+Decisions worth the words. The alphabet drops 0 O o 1 l I because codes
+get read off flyers and business cards, and each of those six is a
+support ticket from somebody who typed it correctly as far as they could
+tell. Payment codes are 14 characters where every other group gets 10:
+that page shows an order's contents and total and was behind a
+40-character token, so a shorter front door would have been reducing
+protection to buy convenience. Prefixes (/p/ /pay/ /j/ /c/) instead of a
+flat /{code}, because this app serves real pages at the top level and the
+first future page colliding with a live code would kill that customer's
+link with nothing connecting the two events. Conversion rate divides by
+UNIQUE opens — four reads before buying is one person who converted, and
+agents use this number to choose where to spend effort. Nothing-opened-
+yet is null, never 0%: "0%" says the link is failing, "—" says nobody has
+looked, and those call for opposite actions.
+
+Two old bugs fixed on the way. Affiliate destroy() hard-deleted and
+affiliate_link_clicks cascades, so an agent tidying up a link erased
+every click it ever recorded — the only real per-click history in the
+app, and the only one of six tables that hard-deleted at all. And
+product_share_links.view_count has been incremented on every public page
+load since TASK-056 and rendered by no screen in either frontend; it is
+surfaced now as legacy_view_count, reported separately from click_count
+because the two count different things over different periods and a sum
+would be true of neither.
+
+Three open questions were decided rather than asked, per instruction, and
+are recorded in the doc with reasons. Company Admins may mint the company
+signup link (it is recruitment material, same category as the theme and
+branded login link they already own; routing it through Super Admin
+produces one permanent link nobody dares expire, which is worse). Agents
+may not — a company-wide link attributes to nobody, so it would walk
+straight past ADR-025's is_team_leader gate. Legacy links work forever.
+An agent sees every number on their own links and none on anybody else's,
+checked on show() too because an id is guessable.
+
+48 tests added; 1706 backend, 153 frontend, 117 frontend-admin, pint and
+eslint clean, vue-tsc --build clean. Two existing tests were REPLACED
+with their inverse rather than deleted, each with the reason inline:
+the expiry NOT NULL constraint (paper does not expire; the API still
+requires an explicit answer) and the affiliate hard delete (that line was
+the bug, not the spec).
+
+Clicking it on a real browser found three bugs the suite could not, and
+all three are fixed here. The company signup page told a recruit "step 2
+of 2" above "enter your company's invite code" — on a screen with no code
+field and no way back to step 1. The same two computeds already suppressed
+both for the ?ref= arrival, with a comment explaining why; the company link
+is the identical situation and was simply not covered. /in/<code> had no
+route in this SPA, and a missing route here does not 404 — RouterView
+renders nothing, so the visitor gets the app frame wrapped around an empty
+page, which reads as "the site is broken" rather than "that link is wrong".
+Chasing it turned up the sales-material link being built against the
+frontend origin when it is the API that serves it. And pressing Share still
+returned the 64-character URL, because minting sat after
+ProductShareLinkService's idempotent early return — so a short code could
+only ever be issued for a product nobody had shared before, which in a real
+database is the rarest case. Each of the three is now pinned by a test that
+fails against the old code.
+
+NOT DONE, and stated plainly: four of the seven groups (/j/ /pay/ /l/ /m/)
+have never been clicked, and no conversion counter has been seen leave zero
+— that half of the feature is proven by tests alone. Five migrations ship
+here where the last batch had none, so back the database up. Nothing is
+backfilled — a new code is not the code anybody is holding — though an
+existing product share does mint one the next time an agent presses Share. used_count on the company signup link
+has no row lock, for the same recorded reason the duplicate-document
+check in that path does not — flagged in the code where it matters. QR is
+not yet wired into the new screens, and the visits table has no archive
+plan yet.

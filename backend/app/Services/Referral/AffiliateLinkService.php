@@ -2,8 +2,10 @@
 
 namespace App\Services\Referral;
 
+use App\Enums\TrackedLinkGroup;
 use App\Models\AffiliateLink;
 use App\Models\User;
+use App\Services\Link\TrackedLinkService;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -12,6 +14,8 @@ use Illuminate\Validation\ValidationException;
 // unauthenticated (consumed via the two public routes).
 class AffiliateLinkService
 {
+    public function __construct(private readonly TrackedLinkService $trackedLinks) {}
+
     /**
      * @param  array<string, mixed>  $data
      */
@@ -30,7 +34,7 @@ class AffiliateLinkService
             ]);
         }
 
-        return AffiliateLink::create([
+        $link = AffiliateLink::create([
             'company_id' => $actor->company_id,
             'agent_id' => $agentId,
             'product_id' => $data['product_id'] ?? null,
@@ -38,5 +42,13 @@ class AffiliateLinkService
             // rule 5), same convention as SalesMaterialShareLinkService.
             'token' => Str::random(64),
         ]);
+
+        // TASK-235 — the short code. The old URL was the worst of the six:
+        // `api.partner.syncvision.io/api/v1/l/<64 characters>`, which
+        // routes/api.php itself admits is not actually short. It keeps
+        // working; this is simply the one worth sharing.
+        $this->trackedLinks->mintFor(TrackedLinkGroup::Affiliate, $link, $actor);
+
+        return $link;
     }
 }

@@ -2,9 +2,12 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\TrackedLinkGroup;
+use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Models\AffiliateLink;
 use App\Models\Company;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Referral\AffiliateLinkClickService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -21,9 +24,21 @@ use Illuminate\Http\Request;
  */
 class AffiliateLinkRedirectController extends Controller
 {
+    use ResolvesTrackedLink;
+
     public function show(string $token, Request $request, AffiliateLinkClickService $clickService): RedirectResponse
     {
-        $link = AffiliateLink::withoutGlobalScopes()->where('token', $token)->first();
+        // TASK-235 — `{token}` is now EITHER the short code from
+        // /l/W2K7NRQ4TB or the original 64-character token. Both keep
+        // working; only the short one records a tracked visit, because only
+        // it has a tracked link behind it.
+        $link = $this->resolveViaTrackedLink(
+            $token,
+            TrackedLinkGroup::Affiliate,
+            AffiliateLink::class,
+            $request,
+            app(TrackedLinkService::class),
+        ) ?? AffiliateLink::withoutGlobalScopes()->where('token', $token)->first();
 
         abort_if(! $link, 404);
 

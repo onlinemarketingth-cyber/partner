@@ -48,9 +48,23 @@ class AffiliateLinkController extends Controller
         return new AffiliateLinkResource($affiliateLink->loadCount(['clicks', 'attributedReferrals']));
     }
 
+    /**
+     * TASK-236 — REVOKE, not delete.
+     *
+     * This used to call `->delete()`. `affiliate_link_clicks.link_id`
+     * cascades, so an agent tidying up a link they no longer used silently
+     * destroyed every click it had ever recorded — the only real per-click
+     * history in the whole application, and the company's reporting quietly
+     * changed shape underneath them with nothing to warn anyone.
+     *
+     * It was also the only one of the six link tables that hard-deleted at
+     * all; the other five have set a `revoked_at` all along. The response
+     * stays 204 so no caller has to change.
+     */
     public function destroy(AffiliateLink $affiliateLink): Response
     {
-        $affiliateLink->delete();
+        $affiliateLink->update(['revoked_at' => now()]);
+        $affiliateLink->trackedLink()->withoutGlobalScopes()->first()?->update(['revoked_at' => now()]);
 
         return response()->noContent();
     }

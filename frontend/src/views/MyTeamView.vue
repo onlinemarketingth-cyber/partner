@@ -183,6 +183,8 @@ interface AgentInviteLink {
   label: string | null
   token: string
   public_url: string
+  /** TASK-235 — /j/<code>. Null before the feature; fall back, never swap. */
+  short_url: string | null
   used_count: number
   max_uses: number | null
   expires_at: string | null
@@ -697,7 +699,7 @@ const shareLinkId = ref<number | null>(null)
 function openShare(link: AgentInviteLink) {
   // Order matters: ShareLinkModal watches `show` and renders the QR from
   // `url` at that moment, so the url must already be in place.
-  shareUrl.value = link.public_url
+  shareUrl.value = link.short_url ?? link.public_url
   shareLinkId.value = link.id
   shareHeading.value = link.label || 'ลิงก์ชวนเข้าทีม'
   showShare.value = true

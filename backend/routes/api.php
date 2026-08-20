@@ -39,6 +39,7 @@ use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
 use App\Http\Controllers\Api\V1\CompanyController;
+use App\Http\Controllers\Api\V1\CompanyInviteCodeController;
 use App\Http\Controllers\Api\V1\CompanyThemeController;
 use App\Http\Controllers\Api\V1\ComplianceReportController;
 use App\Http\Controllers\Api\V1\ConfigHealthReportController;
@@ -90,6 +91,7 @@ use App\Http\Controllers\Api\V1\ShareLinkEmailController;
 use App\Http\Controllers\Api\V1\StorefrontBannerController;
 use App\Http\Controllers\Api\V1\TeamVisibilitySettingController;
 use App\Http\Controllers\Api\V1\ThemePresetController;
+use App\Http\Controllers\Api\V1\TrackedLinkController;
 use App\Http\Controllers\Api\V1\UserBadgeController;
 use App\Http\Controllers\Api\V1\UserCertificationController;
 use App\Http\Controllers\Api\V1\UserController;
@@ -209,6 +211,11 @@ Route::prefix('v1')->group(function () {
     // TASK-055 / ADR-018 — PUBLIC per-company theme by slug, for pre-login
     // white-label branding. Unauthenticated + throttled, resolved outside
     // TenantScope; ThemeResource exposes ONLY presentational fields (§6).
+    // TASK-235 (UAT) — /in/<code> needs the slug to become the branded
+    // login page it is short for. Slug only; it is already in the URL every
+    // company shares. Same throttle tier as the other public resolvers.
+    Route::get('/public/login-links/{code}', [RegisterController::class, 'resolveLoginLink'])
+        ->middleware('throttle:30,1');
     Route::get('/public/theme/{slug}', [PublicThemeController::class, 'showBySlug'])
         ->middleware('throttle:60,1')
         ->name('public-theme.show');
@@ -618,6 +625,52 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('cert-tiers', CertTierController::class)
             ->parameters(['cert-tiers' => 'cert_tier'])
             ->except('show');
+
+        /*
+         * TASK-233 — the company's own signup link.
+         *
+         * THIS IS THE FIRST WRITE PATH THIS TABLE HAS EVER HAD.
+         * `company_invite_codes` was added by ADR-005 and only ever read;
+         * until today the only way a code came into existence outside a
+         * test factory was somebody typing an INSERT into the database.
+         *
+         * `destroy` REVOKES (see the controller) — deleting would orphan
+         * users.registered_via_invite_code_id on agents who still work here.
+         *
+         * Super Admin and Company Admin, per CompanyInviteCodePolicy; no
+         * `show` because the admin list already carries every field the one
+         * screen needs, and a second shape is a second thing to keep true.
+         */
+        Route::apiResource('company-invite-codes', CompanyInviteCodeController::class)
+            ->parameters(['company-invite-codes' => 'company_invite_code'])
+            ->except('show');
+
+        // TASK-235 — the short form of /login?company=<slug>. POST because
+        // minting writes a row, and ThemeResource (where the long link
+        // lives) is read anonymously on every themed page load.
+        Route::post('/company-login-link', [CompanyInviteCodeController::class, 'loginLink']);
+
+        /*
+         * TASK-234 — every link in the system, read through one endpoint.
+         *
+         * OPEN TO EVERY AUTHENTICATED ROLE, narrowed in the controller: an
+         * Agent sees only links they created, a Company Admin sees their
+         * company, a Super Admin sees everything or one named company.
+         * Before this, an agent had to visit four separate screens to find
+         * their own links and nothing anywhere showed a company its links
+         * as a whole — splitting this per group would rebuild that problem.
+         *
+         * NO `store`, NO `destroy`. Links are minted by whichever service
+         * owns the thing being linked to, because each carries its own
+         * rules (BR-1 certification, team-leader flag, order state) and a
+         * generic create endpoint would have to duplicate all of them.
+         * Deleting is not offered at all: a deleted link takes its visit
+         * history with it and NULLs the attribution on the orders and
+         * agents it produced. Revoking happens on the underlying thing.
+         */
+        Route::apiResource('tracked-links', TrackedLinkController::class)
+            ->parameters(['tracked-links' => 'trackedLink'])
+            ->only(['index', 'show', 'update']);
         Route::apiResource('modules', ModuleController::class);
         /*
          * TASK-151 / ADR-031 §2.1 — BULK REORDER, one endpoint per parent.

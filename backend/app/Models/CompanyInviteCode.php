@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasTrackedLink;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,11 +18,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class CompanyInviteCode extends Model
 {
     use HasFactory;
+    use HasTrackedLink;
 
     protected $fillable = [
         'company_id',
         'code',
         'label',
+        'max_uses',
+        'used_count',
         'expires_at',
         'revoked_at',
         'created_by_user_id',
@@ -32,6 +36,8 @@ class CompanyInviteCode extends Model
         return [
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
+            'max_uses' => 'integer',
+            'used_count' => 'integer',
         ];
     }
 
@@ -55,6 +61,23 @@ class CompanyInviteCode extends Model
      */
     public function isValid(): bool
     {
-        return $this->revoked_at === null && $this->expires_at !== null && $this->expires_at->isFuture();
+        if ($this->revoked_at !== null) {
+            return false;
+        }
+
+        // TASK-233 — NULL now means "never expires", not "misconfigured".
+        // Before this the check demanded `expires_at !== null`, because the
+        // column could not be null; a printed signup link has to be able to
+        // outlive any date somebody would have picked for it.
+        if ($this->expires_at !== null && ! $this->expires_at->isFuture()) {
+            return false;
+        }
+
+        // NULL max_uses = unlimited, the same meaning `agent_invite_links`
+        // gives it (ADR-025 §3). Written as an explicit null check rather
+        // than a comparison so that `0` — a code deliberately set to allow
+        // nobody — behaves as the exhausted code it is, instead of falling
+        // through as "no limit".
+        return $this->max_uses === null || $this->used_count < $this->max_uses;
     }
 }

@@ -3,6 +3,7 @@
 namespace Tests\Feature\Referral;
 
 use App\Models\AffiliateLink;
+use App\Models\AffiliateLinkClick;
 use App\Models\CertTier;
 use App\Models\Company;
 use App\Models\User;
@@ -85,6 +86,24 @@ class AffiliateLinkTest extends TestCase
             ->assertNotFound();
     }
 
+    /**
+     * AMENDED (TASK-236, 2026-08-20) — the last line used to be
+     * `assertDatabaseMissing`, and that was the bug rather than the spec.
+     *
+     * `destroy()` hard-deleted the row, and `affiliate_link_clicks.link_id`
+     * cascades — so an agent tidying up a link they no longer used silently
+     * destroyed every click it had ever recorded. That is the only real
+     * per-click history in this application; the other five link types have
+     * a counter or nothing at all. The company's reporting changed shape
+     * underneath them and nothing warned anybody.
+     *
+     * Affiliate links were also the ONLY one of the six tables that
+     * hard-deleted. Product shares, sales-material shares, agent invites
+     * and company invite codes have set a `revoked_at` all along.
+     *
+     * The endpoint, the verb and the 204 are all unchanged, so no caller
+     * had to move. Only the row survives now.
+     */
     public function test_agent_can_revoke_their_own_link(): void
     {
         $company = Company::factory()->create();
@@ -95,6 +114,32 @@ class AffiliateLinkTest extends TestCase
             ->deleteJson("/api/v1/affiliate-links/{$link->id}")
             ->assertNoContent();
 
-        $this->assertDatabaseMissing('affiliate_links', ['id' => $link->id]);
+        $this->assertDatabaseHas('affiliate_links', ['id' => $link->id]);
+        $this->assertNotNull($link->fresh()->revoked_at);
+        $this->assertFalse($link->fresh()->isUsable());
+    }
+
+    public function test_revoking_a_link_keeps_its_click_history(): void
+    {
+        // The whole point of TASK-236. Before it, this assertion was
+        // impossible to write: the clicks went with the row.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $link = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id]);
+
+        AffiliateLinkClick::create([
+            'company_id' => $company->id,
+            'link_id' => $link->id,
+            'clicked_at' => now(),
+            'ip_hash' => str_repeat('a', 64),
+        ]);
+
+        $this->actingAs($agent)->deleteJson("/api/v1/affiliate-links/{$link->id}")->assertNoContent();
+
+        $this->assertSame(
+            1,
+            AffiliateLinkClick::withoutGlobalScopes()->where('link_id', $link->id)->count(),
+            'revoking a link must never erase the evidence of how well it worked',
+        );
     }
 }

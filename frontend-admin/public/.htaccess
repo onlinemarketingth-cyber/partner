@@ -10,28 +10,3 @@
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule . /index.html [L]
 </IfModule>
-
-# --- Cache policy (TASK-229, 2026-08-20) ---
-#
-# index.html must NEVER be reused from cache without asking the server
-# first. Vite fingerprints every file under assets/ (index-<hash>.js), so
-# those are safe to cache for a long time — but index.html is the ONLY
-# thing that says WHICH hash is current. Cache it and the browser keeps
-# loading last week's JS from a perfectly up-to-date server, forever.
-#
-# That is not hypothetical: on 2026-08-20 a human reported video uploads
-# still capped at 200 MB hours after the TASK-226 fix went live. The fix
-# was on the server (assets/Icon-CoUDrwZ_.js contained it); the browser
-# was running the pre-deploy bundle because it still had the old
-# index.html. The server sent NO Cache-Control for it, so the browser
-# fell back to heuristic caching off Last-Modified and decided on its own
-# how long to keep it.
-#
-# `no-cache` does not mean "do not store" — it means "revalidate before
-# use". With Last-Modified/ETag already being sent, an unchanged page
-# costs one 304 rather than a full download, so this is close to free.
-<IfModule mod_headers.c>
-  <FilesMatch "\.html$">
-    Header set Cache-Control "no-cache, must-revalidate"
-  </FilesMatch>
-</IfModule>

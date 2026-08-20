@@ -91,11 +91,40 @@ const refInviterName = ref('')
  * no ?ref= must never see a "checking your link" line for a link they do not
  * have, not even for one frame.
  */
-const resolvingRef = ref(typeof route.query.ref === 'string' && route.query.ref.trim().length > 0)
+// TASK-232 — /j/<code> puts the token in the PATH, so seeding this from
+// the query alone would skip the "checking your link" line for exactly the
+// links this feature added. Still seeded at setup rather than defaulted to
+// true: a visitor with no link must never see that line for one frame.
+const hasTeamLink =
+  (typeof route.query.ref === 'string' && route.query.ref.trim().length > 0) ||
+  (route.name === 'team-signup-link' && typeof route.params.code === 'string')
+const resolvingRef = ref(hasTeamLink)
 /** Explains a dropped token on the invite step. Never a dead end. */
 const refFallbackMessage = ref('')
 
 const viaRecruitLink = computed(() => Boolean(refToken.value))
+
+/**
+ * TASK-233 — arrived on /c/<code>, the company's own signup link.
+ *
+ * FOUND IN UAT, 2026-08-20. The two computeds below already suppressed the
+ * step counter and the "enter your invite code" subtitle for a recruit-link
+ * arrival, with a comment explaining exactly why: the link already did what
+ * step 1 exists to do, so advertising a step this person never saw and
+ * cannot go back to is a lie. A company-link arrival is the SAME situation
+ * and was not covered — the page told a recruit to "กรอกรหัสเชิญของบริษัท"
+ * on a screen with no such field, directly under a heading claiming they
+ * were on step 2 of 2.
+ *
+ * Kept as its own flag rather than folded into viaRecruitLink: they are
+ * different arrivals with different copy (one names a team leader, one does
+ * not), and the two places that need "either kind of link" say so.
+ */
+const viaCompanyLink = computed(() => Boolean(companyLinkCode.value))
+const companyLinkCode = ref('')
+
+/** Either kind of link resolved the company for them, so step 1 never happened. */
+const arrivedViaLink = computed(() => viaRecruitLink.value || viaCompanyLink.value)
 
 function fallBackToInviteStep(message: string) {
   refToken.value = ''
@@ -106,10 +135,49 @@ function fallBackToInviteStep(message: string) {
 }
 
 onMounted(async () => {
-  const raw = route.query.ref
+  /*
+   * TASK-233 — /c/<code>: THE COMPANY'S OWN SIGNUP LINK.
+   *
+   * This is the case that did not exist at all before. A recruit reaching
+   * /register with no link had to be handed a code out of band and type it
+   * in; the branded /login?company=<slug> link people were already sharing
+   * only themed the login page and never carried the company into
+   * registration at all.
+   *
+   * Handled here rather than in a view of its own because the ONLY
+   * difference from typing the code by hand is that the code arrives in
+   * the URL. Everything after the resolve is identical, and a second copy
+   * of this form is a second copy to keep true.
+   */
+  const companyCode = typeof route.params.code === 'string' && route.name === 'company-signup-link'
+    ? route.params.code.trim()
+    : ''
+
+  if (companyCode) {
+    resolvingRef.value = false
+    inviteCode.value = companyCode
+    await submitInviteCode()
+
+    // Only once it RESOLVED. A dead link falls back to the ordinary code
+    // form, where the step counter and the "enter your code" line are both
+    // true again and must come back.
+    if (step.value === 'form') companyLinkCode.value = companyCode
+
+    // submitInviteCode() sets step to 'form' on success and leaves an
+    // explanatory error on the invite step otherwise. A dead /c/ link
+    // therefore lands on the ordinary code form with the reason shown,
+    // rather than on a dead end — the same "recover, never strand" rule
+    // the ?ref= path below follows.
+    return
+  }
+
+  // TASK-232 — /j/<code> carries the team invite in the path; ?ref=<token>
+  // is the original 64-character form, which keeps working forever because
+  // leaders have already sent it to people.
+  const raw = route.name === 'team-signup-link' ? route.params.code : route.query.ref
   const token = typeof raw === 'string' ? raw.trim() : ''
   if (!token) {
-    // No ?ref= — ordinary invite-code registration, nothing to resolve.
+    // Neither form of link — ordinary invite-code registration.
     resolvingRef.value = false
     return
   }
@@ -465,7 +533,7 @@ const stepLabel = computed(() => {
   // A recruit-link arrival has ONE step, not two — the link already did what
   // step 1 exists to do. Showing "ขั้นตอน 2 จาก 2" would advertise a step
   // this person never saw and cannot go back to.
-  if (viaRecruitLink.value) return ''
+  if (arrivedViaLink.value) return ''
   if (step.value === 'invite') return t('reg_step_1', 'ขั้นตอน 1 จาก 2', 'Step 1 of 2')
   if (step.value === 'form') return t('reg_step_2', 'ขั้นตอน 2 จาก 2', 'Step 2 of 2')
   return ''
@@ -479,6 +547,14 @@ const introLine = computed(() => {
       'Fill in your details to join the team',
     )
   }
+  if (viaCompanyLink.value) {
+    return t(
+      'reg_sub_company_link',
+      'กรอกข้อมูลเพื่อสมัครเป็นตัวแทน',
+      'Fill in your details to apply as an agent',
+    )
+  }
+
   return t('reg_sub', 'กรอกรหัสเชิญของบริษัทเพื่อเริ่มสมัคร', 'Enter your company invite code to get started')
 })
 </script>
@@ -620,7 +696,15 @@ const introLine = computed(() => {
             {{ resolvedCompanyName }}
           </span>
           <button type="button" @click="changeInviteCode" class="text-xs font-bold text-ink-success/70 hover:text-ink-success underline shrink-0">
-            {{ t('reg_change_code', 'เปลี่ยนรหัส', 'Change code') }}
+            <!--
+              TASK-233 (UAT) — "เปลี่ยนรหัส" is wrong for somebody who
+              arrived on /c/<code> and never typed a code. The escape hatch
+              itself is still right — they may have been sent the wrong
+              company's link — so only the words change.
+            -->
+            {{ viaCompanyLink
+              ? t('reg_wrong_company', 'ไม่ใช่บริษัทนี้?', 'Not this company?')
+              : t('reg_change_code', 'เปลี่ยนรหัส', 'Change code') }}
           </button>
         </div>
 

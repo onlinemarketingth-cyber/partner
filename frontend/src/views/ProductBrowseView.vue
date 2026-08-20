@@ -82,6 +82,8 @@ interface ProductShareLinkItem {
   id: number
   product_id: number
   public_url: string
+  /** TASK-235 — /p/<code>. Null before the feature; fall back, never swap. */
+  short_url: string | null
 }
 interface BannerProduct {
   id: number
@@ -796,7 +798,7 @@ async function shareProduct(product: { id: number; name: string }) {
          goes to. -->
     <ShareLinkModal
       v-model:show="showShareModal"
-      :url="shareLink?.public_url ?? ''"
+      :url="shareLink?.short_url ?? shareLink?.public_url ?? ''"
       :heading="shareHeading"
       email-type="product_share"
       :email-target-id="shareLink?.id ?? null"

@@ -2,8 +2,10 @@
 
 namespace App\Services\Registration;
 
+use App\Enums\TrackedLinkGroup;
 use App\Models\AgentInviteLink;
 use App\Models\User;
+use App\Services\Link\TrackedLinkService;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
@@ -23,6 +25,8 @@ use Illuminate\Validation\ValidationException;
  */
 class AgentInviteLinkService
 {
+    public function __construct(private readonly TrackedLinkService $trackedLinks) {}
+
     /**
      * Mint a new recruit link owned by $agent.
      *
@@ -76,7 +80,7 @@ class AgentInviteLinkService
         // meaningless as a per-campaign figure — the exact opposite of the
         // reason product shares reuse (one running view_count per
         // agent+product).
-        return AgentInviteLink::create([
+        $link = AgentInviteLink::create([
             'company_id' => $agent->company_id,
             'agent_id' => $agent->id,
             'token' => $this->generateUniqueToken(),
@@ -88,6 +92,20 @@ class AgentInviteLinkService
             'max_uses' => $attributes['max_uses'] ?? null,
             'used_count' => 0,
         ]);
+
+        // TASK-232 — the short code. `label` is passed through so the
+        // campaign name the leader typed is on the tracked link too, and
+        // the links dashboard can group by it without joining back here.
+        $this->trackedLinks->mintFor(
+            TrackedLinkGroup::TeamSignup,
+            $link,
+            $agent,
+            $attributes['label'] ?? null,
+        );
+
+        // Not `fresh()` — see ProductShareLinkService for why re-fetching
+        // here costs the caller `wasRecentlyCreated`.
+        return $link;
     }
 
     /**

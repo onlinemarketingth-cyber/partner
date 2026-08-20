@@ -114,10 +114,27 @@ ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "$@"; }
 rsync_to() {
   local src="$1" dst="$2"
   shift 2
+  # --chmod=D755,F644 — FORCE web-readable permissions, do not carry the
+  # local ones over.
+  #
+  # 2026-08-20 (TASK-231): the whole site 404'd on every route except `/`
+  # for an hour. Cause: .htaccess reached the server as mode 600. rsync -a
+  # implies -p, so whatever mode the file happened to have in the working
+  # copy is what production got — and LiteSpeed runs as a different user,
+  # so a 600 .htaccess is a file it cannot read. It does not warn; it just
+  # silently ignores the rewrite rules, and every deep link dies while the
+  # deploy reports success.
+  #
+  # The working copy's modes are an accident of whichever tool last wrote
+  # the file (an editor, a script, a umask). They are not a decision, and
+  # they must not be able to decide whether production serves. Forcing the
+  # mode here fixes it for every file in one place, rather than asking
+  # everyone to remember chmod after touching anything under public/.
+  #
   # Extra args (e.g. --exclude=/admin) let callers protect destination
   # paths that --delete would otherwise remove — see the frontend call
   # below for why this exists.
-  rsync -avz --delete "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
+  rsync -avz --delete --chmod=D755,F644 "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
 }
 
 # ---------- sanity checks ----------
@@ -345,6 +362,56 @@ EOF
     fi
   fi
   ok "backend deployed."
+fi
+
+# ---------- 6. post-deploy smoke check ----------
+#
+# WHY THIS EXISTS (2026-08-20, TASK-231). A change to the frontends'
+# .htaccess killed the SPA fallback rewrite on BOTH apps. Every deep route
+# and every hard refresh 404'd — /login, /products, a customer's product
+# share link, the whole admin app below its root — while `/` still
+# returned 200 and this script printed "Deploy complete" and exited 0.
+#
+# Nothing in the deploy was wrong from the deployer's point of view: files
+# copied, migrations ran, caches rebuilt. The site was simply broken, and
+# the first thing to notice was a human clicking their own share link.
+#
+# So: after everything else succeeds, actually ASK THE SITE. A deep route
+# is the check that matters — the root is served by index.html existing
+# and proves nothing about the rewrite.
+#
+# Set SMOKE_URLS in .env.deploy, space-separated. Deliberately not derived
+# from the remote paths: the admin app is served from a SUBDIRECTORY on
+# disk but a SUBDOMAIN over HTTP, so there is no honest way to guess it.
+# Unset skips the check loudly rather than silently.
+if [[ -z "${SMOKE_URLS:-}" ]]; then
+  warn "SMOKE_URLS is not set in .env.deploy — skipping the post-deploy check."
+  warn "Add e.g.  SMOKE_URLS=\"https://example.com/login https://admin.example.com/academy\""
+else
+  echo
+  info "Smoke-checking deep routes (these prove the SPA fallback survived)..."
+  SMOKE_FAILED=false
+  for smoke_url in $SMOKE_URLS; do
+    if $DRY_RUN; then
+      echo "  [dry-run] curl $smoke_url"
+      continue
+    fi
+    smoke_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -L "$smoke_url" || echo 000)"
+    if [[ "$smoke_code" == "200" ]]; then
+      echo "  ✓ $smoke_code  $smoke_url"
+    else
+      echo "  ✗ $smoke_code  $smoke_url"
+      SMOKE_FAILED=true
+    fi
+  done
+  if $SMOKE_FAILED; then
+    echo
+    warn "A deep route did NOT return 200. The files are deployed but the site is not serving them."
+    warn "Most likely the .htaccess SPA fallback: any request that is not a real file must rewrite to /index.html."
+    warn "Check:  ssh -p \$SSH_PORT \$SSH_USER@\$SSH_HOST \"cat '$FRONTEND_REMOTE_PATH/.htaccess'\""
+    exit 1
+  fi
+  ok "deep routes reachable."
 fi
 
 echo

@@ -3,13 +3,16 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\LoginBlockReason;
+use App\Enums\TrackedLinkGroup;
 use App\Events\AgentReadyForApproval;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Registration\RegisterRequest;
 use App\Http\Requests\Registration\ResendVerificationEmailRequest;
 use App\Http\Requests\Registration\ResolveInviteCodeRequest;
 use App\Http\Requests\Registration\ResolveRefTokenRequest;
+use App\Models\Company;
 use App\Models\User;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Registration\RegistrationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,9 +25,15 @@ use Illuminate\Http\Request;
 // points at the frontend rather than this endpoint directly).
 class RegisterController extends Controller
 {
-    public function resolveInviteCode(ResolveInviteCodeRequest $request, RegistrationService $service): JsonResponse
+    public function resolveInviteCode(ResolveInviteCodeRequest $request, RegistrationService $service, TrackedLinkService $trackedLinks): JsonResponse
     {
         $inviteCode = $service->resolveInviteCode($request->validated('invite_code'));
+
+        // TASK-232 — this endpoint is what /c/thailife calls, so it is where
+        // the open gets counted. Typing the code into the form by hand hits
+        // the same line, which is correct: both are somebody arriving at
+        // this company's signup through that campaign.
+        $this->countLinkOpen($request, $trackedLinks, $request->validated('invite_code'), TrackedLinkGroup::CompanySignup);
 
         // 404, not 422 — this is a lookup, not a validation of
         // already-known data. Same generic reason regardless of why it
@@ -50,9 +59,15 @@ class RegisterController extends Controller
      * "you are joining <inviter> at <company>" — TASK-116 renders exactly
      * that in place of the invite-code step.
      */
-    public function resolveRefToken(ResolveRefTokenRequest $request, RegistrationService $service): JsonResponse
+    public function resolveRefToken(ResolveRefTokenRequest $request, RegistrationService $service, TrackedLinkService $trackedLinks): JsonResponse
     {
         $link = $service->resolveRefToken($request->validated('ref_token'));
+
+        // TASK-232 — only counts when the visitor arrived via /j/<code>.
+        // A legacy ?ref=<64 chars> link has no tracked link behind it and
+        // reports nothing, which is the honest answer for a URL that
+        // predates the feature rather than a gap to paper over.
+        $this->countLinkOpen($request, $trackedLinks, $request->validated('ref_token'), TrackedLinkGroup::TeamSignup);
 
         // 404 for the same reason resolveInviteCode() 404s, with the same
         // single generic reason for every failure mode — unknown token,
@@ -67,6 +82,57 @@ class RegisterController extends Controller
             // its saving hook — never the email, phone or id.
             'inviter_name' => $link->agent->name,
         ]);
+    }
+
+    /**
+     * Count an open, and never let counting break the page.
+     *
+     * A registration page failing because an analytics write failed would
+     * cost a recruit, which is worth strictly more than the statistic. Same
+     * reasoning as ResolvesTrackedLink::recordTrackedVisit(); kept quiet for
+     * the same reason too — this is an unauthenticated endpoint anyone can
+     * hit at will, so an error path that logs per request is an
+     * amplification vector.
+     */
+    private function countLinkOpen(Request $request, TrackedLinkService $trackedLinks, string $code, TrackedLinkGroup $group): void
+    {
+        try {
+            $link = $trackedLinks->resolve($code);
+
+            if ($link && $link->group === $group) {
+                $trackedLinks->recordVisit($link, $request);
+            }
+        } catch (\Throwable) {
+            // Intentionally ignored — see above.
+        }
+    }
+
+    /**
+     * TASK-235 (UAT) — resolve /in/<code> to the company's slug.
+     *
+     * FOUND BY CLICKING IT. The admin screen minted a short login link and
+     * handed it over, and the agent portal had no route for it — a missing
+     * route in this SPA does not throw, it renders the app chrome with
+     * nothing inside, which reads as "the site is broken" rather than "that
+     * link is wrong". The page needs the slug to become the branded
+     * /login?company=<slug> it is short for, so this returns it.
+     *
+     * SLUG ONLY, and nothing else. It is already public — it sits in the
+     * URL every company shares today — but this endpoint is
+     * unauthenticated, so it must not become a way to read anything about
+     * a company that is not already on that link.
+     */
+    public function resolveLoginLink(string $code, TrackedLinkService $trackedLinks, Request $request): JsonResponse
+    {
+        $company = $trackedLinks->resolveTarget($code, TrackedLinkGroup::CompanyLogin, Company::class);
+
+        // Same generic 404 as every other resolver here: unknown, revoked
+        // and expired must be indistinguishable.
+        abort_unless($company && $company->slug, 404, 'ไม่พบลิงก์นี้ หรือลิงก์ถูกยกเลิกแล้ว');
+
+        $this->countLinkOpen($request, $trackedLinks, $code, TrackedLinkGroup::CompanyLogin);
+
+        return response()->json(['company_slug' => $company->slug]);
     }
 
     public function register(RegisterRequest $request, RegistrationService $service): JsonResponse

@@ -27,6 +27,11 @@ class ProductShareLinkResource extends JsonResource
             'product_name' => $this->whenLoaded('product', fn () => $this->product?->name),
             'token' => $this->token,
             'public_url' => "{$frontendUrl}/p/{$this->token}",
+            // TASK-232 — the SHORT one, and the one every share surface
+            // should offer. `public_url` above stays because links minted
+            // before this feature have no short code, and because anything
+            // already shared still resolves through it.
+            'short_url' => $this->shortUrl(),
             'view_count' => $this->view_count,
             'revoked_at' => $this->revoked_at,
             'created_at' => $this->created_at,

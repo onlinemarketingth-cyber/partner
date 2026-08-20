@@ -57,6 +57,51 @@ const router = createRouter({
       component: () => import('../views/PaymentPageView.vue'),
       meta: { public: true },
     },
+    /*
+     * TASK-232/233 — the two SHORT signup links.
+     *
+     * Both render RegisterView; neither is a page of its own, because the
+     * thing a recruit needs is the registration form and everything these
+     * add is which company (or which leader) they are joining. Giving them
+     * their own view would be two more copies of that form to keep in step.
+     *
+     * `/c/:code` is the company's open signup link — the one that did not
+     * exist at all before TASK-233. `/j/:code` replaces
+     * `/register?ref=<64 characters>`, which still works and always will.
+     *
+     * The prefixes matter and are not decoration: this app serves real
+     * pages at the top level (/login, /register, /products, /profile), so a
+     * flat `/:code` would share that namespace and the first future page
+     * whose path collided with a live code would kill that customer's link
+     * silently.
+     */
+    {
+      path: '/c/:code',
+      name: 'company-signup-link',
+      component: () => import('../views/RegisterView.vue'),
+      meta: { public: true },
+    },
+    {
+      path: '/j/:code',
+      name: 'team-signup-link',
+      component: () => import('../views/RegisterView.vue'),
+      meta: { public: true },
+    },
+    /*
+     * TASK-235 (UAT) — /in/<code>, the short form of
+     * /login?company=<slug>.
+     *
+     * Added because clicking the link the admin screen produced landed on
+     * NOTHING: this router has no catch-all, and an unmatched path renders
+     * the chrome with an empty <RouterView> inside, which looks like the
+     * app broke rather than like a bad link.
+     */
+    {
+      path: '/in/:code',
+      name: 'company-login-link',
+      component: () => import('../views/CompanyLoginLinkView.vue'),
+      meta: { public: true },
+    },
     // TASK-056 Sprint P1/P3 — public, unauthenticated product showcase a
     // prospect reaches from an Agent's product-share link. Path MUST be
     // exactly `/p/:token` — ProductShareLinkResource (backend) builds
@@ -169,6 +214,20 @@ const router = createRouter({
       name: 'leaderboard',
       component: () => import('../views/LeaderboardView.vue'),
       meta: { navLabel: 'Leaderboard' },
+    },
+    /*
+     * TASK-234 — every link this agent owns, in one place.
+     *
+     * They used to be spread across four screens with nothing else in
+     * common (สินค้า, คำสั่งซื้อ, ทีมของฉัน, ลิงก์พันธมิตร), and three of
+     * the four showed no numbers at all — so "which of my links is
+     * working?" could not be asked, let alone answered.
+     */
+    {
+      path: '/my-links',
+      name: 'my-links',
+      component: () => import('../views/MyLinksView.vue'),
+      meta: { navLabel: 'ลิงก์ของฉัน' },
     },
     // ADR-011 Section 4 (TASK-033) — authenticated "My Affiliate Links".
     {

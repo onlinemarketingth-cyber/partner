@@ -44,6 +44,11 @@ class AgentInviteLinkResource extends JsonResource
             // render the QR code client-side.
             'token' => $this->token,
             'public_url' => "{$frontendUrl}/register?ref={$this->token}",
+            // TASK-232 — /j/<code> instead of /register?ref=<64 characters>.
+            // Null for links minted before the feature; the caller falls
+            // back to `public_url`, which is what those leaders already
+            // handed out.
+            'short_url' => $this->shortUrl(),
             'used_count' => $this->used_count,
             // null on either limit means UNLIMITED (ADR-025 §3). Passed
             // through as null rather than 0 or a sentinel so the UI can say

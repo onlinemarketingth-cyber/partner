@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasTrackedLink;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -24,6 +25,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class AffiliateLink extends Model
 {
     use HasFactory;
+    use HasTrackedLink;
 
     protected static function booted(): void
     {
@@ -35,7 +37,25 @@ class AffiliateLink extends Model
         'agent_id',
         'product_id',
         'token',
+        'revoked_at',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'revoked_at' => 'datetime',
+        ];
+    }
+
+    /**
+     * TASK-236 — the same one-definition rule every other link table
+     * follows. Callers must ask this rather than testing `revoked_at`
+     * themselves, so the rule cannot drift between them.
+     */
+    public function isUsable(): bool
+    {
+        return $this->revoked_at === null;
+    }
 
     /** @return BelongsTo<Company, $this> */
     public function company(): BelongsTo

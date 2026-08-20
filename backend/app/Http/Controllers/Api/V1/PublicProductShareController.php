@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\TrackedLinkGroup;
+use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Public\StoreProductShareCheckoutRequest;
 use App\Http\Resources\PublicProductShareResource;
@@ -12,6 +14,7 @@ use App\Models\ProductSalesMaterial;
 use App\Models\ProductShareLink;
 use App\Services\Catalog\ProductMediaService;
 use App\Services\Catalog\ProductSalesMaterialService;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Order\ProductShareCheckoutService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
@@ -27,6 +30,8 @@ use Illuminate\Support\Facades\Storage;
  */
 class PublicProductShareController extends Controller
 {
+    use ResolvesTrackedLink;
+
     public function show(string $token): PublicProductShareResource
     {
         $link = $this->resolveUsableLink($token);
@@ -138,7 +143,20 @@ class PublicProductShareController extends Controller
 
     private function resolveUsableLink(string $token): ProductShareLink
     {
-        $link = ProductShareLink::withoutGlobalScopes()->where('token', $token)->first();
+        // TASK-232 — `{token}` is now EITHER a short code (/p/R4TB8WM2XK)
+        // or the original 64-character token. The short code is tried
+        // first because it is the one that records a visit; a legacy token
+        // has no tracked link behind it and is counted only by the older
+        // `view_count` below, which is the honest answer for a URL that
+        // predates this feature.
+        $link = $this->resolveViaTrackedLink(
+            $token,
+            TrackedLinkGroup::ProductShare,
+            ProductShareLink::class,
+            request(),
+            app(TrackedLinkService::class),
+        ) ?? ProductShareLink::withoutGlobalScopes()->where('token', $token)->first();
+
         abort_if(! $link || ! $link->isUsable(), 404);
 
         /*

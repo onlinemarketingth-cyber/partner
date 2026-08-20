@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\CommissionPlanType;
+use App\Models\Concerns\HasTrackedLink;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -22,6 +23,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 class Company extends Model
 {
     use HasFactory, SoftDeletes;
+    use HasTrackedLink;
 
     protected $fillable = [
         'name',

@@ -51,6 +51,12 @@ interface Theme {
   // ProductShareLinkResource pattern). null only if the company somehow
   // has no slug yet.
   login_link: string | null
+  /**
+   * TASK-235 — /in/<code> instead of /login?company=<slug>. Null until
+   * somebody presses the button below; the long link keeps working forever,
+   * because it is what every company already has printed and shared.
+   */
+  login_short_link: string | null
   primary_hex: string | null
   accent_hex: string | null
   nav_bg_hex: string | null
@@ -467,7 +473,42 @@ watch(() => activeCompany.companyId, () => { if (!activeCompany.requiresCompanyP
 // branded /login?company=<slug> link + QR here and hand it to agents
 // directly, rather than adding a new tenant-lookup step to the login
 // flow itself (see chat discussion — human picked this option).
-const loginLink = computed(() => theme.value?.login_link ?? null)
+/**
+ * TASK-235 — the SHORT link wins where one has been minted.
+ *
+ * Not a swap: `login_link` is what a company already has on its printed
+ * material and in every message it has ever sent, and it resolves exactly
+ * as before. This only changes which one we offer to copy next.
+ */
+const mintedShortLoginLink = ref<string | null>(null)
+/**
+ * Its own error ref rather than reusing `saveError`/`loadError`. Minting is
+ * a separate action from saving the theme, and borrowing the save banner
+ * would make a failed shorten look like a failed theme save — sending the
+ * admin to check the wrong thing.
+ */
+const shortLinkError = ref('')
+const loginLink = computed(
+  () => mintedShortLoginLink.value ?? theme.value?.login_short_link ?? theme.value?.login_link ?? null,
+)
+const hasShortLoginLink = computed(
+  () => Boolean(mintedShortLoginLink.value ?? theme.value?.login_short_link),
+)
+const mintingShortLink = ref(false)
+
+async function mintShortLoginLink() {
+  mintingShortLink.value = true
+  try {
+    const res = await api.post<{ data: { login_short_link: string } }>('/company-login-link', {
+      ...(activeCompany.companyId !== null ? { company_id: activeCompany.companyId } : {}),
+    })
+    mintedShortLoginLink.value = res.data.login_short_link
+  } catch (e) {
+    shortLinkError.value = e instanceof ApiError ? `ย่อลิงก์ไม่สำเร็จ (${e.status})` : 'ย่อลิงก์ไม่สำเร็จ'
+  } finally {
+    mintingShortLink.value = false
+  }
+}
 const loginLinkQr = ref('')
 const loginLinkCopied = ref(false)
 watch(
@@ -1947,6 +1988,25 @@ onMounted(loadPresets)
             </button>
           </div>
           <p v-if="!loginLink" class="mt-2 text-xs text-rose-500">บริษัทนี้ยังไม่มี slug — ไม่สามารถสร้างลิงก์ได้</p>
+          <!--
+            TASK-235 — offered, never automatic. Minting writes a row, and a
+            page that quietly creates one on load would give every company a
+            link nobody asked for.
+          -->
+          <button
+            v-if="loginLink && !hasShortLoginLink"
+            type="button"
+            data-test="mint-short-login-link"
+            class="mt-2 text-xs font-bold text-brand-600 hover:text-brand-700 disabled:opacity-50"
+            :disabled="mintingShortLink"
+            @click="mintShortLoginLink"
+          >
+            {{ mintingShortLink ? 'กำลังย่อ...' : 'ย่อลิงก์ให้สั้นลง + นับสถิติ' }}
+          </button>
+          <p v-if="shortLinkError" class="mt-2 text-xs text-rose-500">{{ shortLinkError }}</p>
+          <p v-else-if="hasShortLoginLink" class="mt-2 text-[11px] text-slate-400">
+            ลิงก์แบบยาวเดิมยังใช้ได้ตลอด — ลิงก์ที่เคยส่งไปแล้วไม่เสีย
+          </p>
         </div>
         <div v-if="loginLinkQr" class="shrink-0 flex flex-col items-center gap-2">
           <img :src="loginLinkQr" alt="QR โค้ดลิงก์ Login" class="w-28 h-28 rounded-lg border border-slate-200" />

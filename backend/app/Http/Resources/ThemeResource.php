@@ -48,6 +48,13 @@ class ThemeResource extends JsonResource
             'login_link' => $this->company?->slug
                 ? rtrim((string) Config::get('services.agent_portal.frontend_url'), '/').'/login?company='.$this->company->slug
                 : null,
+            // TASK-235 — /in/<code> instead of /login?company=<slug>. Null
+            // until somebody mints one, and the caller falls back to
+            // `login_link` above, which is what every company already has
+            // printed and shared. Never auto-minted here: a Resource is a
+            // read, and a GET that quietly creates a row is the kind of
+            // surprise that shows up as duplicate links under retries.
+            'login_short_link' => $this->company?->shortUrl(),
             'primary_hex' => $this->primary_hex ?? $defaults['primary_hex'],
             'accent_hex' => $this->accent_hex ?? $defaults['accent_hex'],
             // App-chrome (top bar + bottom nav) colours; null → client uses

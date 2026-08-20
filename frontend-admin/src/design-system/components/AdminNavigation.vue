@@ -135,6 +135,10 @@ const navItems: NavItem[] = [
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
       { name: 'agent-invite-links', icon: 'link', label: { th: 'ลิงก์ชวนทีม', en: 'Invite Links' } },
+      // TASK-233 — the company-wide signup link, beside the team one.
+      { name: 'company-signup-links', icon: 'link', label: { th: 'ลิงก์สมัครตัวแทน', en: 'Signup Links' } },
+      // TASK-234 — the stats view over every group of link.
+      { name: 'company-links', icon: 'chart', label: { th: 'ลิงก์ทั้งบริษัท', en: 'All Links' } },
       // TASK-050 (moved, human request 2026-07-23) — "ทีมขาย" leadership
       // cockpit lives as a sub-menu of "จัดการตัวแทน", right BEFORE
       // "ค่าคอมมิชชั่น", rather than as its own top-level pillar.

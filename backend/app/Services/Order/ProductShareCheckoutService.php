@@ -15,6 +15,7 @@ use App\Models\ProductShareLink;
 use App\Models\Referral;
 use App\Models\Scopes\TenantScope;
 use App\Services\Gamification\GamificationService;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use Illuminate\Support\Facades\DB;
 
@@ -74,6 +75,10 @@ class ProductShareCheckoutService
         private GamificationService $gamificationService,
         private PipelineTemplateResolver $pipelineTemplateResolver,
         private OrderService $orderService,
+        // TASK-234 — rolls the share link's conversion counter forward in
+        // the same transaction that creates the order, so the count and the
+        // attributed rows cannot disagree.
+        private TrackedLinkService $trackedLinks,
     ) {}
 
     /**
@@ -225,7 +230,32 @@ class ProductShareCheckoutService
             // where the promotion-aware price lives (risk R1) — so the
             // customer is charged exactly the number the share page
             // advertised.
-            return $this->orderService->createForReferral($referral, $paymentMethod);
+            $order = $this->orderService->createForReferral($referral, $paymentMethod);
+
+            /*
+             * TASK-234 — attribute the sale to the SHARE LINK the customer
+             * came through.
+             *
+             * Both the referral and the order get it. The referral is the
+             * lead ("this link produced an interested person"); the order
+             * is the money ("this link produced a sale"). They are
+             * different questions and a share link can produce the first
+             * without the second — which is precisely the gap the reports
+             * exist to show.
+             *
+             * Note this is the SHARE link, not the pay link the order also
+             * has. The pay link is how the customer settled up; the share
+             * link is why they were here at all, and it is the one whose
+             * conversion rate means anything.
+             */
+            $shareLink = $link->trackedLink()->withoutGlobalScopes()->first();
+            if ($shareLink) {
+                $referral->forceFill(['tracked_link_id' => $shareLink->id])->save();
+                $order->forceFill(['tracked_link_id' => $shareLink->id])->save();
+                $this->trackedLinks->recordConversion($shareLink);
+            }
+
+            return $order;
         });
     }
 

@@ -47,6 +47,13 @@ interface Order {
   amount_baht: number
   public_token: string
   public_pay_url: string
+  /**
+   * TASK-235 — /pay/<14 characters> instead of /pay/<40>. Fourteen, not the
+   * ten every other group gets: this page shows the order's contents and
+   * total, so shortening the front door had to not shorten the protection.
+   * Null before the feature; every use site falls back rather than swaps.
+   */
+  short_pay_url: string | null
   client_name: string | null
   // TASK-212 — prefill for the share sheet's recipient box. whenLoaded on
   // OrderResource, hence optional here as well as nullable.
@@ -188,7 +195,7 @@ const shareHeading = ref('')
 const shareOrderId = ref<number | null>(null)
 const shareDefaultEmail = ref<string | null>(null)
 function openShare(order: Order) {
-  shareUrl.value = order.public_pay_url
+  shareUrl.value = order.short_pay_url ?? order.public_pay_url
   shareHeading.value = `ชำระเงิน ${order.order_number}`
   shareOrderId.value = order.id
   shareDefaultEmail.value = order.client_email ?? null
@@ -309,7 +316,7 @@ const hasOrders = computed(() => orders.value.length > 0)
         <p class="text-xs text-ink-card-muted">ส่งลิงก์นี้ให้ลูกค้าเพื่อชำระเงิน</p>
         <div class="flex items-center gap-2">
           <input
-            :value="createdOrder.public_pay_url"
+            :value="createdOrder.short_pay_url ?? createdOrder.public_pay_url"
             readonly
             class="flex-1 min-w-0 min-h-[44px] px-3 py-2 rounded-xl border border-line-card text-xs text-ink-chip bg-surface-chip"
           />
@@ -434,7 +441,7 @@ const hasOrders = computed(() => orders.value.length > 0)
                failing, not the legibility. -->
           <div class="flex items-center gap-2">
             <input
-              :value="order.public_pay_url"
+              :value="order.short_pay_url ?? order.public_pay_url"
               readonly
               class="flex-1 min-w-0 min-h-[44px] px-3 py-1.5 rounded-lg border border-line-card text-[11px] text-ink-chip bg-surface-chip"
             />

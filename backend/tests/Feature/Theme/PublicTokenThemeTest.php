@@ -249,7 +249,20 @@ class PublicTokenThemeTest extends TestCase
         $expected = [
             'accent_hex', 'background', 'card_bg_hex', 'card_border_hex', 'card_shadow',
             'card_text_hex', 'company', 'font_family', 'font_family_latin', 'font_family_thai',
-            'font_weights', 'label_overrides', 'loading', 'login_link', 'logos',
+            'font_weights', 'label_overrides', 'loading', 'login_link',
+            // TASK-235 — `login_short_link` joined the payload. REVIEWED
+            // AGAINST §6, which is what this test exists to force.
+            //
+            // It is the same fact as `login_link` beside it, in a shorter
+            // form: both are a URL to this company's own login page, which
+            // an anonymous visitor is by definition allowed to reach — that
+            // is what a login page is. It carries no counts, no agent, no
+            // company internals; the short code is opaque and resolves to
+            // exactly the page the long one already pointed at.
+            //
+            // Null unless somebody has minted one, so the anonymous payload
+            // is unchanged for every company that has not.
+            'login_short_link', 'logos',
             // TASK-161 §3.1 — nav_bg_type / nav_bg_config joined the
             // payload. Reviewed against §6: both are presentational nav-bar
             // colour config (a type discriminator and two hex stops plus an

@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\HasTrackedLink;
 use App\Models\Scopes\TenantScope;
+use Database\Factories\AgentInviteLinkFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -28,8 +30,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class AgentInviteLink extends Model
 {
-    /** @use HasFactory<\Database\Factories\AgentInviteLinkFactory> */
+    /** @use HasFactory<AgentInviteLinkFactory> */
     use HasFactory;
+
+    use HasTrackedLink;
 
     protected static function booted(): void
     {
@@ -144,9 +148,9 @@ class AgentInviteLink extends Model
 
     /**
      * @return HasMany<User, $this> Users who registered through this link
-     * (ADR-025 §6 attribution). Note this is NOT the same set as the
-     * inviter's directReports(): manager_id can be re-pointed by an Admin
-     * later, while this attribution is immutable history.
+     *                              (ADR-025 §6 attribution). Note this is NOT the same set as the
+     *                              inviter's directReports(): manager_id can be re-pointed by an Admin
+     *                              later, while this attribution is immutable history.
      */
     public function recruits(): HasMany
     {

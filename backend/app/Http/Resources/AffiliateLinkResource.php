@@ -21,6 +21,10 @@ class AffiliateLinkResource extends JsonResource
             // ADR-011/TASK-032 — the public short link (see routes/api.php's
             // own note on why this resolves under /api/v1, not a bare /l/...).
             'public_url' => route('affiliate-links.redirect', $this->token),
+            // TASK-235 — the short form. Null for links minted before the
+            // feature; callers fall back to the long URL above, which is what
+            // those recipients already hold.
+            'short_url' => $this->shortUrl(),
             'clicks_count' => $this->whenCounted('clicks'),
             'conversions_count' => $this->whenCounted('attributedReferrals'),
             'created_at' => $this->created_at,

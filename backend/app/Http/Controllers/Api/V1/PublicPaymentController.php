@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\TrackedLinkGroup;
+use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Order\SubmitSlipRequest;
 use App\Http\Resources\PublicOrderResource;
 use App\Models\Company;
 use App\Models\Order;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Order\OrderService;
 
 // ADR-017 (TASK-054) — the PUBLIC, UNAUTHENTICATED payment page
@@ -19,6 +22,8 @@ use App\Services\Order\OrderService;
 // payload, never agent/commission/PDPA data (§6).
 class PublicPaymentController extends Controller
 {
+    use ResolvesTrackedLink;
+
     /** @var list<string> ADR-033 (TASK-189) — 'voucher' added so PublicOrderResource can render it once paid. */
     private const RELATIONS = ['company', 'product', 'client', 'voucher'];
 
@@ -52,7 +57,21 @@ class PublicPaymentController extends Controller
     {
         // No tenant context on a public request — look up by the unguessable
         // public_token alone, bypassing TenantScope deliberately.
-        $order = Order::withoutGlobalScopes()->where('public_token', $token)->firstOrFail();
+        //
+        // TASK-232 — `{token}` is now EITHER a 14-character short code
+        // (/pay/H9F4VQ2NB7KTXM) or the original 40-character public_token.
+        // 14 rather than the 10 every other group gets: this page shows an
+        // order's contents and total, so shortening its front door had to
+        // not shorten its protection.
+        $order = $this->resolveViaTrackedLink(
+            $token,
+            TrackedLinkGroup::Payment,
+            Order::class,
+            request(),
+            app(TrackedLinkService::class),
+        );
+
+        $order ??= Order::withoutGlobalScopes()->where('public_token', $token)->firstOrFail();
 
         /*
          * TASK-183 §3.5 — a closed tenant collects no money.

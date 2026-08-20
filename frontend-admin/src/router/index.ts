@@ -92,6 +92,33 @@ const router = createRouter({
       component: () => import('../views/AgentInviteLinksView.vue'),
       meta: { navLabel: 'ลิงก์ชวนทีม' },
     },
+    /*
+     * TASK-233 — the company's OWN signup link, which had no screen at all
+     * before today (see CompanySignupLinksView's header). Sits next to
+     * "ลิงก์ชวนทีม" because an admin looking for one is looking for the
+     * other, and the difference between them — company-wide versus
+     * attributed to a team leader — is the thing they need to see side by
+     * side to pick correctly.
+     */
+    {
+      path: '/agents/signup-links',
+      name: 'company-signup-links',
+      component: () => import('../views/CompanySignupLinksView.vue'),
+      meta: { navLabel: 'ลิงก์สมัครตัวแทน' },
+    },
+    /*
+     * TASK-234 — every link the company has out in the world, in one table.
+     *
+     * Six token tables existed and not one screen showed them together; the
+     * only counter visible anywhere was a sales-material `view_count`
+     * buried in a modal inside the product editor.
+     */
+    {
+      path: '/agents/links',
+      name: 'company-links',
+      component: () => import('../views/CompanyLinksView.vue'),
+      meta: { navLabel: 'ลิงก์ทั้งบริษัท' },
+    },
     {
       path: '/gamification',
       name: 'gamification-config',

@@ -5,13 +5,16 @@ namespace App\Services\Registration;
 use App\Enums\AgentApprovalStatus;
 use App\Enums\IdDocumentType;
 use App\Enums\RegistrationChannel;
+use App\Enums\TrackedLinkGroup;
 use App\Enums\UserRole;
 use App\Models\AgentInviteLink;
 use App\Models\Company;
 use App\Models\CompanyInviteCode;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Platform\UserService;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -40,8 +43,38 @@ use Illuminate\Validation\ValidationException;
 // assertDocumentNotAlreadyUsed().
 class RegistrationService
 {
-    public function __construct(private readonly UserService $userService)
+    public function __construct(
+        private readonly UserService $userService,
+        // TASK-232 — lets both public resolvers below accept a short code
+        // as well as the long token they were built for.
+        private readonly TrackedLinkService $trackedLinks,
+    ) {}
+
+    /**
+     * TASK-234 — the tracked link behind a code/invite, if there is one.
+     *
+     * Rolls the conversion counter forward at the same time, so the two
+     * cannot drift apart through somebody remembering one and forgetting
+     * the other. The counter is a cache; `tracked_link_id` on the row is
+     * the fact, and the count is rebuildable from it.
+     *
+     * Returns null — and counts nothing — for a registration that did not
+     * come through a link at all. That is not a gap to fill: somebody who
+     * typed a code off a piece of paper genuinely did not click anything,
+     * and attributing them to the link would inflate exactly the number
+     * this feature exists to make trustworthy.
+     */
+    private function trackedLinkIdFor(Model $target): ?int
     {
+        $link = $target->trackedLink()->withoutGlobalScopes()->first();
+
+        if (! $link) {
+            return null;
+        }
+
+        $this->trackedLinks->recordConversion($link);
+
+        return $link->id;
     }
 
     /**
@@ -51,6 +84,12 @@ class RegistrationService
      */
     public function resolveInviteCode(string $rawCode): ?CompanyInviteCode
     {
+        // TASK-233 — the company signup link's short code IS this column,
+        // so no separate lookup is needed here: /c/thailife and typing
+        // "thailife" into the form are the same act, resolved the same way.
+        // That is why the code is normalised to lowercase on the way in —
+        // URLs match case-sensitively, and two links that look identical in
+        // print must not be two different links.
         $code = CompanyInviteCode::where('code', $rawCode)->first();
 
         if (! $code || ! $code->isValid()) {
@@ -98,10 +137,21 @@ class RegistrationService
      */
     public function resolveRefToken(string $rawToken): ?AgentInviteLink
     {
-        $link = AgentInviteLink::withoutGlobalScopes()
+        // TASK-232 — `$rawToken` is now EITHER the short code from
+        // /j/K7M3QP2X9A or the original 64-character ?ref= token. The short
+        // code is tried first because it is the one that records a visit;
+        // the long one keeps working forever, because leaders have already
+        // sent it to people.
+        $link = $this->trackedLinks->resolveTarget(
+            $rawToken,
+            TrackedLinkGroup::TeamSignup,
+            AgentInviteLink::class,
+        ) ?? AgentInviteLink::withoutGlobalScopes()
             ->with('company')
             ->where('token', $rawToken)
             ->first();
+
+        $link?->loadMissing('company');
 
         if (! $link || ! $link->isUsable()) {
             return null;
@@ -274,8 +324,29 @@ class RegistrationService
             'agent_approval_status' => AgentApprovalStatus::Pending,
             'registered_via' => RegistrationChannel::Email,
             'registered_via_invite_code_id' => $inviteCode->id,
+            // TASK-234 — WHICH campaign produced this agent, not just which
+            // company code. Two flyers can share one code; two links cannot.
+            // Null when they typed the code by hand rather than arriving
+            // through a link, which is a real and different answer.
+            'tracked_link_id' => $this->trackedLinkIdFor($inviteCode),
             'email_verified_at' => null,
         ]);
+
+        // TASK-233 — count the seat. `max_uses` on a company code is new
+        // (agent_invite_links has had it since ADR-025 §3), so this is the
+        // first time this path has had anything to count.
+        //
+        // WITHOUT A LOCK, and that is a recorded limitation rather than an
+        // oversight. This whole branch deliberately opens no transaction —
+        // see assertDocumentNotAlreadyUsed()'s docblock, which records the
+        // same gap for duplicate documents. Two people submitting the last
+        // seat of a capped link at the same instant can both get in. The
+        // recruit-link path locks because it already had a transaction to
+        // lock inside; giving this one a transaction purely for the counter
+        // would change the failure behaviour of everything else in it, and
+        // that is a bigger change than the bug it fixes. Worth doing —
+        // separately, deliberately, with the document check moved inside it.
+        $inviteCode->increment('used_count');
 
         $user->sendEmailVerificationNotification();
 
@@ -439,6 +510,11 @@ class RegistrationService
                 // losing the flag, the link being revoked, or an Admin
                 // re-pointing manager_id.
                 'recruited_via_agent_link_id' => $link->id,
+                // TASK-234 — see the company path above. `recruited_via`
+                // says WHO recruited them; this says through which link,
+                // which is what lets a leader tell their LINE post from
+                // their Facebook one.
+                'tracked_link_id' => $this->trackedLinkIdFor($link),
                 'email_verified_at' => null,
                 // NOTE the absence of 'manager_id' here. See below.
             ]);

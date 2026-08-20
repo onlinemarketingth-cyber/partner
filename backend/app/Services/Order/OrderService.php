@@ -6,10 +6,12 @@ use App\Enums\NotificationType;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PipelineStage;
+use App\Enums\TrackedLinkGroup;
 use App\Models\Order;
 use App\Models\Referral;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Notification\NotificationService;
 use App\Services\Referral\PipelineService;
 use App\Support\Media\StoredFileName;
@@ -50,6 +52,10 @@ class OrderService
         // the exact same transaction, under the exact same guard, as the
         // voucher line above.
         private NotificationService $notificationService,
+        // TASK-232 — mints the pay link's short code at order creation, so
+        // every order has one from the moment it exists rather than the
+        // first time somebody opens the share modal.
+        private TrackedLinkService $trackedLinks,
     ) {}
 
     /**
@@ -75,7 +81,7 @@ class OrderService
             ]);
         }
 
-        return Order::create([
+        $order = Order::create([
             'company_id' => $referral->company_id,
             'referral_id' => $referral->id,
             'client_id' => $referral->client_id,
@@ -109,6 +115,20 @@ class OrderService
             'payment_method' => $method,
             'status' => OrderStatus::Pending,
         ]);
+
+        // TASK-232 — the pay link's short code.
+        //
+        // 14 characters here where every other group gets 10, decided in
+        // TrackedLinkGroup::codeLength(): this page shows the order's
+        // contents and total, and it was previously guarded by a
+        // 40-character token. Putting a shorter front door on the one link
+        // in this system that is about money would have been reducing its
+        // protection to buy convenience, so the extra four characters stay.
+        $this->trackedLinks->mintFor(TrackedLinkGroup::Payment, $order, $referral->agent);
+
+        // Not `fresh()` — see ProductShareLinkService for why re-fetching
+        // here costs the caller `wasRecentlyCreated`.
+        return $order;
     }
 
     /**

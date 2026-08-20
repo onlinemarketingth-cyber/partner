@@ -41,6 +41,10 @@ class OrderResource extends JsonResource
             'amount_baht' => round($this->amount_satang / 100, 2),
             'public_token' => $this->public_token,
             'public_pay_url' => self::publicPayUrl($this->resource),
+            // TASK-232 — /pay/<14 characters> instead of /pay/<40>. Null on
+            // orders created before the feature; every share surface falls
+            // back to `public_pay_url`, which those customers already hold.
+            'short_pay_url' => $this->shortUrl(),
             'client_name' => $this->whenLoaded('client', fn () => $this->client?->name),
             // TASK-212 — prefills <ShareLinkModal>'s recipient field so the
             // agent confirms an address rather than retyping one (human's

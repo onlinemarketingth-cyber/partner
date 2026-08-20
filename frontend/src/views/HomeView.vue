@@ -191,6 +191,8 @@ const BASE_MENU_LINKS: MenuLink[] = [
   { to: '/orders', icon: 'cart', label: 'คำสั่งซื้อ' },
   { to: '/products', icon: 'box', label: 'สินค้า' },
   { to: '/pipeline', icon: 'pipeline', label: 'กระบวนการขาย' },
+  // TASK-234 — first, because it is now the way in to every other link.
+  { to: '/my-links', icon: 'link', label: 'ลิงก์ของฉัน' },
   { to: '/affiliate-links', icon: 'link', label: 'ลิงก์พันธมิตร' },
   { to: '/announcements', icon: 'megaphone', label: 'ข่าวสาร' },
   { to: '/profile', icon: 'user', label: 'โปรไฟล์' },

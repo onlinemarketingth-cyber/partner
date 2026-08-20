@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\TrackedLinkGroup;
+use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreSalesMaterialShareLinkRequest;
 use App\Http\Resources\SalesMaterialShareLinkResource;
@@ -10,6 +12,7 @@ use App\Models\ProductSalesMaterial;
 use App\Models\SalesMaterialShareLink;
 use App\Services\Catalog\ProductSalesMaterialService;
 use App\Services\Catalog\SalesMaterialShareLinkService;
+use App\Services\Link\TrackedLinkService;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Storage;
@@ -20,6 +23,8 @@ use Illuminate\Support\Facades\Storage;
 // auth:sanctum group in routes/api.php — deliberately.
 class SalesMaterialShareLinkController extends Controller
 {
+    use ResolvesTrackedLink;
+
     public function index(ProductSalesMaterial $salesMaterial): AnonymousResourceCollection
     {
         $this->authorize('view', $salesMaterial->product);
@@ -54,7 +59,14 @@ class SalesMaterialShareLinkController extends Controller
      */
     public function show(string $token, SalesMaterialShareLinkService $shareLinkService, ProductSalesMaterialService $materialService): mixed
     {
-        $link = SalesMaterialShareLink::withoutGlobalScopes()->where('token', $token)->first();
+        // TASK-235 — short code or the original 64-character token.
+        $link = $this->resolveViaTrackedLink(
+            $token,
+            TrackedLinkGroup::SalesMaterial,
+            SalesMaterialShareLink::class,
+            request(),
+            app(TrackedLinkService::class),
+        ) ?? SalesMaterialShareLink::withoutGlobalScopes()->where('token', $token)->first();
 
         abort_if(! $link || ! $link->isUsable(), 404);
 

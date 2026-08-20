@@ -60,6 +60,13 @@ interface AffiliateLinkItem {
   product_id: number | null
   token: string
   public_url: string
+  /**
+   * TASK-235 — the short form. NULL for links minted before the feature,
+   * which is why every use site below is `short_url ?? public_url` rather
+   * than a swap: those recipients are holding the long URL and it still
+   * works.
+   */
+  short_url: string | null
   clicks_count: number
   conversions_count: number
   created_at: string
@@ -158,7 +165,7 @@ async function createLink() {
 const copiedLinkId = ref<number | null>(null)
 async function copyLink(link: AffiliateLinkItem) {
   try {
-    await navigator.clipboard.writeText(link.public_url)
+    await navigator.clipboard.writeText(link.short_url ?? link.public_url)
     copiedLinkId.value = link.id
     setTimeout(() => {
       if (copiedLinkId.value === link.id) copiedLinkId.value = null
@@ -328,7 +335,7 @@ function formatDate(iso: string): string {
                        hero numbers live in the footer below. -->
                   <div class="min-w-0">
                     <p class="text-sm font-bold text-ink-card">{{ productName(link.product_id) }}</p>
-                    <p class="text-[11px] text-ink-card-subtle truncate">{{ link.public_url }}</p>
+                    <p class="text-[11px] text-ink-card-subtle truncate">{{ link.short_url ?? link.public_url }}</p>
                     <p class="text-[11px] text-ink-card-subtle mt-0.5">สร้างเมื่อ {{ formatDate(link.created_at) }}</p>
                   </div>
                 </div>

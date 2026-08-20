@@ -85,10 +85,45 @@ class RegistrationSchemaTest extends TestCase
         $this->assertSame(2, $company->inviteCodes()->get()->filter->isValid()->count());
     }
 
-    public function test_invite_code_cannot_be_created_without_an_expiry(): void
+    /**
+     * REPLACED, NOT DELETED (TASK-233, 2026-08-20).
+     *
+     * This used to assert the OPPOSITE — that the database refuses a code
+     * with no expiry — and it was right for its whole life. ADR-005 wanted
+     * a Super Admin to choose an expiry deliberately rather than inherit a
+     * baked-in default, and a NOT NULL column enforced that.
+     *
+     * TASK-233 made the code the target of a printed signup link
+     * (partner.syncvision.io/c/thailife). Paper does not expire. A link
+     * that dies while the poster is still on the wall is a worse failure
+     * than one that outlives its campaign, and the recruit who scans it
+     * just sees a dead page.
+     *
+     * The original intent survives one level up: the API still REQUIRES the
+     * caller to state which they want, so "no expiry" remains a decision
+     * somebody makes rather than a default that happens to them. Only the
+     * set of legal answers grew from one to two.
+     *
+     * Kept as its inverse rather than removed because a future migration
+     * that quietly restores NOT NULL would break every permanent link in
+     * production, and nothing else in the suite would notice.
+     */
+    public function test_an_invite_code_may_have_no_expiry_at_all(): void
     {
-        $this->expectException(QueryException::class);
+        $code = CompanyInviteCode::factory()->create(['expires_at' => null]);
 
-        CompanyInviteCode::factory()->create(['expires_at' => null]);
+        $this->assertNull($code->expires_at);
+        $this->assertTrue($code->isValid(), 'no expiry means never expires, not misconfigured');
+    }
+
+    public function test_a_code_that_has_reached_its_use_limit_is_no_longer_valid(): void
+    {
+        $exhausted = CompanyInviteCode::factory()->create(['max_uses' => 5, 'used_count' => 5]);
+        $room = CompanyInviteCode::factory()->create(['max_uses' => 5, 'used_count' => 4]);
+        $unlimited = CompanyInviteCode::factory()->create(['max_uses' => null, 'used_count' => 9999]);
+
+        $this->assertFalse($exhausted->isValid());
+        $this->assertTrue($room->isValid());
+        $this->assertTrue($unlimited->isValid(), 'null max_uses is unlimited, the same meaning agent_invite_links gives it');
     }
 }

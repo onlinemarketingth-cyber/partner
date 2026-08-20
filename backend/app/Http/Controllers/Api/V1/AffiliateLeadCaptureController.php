@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\TrackedLinkGroup;
+use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Public\StoreAffiliateLeadRequest;
 use App\Http\Resources\PublicAffiliateLinkContextResource;
 use App\Models\AffiliateLink;
 use App\Models\Company;
+use App\Services\Link\TrackedLinkService;
 use App\Services\Referral\AffiliateLeadCaptureService;
 use Illuminate\Http\JsonResponse;
 
@@ -27,9 +30,19 @@ use Illuminate\Http\JsonResponse;
  */
 class AffiliateLeadCaptureController extends Controller
 {
+    use ResolvesTrackedLink;
+
     public function show(string $token): PublicAffiliateLinkContextResource
     {
-        $link = AffiliateLink::withoutGlobalScopes()->where('token', $token)->with(['company', 'agent', 'product'])->first();
+        // TASK-235 — short code or legacy token, same as the redirect.
+        $link = $this->resolveViaTrackedLink(
+            $token,
+            TrackedLinkGroup::Affiliate,
+            AffiliateLink::class,
+            request(),
+            app(TrackedLinkService::class),
+        ) ?? AffiliateLink::withoutGlobalScopes()->where('token', $token)->first();
+        $link?->loadMissing(['company', 'agent', 'product']);
 
         abort_if(! $link, 404);
 
@@ -46,7 +59,8 @@ class AffiliateLeadCaptureController extends Controller
 
     public function store(StoreAffiliateLeadRequest $request, string $token, AffiliateLeadCaptureService $service): JsonResponse
     {
-        $link = AffiliateLink::withoutGlobalScopes()->where('token', $token)->first();
+        $link = app(TrackedLinkService::class)->resolveTarget($token, TrackedLinkGroup::Affiliate, AffiliateLink::class)
+            ?? AffiliateLink::withoutGlobalScopes()->where('token', $token)->first();
 
         abort_if(! $link, 404);
 

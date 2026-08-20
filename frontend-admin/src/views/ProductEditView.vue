@@ -271,6 +271,8 @@ interface SalesMaterialItem {
 interface ShareLinkItem {
   id: number
   share_url: string
+  /** TASK-235 — /m/<code>. Null before the feature; fall back, never swap. */
+  short_url: string | null
   expires_at: string
   revoked_at: string | null
   view_count: number
@@ -1444,7 +1446,7 @@ async function revokeShareLink(materialId: number, linkId: number) {
 
 async function copyShareLink(link: ShareLinkItem) {
   try {
-    await navigator.clipboard.writeText(link.share_url)
+    await navigator.clipboard.writeText(link.short_url ?? link.share_url)
     copiedShareLinkId.value = link.id
     setTimeout(() => {
       if (copiedShareLinkId.value === link.id) copiedShareLinkId.value = null
@@ -3398,7 +3400,7 @@ function goToVideoSettings() {
             <p v-if="!shareLinksByMaterial[expandedShareLinksMaterialId]?.length" class="text-xs text-slate-400 mb-3">ยังไม่มีลิงก์แชร์</p>
             <div v-else class="space-y-1.5 mb-3">
               <div v-for="link in shareLinksByMaterial[expandedShareLinksMaterialId]" :key="link.id" class="flex items-center justify-between gap-2 text-xs">
-                <span :class="isLinkUsable(link) ? 'text-slate-600' : 'text-slate-300 line-through'" class="truncate">{{ link.share_url }}</span>
+                <span :class="isLinkUsable(link) ? 'text-slate-600' : 'text-slate-300 line-through'" class="truncate">{{ link.short_url ?? link.share_url }}</span>
                 <div class="flex items-center gap-1.5 shrink-0">
                   <span class="text-slate-400">{{ link.view_count }} views</span>
                   <button v-if="isLinkUsable(link)" class="text-brand-600 hover:text-brand-700" title="คัดลอกลิงก์" @click="copyShareLink(link)">
