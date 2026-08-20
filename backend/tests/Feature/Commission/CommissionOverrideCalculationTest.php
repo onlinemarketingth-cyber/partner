@@ -42,7 +42,23 @@ class CommissionOverrideCalculationTest extends TestCase
         return $referral;
     }
 
-    public function test_a_three_level_chain_creates_one_direct_row_and_two_override_rows(): void
+    /**
+     * TASK-214 — REWRITTEN. This test used to prove that two managers at
+     * different cert tiers earned two DIFFERENT override rates (1% and
+     * 0.5%), which was the whole point of keying the rate by
+     * manager_cert_tier_id.
+     *
+     * The human removed that on 2026-08-19 ("ไม่ต้องผูก"), for the same
+     * reason ADR-035 removed cert tier from the selling agent's rate:
+     * passing more exams is not a reason to earn a higher percentage. One
+     * company-wide rate now pays every eligible manager in the chain the
+     * same percentage.
+     *
+     * What did NOT change, and is still asserted here: a manager must hold
+     * a passed cert tier to be paid at all. Certification is a gate, not a
+     * multiplier.
+     */
+    public function test_a_three_level_chain_pays_every_eligible_manager_the_same_company_wide_rate(): void
     {
         $company = Company::factory()->create();
         $basic = CertTier::firstOrCreate(['key' => 'basic'], ['name' => 'Basic', 'sort_order' => 1, 'is_mandatory' => true]);
@@ -63,13 +79,11 @@ class CommissionOverrideCalculationTest extends TestCase
             'company_id' => $company->id, 'cert_tier_id' => $basic->id, 'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage, 'rate_value' => 300, // 3%
         ]);
+        // ONE rule, company-wide (both scope columns null) — the shape
+        // every pre-TASK-214 row already had.
         CommissionOverrideRule::factory()->create([
-            'company_id' => $company->id, 'manager_cert_tier_id' => $unitManagerTier->id,
+            'company_id' => $company->id, 'manager_cert_tier_id' => null,
             'rate_type' => CommissionRateType::Percentage, 'rate_value' => 100, // 1%
-        ]);
-        CommissionOverrideRule::factory()->create([
-            'company_id' => $company->id, 'manager_cert_tier_id' => $branchManagerTier->id,
-            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 50, // 0.5%
         ]);
 
         $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
@@ -90,9 +104,95 @@ class CommissionOverrideCalculationTest extends TestCase
             'referral_id' => $referral->id, 'agent_id' => $unitManager->id,
             'earned_via' => CommissionEarnedVia::Override->value, 'amount_satang' => 10000, 'override_source_agent_id' => $agent->id,
         ]);
+        // Same 1% as the unit manager — no longer 0.5%.
         $this->assertDatabaseHas('commission_ledger', [
             'referral_id' => $referral->id, 'agent_id' => $branchManager->id,
-            'earned_via' => CommissionEarnedVia::Override->value, 'amount_satang' => 5000, 'override_source_agent_id' => $agent->id,
+            'earned_via' => CommissionEarnedVia::Override->value, 'amount_satang' => 10000, 'override_source_agent_id' => $agent->id,
+        ]);
+    }
+
+    /**
+     * TASK-214 — the ruling's actual point: a product may pay its leaders a
+     * different rate from the company default, resolved in exactly the
+     * order the selling agent's rate uses (product > category > company).
+     */
+    public function test_a_product_scoped_override_rate_beats_the_company_default(): void
+    {
+        $company = Company::factory()->create();
+        $basic = CertTier::firstOrCreate(['key' => 'basic'], ['name' => 'Basic', 'sort_order' => 1, 'is_mandatory' => true]);
+        $managerTier = CertTier::factory()->create(['key' => 'unit_manager_tier', 'sort_order' => 2]);
+
+        $manager = User::factory()->agent()->create(['company_id' => $company->id]);
+        $this->passCert($manager, $company, $managerTier);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id, 'manager_id' => $manager->id]);
+        $this->passCert($agent, $company, $basic);
+
+        $product = Product::factory()->create(['company_id' => $company->id, 'price_satang' => 1000000]); // 10,000 THB
+        CommissionRule::factory()->create([
+            'company_id' => $company->id, 'cert_tier_id' => $basic->id, 'product_id' => $product->id,
+            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 300,
+        ]);
+
+        // Company-wide default 1% ...
+        CommissionOverrideRule::factory()->create([
+            'company_id' => $company->id, 'manager_cert_tier_id' => null,
+            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 100,
+        ]);
+        // ... overridden to 2.5% for THIS product only.
+        CommissionOverrideRule::factory()->create([
+            'company_id' => $company->id, 'manager_cert_tier_id' => null, 'product_id' => $product->id,
+            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 250,
+        ]);
+
+        $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
+        $referral = Referral::create([
+            'company_id' => $company->id, 'client_id' => $client->id, 'agent_id' => $agent->id, 'product_id' => $product->id,
+            'branch' => 'Silom', 'preferred_time' => now()->addDay(), 'current_stage' => PipelineStage::CompleteRegistered,
+            'meeting_number' => null, 'submitted_at' => now(),
+        ]);
+        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+
+        // 2.5% of 10,000 THB = 250 THB, not the company default's 100 THB.
+        $this->assertDatabaseHas('commission_ledger', [
+            'referral_id' => $referral->id, 'agent_id' => $manager->id,
+            'earned_via' => CommissionEarnedVia::Override->value, 'amount_satang' => 25000,
+        ]);
+    }
+
+    /**
+     * TASK-214 — the gate that survived the ruling. The rate stopped
+     * depending on the manager's tier; being paid at all did not.
+     */
+    public function test_a_manager_with_no_passed_cert_tier_is_still_skipped(): void
+    {
+        $company = Company::factory()->create();
+        $basic = CertTier::firstOrCreate(['key' => 'basic'], ['name' => 'Basic', 'sort_order' => 1, 'is_mandatory' => true]);
+
+        $manager = User::factory()->agent()->create(['company_id' => $company->id]); // never certified
+        $agent = User::factory()->agent()->create(['company_id' => $company->id, 'manager_id' => $manager->id]);
+        $this->passCert($agent, $company, $basic);
+
+        $product = Product::factory()->create(['company_id' => $company->id, 'price_satang' => 1000000]);
+        CommissionRule::factory()->create([
+            'company_id' => $company->id, 'cert_tier_id' => $basic->id, 'product_id' => $product->id,
+            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 300,
+        ]);
+        CommissionOverrideRule::factory()->create([
+            'company_id' => $company->id, 'manager_cert_tier_id' => null,
+            'rate_type' => CommissionRateType::Percentage, 'rate_value' => 100,
+        ]);
+
+        $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
+        $referral = Referral::create([
+            'company_id' => $company->id, 'client_id' => $client->id, 'agent_id' => $agent->id, 'product_id' => $product->id,
+            'branch' => 'Silom', 'preferred_time' => now()->addDay(), 'current_stage' => PipelineStage::CompleteRegistered,
+            'meeting_number' => null, 'submitted_at' => now(),
+        ]);
+        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+
+        $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)->count());
+        $this->assertDatabaseMissing('commission_ledger', [
+            'referral_id' => $referral->id, 'agent_id' => $manager->id,
         ]);
     }
 

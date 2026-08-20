@@ -25,7 +25,12 @@ class CommissionRuleController extends Controller
     public function index(Request $request): AnonymousResourceCollection
     {
         return CommissionRuleResource::collection(
-            CommissionRule::query()->with(['certTier', 'product', 'productCategory'])->latest('effective_from')->paginate()
+            // TASK-214 — ->get(), not ->paginate(): see
+            // CommissionOverrideRuleController's docblock. The same silent
+            // truncation applied here and was already reachable — a company
+            // with 16+ rules had one quietly missing from the Admin list
+            // while it kept on paying.
+            CommissionRule::query()->with(['certTier', 'product', 'productCategory'])->latest('effective_from')->get()
         );
     }
 
