@@ -65,6 +65,30 @@ function retain(sourceUrl: string): void {
   refCounts.set(sourceUrl, (refCounts.get(sourceUrl) ?? 0) + 1)
 }
 
+/**
+ * TASK-224 — a failure carries its HTTP status so the caller can tell a
+ * BLIP from an ANSWER.
+ *
+ * 404 and 403 are answers: the file is gone, or this user may not have it.
+ * Retrying them costs three requests per image to arrive at the same
+ * place, and on a grid of twelve missing thumbnails that is thirty-six.
+ * A dropped connection, a 429 from the rate limiter, or a 502 while the
+ * server restarts are blips — those are worth asking again.
+ */
+class MediaFetchError extends Error {
+  /** null = the request never got a response (network/DNS/abort). */
+  constructor(readonly status: number | null) {
+    super(`Failed to load media (${status ?? 'network'})`)
+  }
+
+  get isTransient(): boolean {
+    return this.status === null
+      || this.status === 408
+      || this.status === 429
+      || this.status >= 500
+  }
+}
+
 function fetchAsObjectUrl(sourceUrl: string): Promise<string> {
   const cached = objectUrlCache.get(sourceUrl)
   if (cached) return Promise.resolve(cached)
@@ -80,8 +104,16 @@ function fetchAsObjectUrl(sourceUrl: string): Promise<string> {
     const xsrfToken = getCookie('XSRF-TOKEN')
     if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
-    const res = await fetch(sourceUrl, { method: 'GET', headers, credentials: 'include' })
-    if (!res.ok) throw new Error(`Failed to load media (${res.status})`)
+    let res: Response
+    try {
+      res = await fetch(sourceUrl, { method: 'GET', headers, credentials: 'include' })
+    } catch {
+      // fetch() only rejects when there was no HTTP answer at all — the
+      // single most retryable thing that can happen here.
+      throw new MediaFetchError(null)
+    }
+
+    if (!res.ok) throw new MediaFetchError(res.status)
 
     const objectUrl = URL.createObjectURL(await res.blob())
 
@@ -120,6 +152,48 @@ function release(sourceUrl: string | null): void {
 }
 
 /**
+ * TASK-224 — retry a TRANSIENT failure a couple of times before giving up.
+ *
+ * Human-reported after TASK-223: one failed fetch left a red triangle that
+ * never went away until the component happened to remount. The most common
+ * cause of that on a phone is not a broken file — it is one request out of
+ * a dozen losing its connection.
+ *
+ * THREE ATTEMPTS, NOT MORE. A product grid can hold a dozen images; every
+ * extra attempt multiplies by twelve. Two short retries recover a blip
+ * without turning a genuinely-down server into a stampede.
+ *
+ * `stillWanted` is checked between attempts so a card that scrolled away,
+ * or whose url changed, stops immediately instead of finishing a retry
+ * chain nobody is waiting for.
+ */
+const RETRY_DELAYS_MS = [400, 1200]
+
+async function attemptWithRetries(url: string, stillWanted: () => boolean): Promise<string> {
+  let lastError: unknown
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetchAsObjectUrl(url)
+    } catch (e) {
+      lastError = e
+
+      // An ANSWER, not a blip — asking again produces the same answer.
+      if (e instanceof MediaFetchError && ! e.isTransient) break
+
+      const delay = RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || ! stillWanted()) break
+
+      await new Promise((resolve) => setTimeout(resolve, delay))
+
+      if (! stillWanted()) break
+    }
+  }
+
+  throw lastError
+}
+
+/**
  * Reactive: pass a ref (or plain string) holding the protected URL, get
  * back a ref holding the displayable blob object URL (null while
  * loading or if sourceUrl is null). Automatically re-fetches when the
@@ -153,13 +227,15 @@ export function useAuthenticatedMedia(sourceUrl: Ref<string | null>) {
 
     loading.value = true
     try {
-      const result = await fetchAsObjectUrl(url)
+      const result = await attemptWithRetries(url, () => currentTracked === url)
       // A newer load() may have started while this one was in flight;
       // that one owns `currentTracked` now, and writing here would show
       // a stale image.
       if (currentTracked === url) objectUrl.value = result
-    } catch {
-      error.value = 'โหลดสื่อไม่สำเร็จ'
+    } catch (e) {
+      error.value = e instanceof MediaFetchError && ! e.isTransient
+        ? 'ไม่พบไฟล์สื่อนี้'
+        : 'โหลดสื่อไม่สำเร็จ'
       if (currentTracked === url) {
         release(url)
         currentTracked = null
@@ -169,8 +245,22 @@ export function useAuthenticatedMedia(sourceUrl: Ref<string | null>) {
     }
   }
 
+  /**
+   * TASK-224 — re-attempt the CURRENT source url by hand.
+   *
+   * Auto-retry above covers a blip. This covers everything it deliberately
+   * does not: a 404 the admin has since fixed by re-uploading, a 403 that
+   * a re-login cleared, or simply a user who wants to try again rather
+   * than reload the whole page. Safe to call at any time — it goes through
+   * the same load(), so it retains/releases correctly and cannot
+   * double-count a reference.
+   */
+  function retry(): void {
+    void load(sourceUrl.value)
+  }
+
   watch(sourceUrl, (url) => load(url), { immediate: true })
   onUnmounted(() => release(currentTracked))
 
-  return { objectUrl, loading, error }
+  return { objectUrl, loading, error, retry }
 }

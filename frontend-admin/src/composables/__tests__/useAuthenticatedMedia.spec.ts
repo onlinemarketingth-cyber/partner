@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { ref, nextTick } from 'vue'
 
 /**
@@ -20,11 +20,13 @@ async function freshModule() {
   vi.resetModules()
   created = 0
   revoked = []
-  // jsdom already provides `document`; this only clears the cookie jar so
-  // the XSRF header is deterministic. The `??` keeps the spec runnable if
-  // the environment is ever switched away from jsdom.
-  // @ts-expect-error test stub
-  globalThis.document = globalThis.document ?? { cookie: '' }
+  // jsdom always provides `document` — vitest.config.ts pins the
+  // environment for the whole project — so this only clears the cookie jar
+  // to keep the XSRF header deterministic between tests. An earlier
+  // version also assigned a `{ cookie: '' }` fallback for a hypothetical
+  // non-jsdom environment; it needed a @ts-expect-error that `vue-tsc
+  // --build` then reported as UNUSED, which is TypeScript stating the
+  // fallback could never be reached.
   document.cookie = ''
   // Patch the two methods, never replace globalThis.URL itself — Vite and
   // vitest both call `new URL(...)` internally, and swapping the whole
@@ -54,11 +56,18 @@ function deferredFetch() {
   }
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 0))
+const settle = () => vi.advanceTimersByTimeAsync(0)
 const URL_A = 'https://api.test/media/1'
 
 describe('useAuthenticatedMedia', () => {
-  beforeEach(() => { vi.restoreAllMocks() })
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    // TASK-224's retry waits 400ms then 1200ms between attempts. Fake
+    // timers keep the suite instant instead of sleeping for real.
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => { vi.useRealTimers() })
 
   it('makes ONE request when two components ask for the same url at once', async () => {
     const use = await freshModule()
@@ -139,5 +148,92 @@ describe('useAuthenticatedMedia', () => {
 
     expect(a.objectUrl.value).toBeNull()
     expect(a.error.value).not.toBe('')
+  })
+
+  // ── TASK-224: retry ───────────────────────────────────────────────
+
+  it('retries a transient failure and succeeds on the second attempt', async () => {
+    const use = await freshModule()
+    let calls = 0
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn(async () => {
+      calls++
+
+      return calls === 1
+        ? { ok: false, status: 503 }
+        : { ok: true, status: 200, blob: async () => ({}) }
+    })
+
+    const a = use(ref(URL_A))
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(calls).toBe(2)
+    expect(a.error.value).toBe('')
+    expect(a.objectUrl.value).toBe('blob:stub-1')
+  })
+
+  it('gives up after three attempts on a server that stays down', async () => {
+    const use = await freshModule()
+    let calls = 0
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn(async () => { calls++; return { ok: false, status: 500 } })
+
+    const a = use(ref(URL_A))
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(calls).toBe(3)
+    expect(a.error.value).not.toBe('')
+  })
+
+  /** A 404 is an ANSWER. Retrying it twice per image is pure waste. */
+  it('does NOT retry a 404', async () => {
+    const use = await freshModule()
+    let calls = 0
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn(async () => { calls++; return { ok: false, status: 404 } })
+
+    const a = use(ref(URL_A))
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(calls).toBe(1)
+    expect(a.error.value).toBe('ไม่พบไฟล์สื่อนี้')
+  })
+
+  it('retries a dropped connection (fetch itself rejecting)', async () => {
+    const use = await freshModule()
+    let calls = 0
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn(async () => {
+      calls++
+      if (calls === 1) throw new TypeError('Load failed')
+
+      return { ok: true, status: 200, blob: async () => ({}) }
+    })
+
+    const a = use(ref(URL_A))
+    await vi.advanceTimersByTimeAsync(500)
+
+    expect(calls).toBe(2)
+    expect(a.objectUrl.value).toBe('blob:stub-1')
+  })
+
+  /** The manual escape hatch: the admin re-uploaded, the user taps again. */
+  it('retry() recovers after a permanent failure that has since been fixed', async () => {
+    const use = await freshModule()
+    let broken = true
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn(async () =>
+      broken ? { ok: false, status: 404 } : { ok: true, status: 200, blob: async () => ({}) })
+
+    const a = use(ref(URL_A))
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(a.error.value).not.toBe('')
+
+    broken = false
+    a.retry()
+    await vi.advanceTimersByTimeAsync(5000)
+
+    expect(a.error.value).toBe('')
+    expect(a.objectUrl.value).toBe('blob:stub-1')
   })
 })
