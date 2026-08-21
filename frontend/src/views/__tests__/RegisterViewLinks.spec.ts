@@ -63,6 +63,7 @@ vi.mock('vue-router', () => ({
 }))
 
 import RegisterView from '../RegisterView.vue'
+import { useThemeStore } from '@/stores/theme'
 
 function setRoute(name: string, params: Record<string, unknown> = {}, query: Record<string, unknown> = {}) {
   currentRoute.name = name
@@ -179,6 +180,64 @@ describe('RegisterView — the short signup links (TASK-232/233)', () => {
     expect(text).not.toContain('ขั้นตอน 2 จาก 2')
     expect(text).not.toContain('กรอกรหัสเชิญของบริษัทเพื่อเริ่มสมัคร')
     expect(text).not.toContain('เปลี่ยนรหัส')
+  })
+
+  it('paints the inviting company\'s theme, which a short link cannot look up itself', async () => {
+    /*
+     * Reported 2026-08-21: "เข้าที่มือถือ หรือ scan qr code … สีของ theme ไม่มา".
+     *
+     * The theme store resolves a company pre-login from `?company=<slug>` or
+     * a slug cached in localStorage. /j/<code> has NEITHER — no slug in the
+     * URL (that is what makes it short) and nothing cached on a phone that
+     * has never signed in. So the theme has to ride in the resolve payload,
+     * exactly as it already does for /p/, /pay/ and /l/.
+     *
+     * IT LOOKED FINE UNTIL SOMEBODY SCANNED THE QR CODE: the desktop these
+     * links were tested on had a cached slug from an earlier login and
+     * themed correctly, hiding the bug completely. An in-app browser (LINE,
+     * the camera app) starts with empty storage on every open, so the one
+     * audience a QR code exists for never saw the branding.
+     *
+     * Asserted on applyResolved rather than on CSS variables: what this view
+     * owns is handing the payload to the store. If it stops, nothing throws
+     * and nothing 500s — the page just quietly goes neutral again.
+     */
+    const theme = { company: { name: 'ไทยประกันชีวิต', slug: 'thailife' }, primary_hex: '#B08D57' }
+    post.mockResolvedValue({ company_name: 'ไทยประกันชีวิต', inviter_name: 'สมชาย', theme })
+    setRoute('team-signup-link', { code: 'K7M3QP2X9A' })
+
+    const themeStore = useThemeStore()
+    const applyResolved = vi.spyOn(themeStore, 'applyResolved')
+
+    await mountRegister()
+
+    expect(applyResolved).toHaveBeenCalledWith(theme)
+  })
+
+  it('does the same for the company link', async () => {
+    const theme = { company: { name: 'ไทยประกันชีวิต', slug: 'thailife' }, primary_hex: '#B08D57' }
+    post.mockResolvedValue({ company_name: 'ไทยประกันชีวิต', theme })
+    setRoute('company-signup-link', { code: 'thailife' })
+
+    const themeStore = useThemeStore()
+    const applyResolved = vi.spyOn(themeStore, 'applyResolved')
+
+    await mountRegister()
+
+    expect(applyResolved).toHaveBeenCalledWith(theme)
+  })
+
+  it('still signs people up against a backend that sends no theme', async () => {
+    // A backend deployed before this change omits the key. The recruit must
+    // meet a neutral page, never a crash — the branding is the nice-to-have
+    // here and the signup is not.
+    post.mockResolvedValue({ company_name: 'ไทยประกันชีวิต', inviter_name: 'สมชาย' })
+    setRoute('team-signup-link', { code: 'K7M3QP2X9A' })
+
+    const wrapper = await mountRegister()
+
+    expect(wrapper.text()).toContain('สมชาย')
+    expect(wrapper.find('#first_name').exists()).toBe(true)
   })
 
   it('brings the step counter back when the link was dead and the code form returned', async () => {

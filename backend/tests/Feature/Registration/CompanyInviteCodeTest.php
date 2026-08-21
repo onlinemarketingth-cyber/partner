@@ -218,7 +218,25 @@ class CompanyInviteCodeTest extends TestCase
         $response = $this->postJson('/api/v1/register/resolve-invite-code', ['invite_code' => 'thailife'])
             ->assertOk();
 
-        $this->assertSame(['company_name' => 'ไทยประกันชีวิต'], $response->json());
+        // `theme` joined this payload on 2026-08-21 so a phone that has just
+        // scanned the QR code can paint the company's own colours: a short
+        // link carries no slug and a freshly-scanned device has nothing
+        // cached, so this response is the only place the theme can come from.
+        // SignupLinkThemeTest owns that behaviour and asserts it is
+        // presentational only. This list stays CLOSED — a third key has to
+        // argue with this line before it ships.
+        $keys = array_keys($response->json());
+        sort($keys);
+        $this->assertSame(['company_name', 'theme'], $keys);
+        $this->assertSame('ไทยประกันชีวิต', $response->json('company_name'));
+
+        // The QUOTA is the thing this test was written to keep out: an
+        // unauthenticated caller must not learn how big a company's
+        // recruitment drive is or how much room is left in it.
+        $body = $response->getContent();
+        $this->assertStringNotContainsString('used_count', $body);
+        $this->assertStringNotContainsString('max_uses', $body);
+        $this->assertStringNotContainsString('expires_at', $body);
     }
 
     public function test_a_revoked_and_an_invented_code_answer_the_same_way(): void

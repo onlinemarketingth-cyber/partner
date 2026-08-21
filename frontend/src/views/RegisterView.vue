@@ -57,6 +57,7 @@ import { api, ApiError, ensureCsrfCookie } from '@/api/client'
 // view never gates on the session, and an anonymous recruit never triggers it.
 import { useAuthStore } from '@/stores/auth'
 import { useToastStore } from '@/stores/toast'
+import { type Theme, useThemeStore } from '@/stores/theme'
 import { useI18n } from '@/composables/useI18n'
 import Icon from '@/design-system/components/Icon.vue'
 import AppLogo from '@/design-system/components/AppLogo.vue'
@@ -126,6 +127,46 @@ const companyLinkCode = ref('')
 
 /** Either kind of link resolved the company for them, so step 1 never happened. */
 const arrivedViaLink = computed(() => viaRecruitLink.value || viaCompanyLink.value)
+
+const themeStore = useThemeStore()
+
+/**
+ * Paint the page in the inviting company's colours.
+ *
+ * ── WHY THE THEME HAS TO ARRIVE IN THIS PAYLOAD ──
+ *
+ * The theme store resolves a company pre-login from `?company=<slug>`, or
+ * failing that from a slug cached in localStorage. A short signup link
+ * carries NEITHER — no slug in /j/<code> or /c/<code> (that is what makes it
+ * short), and a device that has never signed in has nothing cached. So
+ * loadPublic() bails at resolveSlug() and the recruit gets the neutral
+ * platform brand instead of the company that invited them.
+ *
+ * ── AND WHY IT LOOKED FINE UNTIL SOMEBODY SCANNED THE QR CODE ──
+ *
+ * Reported 2026-08-21: "เข้าที่มือถือ หรือ scan qr code … สีของ theme ไม่มา".
+ * The desktop these links were tested on had a cached slug from an earlier
+ * login, so it themed correctly and hid the bug completely. A phone that has
+ * just scanned the QR has nothing — and an in-app browser (LINE, the camera
+ * app, Facebook) often starts with empty storage on EVERY open, so it never
+ * accumulates one either. The single audience a QR code exists for was the
+ * one audience that never saw the branding.
+ *
+ * ── NOT A NEW MECHANISM ──
+ *
+ * ProductShareView, PaymentPageView and AffiliateLeadCaptureView already do
+ * exactly this for the three customer token pages, against the same
+ * `theme` key from the same serialiser (App\Http\Resources\Concerns\
+ * ResolvesPublicTheme). The signup links are the same shape of page and were
+ * simply never covered.
+ *
+ * Undefined is tolerated on purpose: a backend deployed before this change
+ * omits the key, and a recruit must still be able to sign up on the neutral
+ * theme rather than meet a crash.
+ */
+function applyLinkTheme(next: Theme | null | undefined): void {
+  themeStore.applyResolved(next)
+}
 
 function fallBackToInviteStep(message: string) {
   refToken.value = ''
@@ -197,13 +238,16 @@ onMounted(async () => {
     // verification to every request from the SPA's stateful domain, so the
     // first POST a visitor makes has to obtain the cookie first.
     await ensureCsrfCookie()
-    const res = await api.post<{ company_name: string; inviter_name: string }>(
+    const res = await api.post<{ company_name: string; inviter_name: string; theme?: Theme | null }>(
       '/register/resolve-ref-token',
       { ref_token: token },
     )
     refToken.value = token
     refCompanyName.value = res.company_name
     refInviterName.value = res.inviter_name
+    // THE COMPANY'S COLOURS, ON A PAGE THAT CANNOT LOOK THEM UP ITSELF.
+    // See applyLinkTheme() for why this is the only source available here.
+    applyLinkTheme(res.theme)
     // The link IS the invitation — skip step 1 (ADR-025 §5).
     step.value = 'form'
   } catch (e) {
@@ -249,10 +293,11 @@ async function submitInviteCode() {
     // stateful domain, not just authenticated ones, so the very first
     // POST a visitor makes (before any cookie exists) always 419'd.
     await ensureCsrfCookie()
-    const res = await api.post<{ company_name: string }>('/register/resolve-invite-code', {
+    const res = await api.post<{ company_name: string; theme?: Theme | null }>('/register/resolve-invite-code', {
       invite_code: inviteCode.value.trim(),
     })
     resolvedCompanyName.value = res.company_name
+    applyLinkTheme(res.theme)
     step.value = 'form'
   } catch (e) {
     // 404 either way (unknown/expired/revoked) — see ResolveInviteCodeRequest's

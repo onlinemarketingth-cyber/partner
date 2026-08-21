@@ -100,9 +100,17 @@ class RecruitLinkRegistrationTest extends TestCase
 
         $keys = array_keys($response->json());
         sort($keys);
-        $this->assertSame(['company_name', 'inviter_name'], $keys);
+        // `theme` joined this payload on 2026-08-21 so a phone that has just
+        // scanned the QR code can paint the inviting company's colours: a
+        // short link carries no slug and a freshly-scanned device has nothing
+        // cached, so this response is the only place the theme can come from.
+        // SignupLinkThemeTest owns that behaviour. This list stays CLOSED —
+        // a third key has to argue with this line before it ships.
+        $this->assertSame(['company_name', 'inviter_name', 'theme'], $keys);
 
-        // Spelled out individually so a future regression names itself.
+        // Spelled out individually so a future regression names itself. All
+        // four are the LINK's own state, and none of them became reachable
+        // when the theme arrived — ThemeResource is presentational only.
         $body = $response->getContent();
         $this->assertStringNotContainsString($link->token, $body);
         $this->assertStringNotContainsString('used_count', $body);

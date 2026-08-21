@@ -25,9 +25,11 @@
 import { onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
+import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
 const router = useRouter()
+const themeStore = useThemeStore()
 
 const failed = ref(false)
 
@@ -42,7 +44,35 @@ onMounted(async () => {
 
   try {
     const res = await api.get<{ company_slug: string }>(`/public/login-links/${encodeURIComponent(code)}`)
-    router.replace({ name: 'login', query: { company: res.company_slug } })
+    await router.replace({ name: 'login', query: { company: res.company_slug } })
+
+    /*
+     * THE REDIRECT ALONE DOES NOT THEME THE PAGE. Reported 2026-08-21:
+     * "scan qr code … สีของ theme ไม่มา".
+     *
+     * loadPublic() runs exactly once, from main.ts, at boot — and at that
+     * moment the URL is /in/<code>, which carries no `?company=`. The store
+     * therefore falls back to a slug cached in localStorage, which is empty
+     * on a phone that has never signed in (and stays empty in an in-app
+     * browser, which often starts with fresh storage on every open). So the
+     * boot load resolves nothing.
+     *
+     * Writing `?company=` into the URL afterwards changes nothing by itself:
+     * an in-SPA route push never re-runs loadPublic(). The theme store's own
+     * loginRouteLocation() docblock states this exact limitation — it was
+     * known, and this arrival was simply never wired to it.
+     *
+     * Called AFTER awaiting the replace, because resolveSlug() reads
+     * window.location.search: run it before the navigation commits and it
+     * would look at /in/<code> again and bail a second time. It also caches
+     * the slug, so a returning visitor on this device is themed from the
+     * first frame.
+     *
+     * Never throws (boot resilience is built into loadPublic), so an
+     * unreachable theme endpoint still leaves the agent on a working, if
+     * neutral, login page.
+     */
+    await themeStore.loadPublic()
   } catch (e) {
     /*
      * A dead link still reaches the login page — just the unbranded one.

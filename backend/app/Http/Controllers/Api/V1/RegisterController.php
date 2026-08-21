@@ -11,6 +11,7 @@ use App\Http\Requests\Registration\RegisterRequest;
 use App\Http\Requests\Registration\ResendVerificationEmailRequest;
 use App\Http\Requests\Registration\ResolveInviteCodeRequest;
 use App\Http\Requests\Registration\ResolveRefTokenRequest;
+use App\Http\Resources\Concerns\ResolvesPublicTheme;
 use App\Models\Company;
 use App\Models\User;
 use App\Services\Link\TrackedLinkService;
@@ -26,6 +27,45 @@ use Illuminate\Http\Request;
 // points at the frontend rather than this endpoint directly).
 class RegisterController extends Controller
 {
+    /*
+     * TASK-159 §3's `theme` key, extended to the TWO SIGNUP LINKS.
+     *
+     * ── THE BUG THIS FIXES, REPORTED 2026-08-21 ──
+     *
+     * "เข้าที่มือถือ หรือ scan qr code … สีของ theme ไม่มา."
+     *
+     * The theme store resolves a company pre-login from `?company=<slug>`
+     * or, failing that, a slug cached in localStorage. A short signup link
+     * (/j/<code>, /c/<code>) carries NO slug — that is the entire point of a
+     * short link — so on a device that has never signed in, resolveSlug()
+     * returns null, loadPublic() returns early, and the recruit sees the
+     * neutral platform brand instead of the company that invited them.
+     *
+     * It works on the desktop the links were TESTED on, because that browser
+     * has a cached slug from a previous login. A phone that just scanned the
+     * QR code has nothing cached, and an in-app browser (LINE, the camera
+     * app, Facebook) often starts with empty storage every single time. So
+     * the one audience the QR code exists for is the one audience that never
+     * saw the branding.
+     *
+     * ── WHY THIS SEAM AND NOT A SLUG IN THE URL ──
+     *
+     * ResolvesPublicTheme already solves exactly this for the three
+     * customer-facing token pages (/p/, /pay/, /l/), whose docblock names
+     * "the hostname/`?company=` slug guess" as the mistake it exists to stop
+     * repeating. The signup links are the same shape of page — public,
+     * token-resolved, no slug available — and were simply never covered.
+     * Reusing the trait keeps one serialiser and one shape, so ag-ui hands
+     * this payload to the same themeStore.applyResolved() the other three
+     * already use.
+     *
+     * BR-6: the company comes off the token-resolved model, never from the
+     * request. Both call sites below sit AFTER the abort_unless() that
+     * rejects an unknown, expired or revoked credential, so a dead link
+     * still emits no theme.
+     */
+    use ResolvesPublicTheme;
+
     public function resolveInviteCode(ResolveInviteCodeRequest $request, RegistrationService $service, TrackedLinkService $trackedLinks): JsonResponse
     {
         $inviteCode = $service->resolveInviteCode($request->validated('invite_code'));
@@ -41,7 +81,10 @@ class RegisterController extends Controller
         // failed (unknown / expired / revoked) — never leaked (ADR-005).
         abort_unless($inviteCode, 404, 'ไม่พบรหัสเชิญนี้ในระบบ หรือรหัสหมดอายุ/ถูกยกเลิกแล้ว');
 
-        return response()->json(['company_name' => $inviteCode->company->name]);
+        return response()->json([
+            'company_name' => $inviteCode->company->name,
+            'theme' => $this->publicTheme($inviteCode->company),
+        ]);
     }
 
     /**
@@ -82,6 +125,7 @@ class RegisterController extends Controller
             // `name` is the derived "first last" column User maintains in
             // its saving hook — never the email, phone or id.
             'inviter_name' => $link->agent->name,
+            'theme' => $this->publicTheme($link->company),
         ]);
     }
 
