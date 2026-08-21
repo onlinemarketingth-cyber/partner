@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Platform;
 
+use App\Support\PasswordRuleMessages;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rules\Password;
 
@@ -28,5 +29,16 @@ class ResetUserPasswordRequest extends FormRequest
             // logs in with, so it gets the same floor as a self-chosen one.
             'password' => ['required', 'string', Password::defaults()],
         ];
+    }
+
+    /**
+     * Thai text for the shared password policy — see PasswordRuleMessages.
+     * Without this the Password rule answers in English inside a Thai app.
+     *
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return PasswordRuleMessages::all();
     }
 }

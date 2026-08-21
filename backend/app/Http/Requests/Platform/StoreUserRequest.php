@@ -5,6 +5,7 @@ namespace App\Http\Requests\Platform;
 use App\Enums\IdDocumentType;
 use App\Models\User;
 use App\Rules\IdDocument;
+use App\Support\PasswordRuleMessages;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -62,5 +63,16 @@ class StoreUserRequest extends FormRequest
             // path straight to `approved`).
             'national_id' => ['nullable', 'string', 'max:255', new IdDocument($this->input('id_document_type'))],
         ];
+    }
+
+    /**
+     * Thai text for the shared password policy — see PasswordRuleMessages.
+     * Without this the Password rule answers in English inside a Thai app.
+     *
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return PasswordRuleMessages::all();
     }
 }

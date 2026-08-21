@@ -5,6 +5,7 @@ namespace App\Http\Requests\Registration;
 use App\Enums\IdDocumentType;
 use App\Rules\IdDocument;
 use App\Services\Registration\RegistrationService;
+use App\Support\PasswordRuleMessages;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -150,6 +151,7 @@ class RegisterRequest extends FormRequest
         $notBoth = 'ใช้รหัสเชิญและลิงก์ชวนเข้าทีมพร้อมกันไม่ได้ — เลือกอย่างใดอย่างหนึ่ง';
 
         return [
+            ...PasswordRuleMessages::all(),
             'invite_code.required_without' => $eitherOr,
             'ref_token.required_without' => $eitherOr,
             'invite_code.prohibited' => $notBoth,

@@ -94,9 +94,27 @@ class AppServiceProvider extends ServiceProvider
          * production.
          */
         Password::defaults(function () {
+            /*
+             * EIGHT, not ten (human decision 2026-08-21).
+             *
+             * The audit raised the floor to 10 and shipped it without
+             * touching the "อย่างน้อย 8 ตัวอักษร" hint rendered under the
+             * field. An agent then met a rule of 10 and a hint of 8 in the
+             * same box — and the rule's message came out in English on top
+             * of that. The human's call is 8, so 8 it is, and the hint,
+             * the rule and PasswordRuleMessages now all say the same number.
+             *
+             * uncompromised() stays and is the part that carries the
+             * weight. Length pushes people towards predictable padding; the
+             * breach check rejects the passwords actually being sprayed at
+             * this login form. Only a 5-character hash prefix leaves the
+             * server — never the password — and Laravel's verifier fails
+             * OPEN if the service is unreachable, so a network hiccup on
+             * Hostinger cannot lock a new agent out of registering.
+             */
             return $this->app->runningUnitTests()
                 ? Password::min(8)
-                : Password::min(10)->uncompromised();
+                : Password::min(8)->uncompromised();
         });
 
         $this->defineAbilityGates();

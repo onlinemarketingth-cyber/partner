@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Profile;
 
+use App\Support\PasswordRuleMessages;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rules\Password;
 
@@ -41,6 +42,7 @@ class UpdatePasswordRequest extends FormRequest
     public function messages(): array
     {
         return [
+            ...PasswordRuleMessages::all(),
             'current_password.current_password' => 'รหัสผ่านปัจจุบันไม่ถูกต้อง',
             'password.different' => 'รหัสผ่านใหม่ต้องไม่ซ้ำกับรหัสผ่านเดิม',
         ];
