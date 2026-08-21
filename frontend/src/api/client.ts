@@ -16,6 +16,67 @@ function getCookie(name: string): string | null {
   return match?.[2] ? decodeURIComponent(match[2]) : null
 }
 
+/**
+ * Delete a stale XSRF-TOKEN left over from the parent-domain cookie era.
+ *
+ * ── THE INCIDENT THIS FIXES (2026-08-21, production) ──
+ *
+ * ADR-039 step 5 removed SESSION_DOMAIN, so Laravel stopped issuing the
+ * XSRF-TOKEN scoped to `.partner.syncvision.io` and started issuing a
+ * host-only one. Every browser that had visited before was then holding
+ * BOTH, with the same name and different scopes.
+ *
+ * `document.cookie` returns both, getCookie() above matches the FIRST, and
+ * the first is whichever the browser feels like — in practice the stale one.
+ * The client then sent a token belonging to a cookie the server no longer
+ * issues, and every login died with 419 CSRF mismatch. Read-only pages were
+ * unaffected, which is what made it look like a login bug rather than a
+ * cookie bug.
+ *
+ * ── WHY THE APP HAS TO DO THIS AND NOT THE SERVER ──
+ *
+ * The server cannot delete a cookie it no longer scopes: a Set-Cookie that
+ * clears the old one would have to name the old Domain, which is exactly
+ * the thing we just stopped doing. The browser holding it is the only party
+ * that can drop it, and JS may delete a parent-domain cookie by naming the
+ * same domain. So this runs here, once, at module load.
+ *
+ * ── SELF-LIMITING ON PURPOSE ──
+ *
+ * Only fires when there is genuinely MORE THAN ONE cookie of this name. In
+ * the steady state — everyone past the migration, or a browser that never
+ * saw the old scope — it touches nothing at all and costs one string split.
+ * Cookie-deleting code that runs unconditionally, forever, is the kind of
+ * thing that quietly logs somebody out three years from now.
+ *
+ * Safe to delete this function once no active user can still be carrying a
+ * cookie from before 2026-08-21.
+ */
+function purgeDuplicateXsrfCookies(): void {
+  try {
+    if (typeof document === 'undefined') return
+
+    const duplicates = document.cookie.split('; ').filter((c) => c.startsWith('XSRF-TOKEN=')).length
+    if (duplicates < 2) return
+
+    // Walk the parent domains of the current host and clear the name at each
+    // scope. The host-only cookie carries no Domain attribute, so none of
+    // these match it and the good one survives. Stops at two labels: a
+    // browser rejects a cookie set on a public suffix anyway.
+    const labels = window.location.hostname.split('.')
+    for (let i = 0; i <= labels.length - 2; i++) {
+      const domain = labels.slice(i).join('.')
+      document.cookie = `XSRF-TOKEN=; Max-Age=0; path=/; domain=.${domain}`
+    }
+  } catch {
+    // A browser that will not let us read or write cookies is a browser
+    // where the app has larger problems than a stale token. Never throw
+    // from module scope — that white-screens everything downstream.
+  }
+}
+
+purgeDuplicateXsrfCookies()
+
 /** Must be called once (e.g. before login) to obtain the XSRF-TOKEN cookie. */
 export async function ensureCsrfCookie(): Promise<void> {
   await fetch(`${API_BASE_URL}/sanctum/csrf-cookie`, {
