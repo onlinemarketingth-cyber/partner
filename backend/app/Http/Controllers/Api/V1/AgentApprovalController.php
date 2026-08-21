@@ -61,8 +61,14 @@ class AgentApprovalController extends Controller
             ->where('agent_approval_status', $status)
             // approvedBy powers UserResource's `approved_by` block — the
             // "with the approver named" half of ADR-025 §7's mitigation.
-            // Eager-loaded so a queue of N rows is not N+1 lookups.
-            ->with(['company', 'approvedBy'])
+            //
+            // manager and recruitedViaAgentLink.agent power `recruited_via`:
+            // "who did this person sign up under" is the first thing an admin
+            // looks for on a row they are being asked to admit into a
+            // commission tree, and until now the queue could not answer it.
+            //
+            // All eager-loaded so a queue of N rows is not N+1 lookups.
+            ->with(['company', 'approvedBy', 'manager', 'recruitedViaAgentLink.agent'])
             ->orderBy('created_at');
 
         // TASK-209 — Super Admin's header company scope. Applied BEFORE

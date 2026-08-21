@@ -96,6 +96,38 @@ class UserResource extends JsonResource
             'agent_approval_status' => $this->agent_approval_status?->value,
             'approval_rejection_reason' => $this->approval_rejection_reason,
             'registered_via' => $this->registered_via?->value,
+            // A BOOLEAN, NOT THE TIMESTAMP — the same line
+            // PendingRecruitResource already draws, for the same reason. An
+            // admin deciding on this row has to know that approving an
+            // UNVERIFIED person will not let them in yet: LoginGateService
+            // raises EmailUnverified BEFORE ApprovalPending, so the approval
+            // lands, the login still refuses, and it reads as the approval
+            // having silently failed. The exact minute somebody clicked a
+            // link in their inbox is nobody else's business.
+            'email_verified' => $this->email_verified_at !== null,
+            // WHO recruited them, and through which link (ADR-025 §6).
+            //
+            // Deliberately NOT manager_id. `manager` is the CURRENT upline
+            // and an admin may re-point it at any time;
+            // recruited_via_agent_link_id is immutable attribution — it
+            // survives the leader losing the flag, the link being revoked,
+            // and any later re-parenting. "Who did this person sign up
+            // under" has one honest answer and this is it.
+            //
+            // whenLoaded, so /users (which does not eager-load the link)
+            // omits the key rather than firing queries per row. Null INSIDE
+            // means they came through a company-wide invite code — a real
+            // state, not a gap: nobody recruited them personally, and the UI
+            // must say so rather than leave a blank where a name goes.
+            'recruited_via' => $this->whenLoaded('recruitedViaAgentLink', fn () => $this->recruitedViaAgentLink ? [
+                'link_label' => $this->recruitedViaAgentLink->label,
+                'agent' => $this->recruitedViaAgentLink->relationLoaded('agent') && $this->recruitedViaAgentLink->agent
+                    ? [
+                        'id' => (int) $this->recruitedViaAgentLink->agent->id,
+                        'name' => $this->recruitedViaAgentLink->agent->name,
+                    ]
+                    : null,
+            ] : null),
             // TASK-115 / ADR-025 §7 — the "residual risk" mitigation made
             // visible: WHICH path admitted this agent, WHEN, and BY WHOM.
             // TASK-117's queue renders "อนุมัติโดยหัวหน้าทีม <name>" from

@@ -108,6 +108,35 @@ export interface AgentItem {
   // sends it unconditionally (it leaks no digits), so an absent key here
   // means the same thing as null — see idDocumentTypeLabel().
   id_document_type?: IdDocumentType | null
+  /**
+   * Has this person clicked the link in their inbox?
+   *
+   * A BOOLEAN, not the timestamp — UserResource draws that line
+   * deliberately. It matters on the approvals queue because
+   * LoginGateService raises EmailUnverified BEFORE ApprovalPending:
+   * approving an unverified recruit is a real approval, and the login still
+   * refuses them afterwards. An admin who cannot see this approves, hears
+   * "I still cannot get in", and reasonably concludes the button is broken.
+   */
+  email_verified?: boolean
+  /**
+   * WHO this person signed up under, and through which of that leader's
+   * links.
+   *
+   * Not the same question as `manager` above. manager is the CURRENT upline
+   * and an admin may re-point it at will; this comes from
+   * recruited_via_agent_link_id, which is immutable attribution (ADR-025 §6)
+   * and survives the leader losing the flag, the link being revoked, or any
+   * later re-parenting.
+   *
+   * Optional at two levels, and both are real states:
+   *   * key ABSENT — the endpoint did not eager-load the link (/users does
+   *     not; /agent-approvals does);
+   *   * key PRESENT but null — they registered through a COMPANY-wide invite
+   *     code, so nobody recruited them personally. Say that in words; never
+   *     leave a blank where a name goes.
+   */
+  recruited_via?: { link_label: string | null; agent: { id: number; name: string } | null } | null
 }
 
 /** Thai wording identical to IdDocumentType::label() on the backend. */
