@@ -17,7 +17,10 @@
 | pint / eslint / vue-tsc --build | สะอาด | **สะอาด** |
 | build ทั้งสองแอป | ผ่าน | **ผ่าน** |
 
-**ช่องโหว่ที่พบ 20 ข้อ · แก้แล้ว 17 · เหลือ 3 ที่เป็นงานของคนไม่ใช่ของโค้ด**
+**ช่องโหว่ที่พบ 20 ข้อ · แก้แล้ว 18 · เหลือ 2**
+
+> **อัปเดต 2026-08-21:** V6 (session ชนกัน) แก้เสร็จและยืนยันบน production แล้ว — ดู `adr/ADR-039-same-origin-api.md` §10
+> **แต่ backend ยังไม่เคย deploy เลยสักครั้ง** — งานความปลอดภัยที่เหลือทั้งหมดยังอยู่แค่ใน git ดู §7
 
 ---
 
@@ -84,7 +87,7 @@ Laravel 12.66 · Symfony 7.4 · Sanctum 4.3.3 ไม่มีตัวไหน�
 | **V16** | seeder สร้าง superadmin รหัส `password` ไม่มี guard | `abort_unless(local/testing)` ชี้ไปที่ `php artisan admin:create-super` |
 | **V18** | รหัสผ่านขั้นต่ำ 8 ไม่เช็ครหัสที่รั่ว | `Password::defaults()` ที่เดียว → **min 10 + uncompromised** · FormRequest ทั้ง 4 ใช้ตัวเดียวกัน |
 | **V19** | ล็อกอินและ lockout ไม่ถูกบันทึกที่ไหนเลย | `auth.login` + listener `RecordAuthLockout` สำหรับ event ที่ยิงมาแล้วไม่มีใครฟังมาตลอด |
-| **V6** | session ชนกันบน production | เตรียม config + ลำดับขั้นตอนครบ — **ยังต้องมีคนสร้าง subdomain** (ดู §4.1) |
+| **V6** | session ชนกันบน production | ✅ **แก้เสร็จและยืนยันบน production แล้ว 2026-08-21** — ทำตาม ADR-039 (same-origin API ที่ `/backend` ทั้งสองโฮสต์ แล้วถอด `SESSION_DOMAIN`) cookie เป็น host-only ทั้งคู่ |
 
 ---
 
