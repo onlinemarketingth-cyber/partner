@@ -134,8 +134,45 @@ rsync_to() {
   # Extra args (e.g. --exclude=/admin) let callers protect destination
   # paths that --delete would otherwise remove — see the frontend call
   # below for why this exists.
-  rsync -avz --delete --chmod=D755,F644 "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
+  # 2026-08-21 — ...AND rsync on macOS DOES NOT SUPPORT --chmod.
+  #
+  # Recent macOS ships openrsync in place of Tridgell rsync, and it rejects
+  # the flag outright: "rsync: --chmod=D755,F644: invalid argument". The
+  # script then died BEFORE uploading anything, so a deploy looked like it
+  # had run (git pushed, dist/ built, "Pushed." printed) while production
+  # never changed. Two rounds of debugging went into "why is the file not
+  # on the server" before the real answer showed up at the top of the log.
+  #
+  # Dropping --chmod to make it run would silently re-open TASK-231, which
+  # cost an afternoon of 404s. So the guarantee is kept and only the
+  # MECHANISM changes: force the modes with rsync where rsync can, and with
+  # a remote chmod where it cannot. Either way nothing reaches the server
+  # carrying a mode that came from whatever tool last touched the file.
+  #
+  # find without -L on purpose: `api/` and `backend/` under the agent
+  # docroot are symlinks into the Laravel tree, and this must never chmod
+  # its way into the backend.
+  if $RSYNC_CHMOD_SUPPORTED; then
+    rsync -avz --delete --chmod=D755,F644 "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
+  else
+    rsync -avz --delete "$@" -e "$RSYNC_SSH" "$src" "$SSH_USER@$SSH_HOST:$dst"
+    info "rsync has no --chmod here; forcing modes on the server instead."
+    ssh_run "find '$dst' -type d -exec chmod 755 {} + ; find '$dst' -type f -exec chmod 644 {} +"
+  fi
 }
+
+# Does THIS machine's rsync understand --chmod? Probed by actually running
+# it against a throwaway directory rather than by parsing --version or
+# --help, because the two implementations disagree about the format of
+# both. One local copy of one empty file, once per deploy.
+RSYNC_CHMOD_SUPPORTED=false
+_chmod_probe="$(mktemp -d)"
+mkdir -p "$_chmod_probe/src"
+: > "$_chmod_probe/src/probe"
+if rsync -a --chmod=D755,F644 "$_chmod_probe/src/" "$_chmod_probe/dst/" >/dev/null 2>&1; then
+  RSYNC_CHMOD_SUPPORTED=true
+fi
+rm -rf "$_chmod_probe"
 
 # ---------- sanity checks ----------
 info "Checking SSH connection to $SSH_HOST..."
