@@ -6,6 +6,7 @@ use App\Enums\LoginBlockReason;
 use App\Enums\TrackedLinkGroup;
 use App\Events\AgentReadyForApproval;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Registration\CheckEmailRequest;
 use App\Http\Requests\Registration\RegisterRequest;
 use App\Http\Requests\Registration\ResendVerificationEmailRequest;
 use App\Http\Requests\Registration\ResolveInviteCodeRequest;
@@ -133,6 +134,63 @@ class RegisterController extends Controller
         $this->countLinkOpen($request, $trackedLinks, $code, TrackedLinkGroup::CompanyLogin);
 
         return response()->json(['company_slug' => $company->slug]);
+    }
+
+    /**
+     * "Is this address already an account?", asked while the form is still
+     * being filled in rather than after it is submitted.
+     *
+     * ── WHY THE FORM ASKS AT ALL ──
+     *
+     * The email doubles as the login identity, so a recruit whose address is
+     * already registered cannot finish this form no matter what else they
+     * type. Before this they found that out at the end, after a national ID
+     * and a password, from a red banner under a submit button. The most
+     * common cause is the least dramatic one: they already signed up, and
+     * what they actually need is the login page.
+     *
+     * ── WHAT THIS ENDPOINT IS, STATED PLAINLY ──
+     *
+     * It is an account-existence oracle. CheckEmailRequest's docblock has
+     * the full reasoning and the mitigation — the caller must hold the same
+     * live invite code or recruit token that POST /register demands, so the
+     * cheap bulk-harvest version of this question does not exist. Read that
+     * before changing anything here.
+     *
+     * ── NOT AUTHORITATIVE, AND MUST NEVER BE TREATED AS SUCH ──
+     *
+     * Between this answer and the submit that follows it, the address can be
+     * taken by somebody else. `unique:users,email` in RegisterRequest and the
+     * unique index on the column stay the real gate; this is a courtesy that
+     * moves the same news earlier. A future refactor that "saves a query" by
+     * trusting this result would open a registration race.
+     *
+     * `available` is the only key. No name, no company, no registered_at —
+     * whether the account exists is the entire answer, and anything else
+     * would turn a yes/no into a profile.
+     */
+    public function checkEmail(CheckEmailRequest $request): JsonResponse
+    {
+        // THE COMPARISON IS DELIBERATELY THE SAME ONE `unique:users,email`
+        // MAKES, and nothing more.
+        //
+        // No lowercasing, no trimming, no normalisation. RegistrationService
+        // stores the address exactly as submitted, and `unique` is a plain
+        // WHERE — so whether "A@b.com" collides with "a@b.com" is decided by
+        // the column's collation (case-insensitive on the MySQL production
+        // database, case-sensitive on the SQLite the tests run against).
+        // Folding case here would make this endpoint disagree with the gate
+        // it is previewing on one of those two, and a preview that
+        // contradicts the submit is worse than no preview.
+        //
+        // withTrashed() for the same reason: a soft-deleted row still holds
+        // the address, and `unique` has always seen it — see
+        // RegistrationService::assertDocumentNotAlreadyUsed()'s docblock,
+        // which spells out why a deactivated agent is still that person's
+        // account and what the real remedy is (an Admin restore).
+        return response()->json([
+            'available' => ! User::withTrashed()->where('email', $request->validated('email'))->exists(),
+        ]);
     }
 
     public function register(RegisterRequest $request, RegistrationService $service): JsonResponse

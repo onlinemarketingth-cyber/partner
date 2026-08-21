@@ -50,7 +50,7 @@
  * than stubbed with dead buttons, to avoid promising a channel that
  * doesn't work yet.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, ensureCsrfCookie } from '@/api/client'
 // Only used for the one-off "you are previewing your own link" toast — this
@@ -60,6 +60,7 @@ import { useToastStore } from '@/stores/toast'
 import { useI18n } from '@/composables/useI18n'
 import Icon from '@/design-system/components/Icon.vue'
 import AppLogo from '@/design-system/components/AppLogo.vue'
+import NationalIdSegments from '@/design-system/components/NationalIdSegments.vue'
 
 const { lang, t, setLang } = useI18n()
 const route = useRoute()
@@ -301,6 +302,8 @@ const firstNameInputEl = ref<HTMLInputElement | null>(null)
 const lastNameInputEl = ref<HTMLInputElement | null>(null)
 const emailInputEl = ref<HTMLInputElement | null>(null)
 const nationalIdInputEl = ref<HTMLInputElement | null>(null)
+/** Only mounted on the Thai path — see focusNationalId(). */
+const nationalIdSegmentsEl = ref<{ focus: () => void } | null>(null)
 const passwordInputEl = ref<HTMLInputElement | null>(null)
 const passwordConfirmInputEl = ref<HTMLInputElement | null>(null)
 
@@ -311,6 +314,124 @@ const idDocumentTypeError = ref('')
 const nationalIdError = ref('')
 const passwordError = ref('')
 const passwordConfirmError = ref('')
+
+/**
+ * "This address already has an account" — told while the form is being
+ * filled in, not after it is submitted.
+ *
+ * ── WHY IT IS WORTH A ROUND TRIP ──
+ *
+ * The email IS the login identity here, so a recruit whose address is
+ * already registered cannot finish this form no matter what else they type.
+ * Before this they learned that at the very end, from a red banner under a
+ * submit button, having already produced a national ID and chosen a
+ * password. And the usual cause is the least dramatic one: they signed up
+ * already and what they actually want is the login page — which is why the
+ * message below is a route, not just a complaint.
+ *
+ * ── THE ENDPOINT IS AN ACCOUNT-EXISTENCE ORACLE ──
+ *
+ * It is gated server-side on the same live invite code or recruit token
+ * that the submit demands, which is the whole reason it can exist at all —
+ * see CheckEmailRequest's docblock. This view must therefore always send
+ * the credential it is holding; a call without one is refused, by design.
+ *
+ * ── AND IT IS NEVER AUTHORITATIVE ──
+ *
+ * `unique:users,email` and the unique index are the real gate. The address
+ * can be taken in the seconds between this answer and the submit, and the
+ * submit still handles that. What this removes is the wasted five minutes,
+ * not the check.
+ */
+const emailTaken = ref(false)
+const checkingEmail = ref(false)
+
+let emailCheckTimer: ReturnType<typeof setTimeout> | undefined
+/**
+ * Guards against a slow answer for an OLD address landing after a fast one
+ * for the address now on screen. Without it, correcting a typo can leave
+ * the previous address's verdict showing under the new one — and the person
+ * has no way to tell it is stale.
+ */
+let emailCheckSeq = 0
+
+/**
+ * Deliberately loose: enough to know the person has stopped mid-typing, not
+ * a second opinion on what a valid address is. RFC-shaped email regexes are
+ * famously wrong at the edges, and being wrong here would mean refusing to
+ * CHECK a perfectly good address — the server's `email` rule stays the
+ * authority on validity.
+ */
+function looksLikeACompleteAddress(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value.trim())
+}
+
+/**
+ * The credential this signup is running on. Null before step 1 resolved,
+ * which is also when there is nothing to check against.
+ */
+function signupCredential(): Record<string, string> | null {
+  if (refToken.value) return { ref_token: refToken.value }
+  if (inviteCode.value.trim()) return { invite_code: inviteCode.value.trim() }
+
+  return null
+}
+
+async function checkEmailAvailability(): Promise<void> {
+  const email = form.value.email.trim()
+  const credential = signupCredential()
+
+  if (!looksLikeACompleteAddress(email) || !credential) return
+
+  const seq = ++emailCheckSeq
+  checkingEmail.value = true
+
+  try {
+    const res = await api.post<{ available: boolean }>('/register/check-email', { email, ...credential })
+
+    // A newer keystroke already started a newer check — that one owns the
+    // answer now.
+    if (seq !== emailCheckSeq) return
+
+    emailTaken.value = res.available === false
+  } catch {
+    // FAILS SILENT, ON PURPOSE. This is a convenience layered on top of a
+    // server-side rule that still runs at submit. A rate limit (20/min), a
+    // dropped connection or a flaky network must never turn into a red
+    // message on a form the person can still legitimately send — and must
+    // never claim an address is free either. Saying nothing leaves them
+    // exactly where they were before this feature existed.
+  } finally {
+    if (seq === emailCheckSeq) checkingEmail.value = false
+  }
+}
+
+/** Debounced so it fires when typing stops, not once per character. */
+function scheduleEmailCheck(): void {
+  clearTimeout(emailCheckTimer)
+  emailCheckTimer = setTimeout(() => void checkEmailAvailability(), 450)
+}
+
+function onEmailInput(): void {
+  emailError.value = ''
+  // Cleared on every keystroke: a verdict about a DIFFERENT address is
+  // worse than no verdict, and this is the only moment we can be certain
+  // the one on screen has changed.
+  emailTaken.value = false
+  scheduleEmailCheck()
+}
+
+function onEmailBlur(): void {
+  // Leaving the field is a stronger "I am done with this" than any pause,
+  // so do not sit out the rest of the debounce.
+  clearTimeout(emailCheckTimer)
+  void checkEmailAvailability()
+}
+
+// A pending timer on a torn-down component would fire into a dead view.
+// Harmless today (the handler only touches refs) and exactly the kind of
+// thing that stops being harmless the moment someone adds a toast to it.
+onUnmounted(() => clearTimeout(emailCheckTimer))
 
 const idDocumentTypeOptions = computed<Array<{ value: IdDocumentType; label: string }>>(() => [
   // Thai wording deliberately identical to IdDocumentType::label() on the
@@ -343,8 +464,8 @@ const documentNumberHint = computed(() =>
   isThaiIdDocument.value
     ? t(
         'reg_id_number_thai_hint',
-        'กรอกตามหน้าบัตร จะเว้นวรรคหรือใส่ขีดก็ได้ ระบบตัดให้เอง',
-        'Type it as printed on your card — spaces and dashes are removed for you.',
+        'กรอกตามกลุ่มตัวเลขที่พิมพ์บนหน้าบัตร ครบแล้วระบบจะเลื่อนช่องถัดไปให้เอง',
+        'Type each group as printed on your card — it moves to the next box for you.',
       )
     : t(
         'reg_id_number_passport_hint',
@@ -369,43 +490,36 @@ function selectIdDocumentType(next: IdDocumentType) {
 }
 
 /**
- * Keep the Thai ID field to bare digits AS IT IS TYPED.
+ * Focus whichever control is currently showing the document number.
  *
- * ── THE FAILURE THIS REMOVES ──
+ * The two document types are rendered by two different things — a Thai ID
+ * by NationalIdSegments (five boxes), a passport by a plain input — so a
+ * single template ref cannot reach both. Every "put the cursor back on the
+ * bad field" path goes through here, because a validation message on a
+ * field the person then has to hunt for is barely better than no message.
  *
- * A Thai ID card prints the number in groups — "1 2345 67890 12 1" — and
- * people copy what they are holding, separators and all. Before this the
- * field was maxlength="13" with no normalisation, so those four separators
- * ate four of the thirteen slots: the browser stopped accepting input
- * part-way through the number, and the server then answered
+ * ── THE HISTORY THIS REPLACES ──
  *
- *     "เลขบัตรประชาชนต้องเป็นตัวเลข 13 หลัก"
+ * The first fix for the 2026-08-21 report ("validate บัตรประชาชนไม่ผ่าน")
+ * was a single field that stripped separators as they were typed. That
+ * removed the truncation bug — a card typed as "1-1017-00230-70-8" used to
+ * hit maxlength="13" part-way through, and the server then said "must be 13
+ * digits" to somebody who had typed thirteen. The boxes remove the same bug
+ * a better way: the person can now see their number in the same groups the
+ * card prints, so a mistyped digit is visible BEFORE a mod-11 checksum
+ * rejects the whole number without saying which digit was wrong.
  *
- * to somebody who HAD typed thirteen digits. Nothing on screen explained
- * where the rest of their number went. Pasting was worse — one action,
- * silently truncated, no keystroke to notice it by.
- *
- * ── WHY THIS IS PRESENTATION AND NOT A SECOND VALIDATOR ──
- *
- * App\Rules\ThaiNationalId deliberately demands digits-only, because the
- * stored value and its blind index must be canonical — one number, one
- * hash, or per-company duplicate detection quietly stops working. That rule
- * stays exactly as strict as it is. This makes the field PRODUCE the
- * canonical form; it does not make the server accept anything else.
- *
- * The mod-11 CHECKSUM is still not duplicated here and must not be — see
- * validateForm() below for why that implementation stays in one place.
- *
- * maxlength moves to 17 for the same reason the strip exists: the field has
- * to hold the separators long enough for us to remove them. slice(0, 13) is
- * what actually caps the number.
+ * The checksum itself is still not duplicated in the browser — see
+ * NationalIdSegments.vue and validateForm() below.
  */
-function onNationalIdInput(): void {
-  nationalIdError.value = ''
-
+function focusNationalId(): void {
   if (isThaiIdDocument.value) {
-    form.value.national_id = form.value.national_id.replace(/\D/g, '').slice(0, 13)
+    nationalIdSegmentsEl.value?.focus()
+
+    return
   }
+
+  nationalIdInputEl.value?.focus()
 }
 
 const showPassword = ref(false)
@@ -440,6 +554,15 @@ function validateForm(): boolean {
     emailInputEl.value?.focus()
     return false
   }
+  // Saves a round trip whose only possible outcome is the 422 that
+  // applyServerFieldErrors() would then show in this same spot. NOT a
+  // replacement for that path: emailTaken is only ever set by an answer we
+  // received, so a check that never ran, was rate-limited or failed leaves
+  // this false and the submit goes through to the real gate.
+  if (emailTaken.value) {
+    emailInputEl.value?.focus()
+    return false
+  }
   // TASK-123 — required on this path (RegisterRequest), unlike the Admin
   // create form where the same two fields stay optional. Only PRESENCE is
   // checked here: the 13-digit mod-11 checksum and the passport shape have
@@ -457,7 +580,7 @@ function validateForm(): boolean {
     nationalIdError.value = isThaiIdDocument.value
       ? t('reg_id_number_thai_required', 'กรุณากรอกเลขบัตรประชาชน', 'Please enter your Thai national ID')
       : t('reg_id_number_passport_required', 'กรุณากรอกเลขที่หนังสือเดินทาง', 'Please enter your passport number')
-    nationalIdInputEl.value?.focus()
+    focusNationalId()
     return false
   }
   if (!form.value.password) {
@@ -498,7 +621,7 @@ function applyServerFieldErrors(errors: Record<string, string[]>) {
   // inline on the number field rather than as a banner because that is the
   // only field the person can change to get past it — and the backend
   // deliberately names nobody, so there is nothing else to show.
-  else if (errors.national_id?.[0]) { nationalIdError.value = errors.national_id[0]; nationalIdInputEl.value?.focus() }
+  else if (errors.national_id?.[0]) { nationalIdError.value = errors.national_id[0]; focusNationalId() }
   else if (errors.password?.[0]) { passwordError.value = errors.password[0]; passwordInputEl.value?.focus() }
   else if (errors.invite_code?.[0]) {
     // The code that worked at step 1 stopped being valid by the time
@@ -807,13 +930,47 @@ const introLine = computed(() => {
               v-model="form.email"
               type="email"
               autocomplete="username"
-              class="bg-surface-input w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
-              :class="emailError ? 'border-rose-300' : 'border-line-input'"
+              class="bg-surface-input w-full pl-9 pr-9 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
+              :class="emailError || emailTaken ? 'border-rose-300' : 'border-line-input'"
               placeholder="agent@thailife.test"
-              @input="emailError = ''"
+              :aria-invalid="emailTaken ? 'true' : undefined"
+              aria-describedby="email_status"
+              @input="onEmailInput"
+              @blur="onEmailBlur"
+            />
+            <!-- Quiet, and only while a check is actually in flight. A
+                 spinner that appears on every keystroke reads as the form
+                 struggling; this one appears once, after typing stops. -->
+            <span
+              v-if="checkingEmail"
+              class="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 border-line-input border-t-brand-500 animate-spin"
+              aria-hidden="true"
             />
           </div>
-          <p v-if="emailError" class="text-xs text-ink-danger mt-1">{{ emailError }}</p>
+          <!-- aria-live so the verdict is ANNOUNCED. It arrives without the
+               person doing anything, so a screen-reader user would otherwise
+               be told nothing at all until submit. -->
+          <div id="email_status" aria-live="polite">
+            <span v-if="emailError" class="block text-xs text-ink-danger mt-1">{{ emailError }}</span>
+            <!--
+              THE POINT OF THE WHOLE FEATURE IS THE LINK, NOT THE WARNING.
+              "Already registered" on a signup form is not news the person
+              can act on by itself — the thing they came to do is get into
+              their account. Telling them without offering the door is a
+              dead end dressed up as helpfulness.
+            -->
+            <span v-else-if="emailTaken" class="block text-xs text-ink-danger mt-1">
+              {{ t('reg_email_taken', 'อีเมลนี้มีบัญชีในระบบแล้ว', 'This email already has an account') }}
+              <!-- No ?email= on this link. It would put a real person's
+                   address into browser history, into the Referer header of
+                   everything the login page loads, and into any access log
+                   in between — for the sake of saving one field of typing
+                   (§6, PDPA). -->
+              <RouterLink :to="{ name: 'login' }" class="font-bold underline">
+                {{ t('reg_email_taken_login', 'เข้าสู่ระบบ', 'Log in') }}
+              </RouterLink>
+            </span>
+          </div>
         </div>
 
         <div>
@@ -873,7 +1030,21 @@ const introLine = computed(() => {
             {{ documentNumberLabel }}
             <span class="text-ink-danger">*</span>
           </label>
-          <div class="relative">
+          <!-- A Thai ID gets the card's own five groups (see
+               NationalIdSegments.vue). A passport is one free-form field:
+               its number has no printed grouping to mirror, and splitting a
+               6-12 character alphanumeric into fixed boxes would invent a
+               format that does not exist. -->
+          <NationalIdSegments
+            v-if="isThaiIdDocument"
+            id="national_id"
+            ref="nationalIdSegmentsEl"
+            v-model="form.national_id"
+            :invalid="Boolean(nationalIdError)"
+            :aria-label="documentNumberLabel"
+            @update:model-value="nationalIdError = ''"
+          />
+          <div v-else class="relative">
             <Icon name="shield" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-card-subtle" />
             <!-- autocomplete off + spellcheck off: this is PDPA-sensitive
                  (Section 6) and has no business being remembered by the
@@ -885,16 +1056,13 @@ const introLine = computed(() => {
               type="text"
               autocomplete="off"
               spellcheck="false"
-              :inputmode="isThaiIdDocument ? 'numeric' : 'text'"
-              :autocapitalize="isThaiIdDocument ? 'off' : 'characters'"
-              :maxlength="isThaiIdDocument ? 17 : 12"
+              inputmode="text"
+              autocapitalize="characters"
+              maxlength="12"
               :placeholder="documentNumberPlaceholder"
-              class="bg-surface-input w-full pl-9 pr-3 py-2.5 min-h-[44px] rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
-              :class="[
-                nationalIdError ? 'border-rose-400' : 'border-line-input',
-                isThaiIdDocument ? '' : 'uppercase tracking-wide',
-              ]"
-              @input="onNationalIdInput"
+              class="bg-surface-input w-full pl-9 pr-3 py-2.5 min-h-[44px] rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors uppercase tracking-wide"
+              :class="nationalIdError ? 'border-rose-400' : 'border-line-input'"
+              @input="nationalIdError = ''"
             />
           </div>
           <p class="text-xs text-ink-card-subtle mt-1">{{ documentNumberHint }}</p>

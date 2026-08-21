@@ -138,6 +138,29 @@ Route::prefix('v1')->group(function () {
     // it is the only endpoint that will confirm a recruit token exists, so
     // it is the one an enumerator would point at.
     Route::post('/register/resolve-ref-token', [RegisterController::class, 'resolveRefToken'])->middleware('throttle:10,1');
+    // The signup form asks whether an address is already an account BEFORE
+    // the recruit fills in a national ID and a password, because the email
+    // IS the login identity here — a taken one makes the rest of the form
+    // pointless, and the usual cause is that they already signed up and
+    // want the login page.
+    //
+    // THIS IS AN ACCOUNT-EXISTENCE ORACLE and is treated as one: the caller
+    // must present the same live invite code or recruit token that
+    // POST /register demands (CheckEmailRequest enforces it through the same
+    // RegistrationService lookups), so it cannot be harvested by anyone who
+    // does not already hold a working link — and links are quota-bounded,
+    // expiring and revocable, which is the lever a company needs if abuse
+    // shows up. The full reasoning, including why /register's 422 always
+    // leaked the same fact and why the COST of extracting it is what
+    // actually changed, is in that Request's docblock.
+    //
+    // throttle:20,1 rather than its siblings' 10: this one is called while
+    // somebody is typing (debounced, but a corrected address is a second
+    // call, and an office or campus shares one IP between several recruits),
+    // so 10 would start refusing genuine signups. It remains a hard bound on
+    // volume for an attacker who does hold a link, which is what the number
+    // is there for.
+    Route::post('/register/check-email', [RegisterController::class, 'checkEmail'])->middleware('throttle:20,1');
     Route::post('/register', [RegisterController::class, 'register'])->middleware('throttle:10,1');
     // TASK-115 (TASK-021 item 3) — the resend affordance the login gate's
     // 403 advertises via `can_resend_verification`. Tighter throttle than its
