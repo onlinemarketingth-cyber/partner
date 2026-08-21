@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import HomeView from '../views/HomeView.vue'
 import { useAuthStore } from '@/stores/auth'
+import { hasChosenToStayInAgentPortal } from '@/utils/portalChoice'
 import { useThemeStore } from '@/stores/theme'
 
 const router = createRouter({
@@ -349,8 +350,15 @@ router.beforeEach(async (to) => {
    * super_admin ONLY, not company_admin: nobody has reported the same
    * confusion for that role, and locking a role out of a whole app on a
    * guess is not a call to make for the human (BR-7).
+   *
+   * 2026-08-21 (human request) — AND ONLY UNTIL THEY SAY OTHERWISE.
+   * The notice screen used to redirect automatically, which assumed every
+   * Super Admin who lands here arrived by mistake. A platform owner opening
+   * this app deliberately — to see what agents see — had no way through at
+   * all. It now offers both doors and records the answer; this condition is
+   * what makes that answer stick past the next navigation.
    */
-  if (!to.meta.public && authStore.user?.role === 'super_admin') {
+  if (!to.meta.public && authStore.user?.role === 'super_admin' && !hasChosenToStayInAgentPortal()) {
     return { name: 'super-admin-notice' }
   }
 
@@ -358,7 +366,7 @@ router.beforeEach(async (to) => {
     // A Super Admin who just signed in here would otherwise be sent to
     // 'home' only for the rule above to bounce them again on the next
     // pass — one hop, stated directly.
-    return authStore.user?.role === 'super_admin'
+    return authStore.user?.role === 'super_admin' && !hasChosenToStayInAgentPortal()
       ? { name: 'super-admin-notice' }
       : { name: 'home' }
   }

@@ -5,6 +5,41 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # -------------------------------------------------------------------
+  # SECURITY AUDIT 2026-08-21 — this console answers on ONE host only.
+  #
+  # This folder is the document root of admin.partner.syncvision.io AND a
+  # subfolder of the agent portal's document root, because that is how the
+  # subdomain was pointed at it. So https://partner.syncvision.io/admin/
+  # serves this application in full — confirmed on production, and it is
+  # the real console, not a broken shell: both URLs return
+  # <title>Sync Vision Admin</title>.
+  #
+  # WHY THE RULE IS HERE AND NOT (only) IN THE PARENT
+  # The equivalent rule was added to the agent portal's .htaccess first
+  # and deployed, and /admin/ still answered 200. A .htaccess in a PARENT
+  # directory is not reliably consulted for a request that resolves into a
+  # subdirectory holding its own .htaccess — how much of the parent's
+  # rewrite context survives varies by server, and this host runs
+  # LiteSpeed rather than Apache. The file sitting next to the resource is
+  # always read. So the rule belongs next to the resource.
+  #
+  # The parent's copy is kept as a second layer rather than removed: two
+  # cheap rules, and the one that fires depends on a server behaviour we
+  # do not control.
+  #
+  # KEYED ON THE HOST, WHICH IS WHAT MAKES IT SAFE TO PUT HERE.
+  # This is the admin console's OWN .htaccess — a bare `RewriteRule ^`
+  # deny would 403 the real console. The condition means it can only ever
+  # fire for a request that arrived at partner.syncvision.io, i.e. the
+  # wrong door. Requests to admin.partner.syncvision.io never match it.
+  # After TASK-231 took production down through this exact class of file,
+  # a rule in here has to fail safe by construction, not by review.
+  # -------------------------------------------------------------------
+  RewriteCond %{HTTP_HOST} ^partner\.syncvision\.io$ [NC]
+  RewriteRule ^ - [F,L]
+
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d

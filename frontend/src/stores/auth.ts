@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, ApiError, ensureCsrfCookie } from '@/api/client'
+import { forgetPortalChoice } from '@/utils/portalChoice'
 
 // Matches App\Enums\UserRole (backend). Kept as a string union rather than
 // re-declaring business rules on the frontend — role gates itself live in
@@ -146,6 +147,11 @@ export const useAuthStore = defineStore('auth', () => {
       await api.post('/logout')
     } finally {
       user.value = null
+      // A Super Admin's "stay in the Agent Portal" choice belongs to the
+      // person, not to the browser. Cleared here so the next sign-in on
+      // this machine is asked in their own right — including the same
+      // person coming back tomorrow, for whom it is a fresh question.
+      forgetPortalChoice()
     }
   }
 
