@@ -445,7 +445,7 @@ async function savePassword(): Promise<void> {
           </button>
           <p v-if="passwordSaved" class="text-xs font-bold text-emerald-600">เปลี่ยนรหัสผ่านสำเร็จ</p>
           <p v-if="passwordError" class="text-xs font-bold text-rose-600">{{ passwordError }}</p>
-          <p class="text-xs text-slate-400">อย่างน้อย 8 ตัวอักษร</p>
+          <p class="text-xs text-slate-400">อย่างน้อย 8 ตัวอักษร มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข</p>
         </div>
       </div>
     </div>

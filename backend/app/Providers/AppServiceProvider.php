@@ -77,44 +77,62 @@ class AppServiceProvider extends ServiceProvider
          * accident rather than by decision, and moving the floor meant
          * finding all four.
          *
-         * uncompromised() is the rule that actually matters here. Length
-         * requirements push people towards predictable padding; the
-         * HaveIBeenPwned k-anonymity check rejects the passwords that are
-         * genuinely being sprayed at this login form right now. Only a
-         * 5-character hash prefix leaves this server — never the password,
-         * never the hash — and Laravel's verifier fails OPEN if the service
-         * is unreachable, so a Hostinger network hiccup cannot lock a new
-         * agent out of registering.
-         *
-         * Relaxed under `php artisan test` alone: the suite's fixtures use
-         * the literal string "password" (which uncompromised() would
-         * rightly reject) and must not make a network call per assertion.
-         * Local development keeps the production rule deliberately — a dev
-         * who cannot set a weak password locally will not be surprised by
-         * production.
+         * Relaxed under `php artisan test` alone, so the suite's fixtures can
+         * keep using the literal string "password". Local development keeps
+         * the production rule deliberately — a dev who cannot set a weak
+         * password locally will not be surprised by production.
          */
         Password::defaults(function () {
             /*
-             * EIGHT, not ten (human decision 2026-08-21).
+             * EIGHT CHARACTERS, UPPER + LOWER + A NUMBER (human decision
+             * 2026-08-21, revised the same day).
              *
-             * The audit raised the floor to 10 and shipped it without
-             * touching the "อย่างน้อย 8 ตัวอักษร" hint rendered under the
-             * field. An agent then met a rule of 10 and a hint of 8 in the
-             * same box — and the rule's message came out in English on top
-             * of that. The human's call is 8, so 8 it is, and the hint,
-             * the rule and PasswordRuleMessages now all say the same number.
+             * ── WHAT THIS REPLACED, AND WHY IT WENT ──
              *
-             * uncompromised() stays and is the part that carries the
-             * weight. Length pushes people towards predictable padding; the
-             * breach check rejects the passwords actually being sprayed at
-             * this login form. Only a 5-character hash prefix leaves the
-             * server — never the password — and Laravel's verifier fails
-             * OPEN if the service is unreachable, so a network hiccup on
-             * Hostinger cannot lock a new agent out of registering.
+             * The audit had shipped min(8)->uncompromised(): a
+             * HaveIBeenPwned k-anonymity check that rejects passwords known
+             * to be in public breach data. On the security merits that is
+             * the stronger rule — it refuses exactly the passwords being
+             * sprayed at this login form, which a character-class rule does
+             * not (P@ssw0rd1 satisfies every class below and is in every
+             * cracking dictionary on earth).
+             *
+             * It was removed at the human's explicit instruction after a
+             * registration was refused with
+             *
+             *   "รหัสผ่านนี้เคยปรากฏในเหตุข้อมูลรั่วไหลของเว็บอื่น..."
+             *
+             * That is the correct verdict on the password that was typed —
+             * and it is also a sentence that reads, to an insurance agent
+             * signing up on a phone, as the site accusing them of something.
+             * There is no way to tell them WHICH rule to satisfy, because
+             * "not in a breach list" is not a rule anybody can plan around.
+             * Character classes are worse security and better instructions,
+             * and the person who owns this product chose instructions.
+             *
+             * Recorded plainly so nobody later reads the weaker rule as an
+             * oversight: it is a deliberate trade, made by the owner, with
+             * the cost stated.
+             *
+             * ── WHY NO symbols() ──
+             *
+             * Every class added is another way to be refused with no idea
+             * why, and a symbol is the one an agent cannot type without
+             * hunting through a phone keyboard. Upper + lower + digit is
+             * what mainstream sites ask for, and it is what the hint under
+             * the field says.
+             *
+             * ── THE NUMBER 8 APPEARS IN THREE PLACES ──
+             *
+             * Here, in PasswordRuleMessages, and in the hint rendered under
+             * the field in both apps. They have disagreed before: the audit
+             * raised this to 10 without touching the hint, so an agent met a
+             * rule of 10 under a hint of 8, in English. Change one, change
+             * all three.
              */
             return $this->app->runningUnitTests()
                 ? Password::min(8)
-                : Password::min(8)->uncompromised();
+                : Password::min(8)->letters()->mixedCase()->numbers();
         });
 
         $this->defineAbilityGates();

@@ -47,11 +47,32 @@ final class PasswordRuleMessages
             // ProfileSettingsView.vue. Three places say it; they must agree.
             'password.min' => 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร',
 
-            // uncompromised() checks the password against known breach data
-            // (only a 5-character hash prefix leaves the server). Saying so
-            // matters: "this password is not allowed" with no reason reads
-            // as an arbitrary rule, and people retry variations of the same
-            // leaked password rather than choosing a different one.
+            // The three character-class rules, each naming the ONE thing
+            // that is missing. Laravel raises them together, so somebody who
+            // typed "12345678" is told about the letters AND the mixed case
+            // at once and can fix both in one go — which is exactly why
+            // these were chosen over a breach check.
+            //
+            // The key names are not a guess:
+            // Illuminate\Validation\Rules\Password::validate() calls
+            // addFailure($attribute, 'password.mixed' | 'password.letters' |
+            // 'password.numbers' | 'password.symbols'), and the inner
+            // Validator it builds is handed $this->validator->customMessages
+            // — which is how an override written here reaches it at all.
+            //
+            // No 'password.symbols' entry: symbols() is deliberately not in
+            // the policy (AppServiceProvider says why). Adding the message
+            // without the rule would read as if it were.
+            'password.mixed' => 'รหัสผ่านต้องมีตัวอักษรพิมพ์ใหญ่และพิมพ์เล็กอย่างน้อยอย่างละ 1 ตัว',
+            'password.letters' => 'รหัสผ่านต้องมีตัวอักษรภาษาอังกฤษอย่างน้อย 1 ตัว',
+            'password.numbers' => 'รหัสผ่านต้องมีตัวเลขอย่างน้อย 1 ตัว',
+
+            // uncompromised() is NO LONGER in the policy — the owner chose
+            // character classes over the breach check on 2026-08-21, and the
+            // trade is recorded in AppServiceProvider rather than here. This
+            // line stays so that turning the rule back on is one edit there
+            // instead of two in two files, and so it can never reappear in
+            // English if someone does.
             'password.uncompromised' => 'รหัสผ่านนี้เคยปรากฏในเหตุข้อมูลรั่วไหลของเว็บอื่น กรุณาตั้งรหัสผ่านอื่นที่ไม่เคยใช้ที่ไหนมาก่อน',
         ];
     }

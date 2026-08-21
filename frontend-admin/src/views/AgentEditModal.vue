@@ -1658,7 +1658,7 @@ watch(
                   v-model="resetPasswordValue"
                   type="text"
                   minlength="8"
-                  placeholder="รหัสผ่านชั่วคราวใหม่ (อย่างน้อย 8 ตัว)"
+                  placeholder="รหัสผ่านชั่วคราวใหม่ (8 ตัวขึ้นไป มีพิมพ์ใหญ่ พิมพ์เล็ก ตัวเลข)"
                   class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm"
                 />
                 <button

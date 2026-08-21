@@ -411,7 +411,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
         <input v-model="createForm.email" type="email" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
-        <label class="text-xs font-bold text-slate-500">รหัสผ่านชั่วคราว (อย่างน้อย 8 ตัว)</label>
+        <label class="text-xs font-bold text-slate-500">รหัสผ่านชั่วคราว (8 ตัวขึ้นไป มีพิมพ์ใหญ่ พิมพ์เล็ก ตัวเลข)</label>
         <input v-model="createForm.password" type="text" minlength="8" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>

@@ -359,7 +359,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
           </div>
           <AppButton :loading="passwordBusy" @click="savePassword">เปลี่ยนรหัสผ่าน</AppButton>
           <p v-if="passwordError" class="text-xs font-bold text-ink-danger">{{ passwordError }}</p>
-          <p class="text-xs text-ink-card-subtle">อย่างน้อย 8 ตัวอักษร</p>
+          <p class="text-xs text-ink-card-subtle">อย่างน้อย 8 ตัวอักษร มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข</p>
         </div>
       </div>
     </div>

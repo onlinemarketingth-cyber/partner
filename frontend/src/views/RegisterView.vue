@@ -1096,6 +1096,19 @@ const introLine = computed(() => {
               <Icon :name="showPassword ? 'eye_off' : 'eye'" :size="16" />
             </button>
           </div>
+          <!-- STATED BEFORE THEY TYPE, not after they are refused. This
+               field had no hint at all, so the only way to learn the policy
+               was to break it — which is precisely what happened on
+               2026-08-21 and why the rule changed shape. Must stay in step
+               with Password::defaults() in AppServiceProvider and with
+               PasswordRuleMessages. -->
+          <p class="text-xs text-ink-card-subtle mt-1">
+            {{ t(
+              'reg_password_hint',
+              'อย่างน้อย 8 ตัวอักษร มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข',
+              'At least 8 characters, with upper case, lower case and a number.',
+            ) }}
+          </p>
           <p v-if="passwordError" class="text-xs text-ink-danger mt-1">{{ passwordError }}</p>
         </div>
 
