@@ -4,6 +4,7 @@ namespace Tests\Feature\Commission;
 
 use App\Enums\CommissionEarnedVia;
 use App\Enums\PaymentStatus;
+use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Models\Company;
 use App\Models\User;
@@ -79,6 +80,44 @@ class CommissionLedgerTest extends TestCase
             ->assertForbidden();
 
         $this->assertSame('pending', $entry->fresh()->payment_status->value);
+    }
+
+    public function test_marking_a_commission_paid_records_who_did_it(): void
+    {
+        /*
+         * SECURITY AUDIT 2026-08-21 (V13) — this was the ONE money-moving
+         * action in the application and the one action nobody recorded.
+         *
+         * audit_logs' own migration says the table exists "for anything
+         * affecting money, commission, status, certification, or
+         * permissions". Role changes, bank-account edits and national-id
+         * edits were all audited. The moment a commission stops being owed
+         * and starts being paid was not, and the only trace left behind was
+         * paid_at — which says when, and never who.
+         */
+        $company = Company::factory()->create();
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $entry = CommissionLedger::factory()->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+            'amount_satang' => 26700,
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson("/api/v1/commission-ledger/{$entry->id}/mark-paid")
+            ->assertOk();
+
+        $log = AuditLog::where('action', 'commission_ledger.marked_paid')->sole();
+
+        $this->assertSame($admin->id, $log->actor_user_id);
+        $this->assertSame($company->id, $log->company_id);
+        $this->assertSame($entry->id, $log->auditable_id);
+        // The amount is recorded alongside the status on purpose: an audit
+        // entry that forces the reader to join another table to learn what
+        // was actually paid is an audit entry people stop reading.
+        $this->assertSame(26700, $log->new_values['amount_satang']);
+        $this->assertSame($agent->id, $log->new_values['agent_user_id']);
     }
 
     public function test_company_admin_can_mark_a_commission_as_paid(): void
@@ -157,26 +196,33 @@ class CommissionLedgerTest extends TestCase
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
 
+        // created_at is set AT CREATION, not back-dated with a second
+        // save(). Since the 2026-08-21 audit (V12) a commission_ledger row
+        // refuses any post-creation change outside payment_status/paid_at,
+        // and that guard is doing its job here: back-dating a ledger entry
+        // after the fact is precisely the kind of quiet rewrite BR-4 exists
+        // to forbid. A fixture wanting an older row can simply create an
+        // older row.
         $inRangePaid = CommissionLedger::factory()->create([
             'company_id' => $company->id,
             'agent_id' => $agent->id,
             'payment_status' => PaymentStatus::Paid,
+            'created_at' => now()->subDays(2),
         ]);
-        $inRangePaid->forceFill(['created_at' => now()->subDays(2)])->save();
 
         $inRangePending = CommissionLedger::factory()->create([
             'company_id' => $company->id,
             'agent_id' => $agent->id,
             'payment_status' => PaymentStatus::Pending,
+            'created_at' => now()->subDays(2),
         ]);
-        $inRangePending->forceFill(['created_at' => now()->subDays(2)])->save();
 
         $outOfRangePaid = CommissionLedger::factory()->create([
             'company_id' => $company->id,
             'agent_id' => $agent->id,
             'payment_status' => PaymentStatus::Paid,
+            'created_at' => now()->subDays(30),
         ]);
-        $outOfRangePaid->forceFill(['created_at' => now()->subDays(30)])->save();
 
         $this->actingAs($admin)
             ->getJson('/api/v1/commission-ledger?agent_id='.$agent->id.

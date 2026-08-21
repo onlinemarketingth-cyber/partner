@@ -9,6 +9,8 @@ use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use LogicException;
 
 /**
  * BR-4: immutable once created — never edit rate_applied/amount_satang
@@ -25,9 +27,76 @@ class CommissionLedger extends Model
     // "no such table". Same bug, same fix as XpLedger.
     protected $table = 'commission_ledger';
 
+    /**
+     * The only columns BR-4 permits to change after a row exists.
+     *
+     * Payment STATUS is bookkeeping about the row; everything else IS the
+     * row — who earned what, on which sale, at which rate, off which price.
+     *
+     * @var list<string>
+     */
+    public const MUTABLE_AFTER_CREATION = ['payment_status', 'paid_at', 'updated_at'];
+
     protected static function booted(): void
     {
         static::addGlobalScope(new TenantScope);
+
+        /*
+         * SECURITY AUDIT 2026-08-21 (V12) — BR-4 ENFORCED, NOT JUST STATED.
+         *
+         * "Immutable once created" was written at the top of this class,
+         * written again in the migration, and enforced by exactly nothing:
+         * no model event, no database trigger, no revoked grant. What
+         * actually stopped a rewrite was that no route exists for one —
+         * apiResource(...)->only(['index','show']) — which is a fact about
+         * the HTTP surface, not about the invariant. Every artisan command,
+         * queued job, future feature and tinker session had a free hand.
+         *
+         * That is a strange gap for the one rule the whole product rests
+         * on. Commission is what this system pays people; a ledger you can
+         * quietly edit is not a ledger, it is a cache with opinions. And an
+         * edit would leave no trace: audit_logs is written by callers, so
+         * the caller that skips the audit skips the record of skipping it.
+         *
+         * Enforced with an allowlist, not a blocklist, deliberately: a new
+         * column added next year is protected by default, whereas a
+         * blocklist protects it only if somebody remembers. `updated_at` is
+         * in the list because Eloquent touches it alongside any permitted
+         * change, not because it is meaningful.
+         *
+         * A LogicException rather than a silent `return false`: a silent
+         * refusal makes the calling code believe the write succeeded, which
+         * for money is the worst of the three possible behaviours. This is
+         * a programming error and should read like one, in tests and in
+         * production alike.
+         */
+        static::updating(function (self $entry): void {
+            $forbidden = array_diff(array_keys($entry->getDirty()), self::MUTABLE_AFTER_CREATION);
+
+            if ($forbidden !== []) {
+                throw new LogicException(
+                    'BR-4: commission_ledger rows are immutable. Refusing to change ['
+                        .implode(', ', $forbidden).'] on entry '.$entry->getKey().'. '
+                        .'To reverse a commission, write a REVERSING entry (see CommissionReversalService); never edit the original.',
+                );
+            }
+        });
+
+        /*
+         * Deleting is refused outright, with no allowlist to argue about.
+         *
+         * The reason a reversal exists is that the original must survive:
+         * "this sale was paid then refunded" and "this sale never happened"
+         * are different facts, and only the first one is true. Deleting the
+         * row destroys the audit trail of the very event the reversal is
+         * accounting for.
+         */
+        static::deleting(function (self $entry): void {
+            throw new LogicException(
+                'BR-4: commission_ledger rows are never deleted (entry '.$entry->getKey().'). '
+                    .'Write a reversing entry instead — the original is the record that it happened.',
+            );
+        });
     }
 
     protected $fillable = [
@@ -60,6 +129,8 @@ class CommissionLedger extends Model
         // TASK-042 §3 — null unless earned_via = PromotionBonus (same
         // marker pattern as source_binary_cycle_id above).
         'source_agent_promotion_id',
+        // SECURITY AUDIT 2026-08-21 (V15) — set only on a reversing entry.
+        'reverses_commission_ledger_id',
     ];
 
     protected function casts(): array
@@ -79,6 +150,26 @@ class CommissionLedger extends Model
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /** @return BelongsTo<CommissionLedger, $this> The entry this one reverses (null on an ordinary payout). */
+    public function reverses(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'reverses_commission_ledger_id');
+    }
+
+    /**
+     * The reversal written against THIS entry, if it has been refunded.
+     *
+     * hasOne, not hasMany, and the database agrees: a unique index on
+     * reverses_commission_ledger_id makes a second reversal of the same
+     * entry impossible rather than merely unusual.
+     *
+     * @return HasOne<CommissionLedger, $this>
+     */
+    public function reversal(): HasOne
+    {
+        return $this->hasOne(self::class, 'reverses_commission_ledger_id');
     }
 
     /** @return BelongsTo<User, $this> */

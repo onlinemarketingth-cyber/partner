@@ -1386,6 +1386,30 @@ function toggleCategoryForm(): void {
     categoryCompanyIds.value = [selectedCatalogCompanyId.value]
   }
 }
+
+/**
+ * The dialog header's create button (human request, 2026-08-20).
+ *
+ * It used to be TWO buttons, one per tab, each sitting beside its own
+ * search box. The human moved it up to the title row, where there is only
+ * one row for both tabs — so which form it opens has to be decided here
+ * rather than by which panel rendered it.
+ *
+ * Dispatching on the active tab, rather than rendering two buttons with
+ * v-if, keeps the two toggles exactly as they were: each still pre-ticks
+ * its own company list, and neither grew a second caller to keep in step.
+ */
+const refCreateLabel = computed(() => (refDrawerTab.value === 'brands' ? '+ เพิ่มแบรนด์' : '+ เพิ่มหมวดหมู่'))
+
+function toggleRefForm(): void {
+  if (refDrawerTab.value === 'brands') {
+    toggleBrandForm()
+
+    return
+  }
+
+  toggleCategoryForm()
+}
 </script>
 
 <template>
@@ -1460,8 +1484,17 @@ function toggleCategoryForm(): void {
           @click.self="closeRefDrawer"
         >
           <div class="w-full max-w-3xl max-h-[85vh] overflow-y-auto bg-white rounded-2xl shadow-2xl px-5 py-5">
+            <!-- Human request (2026-08-20): the create button moves from the
+                 tab's own toolbar up here to the title row. One button for
+                 both tabs now — see toggleRefForm(); its label follows the
+                 active tab so it never offers to add the thing you are not
+                 looking at. Placed BEFORE the close button, never after: the
+                 far-right corner of a dialog is where "close" lives, and a
+                 create button landing there is the one misclick that costs
+                 you the form you were filling in. -->
             <div class="flex items-center gap-3 mb-4">
-              <h2 class="flex-1 text-base font-bold text-slate-900">จัดการแบรนด์ / หมวดหมู่</h2>
+              <h2 class="flex-1 min-w-0 text-base font-bold text-slate-900">จัดการแบรนด์ / หมวดหมู่</h2>
+              <button class="btn-primary shrink-0" @click="toggleRefForm">{{ refCreateLabel }}</button>
               <button class="w-10 h-10 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-100" title="ปิด (Esc)" @click="closeRefDrawer">
                 <Icon name="x" :size="18" />
               </button>
@@ -1517,15 +1550,15 @@ function toggleCategoryForm(): void {
             </div>
 
     <section v-if="refDrawerTab === 'brands'" class="mt-4">
-      <!-- TASK-202 — search + a create button that names the company it will
-           create in, and refuses to open the form at all until one is picked
-           (the old flow let you fill the form and only told you at save). -->
-      <div class="flex items-center gap-2 mb-2">
-        <div class="relative flex-1 min-w-0">
+      <!-- TASK-202 — search. The create button that used to sit beside it
+           moved to the dialog title row (human, 2026-08-20); it is one
+           button for both tabs now, so it cannot live inside either tab's
+           panel. -->
+      <div class="mb-2">
+        <div class="relative">
           <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input v-model="refSearch" type="text" placeholder="ค้นหาแบรนด์..." class="w-full h-[34px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm" />
         </div>
-        <button class="btn-primary" @click="toggleBrandForm">+ เพิ่มแบรนด์</button>
       </div>
       <!-- TASK-203 — the create form owns its target companies (tick boxes,
            เลือกทั้งหมด / ล้างทั้งหมด). One submit = one POST per ticked
@@ -1668,13 +1701,13 @@ function toggleCategoryForm(): void {
     <!-- Categories -->
     <section v-if="refDrawerTab === 'categories'" class="mt-4">
       <!-- TASK-202 — mirrors the brands toolbar above, deliberately identical:
-           two adjacent tabs behaving differently would be its own bug. -->
-      <div class="flex items-center gap-2 mb-2">
-        <div class="relative flex-1 min-w-0">
+           two adjacent tabs behaving differently would be its own bug. Its
+           create button moved to the title row in the same change. -->
+      <div class="mb-2">
+        <div class="relative">
           <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input v-model="refSearch" type="text" placeholder="ค้นหาหมวดหมู่..." class="w-full h-[34px] pl-8 pr-3 rounded-lg border border-slate-200 text-sm" />
         </div>
-        <button class="btn-primary" @click="toggleCategoryForm">+ เพิ่มหมวดหมู่</button>
       </div>
       <form v-if="showCategoryForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 space-y-3" @submit.prevent="submitCategory">
         <div>

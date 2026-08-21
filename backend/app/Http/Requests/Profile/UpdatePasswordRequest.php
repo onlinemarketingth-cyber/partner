@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Profile;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rules\Password;
 
 // Self-service "change my own password" — always operates on
 // $request->user() (see UserProfileController), same self-scoped pattern
@@ -26,7 +27,11 @@ class UpdatePasswordRequest extends FormRequest
     {
         return [
             'current_password' => ['required', 'string', 'current_password'],
-            'password' => ['required', 'string', 'min:8', 'confirmed', 'different:current_password'],
+            // SECURITY AUDIT 2026-08-21 (V18) — Password::defaults(), not a
+            // fourth private copy of min:8. The policy is registered once in
+            // AppServiceProvider; see there for why breach-checking matters
+            // more here than length does.
+            'password' => ['required', 'string', Password::defaults(), 'confirmed', 'different:current_password'],
         ];
     }
 

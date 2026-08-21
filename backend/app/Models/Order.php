@@ -45,9 +45,18 @@ class Order extends Model
         'payment_method',
         'status',
         'slip_path',
+        // Follow-up to the 2026-08-21 audit — NULL when the customer
+        // uploaded it themselves through the public /pay page, which is
+        // the ordinary case and a real answer, not a missing one.
+        'slip_uploaded_by_user_id',
         'payment_reference',
         'paid_at',
         'verified_by_user_id',
+        // SECURITY AUDIT 2026-08-21 (V15) — written only by
+        // CommissionReversalService, never from a request payload.
+        'refunded_at',
+        'refund_reason',
+        'refunded_by_user_id',
         // ADR-033 (TASK-189) §2.5 — captured once, at the point of paying
         // (public /pay/{token} slip submission), never from a stored
         // client profile. Required server-side only when
@@ -64,6 +73,7 @@ class Order extends Model
             'payment_method' => PaymentMethod::class,
             'amount_satang' => 'integer',
             'paid_at' => 'datetime',
+            'refunded_at' => 'datetime',
         ];
     }
 

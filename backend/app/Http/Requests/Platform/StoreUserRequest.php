@@ -3,9 +3,11 @@
 namespace App\Http\Requests\Platform;
 
 use App\Enums\IdDocumentType;
+use App\Models\User;
 use App\Rules\IdDocument;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 
 // "Manage Agents" — human-confirmed scope this phase: the Admin types a
 // temporary password directly into the create form (no email/invite
@@ -17,7 +19,7 @@ class StoreUserRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\User::class);
+        return $this->user()->can('create', User::class);
     }
 
     /**
@@ -35,7 +37,9 @@ class StoreUserRequest extends FormRequest
             'first_name' => ['required', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'password' => ['required', 'string', 'min:8'],
+            // SECURITY AUDIT 2026-08-21 (V18) — one policy, registered in
+            // AppServiceProvider.
+            'password' => ['required', 'string', Password::defaults()],
             'role' => ['required', Rule::in(['agent', 'company_admin'])],
             // TASK-122 — WHICH identity document `national_id` below is.
             // `required_with`, not `required`: the document itself stays

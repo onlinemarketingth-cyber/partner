@@ -95,8 +95,53 @@ export function isYoutubeUrl(url: string | null | undefined): boolean {
 export function toEmbedUrl(url: string | null | undefined): string {
   if (!url) return ''
   const id = youtubeId(url)
+  if (id) return `https://www.youtube.com/embed/${id}`
 
-  return id ? `https://www.youtube.com/embed/${id}` : url
+  return isFramableProtocol(url) ? url : ''
+}
+
+/**
+ * Only http(s) may ever reach an `<iframe src>` (SECURITY AUDIT 2026-08-21, V11).
+ *
+ * ── WHAT THIS CLOSES ──
+ *
+ * `toEmbedUrl()` returned anything it did not recognise UNCHANGED, and its
+ * callers put that straight into `<iframe :src>`. A `javascript:` URL in an
+ * iframe src executes in the EMBEDDING page's origin — the iframe's initial
+ * document is same-origin `about:blank` until it navigates — and `data:`
+ * text/html is the same trick wearing a different hat.
+ *
+ * The values that flow in are a lesson's `content_ref` and a product
+ * media's `embed_url`: free text typed by a Company Admin, behind an
+ * `<input type="url">` that is a client-side hint and nothing more, since
+ * the API accepts a direct POST. One of the render sites is
+ * ProductShareView — a PUBLIC, unauthenticated page — so the audience for
+ * a bad value is not limited to that company's own staff.
+ *
+ * ── WHY AN ALLOWLIST, AND WHY EMPTY STRING ──
+ *
+ * Blocklisting `javascript:` invites the next scheme (`vbscript:`, `blob:`,
+ * whatever a browser adds later). Two schemes are wanted here and two are
+ * allowed; everything else is not a rendering decision to get right, it is
+ * an input we do not accept.
+ *
+ * Empty string rather than throwing, because `<iframe src="">` renders a
+ * blank frame and every caller already handles "this did not embed" by
+ * showing its open-in-a-new-tab escape. A throw would take the whole
+ * lesson page down over one bad field.
+ *
+ * `new URL()` rather than a regex, because the parser is the thing the
+ * browser will use, and a regex would be a second opinion about what the
+ * scheme is. A relative URL has no scheme to abuse, so it resolves against
+ * the page and is allowed through the same check.
+ */
+function isFramableProtocol(url: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(url, window.location.origin).protocol)
+  } catch {
+    // Unparseable is not framable.
+    return false
+  }
 }
 
 /**

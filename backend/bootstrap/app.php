@@ -1,5 +1,8 @@
 <?php
 
+use App\Http\Middleware\EnsureCompanyIsOperational;
+use App\Http\Middleware\ResolveChunkedUpload;
+use App\Http\Middleware\SecurityHeaders;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -61,9 +64,23 @@ return Application::configure(basePath: dirname(__DIR__))
         // whole auth:sanctum group in routes/api.php — see that registration
         // for the ONE deliberate exclusion (logout) and why.
         $middleware->alias([
-            'resolve.chunked-upload' => \App\Http\Middleware\ResolveChunkedUpload::class,
-            'company.operational' => \App\Http\Middleware\EnsureCompanyIsOperational::class,
+            'resolve.chunked-upload' => ResolveChunkedUpload::class,
+            'company.operational' => EnsureCompanyIsOperational::class,
         ]);
+
+        /*
+         * SECURITY AUDIT 2026-08-21 (V10) — response security headers.
+         *
+         * append(), so it runs last on the way in and therefore wraps
+         * everything on the way out: the headers have to be on error
+         * responses and on streamed file downloads too, not only on the
+         * happy path of a request that reaches a controller.
+         *
+         * Global rather than attached to a group, because "which responses
+         * deserve X-Content-Type-Options" has no useful answer other than
+         * "all of them", and a list is a list somebody forgets to add to.
+         */
+        $middleware->append(SecurityHeaders::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Second half of the same fix — CLAUDE.md Section 3: "strictly a

@@ -16,6 +16,7 @@ use App\Models\ProductPricePromotion;
 use App\Models\Referral;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -77,6 +78,47 @@ class CommissionService
      * the referral's pipeline from advancing.
      */
     public function recordForReferral(Referral $referral): ?CommissionLedger
+    {
+        /*
+         * SECURITY AUDIT 2026-08-21 — THE LOCK THE DOCBLOCK ABOVE ASKED FOR.
+         *
+         * That caution was written when the unique index came off and was
+         * never acted on: the check-then-create below stayed non-atomic, so
+         * two concurrent confirms of the same referral could both find no
+         * existing row and both write one. A double-click on the confirm
+         * button, or an HTTP retry after a slow response, is enough — and
+         * what it produces is two BR-4 ledger rows that may never be edited
+         * or deleted, for one sale.
+         *
+         * Locking the REFERRAL rather than the ledger, because you cannot
+         * lock a row that does not exist yet: the second caller must block
+         * on something both callers can see before either has written. The
+         * referral is that thing, and it is already the row every caller
+         * mutates in the same breath.
+         *
+         * DB::transaction() rather than assuming one is open: every caller
+         * today happens to be inside one, which is exactly the assumption
+         * that quietly stops being true. Nested inside an existing
+         * transaction this becomes a savepoint and the lock is held to the
+         * outer commit, which is the behaviour we want; called bare, it
+         * opens the transaction the lock needs to mean anything at all.
+         *
+         * SQLite compiles lockForUpdate() to nothing, so the test suite
+         * proves the logic here, never the locking. The locking is proved
+         * by MySQL in production. Do not read a green suite as proof of it.
+         */
+        return DB::transaction(function () use ($referral) {
+            Referral::withoutGlobalScopes()
+                ->whereKey($referral->getKey())
+                ->lockForUpdate()
+                ->first();
+
+            return $this->recordForReferralLocked($referral);
+        });
+    }
+
+    /** The original body, now only ever reached with the referral row locked. */
+    private function recordForReferralLocked(Referral $referral): ?CommissionLedger
     {
         $existing = CommissionLedger::where('referral_id', $referral->id)->first();
         if ($existing) {

@@ -18,6 +18,8 @@ use App\Models\Referral;
 use App\Models\User;
 use App\Models\UserCertification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -228,22 +230,66 @@ class ProductShareCheckoutTest extends TestCase
         $this->assertNull(Referral::withoutGlobalScopes()->firstOrFail()->branch);
     }
 
-    public function test_the_order_is_immediately_confirmable_by_the_agent(): void
+    public function test_the_self_serve_order_can_still_be_closed_once_the_customer_has_paid(): void
     {
-        // The whole point of ADR-026 §3.7 — the customer's order must not
-        // land in a state nobody can close.
-        [, $agent, , $link] = $this->makeSelfServeShare();
+        // ADR-026 §3.7 — the customer's order must not land in a state
+        // nobody can close. That requirement is unchanged; WHO closes it,
+        // and WHEN, changed on 2026-08-21 (security audit, human ruling
+        // D1/D2), so this test now walks the whole real journey instead of
+        // jumping to the end: customer pays and uploads their slip, THEN a
+        // Company Admin verifies it.
+        //
+        // This test used to be called "the order is immediately confirmable
+        // by the agent" and asserted exactly the hole the audit found — the
+        // agent who earns the commission closing their own sale with no
+        // proof of payment in existence. It is replaced by its inverse
+        // rather than deleted, so that the change of rule is visible in the
+        // history instead of a test quietly disappearing. See
+        // test_the_agent_who_earns_the_commission_may_not_confirm_the_payment
+        // below for the other half.
+        Storage::fake('local');
+        [$company, , , $link] = $this->makeSelfServeShare();
 
         $this->postJson("/api/v1/public/product-shares/{$link->token}/checkout", $this->payload())->assertOk();
 
         $order = Order::withoutGlobalScopes()->firstOrFail();
 
-        $this->actingAs($agent)
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk()
             ->assertJsonPath('data.status', 'paid');
 
         $this->assertSame(PipelineStage::CompletePayment, Referral::withoutGlobalScopes()->firstOrFail()->current_stage);
+    }
+
+    public function test_the_agent_who_earns_the_commission_may_not_confirm_the_payment(): void
+    {
+        // SECURITY AUDIT 2026-08-21 — the self-serve checkout is the
+        // cheapest place in the app to manufacture a sale: no client
+        // record to fake, no pipeline to walk, one public POST. If the
+        // agent could also confirm it, one agent alone could mint an
+        // immutable BR-4 commission row from nothing.
+        Storage::fake('local');
+        [, $agent, , $link] = $this->makeSelfServeShare();
+
+        $this->postJson("/api/v1/public/product-shares/{$link->token}/checkout", $this->payload())->assertOk();
+        $order = Order::withoutGlobalScopes()->firstOrFail();
+
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+
+        // Even WITH a real slip on file, the earner is not the verifier.
+        $this->actingAs($agent)
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertForbidden();
+
+        $this->assertSame(OrderStatus::AwaitingVerification, $order->fresh()->status);
+        $this->assertDatabaseCount('commission_ledger', 0);
     }
 
     // ── Refusals — all indistinguishable ───────────────────────────────
@@ -412,12 +458,19 @@ class ProductShareCheckoutTest extends TestCase
     public function test_a_paid_order_is_never_handed_back_as_a_reusable_one(): void
     {
         // Reuse must not tell a customer who already paid to pay again.
-        [, $agent, , $link] = $this->makeSelfServeShare();
+        Storage::fake('local');
+        [$company, , , $link] = $this->makeSelfServeShare();
 
         $first = $this->postJson("/api/v1/public/product-shares/{$link->token}/checkout", $this->payload())->assertOk();
 
         $order = Order::withoutGlobalScopes()->firstOrFail();
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        // The full journey to "paid" since the 2026-08-21 audit: slip first,
+        // then a Company Admin verifies it. The subject of this test is
+        // still checkout reuse, not who may confirm.
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $second = $this->postJson("/api/v1/public/product-shares/{$link->token}/checkout", $this->payload())->assertOk();
 

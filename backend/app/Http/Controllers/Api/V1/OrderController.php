@@ -7,8 +7,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Order\StoreOrderRequest;
 use App\Http\Resources\OrderResource;
 use App\Mail\OrderPaymentConfirmedMail;
+use App\Models\AuditLog;
 use App\Models\Order;
 use App\Models\Referral;
+use App\Services\Commission\CommissionReversalService;
 use App\Services\Order\OrderService;
 use App\Services\Platform\PlatformMailSettingService;
 use App\Support\CompanyScopeFilter;
@@ -17,6 +19,7 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 // ADR-017 (TASK-054) — authenticated order management. §5 rule 4: index
@@ -121,6 +124,91 @@ class OrderController extends Controller
         $order = $service->cancel($order);
 
         return new OrderResource($order->load(self::RELATIONS));
+    }
+
+    /**
+     * POST /orders/{order}/slip — an admin uploads the slip FOR the customer.
+     *
+     * Follow-up to the 2026-08-21 audit (human ruling). Requiring a slip
+     * before confirmation closed a fraud path and simultaneously stranded
+     * every customer who pays cash at a branch or sends the slip to their
+     * agent over LINE — the public /pay page was the only thing that could
+     * create one. This is that missing door, and it is the ONLY difference
+     * from the public route: same validation, same private disk, same
+     * resulting status.
+     *
+     * The public POST /pay/{token}/slip is untouched and remains how a
+     * customer does it themselves.
+     */
+    public function uploadSlip(Request $request, Order $order, OrderService $service): OrderResource
+    {
+        $this->authorize('submitSlip', $order);
+
+        if (! $order->isPayable()) {
+            throw ValidationException::withMessages([
+                'status' => 'อัปโหลดสลิปได้เฉพาะคำสั่งซื้อที่ยังรอชำระเงินอยู่เท่านั้น (สถานะปัจจุบัน: '.$order->status->label().')',
+            ]);
+        }
+
+        /*
+         * The shipping fields are NOT accepted here, and that is deliberate.
+         *
+         * On the public page they are captured from the customer, who is
+         * the only person who knows where they live. An admin typing a
+         * delivery address on somebody's behalf, from a phone call, is how
+         * a parcel goes to the wrong place with the system's full
+         * confidence. If the product needs shipping details, the customer
+         * still supplies them through /pay.
+         */
+        $validated = $request->validate([
+            'slip' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
+        ]);
+
+        $service->submitSlip($order, $validated['slip'], [], $request->user());
+
+        /*
+         * Audited, because this is a member of staff asserting that a
+         * payment they did not receive personally exists. The same admin
+         * may then confirm it (OrderPolicy::submitSlip explains why that is
+         * accepted), so this row is what makes the sequence visible
+         * afterwards rather than merely permitted at the time.
+         */
+        AuditLog::create([
+            'company_id' => $order->company_id,
+            'actor_user_id' => $request->user()->id,
+            'action' => 'order.slip_uploaded_by_staff',
+            'auditable_type' => Order::class,
+            'auditable_id' => $order->id,
+            'old_values' => null,
+            'new_values' => [
+                'order_number' => $order->order_number,
+                'amount_satang' => $order->amount_satang,
+            ],
+            'ip_address' => $request->ip(),
+        ]);
+
+        return new OrderResource($order->fresh()->load(self::RELATIONS));
+    }
+
+    /**
+     * POST /orders/{order}/refund — undo a paid sale (SECURITY AUDIT V15, ruling D3).
+     *
+     * Super Admin only; see OrderPolicy::refund() for why it is narrower
+     * than confirm(). A reason is REQUIRED, not optional: a money movement
+     * with no stated cause is a gap in the audit trail at the exact point
+     * somebody will later need to read it.
+     */
+    public function refund(Request $request, Order $order, CommissionReversalService $reversals): OrderResource
+    {
+        $this->authorize('refund', $order);
+
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'min:5', 'max:500'],
+        ]);
+
+        $reversals->refundOrder($order, $request->user(), $validated['reason']);
+
+        return new OrderResource($order->fresh()->load(self::RELATIONS));
     }
 
     /** GET /orders/{order}/slip — access-checked private-disk download (§6). */

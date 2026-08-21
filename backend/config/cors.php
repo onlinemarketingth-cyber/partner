@@ -24,12 +24,27 @@ return [
     // agent.localhost / admin.localhost (see SESSION_DOMAIN comment in
     // .env for why: sharing one hostname made the two apps' login
     // sessions collide in the same browser).
-    'allowed_origins' => [
-        env('FRONTEND_URL', 'http://agent.localhost:5178'),
-        env('ADMIN_FRONTEND_URL', 'http://admin.localhost:5179'),
-        'http://agent.localhost:5178',
-        'http://admin.localhost:5179',
-    ],
+    // SECURITY AUDIT 2026-08-21 (V14) — the two hardcoded dev origins used
+    // to sit in this list unconditionally, so production accepted
+    // credentialed requests from http://agent.localhost:5178 and
+    // http://admin.localhost:5179. Those names do not resolve on the public
+    // internet, so this was never remotely exploitable — but anyone able to
+    // make them resolve on a machine (a hosts entry, a hostile local proxy,
+    // a shared workstation) got a fully credentialed origin against live
+    // customer data, for no benefit whatsoever in production.
+    //
+    // Gated the same way allowed_origins_patterns below already was. That
+    // the pattern list was gated and this one was not is what makes this an
+    // oversight rather than a decision.
+    'allowed_origins' => array_values(array_filter(array_merge(
+        [
+            env('FRONTEND_URL'),
+            env('ADMIN_FRONTEND_URL'),
+        ],
+        env('APP_ENV') === 'local'
+            ? ['http://agent.localhost:5178', 'http://admin.localhost:5179']
+            : [],
+    ))),
 
     // Local-dev-only fallback: Vite auto-increments its port (5173 ->
     // 5174 -> ...) whenever 5173 is already taken by another running

@@ -82,7 +82,7 @@ class VoucherTest extends TestCase
         ]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk();
 
@@ -104,7 +104,7 @@ class VoucherTest extends TestCase
         ]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
         $this->assertNull($voucher->usage_quota);
@@ -128,12 +128,12 @@ class VoucherTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         // Second confirm: top-of-method idempotency check short-circuits
         // (order already Paid) — still asserting the OUTCOME (exactly one
         // voucher row), not the code path, so this test stays valid even if
         // the short-circuit implementation changes.
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $this->assertSame(1, OrderVoucher::where('order_id', $order->id)->count());
     }
@@ -149,7 +149,7 @@ class VoucherTest extends TestCase
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, ['voucher_usage_quota' => 2]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
 
         $this->actingAs($admin)
@@ -173,7 +173,7 @@ class VoucherTest extends TestCase
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, ['voucher_usage_quota' => 1]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
 
         // First redemption exhausts the single-use quota.
@@ -218,7 +218,7 @@ class VoucherTest extends TestCase
         $agentA = User::factory()->agent()->create(['company_id' => $companyA->id]);
         $referral = $this->makeReferral($companyA, $agentA, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
-        $this->actingAs($agentA)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($companyA))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
 
         $companyB = Company::factory()->create();
@@ -238,7 +238,7 @@ class VoucherTest extends TestCase
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
 
         $superAdmin = User::factory()->superAdmin()->create();
@@ -338,7 +338,7 @@ class VoucherTest extends TestCase
             ->assertJsonPath('data.requires_shipping', true)
             ->assertJsonMissingPath('data.voucher.code'); // not yet paid
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $this->getJson("/api/v1/pay/{$order->public_token}")
             ->assertOk()

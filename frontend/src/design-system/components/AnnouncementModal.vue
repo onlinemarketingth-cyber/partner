@@ -33,6 +33,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import Icon from './Icon.vue'
+import { toEmbedUrl } from '@/utils/embedUrl'
 
 export interface AnnouncementModalVideo {
   type: 'upload' | 'embed'
@@ -206,7 +207,14 @@ function formatDate(iso: string): string {
             class="w-full rounded-xl bg-black"
           ></video>
           <div v-else-if="announcement.video?.type === 'embed'" class="aspect-video w-full rounded-xl overflow-hidden bg-black">
-            <iframe :src="announcement.video.url" class="w-full h-full" allowfullscreen frameborder="0"></iframe>
+            <!-- SECURITY AUDIT 2026-08-21 (V11) — through toEmbedUrl(), not
+                 raw. This src is an admin-typed URL (announcements.video_embed_url)
+                 and it was the one embed in either app that skipped the
+                 shared helper, so it skipped the http(s)-only check the
+                 helper now performs. It also gains the YouTube watch→embed
+                 rewrite it never had, which is a bug fix in its own right:
+                 a pasted youtube.com/watch link renders a dead grey box. -->
+            <iframe :src="toEmbedUrl(announcement.video.url)" class="w-full h-full" allowfullscreen frameborder="0"></iframe>
           </div>
 
           <p class="text-sm text-ink-card whitespace-pre-line leading-relaxed">{{ announcement.content }}</p>

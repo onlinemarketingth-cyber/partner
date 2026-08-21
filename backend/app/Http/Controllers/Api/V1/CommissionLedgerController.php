@@ -6,6 +6,7 @@ use App\Enums\NotificationType;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CommissionLedgerResource;
+use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Services\Notification\NotificationService;
 use App\Support\CompanyScopeFilter;
@@ -83,13 +84,52 @@ class CommissionLedgerController extends Controller
     }
 
     /** POST /commission-ledger/{commissionLedger}/mark-paid — the one allowed mutation (BR-4). */
-    public function markPaid(CommissionLedger $commissionLedger, NotificationService $notifier): CommissionLedgerResource
+    public function markPaid(Request $request, CommissionLedger $commissionLedger, NotificationService $notifier): CommissionLedgerResource
     {
         $this->authorize('markPaid', $commissionLedger);
+
+        $before = $commissionLedger->payment_status;
 
         $commissionLedger->update([
             'payment_status' => PaymentStatus::Paid,
             'paid_at' => now(),
+        ]);
+
+        /*
+         * SECURITY AUDIT 2026-08-21 — THE ONE MONEY-MOVING ACTION IN THIS
+         * APPLICATION WAS THE ONE ACTION NOBODY RECORDED.
+         *
+         * audit_logs' own migration says the table exists "for anything
+         * affecting money, commission, status, certification, or
+         * permissions", and this method is the single point where a
+         * commission stops being owed and starts being paid. Role changes,
+         * bank-account edits and national-id edits were all audited; this
+         * was not. There was no way to answer "who authorised this payout"
+         * — the only trace was paid_at, which says when and never who.
+         *
+         * The amount is recorded alongside the status deliberately. The
+         * ledger row is immutable under BR-4, so the amount cannot drift
+         * from what was approved — but an audit entry that forces the
+         * reader to go and join another table to learn what was actually
+         * paid is an audit entry people stop reading.
+         *
+         * Written after the update() and outside any transaction of its
+         * own, matching every other AuditLog::create() in this codebase: a
+         * logging failure must never roll back a payment that succeeded.
+         */
+        AuditLog::create([
+            'company_id' => $commissionLedger->company_id,
+            'actor_user_id' => $request->user()?->id,
+            'action' => 'commission_ledger.marked_paid',
+            'auditable_type' => CommissionLedger::class,
+            'auditable_id' => $commissionLedger->id,
+            'old_values' => ['payment_status' => $before?->value],
+            'new_values' => [
+                'payment_status' => PaymentStatus::Paid->value,
+                'amount_satang' => $commissionLedger->amount_satang,
+                'agent_user_id' => $commissionLedger->agent_id,
+            ],
+            'ip_address' => $request->ip(),
         ]);
 
         $commissionLedger->load(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime']);

@@ -14,6 +14,19 @@ enum OrderStatus: string
     case Paid = 'paid';                                // verified — terminal, triggered the sale close
     case Cancelled = 'cancelled';
 
+    /*
+     * SECURITY AUDIT 2026-08-21 (V15, human ruling D3).
+     *
+     * Distinct from Cancelled, and the distinction is the point: Cancelled
+     * means the money never arrived, Refunded means it arrived and went
+     * back. Reusing Cancelled would have erased the fact that a real
+     * payment happened — which is exactly the fact the reversing commission
+     * entry is accounting for.
+     *
+     * Reachable only FROM Paid, and only by a Super Admin.
+     */
+    case Refunded = 'refunded';
+
     public function label(): string
     {
         return match ($this) {
@@ -21,6 +34,7 @@ enum OrderStatus: string
             self::AwaitingVerification => 'รอตรวจสอบสลิป',
             self::Paid => 'ชำระเงินแล้ว',
             self::Cancelled => 'ยกเลิก',
+            self::Refunded => 'คืนเงินแล้ว',
         };
     }
 }

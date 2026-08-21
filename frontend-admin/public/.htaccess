@@ -10,3 +10,43 @@
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteRule . /index.html [L]
 </IfModule>
+
+# ---------------------------------------------------------------------
+# SECURITY AUDIT 2026-08-21 (V10) — response security headers.
+#
+# Before this the whole stack set NONE of these, which meant the admin console
+# could be loaded inside an <iframe> on any site in the world. That is
+# clickjacking: the attacker's page overlays its own invisible UI on top
+# of a logged-in session and harvests clicks that land on real buttons.
+#
+# ⚠️ THIS FILE HAS TAKEN PRODUCTION DOWN BEFORE (TASK-231) — it went out
+# mode 600, LiteSpeed could not read it, and every deep link 404'd. The
+# cause was the file's PERMISSIONS, not its contents, and deploy.sh now
+# rsyncs with --chmod=D755,F644. Verify after the first deploy that a
+# deep link still loads AND that the headers are present:
+#     curl -sI https://<host>/login | grep -i 'x-frame\|x-content\|referrer'
+#
+# Wrapped in IfModule so that a server without mod_headers ignores the
+# block instead of throwing a 500 on every request.
+<IfModule mod_headers.c>
+  Header always set X-Frame-Options "DENY"
+  Header always set Content-Security-Policy "frame-ancestors 'self'"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "geolocation=(), microphone=(), payment=()"
+  Header always set Strict-Transport-Security "max-age=31536000"
+</IfModule>
+
+# A FULL Content-Security-Policy is deliberately NOT enabled here yet.
+#
+# A content CSP does not warn when it is wrong — it white-screens the
+# app — and the only honest way to tune one is to load every screen in a
+# real browser and read the console. That has not been done, so shipping
+# one would be trading a clickjacking risk for an outage risk.
+#
+# The starting point below is believed correct for this app (own bundle,
+# API origin, YouTube embeds, blob: for pdf.js workers and object URLs).
+# Enable it on a STAGING subdomain first, click through every screen with
+# devtools open, then move it into the block above.
+#
+# Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.partner.syncvision.io; media-src 'self' blob: https://api.partner.syncvision.io; connect-src 'self' https://api.partner.syncvision.io; worker-src 'self' blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"

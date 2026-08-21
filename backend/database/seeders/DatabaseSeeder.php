@@ -26,6 +26,34 @@ class DatabaseSeeder extends Seeder
 
     public function run(): void
     {
+        /*
+         * SECURITY AUDIT 2026-08-21 (V16) — THE WARNING AT THE TOP OF THIS
+         * FILE IS NOW ENFORCED INSTEAD OF MERELY WRITTEN.
+         *
+         * It has always said "never use these accounts or this pattern
+         * outside local development", and a comment has never stopped
+         * anybody. What this seeder creates is a Super Admin whose password
+         * is the literal string "password", and it is deliberately
+         * idempotent (firstOrCreate) — which is exactly what makes it
+         * dangerous: pointed at production it does not crash on the
+         * existing data, it quietly succeeds and leaves a platform-wide
+         * account with a known password behind, indistinguishable from a
+         * legitimate one.
+         *
+         * `php artisan db:seed` against the wrong DB_DATABASE is one
+         * mistyped command. And this codebase already documents that
+         * tinker does not work on the production host, which makes
+         * reaching for other artisan commands there MORE likely, not less.
+         * CreateSuperAdminCommand is the safe production path; this guard
+         * is what makes people take it.
+         */
+        abort_unless(
+            app()->environment(['local', 'testing']),
+            500,
+            'DatabaseSeeder is dev-only seed data and refuses to run in "'.app()->environment().'". '
+                .'To create the first Super Admin on a real environment, use: php artisan admin:create-super',
+        );
+
         // Thai Life is explicitly named in CLAUDE.md Section 1 as the
         // first tenant — not an invented value.
         $thaiLife = Company::firstOrCreate(

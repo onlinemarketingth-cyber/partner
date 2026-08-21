@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\LoginRequest;
 use App\Http\Resources\UserResource;
+use App\Models\AuditLog;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 
@@ -18,8 +20,36 @@ class AuthController extends Controller
 
         $request->session()->regenerate();
 
-        /** @var \App\Models\User $user */
+        /** @var User $user */
         $user = $request->user();
+
+        /*
+         * SECURITY AUDIT 2026-08-21 (V19) — record that this login happened.
+         *
+         * Nothing recorded logins before. In a system that pays commission,
+         * "which admin was signed in when this payout was approved, and
+         * from where" had no answer at all — and the absence only becomes
+         * visible at the exact moment somebody needs it, which is always
+         * after the fact and never in time.
+         *
+         * Successes only. A failed attempt is already covered by the
+         * throttle and by RecordAuthLockout when it becomes a pattern;
+         * writing a row per wrong password would let anyone with a login
+         * form fill this table on demand.
+         *
+         * No user agent: it is attacker-controlled free text, it is bulky,
+         * and it answers no question the IP does not answer better.
+         */
+        AuditLog::create([
+            'company_id' => $user->company_id,
+            'actor_user_id' => $user->id,
+            'action' => 'auth.login',
+            'auditable_type' => User::class,
+            'auditable_id' => $user->id,
+            'old_values' => null,
+            'new_values' => ['role' => $user->role?->value],
+            'ip_address' => $request->ip(),
+        ]);
 
         // TASK-044 Phase A — this is the authenticated user's own row
         // (never a route-bound {user}), so the full bank_account_number

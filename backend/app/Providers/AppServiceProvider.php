@@ -5,13 +5,16 @@ namespace App\Providers;
 use App\Enums\Ability;
 use App\Events\AgentReadyForApproval;
 use App\Listeners\NotifyCompanyAdminsOfPendingAgent;
+use App\Listeners\RecordAuthLockout;
 use App\Models\User;
 use App\Services\Academy\LessonAccessGate;
 use App\Services\Authorization\PermissionResolver;
 use App\Services\Platform\MailSettingsService;
+use Illuminate\Auth\Events\Lockout;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
+use Illuminate\Validation\Rules\Password;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -50,6 +53,51 @@ class AppServiceProvider extends ServiceProvider
         // will register Socialite's SocialiteWasCalled -> Line provider
         // extension once that task starts.
         Event::listen(AgentReadyForApproval::class, NotifyCompanyAdminsOfPendingAgent::class);
+
+        /*
+         * SECURITY AUDIT 2026-08-21 (V19) — somebody is now listening.
+         *
+         * LoginRequest has fired Illuminate\Auth\Events\Lockout since the
+         * day it was written, and nothing anywhere in the application
+         * listened for it. A password-guessing run against a specific
+         * agent's account was throttled, correctly, and then left no trace
+         * of having happened: no log line, no audit row, nothing anyone
+         * could notice or investigate afterwards. Throttling stops the
+         * attack in progress; it does not tell you it occurred.
+         */
+        Event::listen(Lockout::class, RecordAuthLockout::class);
+
+        /*
+         * SECURITY AUDIT 2026-08-21 (V18) — ONE password policy, in one place.
+         *
+         * There were four password rules across four Form Requests, three
+         * of them a bare `min:8` and the fourth Password::defaults() with
+         * no defaults ever registered — which is Laravel's built-in
+         * min(8), no complexity, no breach check. So every path agreed by
+         * accident rather than by decision, and moving the floor meant
+         * finding all four.
+         *
+         * uncompromised() is the rule that actually matters here. Length
+         * requirements push people towards predictable padding; the
+         * HaveIBeenPwned k-anonymity check rejects the passwords that are
+         * genuinely being sprayed at this login form right now. Only a
+         * 5-character hash prefix leaves this server — never the password,
+         * never the hash — and Laravel's verifier fails OPEN if the service
+         * is unreachable, so a Hostinger network hiccup cannot lock a new
+         * agent out of registering.
+         *
+         * Relaxed under `php artisan test` alone: the suite's fixtures use
+         * the literal string "password" (which uncompromised() would
+         * rightly reject) and must not make a network call per assertion.
+         * Local development keeps the production rule deliberately — a dev
+         * who cannot set a weak password locally will not be surprised by
+         * production.
+         */
+        Password::defaults(function () {
+            return $this->app->runningUnitTests()
+                ? Password::min(8)
+                : Password::min(10)->uncompromised();
+        });
 
         $this->defineAbilityGates();
 

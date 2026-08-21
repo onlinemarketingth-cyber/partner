@@ -98,6 +98,14 @@ class OrderPaymentNotificationTest extends TestCase
     // In-app agent notification — idempotent under a double-confirm
     // -----------------------------------------------------------------
 
+    /*
+     * SECURITY AUDIT 2026-08-21 — the confirming actor in this file is a
+     * Company Admin, not the agent, because an agent may no longer confirm
+     * a payment they earn from (human ruling D1). The AGENT is still the
+     * one who must be notified, which is what these tests are about — so
+     * the recipient assertions below deliberately still name $agent.
+     */
+
     /**
      * MUTATION-CHECK STYLE PROOF (spec §6, mirroring TASK-189's
      * voucher-issued-exactly-once test): force a double-confirm and prove
@@ -112,11 +120,11 @@ class OrderPaymentNotificationTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
         // Second confirm: top-of-method idempotency check short-circuits —
         // asserting the OUTCOME (exactly one notification), not the code
         // path, per the same reasoning VoucherTest's own mutation test uses.
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $this->assertSame(
             1,
@@ -133,7 +141,7 @@ class OrderPaymentNotificationTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         $notification = Notification::where('user_id', $agent->id)
             ->where('type', NotificationType::OrderPaymentConfirmed)
@@ -160,7 +168,7 @@ class OrderPaymentNotificationTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, 'customer@example.com');
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         Mail::assertNothingSent();
     }
@@ -175,7 +183,7 @@ class OrderPaymentNotificationTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, null);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         Mail::assertNothingSent();
     }
@@ -194,7 +202,7 @@ class OrderPaymentNotificationTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, 'customer@example.com');
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
+        $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
 
         Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($order) {
             return $mail->order->id === $order->id
@@ -225,7 +233,7 @@ class OrderPaymentNotificationTest extends TestCase
             ->once()
             ->andThrow(new \RuntimeException('Connection refused'));
 
-        $response = $this->actingAs($agent)->postJson("/api/v1/orders/{$order->id}/confirm");
+        $response = $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm");
 
         $response->assertOk();
         $this->assertSame('paid', $order->fresh()->status->value);

@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Platform;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rules\Password;
 
 // Companion action to StoreUserRequest's "admin types a temp password"
 // flow — since there's no email/invite system, this is also how an
@@ -22,7 +23,10 @@ class ResetUserPasswordRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'password' => ['required', 'string', 'min:8'],
+            // SECURITY AUDIT 2026-08-21 (V18) — one policy, registered in
+            // AppServiceProvider. An admin-set password is the one an agent
+            // logs in with, so it gets the same floor as a self-chosen one.
+            'password' => ['required', 'string', Password::defaults()],
         ];
     }
 }

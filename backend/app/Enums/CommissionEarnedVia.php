@@ -43,4 +43,26 @@ enum CommissionEarnedVia: string
     case StairstepOverride = 'stairstep_override';
     case GenerationOverride = 'generation_override';
     case PromotionBonus = 'promotion_bonus';
+
+    /*
+     * SECURITY AUDIT 2026-08-21 (V15, human ruling D3) — the one case that
+     * is not an earning.
+     *
+     * A reversal row carries a NEGATIVE amount_satang and points at the row
+     * it reverses (reverses_commission_ledger_id). It is a case here rather
+     * than a boolean column because everything downstream already switches
+     * on earned_via, and because "how was this earned: it wasn't" is
+     * genuinely one of the answers this vocabulary has to be able to give.
+     *
+     * The original row is never touched. "This sale was paid and later
+     * refunded" and "this sale never happened" are different facts, and the
+     * ledger has to be able to state the first one.
+     */
+    case Reversal = 'reversal';
+
+    /** True for a row that takes money back rather than paying it out. */
+    public function isReversal(): bool
+    {
+        return $this === self::Reversal;
+    }
 }

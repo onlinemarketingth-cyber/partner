@@ -50,9 +50,30 @@ class CompanyThemeController extends Controller
 
         $request->validate([
             'slot' => ['required', 'in:nav,login,favicon,loading,background'],
-            // SVG allowed for logos (crisp at any size); 5 MB cap mirrors
-            // the announcement/avatar image uploads.
-            'file' => ['required', 'image', 'mimes:jpg,jpeg,png,webp,svg', 'max:5120'],
+            /*
+             * SECURITY AUDIT 2026-08-21 (V7) — SVG REMOVED (human ruling
+             * D4: it is not needed).
+             *
+             * The old comment read "SVG allowed for logos (crisp at any
+             * size)", which is true and beside the point. An SVG is not an
+             * image file, it is an executable document — <script>,
+             * <foreignObject> and event-handler attributes all run — and
+             * these assets are written to the PUBLIC disk and served
+             * straight off it at a URL on the API's own origin. A Company
+             * Admin uploading one was stored XSS with a permanent URL.
+             *
+             * `mimes:svg` was never a defence against that: it confirms the
+             * file really is an SVG, which is precisely the problem.
+             *
+             * This codebase already knew. StoreBrandRequest carries the
+             * rule verbatim — "SVG is deliberately NOT accepted... these
+             * files are served straight off the public disk" — and this one
+             * endpoint simply did not follow it. Two upload paths, one
+             * policy: that is what makes this a fix rather than a taste.
+             *
+             * 5 MB cap unchanged, mirroring the announcement/avatar uploads.
+             */
+            'file' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:5120'],
         ]);
 
         $company = $this->resolveCompany($request);

@@ -217,14 +217,18 @@ class PipelineTemplateAdvanceTest extends TestCase
             $this->medicalTemplate($company),
             PipelineStage::WaitingAppointment,
         );
-        $order = Order::factory()->create(['referral_id' => $referral->id]);
+        // AwaitingVerification, not Pending: since the 2026-08-21 audit an
+        // order with no slip is refused BEFORE the stage is even looked at,
+        // and this test is about the STAGE gate. Starting from Pending would
+        // still go red, for the wrong reason, and stop testing this.
+        $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertUnprocessable()
             ->assertJsonPath('errors.referral.0', 'ต้องผ่านขั้น "พบแพทย์ครั้งแรก" ก่อนจึงจะยืนยันการชำระเงินได้');
 
-        $this->assertSame(OrderStatus::Pending, $order->fresh()->status);
+        $this->assertSame(OrderStatus::AwaitingVerification, $order->fresh()->status);
         $this->assertSame(PipelineStage::WaitingAppointment, $referral->fresh()->current_stage);
         $this->assertDatabaseCount('commission_ledger', 0);
     }
@@ -241,7 +245,7 @@ class PipelineTemplateAdvanceTest extends TestCase
         );
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk()
             ->assertJsonPath('data.status', 'paid');
@@ -281,7 +285,7 @@ class PipelineTemplateAdvanceTest extends TestCase
         $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk()
             ->assertJsonPath('data.status', 'paid');
@@ -367,7 +371,7 @@ class PipelineTemplateAdvanceTest extends TestCase
         $referral = $this->makeReferral($company, $agent, $product, $template, PipelineStage::Delivery);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk()
             ->assertJsonPath('data.status', 'paid');
@@ -409,9 +413,11 @@ class PipelineTemplateAdvanceTest extends TestCase
     {
         [$company, $agent, $product] = $this->makeCompanyAgentProduct();
         $referral = $this->makeReferral($company, $agent, $product, null, PipelineStage::WaitingAppointment);
-        $order = Order::factory()->create(['referral_id' => $referral->id]);
+        // See the note on the medical stage-gate test above — the slip check
+        // now runs first, so this has to clear it to reach the stage check.
+        $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertUnprocessable()
             ->assertJsonPath('errors.referral.0', 'ต้องผ่านขั้น "พบแพทย์ครั้งแรก" ก่อนจึงจะยืนยันการชำระเงินได้');

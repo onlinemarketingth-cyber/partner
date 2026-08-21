@@ -150,7 +150,7 @@ class OrderService
      *
      * @param  array<string, string|null>  $shipping
      */
-    public function submitSlip(Order $order, UploadedFile $slip, array $shipping = []): Order
+    public function submitSlip(Order $order, UploadedFile $slip, array $shipping = [], ?User $uploadedBy = null): Order
     {
         $path = $slip->storeAs(
             "orders/slips/{$order->company_id}",
@@ -161,6 +161,18 @@ class OrderService
         $update = [
             'slip_path' => $path,
             'status' => OrderStatus::AwaitingVerification,
+            /*
+             * Follow-up to the 2026-08-21 audit. NULL on the public path
+             * (the customer uploaded it) and a user id on the admin path
+             * (staff uploaded it on their behalf, for a cash-at-branch or
+             * sent-over-LINE payment).
+             *
+             * Written on EVERY call, including the public one, and
+             * deliberately so: a re-upload through the public page after
+             * an admin upload has to clear the admin's name, or the record
+             * would claim staff supplied a slip that a customer replaced.
+             */
+            'slip_uploaded_by_user_id' => $uploadedBy?->id,
         ];
 
         foreach (['shipping_recipient_name', 'shipping_phone', 'shipping_address'] as $field) {
@@ -209,6 +221,38 @@ class OrderService
         if (! $order->isPayable()) {
             throw ValidationException::withMessages([
                 'status' => 'คำสั่งซื้อนี้ไม่อยู่ในสถานะที่ยืนยันการชำระเงินได้ (ถูกยกเลิกไปแล้ว)',
+            ]);
+        }
+
+        /*
+         * SECURITY AUDIT 2026-08-21, human ruling D2 — THERE MUST BE PROOF
+         * OF PAYMENT ON FILE BEFORE ANYONE MAY ATTEST THAT MONEY ARRIVED.
+         *
+         * isPayable() above also accepts Pending, and Pending is the state
+         * an order is BORN in — so before this check the very first thing
+         * that could happen to a brand-new order was "confirmed paid", with
+         * nothing anywhere in the system claiming a customer had paid
+         * anything at all. PaymentMethod's own docblock has always
+         * described both methods as slip-verified; the code never asked.
+         *
+         * AwaitingVerification is not a second, redundant way of saying
+         * "a slip exists" — submitSlip() is the only thing that moves an
+         * order into it, so requiring the state IS requiring the slip.
+         * Checking `slip_path !== null` instead would be checking a
+         * consequence rather than the transition, and would quietly drift
+         * apart from it the day a second upload path is added.
+         *
+         * KNOWN CONSEQUENCE, flagged to the human rather than papered
+         * over: today only the CUSTOMER can upload a slip, on the public
+         * /pay/<token> page. A customer who pays cash at a branch, or who
+         * sends the slip to their agent over LINE, now leaves an order
+         * nobody can confirm. Letting an admin upload the slip on the
+         * customer's behalf is the intended companion change; it is NOT in
+         * here, because who may do that is its own decision.
+         */
+        if ($order->status !== OrderStatus::AwaitingVerification) {
+            throw ValidationException::withMessages([
+                'status' => 'ยังไม่มีหลักฐานการชำระเงินในระบบ — ต้องมีสลิปก่อนจึงจะยืนยันการชำระเงินได้',
             ]);
         }
 

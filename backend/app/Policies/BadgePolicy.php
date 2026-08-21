@@ -19,9 +19,29 @@ class BadgePolicy
         return true;
     }
 
+    /**
+     * SECURITY AUDIT 2026-08-21 — this returned true for EVERYONE, and the
+     * comment above explains why that was believed to be fine.
+     *
+     * The belief was out of date. "Non-sensitive shared reference data" was
+     * true of a badge's name and icon; it stopped being true when Phase 10
+     * added condition_config — the rules that decide who earns what, which
+     * is a competitor's incentive design. Badge is not TenantScope'd (a
+     * platform default has a null company_id and must reach everyone), so
+     * nothing else stood between an agent at company B and company A's
+     * private badges by sequential id. Proved by test, not inferred.
+     *
+     * BadgeController::index() has always filtered to "own company OR
+     * platform default" — eight lines above show(), which did not. The
+     * shape below is that same filter, and it is deliberately identical to
+     * GamificationRulePolicy::view(), the sibling that already had it
+     * right. This was an inconsistency between two files, never a decision.
+     */
     public function view(User $user, Badge $badge): bool
     {
-        return true;
+        return $user->isSuperAdmin()
+            || $badge->company_id === null
+            || $badge->company_id === $user->company_id;
     }
 
     public function create(User $user): bool

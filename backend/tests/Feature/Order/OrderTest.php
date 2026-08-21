@@ -5,6 +5,7 @@ namespace Tests\Feature\Order;
 use App\Enums\CommissionRateType;
 use App\Enums\OrderStatus;
 use App\Enums\PipelineStage;
+use App\Models\AuditLog;
 use App\Models\CertTier;
 use App\Models\Client;
 use App\Models\CommissionLedger;
@@ -155,7 +156,7 @@ class OrderTest extends TestCase
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk()
             ->assertJsonPath('data.status', 'paid');
@@ -177,15 +178,126 @@ class OrderTest extends TestCase
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
         $referral = $this->makeReferral($company, $agent, PipelineStage::WaitingAppointment);
-        $order = Order::factory()->create(['referral_id' => $referral->id]);
+        // AwaitingVerification, not Pending: since the 2026-08-21 audit an
+        // order with no slip is refused before the stage is looked at, and
+        // the STAGE gate is what this test exists to prove.
+        $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($agent)
+        $this->actingAs($this->paymentConfirmer($company))
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertUnprocessable();
 
         $order->refresh();
-        $this->assertSame(OrderStatus::Pending, $order->status);
+        $this->assertSame(OrderStatus::AwaitingVerification, $order->status);
         $this->assertDatabaseCount('commission_ledger', 0);
+    }
+
+    // -----------------------------------------------------------------
+    // Admin uploads the slip FOR the customer (2026-08-21 audit follow-up)
+    // -----------------------------------------------------------------
+
+    public function test_an_admin_can_upload_the_slip_for_a_customer_who_paid_cash(): void
+    {
+        // WHY THIS EXISTS: requiring a slip before confirmation closed a
+        // fraud path and, in the same stroke, stranded every customer who
+        // pays at a branch or sends the slip over LINE — the public /pay
+        // page was the only thing that could create one. Without this door
+        // those orders are real payments that nobody can close.
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+        $admin = $this->paymentConfirmer($company);
+
+        $this->actingAs($admin)
+            ->postJson("/api/v1/orders/{$order->id}/slip", [
+                'slip' => UploadedFile::fake()->image('slip-from-line.jpg'),
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.status', 'awaiting_verification');
+
+        $order->refresh();
+        Storage::disk('local')->assertExists($order->slip_path);
+
+        // The record says STAFF put it there. Whoever confirms next needs
+        // to know they are not looking at something the customer uploaded.
+        $this->assertSame($admin->id, $order->slip_uploaded_by_user_id);
+
+        // And the order can now be closed the ordinary way.
+        $this->actingAs($admin)
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'paid');
+    }
+
+    public function test_a_customer_upload_leaves_no_staff_name_on_the_slip(): void
+    {
+        // NULL is a real answer here, not a missing one: the public path
+        // must never look like staff supplied the proof of payment.
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+
+        $this->assertNull($order->fresh()->slip_uploaded_by_user_id);
+    }
+
+    public function test_an_agent_cannot_upload_a_slip_for_their_own_sale(): void
+    {
+        // The earner does not get to supply the proof either — that would
+        // hand back the fraud path the audit closed, one step earlier.
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+
+        $this->actingAs($agent)
+            ->postJson("/api/v1/orders/{$order->id}/slip", [
+                'slip' => UploadedFile::fake()->image('slip.jpg'),
+            ])
+            ->assertForbidden();
+
+        $this->assertNull($order->fresh()->slip_path);
+    }
+
+    public function test_a_staff_slip_upload_is_audit_logged(): void
+    {
+        // The admin who uploads may also confirm, so this row is what makes
+        // that sequence visible afterwards rather than merely allowed.
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+        $admin = $this->paymentConfirmer($company);
+
+        $this->actingAs($admin)
+            ->postJson("/api/v1/orders/{$order->id}/slip", ['slip' => UploadedFile::fake()->image('slip.jpg')])
+            ->assertOk();
+
+        $log = AuditLog::where('action', 'order.slip_uploaded_by_staff')->sole();
+        $this->assertSame($admin->id, $log->actor_user_id);
+        $this->assertSame($order->order_number, $log->new_values['order_number']);
+    }
+
+    public function test_an_already_paid_order_does_not_accept_another_slip(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->paid()->create(['referral_id' => $referral->id]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/slip", ['slip' => UploadedFile::fake()->image('slip.jpg')])
+            ->assertUnprocessable();
     }
 
     public function test_admin_of_another_company_cannot_view_or_confirm_an_order(): void
