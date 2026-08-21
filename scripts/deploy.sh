@@ -298,13 +298,30 @@ if [[ "$SKIP_FRONTEND" != true ]]; then
   # recreates the api/ symlink to backend/public (docs/DEPLOYMENT.md
   # step 4), so every deploy quietly broke the API until the next manual
   # fix. Protect both explicitly.
-  run rsync_to "$ROOT_DIR/frontend/dist/" "$FRONTEND_REMOTE_PATH/" --exclude=/admin --exclude=/api
+  #
+  # ADR-039 (2026-08-21) adds a THIRD thing to protect: the /backend
+  # symlink that serves the Laravel front controller same-origin. It is
+  # exactly as invisible to frontend/dist/ as api/ is, and losing it takes
+  # the whole agent portal down rather than just the API — every
+  # authenticated request goes through it once ADR-039 step 3 lands.
+  run rsync_to "$ROOT_DIR/frontend/dist/" "$FRONTEND_REMOTE_PATH/" --exclude=/admin --exclude=/api --exclude=/backend
   ok "frontend deployed."
 fi
 
 if [[ "$SKIP_FRONTEND_ADMIN" != true ]]; then
   info "Uploading frontend-admin/dist/ -> $FRONTEND_ADMIN_REMOTE_PATH ..."
-  run rsync_to "$ROOT_DIR/frontend-admin/dist/" "$FRONTEND_ADMIN_REMOTE_PATH/"
+  # ADR-039 (2026-08-21) — the admin app gets its own same-origin Laravel
+  # mount at <admin docroot>/backend, and this rsync is the one that would
+  # delete it.
+  #
+  # This line had NO --exclude at all until now, which was correct while
+  # nothing but the built app lived in that folder. The comment on the
+  # agent rsync above describes what happens when that assumption stops
+  # holding: "every deploy quietly broke the API until the next manual
+  # fix". That already happened once here with api/. Adding the exclude in
+  # the SAME change that creates the symlink, so there is never a window
+  # where a deploy would wipe it.
+  run rsync_to "$ROOT_DIR/frontend-admin/dist/" "$FRONTEND_ADMIN_REMOTE_PATH/" --exclude=/backend
   ok "frontend-admin deployed."
 fi
 
