@@ -92,3 +92,44 @@
 # devtools open, then move it into the block above.
 #
 # Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://api.partner.syncvision.io; media-src 'self' blob: https://api.partner.syncvision.io; connect-src 'self' https://api.partner.syncvision.io; worker-src 'self' blob:; frame-src https://www.youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+
+# ---------------------------------------------------------------------
+# index.html MUST NOT BE CACHED — re-added 2026-08-21, deliberately.
+#
+# ── THE FAILURE IT PREVENTS ──
+#
+# Vite gives every JS chunk a content hash, and `rsync --delete` removes
+# the previous deploy's chunks. A browser holding a cached index.html from
+# the last deploy therefore asks for hashes that no longer exist. The SPA
+# fallback below rewrites those misses to index.html, so the browser
+# receives HTML where it expected a module and refuses it:
+#
+#   Failed to load module script: Expected a JavaScript-or-Wasm module
+#   script but the server responded with a MIME type of "text/html"
+#
+# The app then white-screens for that user, and only for returning users —
+# a fresh visitor is fine, which is what makes it so easy to dismiss as
+# "works on my machine". Seen on production on 2026-08-21.
+#
+# ── WHY THIS IS BACK AFTER BEING REVERTED ──
+#
+# TASK-229 added exactly this and TASK-231 reverted it during an outage,
+# because the site was 404ing and this was the newest change. It was not
+# the cause: .htaccess had reached the server as mode 600 and LiteSpeed
+# could not read the file AT ALL, so every rule in it was inert — this one
+# included. deploy.sh now forces file modes on upload (and, since
+# 2026-08-21, over SSH where rsync has no --chmod), so the condition that
+# caused that outage cannot recur silently.
+#
+# `no-cache` is NOT "do not store" — the browser keeps the copy and simply
+# revalidates before using it. A 304 costs one small round trip; a
+# white screen costs the visit.
+#
+# Hashed assets under /assets/ are deliberately left alone: they are
+# immutable by construction and already cache well.
+# ---------------------------------------------------------------------
+<IfModule mod_headers.c>
+  <FilesMatch "\.html$">
+    Header always set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
