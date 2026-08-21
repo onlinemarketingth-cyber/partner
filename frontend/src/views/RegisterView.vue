@@ -343,8 +343,8 @@ const documentNumberHint = computed(() =>
   isThaiIdDocument.value
     ? t(
         'reg_id_number_thai_hint',
-        'กรอกตัวเลขติดกัน ไม่ต้องเว้นวรรคหรือใส่ขีด',
-        'Digits only — no spaces or dashes.',
+        'กรอกตามหน้าบัตร จะเว้นวรรคหรือใส่ขีดก็ได้ ระบบตัดให้เอง',
+        'Type it as printed on your card — spaces and dashes are removed for you.',
       )
     : t(
         'reg_id_number_passport_hint',
@@ -366,6 +366,46 @@ function selectIdDocumentType(next: IdDocumentType) {
   form.value.national_id = ''
   nationalIdError.value = ''
   idDocumentTypeError.value = ''
+}
+
+/**
+ * Keep the Thai ID field to bare digits AS IT IS TYPED.
+ *
+ * ── THE FAILURE THIS REMOVES ──
+ *
+ * A Thai ID card prints the number in groups — "1 2345 67890 12 1" — and
+ * people copy what they are holding, separators and all. Before this the
+ * field was maxlength="13" with no normalisation, so those four separators
+ * ate four of the thirteen slots: the browser stopped accepting input
+ * part-way through the number, and the server then answered
+ *
+ *     "เลขบัตรประชาชนต้องเป็นตัวเลข 13 หลัก"
+ *
+ * to somebody who HAD typed thirteen digits. Nothing on screen explained
+ * where the rest of their number went. Pasting was worse — one action,
+ * silently truncated, no keystroke to notice it by.
+ *
+ * ── WHY THIS IS PRESENTATION AND NOT A SECOND VALIDATOR ──
+ *
+ * App\Rules\ThaiNationalId deliberately demands digits-only, because the
+ * stored value and its blind index must be canonical — one number, one
+ * hash, or per-company duplicate detection quietly stops working. That rule
+ * stays exactly as strict as it is. This makes the field PRODUCE the
+ * canonical form; it does not make the server accept anything else.
+ *
+ * The mod-11 CHECKSUM is still not duplicated here and must not be — see
+ * validateForm() below for why that implementation stays in one place.
+ *
+ * maxlength moves to 17 for the same reason the strip exists: the field has
+ * to hold the separators long enough for us to remove them. slice(0, 13) is
+ * what actually caps the number.
+ */
+function onNationalIdInput(): void {
+  nationalIdError.value = ''
+
+  if (isThaiIdDocument.value) {
+    form.value.national_id = form.value.national_id.replace(/\D/g, '').slice(0, 13)
+  }
 }
 
 const showPassword = ref(false)
@@ -847,14 +887,14 @@ const introLine = computed(() => {
               spellcheck="false"
               :inputmode="isThaiIdDocument ? 'numeric' : 'text'"
               :autocapitalize="isThaiIdDocument ? 'off' : 'characters'"
-              :maxlength="isThaiIdDocument ? 13 : 12"
+              :maxlength="isThaiIdDocument ? 17 : 12"
               :placeholder="documentNumberPlaceholder"
               class="bg-surface-input w-full pl-9 pr-3 py-2.5 min-h-[44px] rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
               :class="[
                 nationalIdError ? 'border-rose-400' : 'border-line-input',
                 isThaiIdDocument ? '' : 'uppercase tracking-wide',
               ]"
-              @input="nationalIdError = ''"
+              @input="onNationalIdInput"
             />
           </div>
           <p class="text-xs text-ink-card-subtle mt-1">{{ documentNumberHint }}</p>
