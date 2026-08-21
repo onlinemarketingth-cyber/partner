@@ -167,6 +167,16 @@ class RegisterRequest extends FormRequest
             // value the UI can only produce from a fixed two-item control.
             'id_document_type.required' => 'กรุณาเลือกประเภทเอกสารยืนยันตัวตน (บัตรประชาชน หรือ หนังสือเดินทาง)',
             'national_id.required' => 'กรุณากรอกเลขที่บัตรประชาชน หรือเลขที่หนังสือเดินทาง',
+            'first_name.required' => 'กรุณากรอกชื่อ',
+            'last_name.required' => 'กรุณากรอกนามสกุล',
+            'email.required' => 'กรุณากรอกอีเมล',
+            'email.email' => 'รูปแบบอีเมลไม่ถูกต้อง',
+            // Laravel's stock wording here is "The email has already been
+            // taken." — English, on a Thai form, and phrased as a complaint
+            // rather than a next step. The usual cause is that the person
+            // already signed up, so this points at the login page, the same
+            // way the live check on the form does.
+            'email.unique' => 'อีเมลนี้มีบัญชีในระบบแล้ว กรุณาเข้าสู่ระบบ หรือใช้อีเมลอื่น',
         ];
     }
 }
