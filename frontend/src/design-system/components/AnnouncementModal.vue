@@ -122,14 +122,33 @@ const cardClasses = computed(() => {
  * the image inside it, which shows the whole image but leaves dead bars
  * above and below. Dropping the height instead means no bars and no crop.
  *
- * DELIBERATELY UNCAPPED (human's choice when asked): a tall portrait image
- * renders at full height and the card scrolls to it. Overflow is still
- * impossible because the CARD carries `max-h-[85vh]`/`max-h-[92vh]` plus
- * `overflow-y-auto` — the modal can never grow past the viewport behind
- * it, only its content can scroll. The trade-off the human accepted: with
- * a very tall image the title and body sit below the fold.
+ * ── CAPPED AT 80vh, 2026-08-21 (human, revising their own earlier call) ──
+ *
+ * TASK-228 left the height DELIBERATELY UNCAPPED and this docblock recorded
+ * the trade-off accepted at the time: "with a very tall image the title and
+ * body sit below the fold". A tall portrait poster then did exactly that in
+ * production — the image filled the sheet and the headline was somewhere
+ * past the bottom edge, so the announcement opened as a picture with no
+ * words. Hence "ปรับรูป banner หน้าแรกแสดง 80% ของหน้าจอ".
+ *
+ * `max-h-[80vh]` + `object-contain` keeps what TASK-228 was actually
+ * defending — the image is never CROPPED — while reserving the last fifth
+ * of the screen for the title.
+ *
+ * THE PAIRING IS NOT OPTIONAL. max-height alone would SQUASH a clamped
+ * image, because `w-full` is still forcing the width; object-contain is what
+ * makes the clamp preserve the ratio. And object-contain has no effect at
+ * all until the cap bites, so an ordinary wide banner renders exactly as it
+ * did before this change — only a very tall one is letterboxed at the
+ * sides, which is the honest way to show a whole portrait image in a
+ * landscape slot.
+ *
+ * The card's own `max-h-[85vh]`/`max-h-[92vh]` + `overflow-y-auto` still
+ * stand behind this, so the modal can never grow past the viewport.
  */
-const imageClasses = computed(() => (displayStyle.value === 'full_screen' ? '' : 'rounded-t-3xl'))
+const imageClasses = computed(() =>
+  displayStyle.value === 'full_screen' ? 'max-h-[80vh]' : 'rounded-t-3xl max-h-[80vh]',
+)
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })
@@ -189,7 +208,7 @@ function formatDate(iso: string): string {
           v-if="announcement.image_url"
           :src="announcement.image_url"
           alt=""
-          class="w-full h-auto block bg-surface-chip"
+          class="w-full h-auto block bg-surface-chip object-contain"
           :class="imageClasses"
         />
 

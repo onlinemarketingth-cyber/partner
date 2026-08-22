@@ -749,34 +749,34 @@ async function confirmRevoke() {
 // i.e. admins only. A reject button would 403 every time it was pressed.
 
 const approveTarget = ref<PendingRecruit | null>(null)
-const showApproveConfirm = ref(false)
 const approving = ref(false)
 
-function askApprove(recruit: PendingRecruit) {
+/**
+ * READ FIRST, THEN APPROVE (human request, 2026-08-21: "ปุ่มอนุมัติด้านบน
+ * ต้องคลิ๊กดูรายละเอียดผู้สมัครถึงอนุมัติได้").
+ *
+ * The queue row used to carry the button itself, so admitting somebody into
+ * the COMPANY — not merely into a roster; ADR-025 §7 accepts that a leader
+ * can now do that with no admin looking — was one tap from a list, followed
+ * by a confirm dialog that showed nothing the list had not already shown.
+ * A dialog that adds no information is a dialog people learn to dismiss.
+ *
+ * So the row opens this sheet and the button lives inside it. The sheet
+ * carries everything the dialog said PLUS the record: when they signed up,
+ * to the minute, and which of the leader's links brought them. That makes
+ * the extra tap buy something, which is the only thing that justifies it.
+ *
+ * The old ConfirmDialog is gone rather than stacked in front of this: three
+ * steps to approve one recruit is how a leader stops reading any of them.
+ */
+function openRecruit(recruit: PendingRecruit) {
   approveTarget.value = recruit
-  showApproveConfirm.value = true
 }
 
-/**
- * The dialog body has to say what this actually does — it admits a person
- * into the COMPANY, not merely into a roster (ADR-025 §7 accepts, knowingly,
- * that a leader can now do that without an admin looking).
- *
- * The unverified case gets an extra line because approving does not by
- * itself let that person in: the login gate still blocks on email
- * verification (TASK-115), so a leader who was not told would reasonably
- * expect them to be able to sign in and would field the confused call.
- */
-const approveBody = computed(() => {
-  const recruit = approveTarget.value
-  if (!recruit) return ''
-  // One flowing paragraph, not multiple lines: ConfirmDialog renders `body`
-  // in a single <p>, so newlines would collapse into a run-on sentence.
-  const base = `การอนุมัติจะรับ ${recruit.name} เข้าเป็นตัวแทนของบริษัท ให้เข้าใช้งานระบบได้ และอยู่ในสายงานของคุณ`
-  return recruit.email_verified
-    ? base
-    : `${base} — หมายเหตุ: ผู้สมัครรายนี้ยังไม่ได้ยืนยันอีเมล จึงจะยังเข้าสู่ระบบไม่ได้จนกว่าจะยืนยันอีเมลเสร็จ`
-})
+function closeRecruit() {
+  if (approving.value) return
+  approveTarget.value = null
+}
 
 async function confirmApprove() {
   const recruit = approveTarget.value
@@ -785,7 +785,6 @@ async function confirmApprove() {
   try {
     await api.put(`/agent-approvals/${recruit.id}/approve`)
     pendingRecruits.value = pendingRecruits.value.filter((r) => r.id !== recruit.id)
-    showApproveConfirm.value = false
     approveTarget.value = null
     toast.success(`รับ ${recruit.name} เข้าทีมแล้ว`)
     // The approved recruit is now a direct report, so the roster and its
@@ -807,6 +806,18 @@ async function confirmApprove() {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('th-TH', { dateStyle: 'medium' })
+}
+
+/**
+ * Date AND time, for the recruit sheet only.
+ *
+ * The list row keeps the short date — several recruits from one campaign all
+ * read "21 ส.ค. 2569" there and that is fine, because the row is a summary.
+ * The sheet is where a leader decides, and "which of the two people who
+ * signed up yesterday is this" is exactly the question the minute answers.
+ */
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 /** null max_uses = unlimited (ADR-025 §3) — never rendered as 0. */
@@ -924,7 +935,17 @@ watch(showCreateSheet, (open) => {
         <AppListGroupHeader label="รออนุมัติเข้าทีม" :count="pendingRecruits.length" />
         <AppList>
           <AppCard v-for="recruit in pendingRecruits" :key="recruit.id" variant="flat">
-            <div class="flex items-center gap-3">
+            <!-- THE WHOLE ROW OPENS THE DETAIL SHEET, and the approve button
+                 lives inside it — see openRecruit() for why the decision
+                 moved off the list. A <button> rather than a div so it is
+                 reachable by keyboard and announced as activatable;
+                 w-full/text-left because a button centres and shrinks its
+                 content by default. -->
+            <button
+              type="button"
+              class="flex items-center gap-3 w-full text-left"
+              @click="openRecruit(recruit)"
+            >
               <img
                 v-if="recruit.avatar_url"
                 :src="recruit.avatar_url"
@@ -946,21 +967,17 @@ watch(showCreateSheet, (open) => {
                 </p>
                 <!-- TASK-115: approving an unverified person does not let
                      them in — the login gate still blocks them. Said here
-                     as well as in the dialog so it is visible before the
+                     as well as in the sheet so it is visible before the
                      leader ever taps. -->
                 <p v-if="!recruit.email_verified" class="text-[11px] text-ink-warning mt-0.5">
                   ยังไม่ได้ยืนยันอีเมล — เข้าสู่ระบบไม่ได้จนกว่าจะยืนยัน
                 </p>
               </div>
 
-              <button
-                type="button"
-                class="shrink-0 min-h-[44px] px-3.5 rounded-xl bg-brand-600 text-ink-primary text-xs font-bold active:scale-95 transition"
-                @click="askApprove(recruit)"
-              >
-                อนุมัติ
-              </button>
-            </div>
+              <!-- A chevron, not an approve button. The row's job is now to
+                   say "there is more to read here". -->
+              <Icon name="chevron_right" :size="18" class="shrink-0 text-ink-card-subtle" />
+            </button>
           </AppCard>
         </AppList>
       </template>
@@ -1275,9 +1292,37 @@ watch(showCreateSheet, (open) => {
               class="flex items-start gap-3 py-4 px-4 rounded-xl bg-surface-chip"
             >
               <Icon name="shield_check" :size="20" class="shrink-0 text-ink-chip mt-0.5" />
+              <!--
+                THE OLD COPY SENT THE READER NOWHERE, and was reported as a
+                bug on 2026-08-21: "ผมคลิกดูรายละเอียดลูกทีมทำไม ถึง Alert
+                แบบนี้ทั้งที่ User นี้เป็นหัวหน้าทีม".
+
+                Nothing is broken. The company's client_visibility_level is
+                `counts_only` — which is also what an unconfigured tenant
+                resolves to, because TeamVisibilityLevel::default() fails
+                closed by ADR-024 §5. But the sentence read as though being a
+                team leader ought to have been enough, and then said "contact
+                your company's admin" to a person who is very often that
+                admin, or the platform owner.
+
+                It now says the two things that were missing: this is a
+                SETTING rather than a permission you failed to earn, and here
+                is the name of the screen that holds it. "การมองเห็นข้อมูลทีม"
+                is the literal menu label in the admin console
+                (frontend-admin router, navLabel on /team-visibility-settings)
+                — naming it is what turns "ask someone" into something the
+                reader can act on.
+
+                Deliberately NOT a link, and the raw level is deliberately not
+                printed: this app has no route into the admin console, and an
+                agent who genuinely cannot change the setting must not be
+                handed a door that 403s.
+              -->
               <p class="text-xs text-ink-chip leading-relaxed">
-                บริษัทตั้งค่าให้หัวหน้าทีมเห็นเฉพาะจำนวนและสถานะ ไม่เปิดเผยรายชื่อลูกค้าของลูกทีม
-                หากต้องการดูรายละเอียด กรุณาติดต่อผู้ดูแลระบบของบริษัท
+                บริษัทตั้งค่าให้หัวหน้าทีมเห็นเฉพาะ<strong class="font-bold">จำนวนและสถานะ</strong>ของลูกค้าลูกทีม
+                ไม่แสดงรายชื่อ — ไม่ใช่ระบบผิดพลาด และไม่เกี่ยวกับสิทธิ์หัวหน้าทีมของคุณ
+                <br />
+                ผู้ดูแลระบบของบริษัทเปลี่ยนได้ที่หน้า “การมองเห็นข้อมูลทีม” ในระบบผู้ดูแล
               </p>
             </div>
 
@@ -1421,6 +1466,107 @@ watch(showCreateSheet, (open) => {
       :email-target-id="shareLinkId"
     />
 
+    <!--
+      ── THE RECRUIT SHEET ────────────────────────────────────────────────
+      Read the applicant, then admit them. Same bottom-sheet shape as the
+      member sheet above so the screen has one way of showing a person, not
+      two.
+
+      WHAT IS DELIBERATELY NOT IN HERE: email, phone, national ID. The
+      backend does not send them — PendingRecruitResource holds ADR-024 §3's
+      line ("a team leader is not entitled to a teammate's PII") and its
+      docblock says widening it is a human decision, not a field to quietly
+      add. So this sheet shows everything a leader IS entitled to and no
+      more; if that turns out to be too thin in practice, the answer is that
+      decision, not a change here.
+    -->
+    <Transition name="sheet-fade">
+      <div v-if="approveTarget" class="fixed inset-0 z-[60] bg-slate-900/40" @click="closeRecruit"></div>
+    </Transition>
+
+    <Transition name="sheet-slide">
+      <div
+        v-if="approveTarget"
+        class="fixed inset-x-0 bottom-0 z-[61] mx-auto w-full max-w-md rounded-t-3xl bg-surface-card shadow-[0_-8px_24px_rgba(0,0,0,0.18)] pb-[env(safe-area-inset-bottom)]"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="approveTarget.name"
+      >
+        <div class="flex justify-center pt-3 pb-1">
+          <div class="h-1 w-10 rounded-full bg-surface-chip"></div>
+        </div>
+
+        <div class="flex items-start gap-3 px-5 py-2">
+          <img
+            v-if="approveTarget.avatar_url"
+            :src="approveTarget.avatar_url"
+            alt=""
+            class="w-11 h-11 rounded-full object-cover border border-line-card shrink-0"
+          />
+          <span
+            v-else
+            class="w-11 h-11 rounded-full bg-brand-100 text-brand-700 text-sm font-bold flex items-center justify-center shrink-0"
+          >
+            {{ initials(approveTarget.name) }}
+          </span>
+
+          <div class="min-w-0 flex-1">
+            <h2 class="text-base font-bold text-ink-card truncate">{{ approveTarget.name }}</h2>
+            <p class="text-xs text-ink-card-muted mt-0.5">รอการอนุมัติเข้าทีมของคุณ</p>
+          </div>
+
+          <button
+            type="button"
+            class="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-ink-card-subtle active:bg-surface-chip"
+            aria-label="ปิด"
+            @click="closeRecruit"
+          >
+            <Icon name="close" :size="18" />
+          </button>
+        </div>
+
+        <div class="max-h-[55vh] overflow-y-auto px-5 pb-4 pt-2 space-y-3">
+          <div>
+            <p class="text-[11px] font-bold text-ink-card-subtle">สมัครเมื่อ</p>
+            <p class="text-sm text-ink-card">{{ formatDateTime(approveTarget.registered_at) }}</p>
+          </div>
+
+          <div>
+            <p class="text-[11px] font-bold text-ink-card-subtle">มาจากลิงก์</p>
+            <!-- invite_link is whenLoaded on the backend, so absent, null and
+                 "present with no label" are three different states and none
+                 may render as a blank line. -->
+            <p class="text-sm text-ink-card">
+              {{ approveTarget.invite_link?.label || 'ลิงก์ชวนเข้าทีมของคุณ (ไม่ได้ตั้งชื่อลิงก์)' }}
+            </p>
+          </div>
+
+          <!-- The consequence, in the place the decision is made. This used
+               to be the confirm dialog's whole body. -->
+          <div class="p-3 rounded-xl bg-surface-chip">
+            <p class="text-xs text-ink-chip leading-relaxed">
+              การอนุมัติจะรับ <strong class="font-bold">{{ approveTarget.name }}</strong>
+              เข้าเป็นตัวแทนของบริษัท ให้เข้าใช้งานระบบได้ และอยู่ในสายงานของคุณ
+            </p>
+            <p v-if="!approveTarget.email_verified" class="text-xs text-ink-warning leading-relaxed mt-2">
+              หมายเหตุ: ผู้สมัครรายนี้ยังไม่ได้ยืนยันอีเมล อนุมัติได้ แต่จะยังเข้าสู่ระบบไม่ได้จนกว่าจะกดลิงก์ยืนยันในอีเมล
+            </p>
+          </div>
+        </div>
+
+        <div class="px-5 pb-5 pt-1">
+          <button
+            type="button"
+            class="w-full min-h-[48px] rounded-xl bg-brand-600 text-ink-primary text-sm font-bold active:scale-95 transition disabled:opacity-50"
+            :disabled="approving"
+            @click="confirmApprove"
+          >
+            {{ approving ? 'กำลังอนุมัติ…' : 'อนุมัติเข้าทีม' }}
+          </button>
+        </div>
+      </div>
+    </Transition>
+
     <ConfirmDialog
       v-model:show="showRevokeConfirm"
       title="ยกเลิกลิงก์นี้?"
@@ -1430,14 +1576,6 @@ watch(showCreateSheet, (open) => {
       @confirm="confirmRevoke"
     />
 
-    <ConfirmDialog
-      v-model:show="showApproveConfirm"
-      title="อนุมัติเข้าทีม?"
-      :body="approveBody"
-      variant="primary"
-      :busy="approving"
-      @confirm="confirmApprove"
-    />
   </main>
 </template>
 

@@ -57,10 +57,31 @@ describe('AnnouncementModal — the image is shown whole (TASK-228)', () => {
 
     const classes = img!.classes()
 
-    // object-cover is the crop. object-contain would not crop, but only by
-    // letterboxing inside a fixed box — neither belongs here.
+    // object-cover IS the crop, and it is the one that must never come back.
+    //
+    // This used to forbid object-contain too, and that was right while the
+    // image sat in a FIXED-height box: contain would have shown the whole
+    // picture only by padding it with dead bars. The box is gone (h-auto),
+    // and since 2026-08-21 there is a max-h-[80vh] cap so the title cannot
+    // be pushed off screen by a tall poster. Against a CAP rather than a
+    // box, object-contain is what stops a clamped image being squashed by
+    // the w-full beside it — it does nothing at all until the cap bites.
+    // So the rule this file defends is unchanged (never crop); only the
+    // class that would break it is.
     expect(classes).not.toContain('object-cover')
-    expect(classes).not.toContain('object-contain')
+  })
+
+  it.each(STYLES)('caps the image at 80vh so the title survives, in the %s style', (style) => {
+    // Reported 2026-08-21: a tall portrait poster filled the sheet and the
+    // headline sat below the fold, so the announcement opened as a picture
+    // with no words. TASK-228's docblock had recorded that exact trade-off
+    // as accepted; production disagreed.
+    const classes = bannerImage(mountModal(style))!.classes()
+
+    expect(classes).toContain('max-h-[80vh]')
+    // The cap and object-contain are a pair: max-height alone would squash
+    // the image, because w-full is still forcing the width.
+    expect(classes).toContain('object-contain')
   })
 
   it.each(STYLES)('pins no fixed height on the image, in the %s style', (style) => {
@@ -77,9 +98,9 @@ describe('AnnouncementModal — the image is shown whole (TASK-228)', () => {
     expect(bannerImage(mountModal('centered_card'))!.classes()).toContain('w-full')
   })
 
-  it('keeps the card capped to the viewport so an uncapped image cannot overflow it', () => {
-    // The counterpart to leaving the image uncapped: overflow is prevented
-    // on the CARD, which scrolls, rather than by cropping the image.
+  it('keeps the card capped to the viewport as well as the image', () => {
+    // Still the backstop behind the image's own 80vh cap: overflow is
+    // prevented on the CARD, which scrolls, never by cropping the image.
     for (const style of ['bottom_sheet', 'centered_card'] as const) {
       const card = mountModal(style).find('.overflow-y-auto')
       expect(card.exists()).toBe(true)
