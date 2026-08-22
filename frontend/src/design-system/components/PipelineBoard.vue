@@ -131,7 +131,7 @@ import { api } from '@/api/client'
 // user-facing copy; apiErrorMessage() is the single normalizer. The toast
 // store covers the other finding: advancing a stage silently refetched with
 // no confirmation at all.
-import { apiErrorMessage } from '@/utils/apiError'
+import { apiErrorMessage, isAbortError } from '@/utils/apiError'
 import { useToastStore } from '@/stores/toast'
 import AppButton from './AppButton.vue'
 import TabFilterBar from './TabFilterBar.vue'
@@ -390,6 +390,30 @@ const kpis = computed<PipelineBoardKpi[]>(() => [
 ])
 // The host renders these in its own page header, so they have to travel up.
 watch(kpis, (value) => emit('kpis-change', value), { immediate: true })
+
+/**
+ * Open the payment slip the customer attached.
+ *
+ * The card already printed "· มีสลิปแนบ" and gave no way to look at it —
+ * the same gap the client drawer had, reported together on 2026-08-21
+ * ("ลูกค้าแนบสลิปแล้วแต่ Agent เช็คไม่ได้").
+ *
+ * `api.download` and not a plain link: the slip lives on the private disk
+ * behind GET /orders/{order}/slip, which is access-checked
+ * (OrderPolicy::view), so an <a href> would 401 rather than open.
+ *
+ * A toast on failure, not an inline error: this is a READ. Nothing is
+ * half-done if it fails, and the card's inline error line belongs to the
+ * confirm/advance actions, which an agent must not confuse with this.
+ */
+async function viewSlip(order: ReferralOrder): Promise<void> {
+  try {
+    await api.download(`/orders/${order.id}/slip`, `slip-${order.order_number}.jpg`)
+  } catch (e) {
+    if (isAbortError(e)) return
+    toast.error(apiErrorMessage(e, 'เปิดสลิปไม่สำเร็จ'))
+  }
+}
 
 async function loadAll() {
   loading.value = true
@@ -949,8 +973,23 @@ function formatDateTime(iso: string): string {
                              formatBaht, here, and nowhere else. -->
                         <p v-if="r.order" class="text-xs text-ink-card-subtle mt-0.5">
                           {{ r.order.order_number }} · {{ formatBaht(r.order.amount_satang) }} บาท ·
-                          {{ r.order.status_label }}<span v-if="r.order.has_slip"> · มีสลิปแนบ</span>
+                          {{ r.order.status_label }}
                         </p>
+                        <!-- "มีสลิปแนบ" used to be plain text here: the card
+                             named a document and offered nothing to press.
+                             Now it IS the way in. Its own line rather than
+                             tacked onto the status sentence, because a button
+                             hidden inside a run-on line is a button nobody
+                             finds on a phone. -->
+                        <button
+                          v-if="r.order?.has_slip"
+                          type="button"
+                          class="mt-1 inline-flex items-center gap-1.5 min-h-[36px] px-2.5 py-1 rounded-lg bg-surface-chip text-xs font-bold text-ink-chip active:scale-95 transition"
+                          @click.stop="viewSlip(r.order)"
+                        >
+                          <Icon name="download" :size="14" />
+                          ดูสลิป
+                        </button>
                         <!-- §4.5 — "ยืนยันโดย …" only on a closed bill, and
                              never blank (see verifiedByLine). -->
                         <p v-if="r.order && r.order.status === 'paid'" class="text-xs text-ink-card-subtle">

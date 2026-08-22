@@ -29,8 +29,21 @@ export type ReferralRowOrderStatus = 'pending' | 'awaiting_verification' | 'paid
 
 /** Only what the row RENDERS — never the full OrderResource. */
 export interface ReferralRowOrder {
+  id: number
+  order_number: string
   status: ReferralRowOrderStatus
   status_label: string
+  /**
+   * Has the customer attached a payment slip?
+   *
+   * This row used to print "รอตรวจสอบสลิป" and offer no way to look at the
+   * slip it was naming (human report, 2026-08-21: "ลูกค้าแนบสลิปแล้วแต่
+   * Agent เช็คไม่ได้"). The capability was never missing — OrdersView has
+   * had a ดูสลิป button since TASK-054 and OrderPolicy::view() has always
+   * let an agent read their own order's slip. It was simply not HERE, in
+   * the drawer where an agent actually works a client.
+   */
+  has_slip: boolean
 }
 
 export interface ReferralRowItem {
@@ -77,6 +90,8 @@ const props = defineProps<{
 defineEmits<{
   collect: []
   share: []
+  /** Open the attached slip. Only ever emitted when `order.has_slip`. */
+  viewSlip: []
 }>()
 
 // Chip colours and labels are OrdersView.vue's, verbatim. `status_label`
@@ -163,6 +178,33 @@ function formatDateTime(iso: string | null): string {
              re-surfaces that link to a customer after payment. So the
              button now shows in EVERY order status, not just before
              payment — label/click handler unchanged either way. -->
+        <!--
+             SEE THE SLIP THE ROW IS TALKING ABOUT (human, 2026-08-21).
+
+             The chip above already says "รอตรวจสอบสลิป". Naming a document
+             and giving no way to open it is the part that reads as broken:
+             the agent collected this payment, the customer told them the
+             slip was sent, and the screen agreed — while offering nothing to
+             press.
+
+             The slip WAS reachable, on /orders, which an agent gets to from
+             the Home quick links. That is the wrong place: this drawer is
+             where an agent works one client, and making them leave it, find
+             the order in a list and come back is why it read as "เช็คไม่ได้".
+
+             FIRST in the row on purpose. Looking at what the customer sent
+             comes before re-sharing a link to a bill they have already paid.
+        -->
+        <AppButton
+          v-if="order?.has_slip"
+          variant="secondary"
+          size="sm"
+          @click="$emit('viewSlip')"
+        >
+          <Icon name="download" :size="14" />
+          ดูสลิป
+        </AppButton>
+
         <AppButton
           v-if="order"
           variant="secondary"

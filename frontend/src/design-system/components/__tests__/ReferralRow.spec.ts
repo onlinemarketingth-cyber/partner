@@ -109,8 +109,8 @@ describe('ReferralRow', () => {
   })
 
   it('offers exactly one action per order state — collect with no order, share once one exists in ANY status', async () => {
-    const paid: ReferralRowOrder = { status: 'paid', status_label: 'ชำระเงินแล้ว' }
-    const pending: ReferralRowOrder = { status: 'pending', status_label: 'รอชำระเงิน' }
+    const paid: ReferralRowOrder = { id: 1, order_number: 'ORD-1', status: 'paid', status_label: 'ชำระเงินแล้ว', has_slip: false }
+    const pending: ReferralRowOrder = { id: 2, order_number: 'ORD-2', status: 'pending', status_label: 'รอชำระเงิน', has_slip: false }
     const labels = (w: ReturnType<typeof mount>) => w.findAll('button').map((b) => b.text())
 
     // (a) No order yet → the one-press collect action (TASK-141).
@@ -143,5 +143,34 @@ describe('ReferralRow', () => {
     expect(labels(settled).some((t) => t.includes('แชร์ลิงก์ชำระเงิน'))).toBe(true)
     await settled.find('button').trigger('click')
     expect(settled.emitted('share')).toHaveLength(1)
+  })
+
+  it('offers ดูสลิป only when a slip is actually attached', async () => {
+    // Reported 2026-08-21: the row printed "รอตรวจสอบสลิป" and gave the agent
+    // nothing to press. Naming a document with no way to open it is the part
+    // that reads as broken — the agent collected the payment, the customer
+    // says the slip was sent, and the screen agrees while offering nothing.
+    const withSlip: ReferralRowOrder = {
+      id: 7, order_number: 'ORD-7', status: 'awaiting_verification',
+      status_label: 'รอตรวจสอบสลิป', has_slip: true,
+    }
+    const withoutSlip: ReferralRowOrder = { ...withSlip, has_slip: false }
+    const labels = (w: ReturnType<typeof mount>) => w.findAll('button').map((b) => b.text())
+
+    const shown = mount(ReferralRow, {
+      props: { referral: referralFixture(), hideClient: true, order: withSlip },
+    })
+    expect(labels(shown).some((t) => t.includes('ดูสลิป'))).toBe(true)
+
+    await shown.findAll('button').find((b) => b.text().includes('ดูสลิป'))!.trigger('click')
+    expect(shown.emitted('viewSlip')).toHaveLength(1)
+
+    // No slip, no button — never one that opens a 404.
+    const hidden = mount(ReferralRow, {
+      props: { referral: referralFixture(), hideClient: true, order: withoutSlip },
+    })
+    expect(labels(hidden).some((t) => t.includes('ดูสลิป'))).toBe(false)
+    // The status still reads the same; only the affordance is conditional.
+    expect(hidden.text()).toContain('รอตรวจสอบสลิป')
   })
 })

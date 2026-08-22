@@ -51,6 +51,8 @@ import { createPinia, setActivePinia } from 'pinia'
 const get = vi.fn()
 const post = vi.fn()
 
+const download = vi.fn()
+
 const { FakeApiError } = vi.hoisted(() => ({
   FakeApiError: class extends Error {
     constructor(
@@ -69,7 +71,7 @@ vi.mock('@/api/client', () => ({
     put: vi.fn(),
     delete: vi.fn(),
     postForm: vi.fn(),
-    download: vi.fn(),
+    download: (...args: unknown[]) => download(...args),
     downloadAbsolute: vi.fn(),
   },
   ApiError: FakeApiError,
@@ -521,14 +523,36 @@ describe('§4.5 / §4.6 — what the agent can see before deciding', () => {
     expect(wrapper.text()).not.toContain('990050')
   })
 
-  it('says มีสลิปแนบ when there is a slip to check', async () => {
+  it('offers a way to OPEN the slip, not just a note that one exists', async () => {
+    // Was: the card printed "· มีสลิปแนบ" as plain text. It named a document
+    // and gave the agent nothing to press — reported 2026-08-21 as
+    // "ลูกค้าแนบสลิปแล้วแต่ Agent เช็คไม่ได้". The note is now the button.
     const wrapper = await mountBoard([
       makeReferral({ name: 'มีสลิป', order: makeOrder({ has_slip: true }) }),
       makeReferral({ name: 'ไม่มีสลิป', order: makeOrder({ id: 78, has_slip: false }) }),
     ])
 
-    expect(card(wrapper, 'มีสลิป').text()).toContain('มีสลิปแนบ')
-    expect(card(wrapper, 'ไม่มีสลิป').text()).not.toContain('มีสลิปแนบ')
+    expect(card(wrapper, 'มีสลิป').text()).toContain('ดูสลิป')
+    // No slip means no button — never one that downloads a 404.
+    expect(card(wrapper, 'ไม่มีสลิป').text()).not.toContain('ดูสลิป')
+  })
+
+  it('actually fetches the slip through the access-checked endpoint', async () => {
+    // api.download and not an <a href>: the slip is on the private disk
+    // behind GET /orders/{order}/slip (OrderPolicy::view), so a plain link
+    // would 401 rather than open. A button that looks right and 401s is the
+    // failure this asserts against.
+    download.mockClear()
+    const wrapper = await mountBoard([
+      makeReferral({ name: 'มีสลิป', order: makeOrder({ has_slip: true }) }),
+    ])
+
+    await card(wrapper, 'มีสลิป').findAll('button').find((b) => b.text().includes('ดูสลิป'))!.trigger('click')
+
+    expect(download).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/orders\/\d+\/slip$/),
+      expect.stringContaining('slip-'),
+    )
   })
 
   it('shows ยืนยันโดย + when, on a paid order', async () => {

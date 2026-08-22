@@ -149,6 +149,74 @@ class OrderTest extends TestCase
         Storage::disk('local')->assertExists($order->slip_path);
     }
 
+    /**
+     * THE SELLING AGENT CAN LOOK AT THE SLIP THEIR CUSTOMER SENT.
+     *
+     * Reported 2026-08-21: "ลูกค้าแนบสลิปแล้วแต่ Agent เช็คไม่ได้". The
+     * screens were the immediate cause — the client drawer and the pipeline
+     * card both NAMED the slip and offered nothing to press — but the reason
+     * this test exists is the layer underneath.
+     *
+     * The 2026-08-21 audit split confirm() out of ownsOrManages() so that an
+     * agent can no longer verify their own payment (human ruling D1). That
+     * was right, and it is exactly the kind of narrowing that gets applied
+     * one method too far: tightening view() the same way would take the slip
+     * away from the person who collected the money, silently, with no test
+     * objecting. Confirming is a decision; LOOKING is not, and an agent
+     * chasing a customer over an unpaid bill needs to see what was sent.
+     */
+    public function test_the_selling_agent_can_download_their_own_orders_slip(): void
+    {
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+
+        $this->actingAs($agent)
+            ->get("/api/v1/orders/{$order->id}/slip")
+            ->assertOk();
+    }
+
+    public function test_an_agent_from_another_company_cannot_download_the_slip(): void
+    {
+        // BR-6. A payment slip carries a real person's bank account and the
+        // amount they paid; the tenant boundary is the whole protection.
+        Storage::fake('local');
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+
+        $this->postJson("/api/v1/pay/{$order->public_token}/slip", [
+            'slip' => UploadedFile::fake()->image('slip.jpg'),
+        ])->assertOk();
+
+        $outsider = User::factory()->agent()->create(['company_id' => Company::factory()->create()->id]);
+
+        $this->actingAs($outsider)
+            ->get("/api/v1/orders/{$order->id}/slip")
+            ->assertNotFound();
+    }
+
+    public function test_an_order_with_no_slip_404s_rather_than_streaming_nothing(): void
+    {
+        // The UI hides the button on has_slip = false; this is the half that
+        // holds when something reaches the URL anyway.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $order = Order::factory()->create(['referral_id' => $referral->id]);
+
+        $this->actingAs($agent)
+            ->get("/api/v1/orders/{$order->id}/slip")
+            ->assertNotFound();
+    }
+
     public function test_confirming_from_finish_1st_doctor_meeting_pays_the_order_and_fires_commission(): void
     {
         $company = Company::factory()->create();

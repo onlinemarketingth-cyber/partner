@@ -366,6 +366,7 @@ const {
   ensureOrdersLoaded,
   orderFor,
   openShareFor,
+  viewSlipFor,
   collectPayment,
 } = useReferralOrders(pageAbort.signal)
 
@@ -1822,6 +1823,7 @@ watch(isListMode, (listMode) => {
               :pay-error="payActionError && payActionError.id === r.id ? payActionError.message : null"
               @share="openShareFor(r.id)"
               @collect="collectPayment(r.id)"
+              @view-slip="viewSlipFor(r.id)"
             >
               <template #actions-start>
                 <button

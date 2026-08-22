@@ -43,6 +43,15 @@ export interface OrderSummary {
   // OrderResource, so it is absent (not null) when the caller did not
   // eager-load the client; `?? null` at every read site handles both.
   client_email?: string | null
+  /**
+   * Has the customer attached a payment slip?
+   *
+   * OrderResource has always sent it and OrdersView has always read it —
+   * this composable simply never carried it, so the client drawer and the
+   * pipeline board could SAY "รอตรวจสอบสลิป" and offer no way to look at
+   * the thing they were naming (human report, 2026-08-21).
+   */
+  has_slip: boolean
 }
 /** Laravel paginates /orders (AnonymousResourceCollection). */
 interface PaginatedResponse<T> {
@@ -147,6 +156,35 @@ export function useReferralOrders(signal?: AbortSignal) {
   }
 
   /**
+   * Open the payment slip the customer attached.
+   *
+   * Lives here rather than in ClientsView so the client drawer and the
+   * pipeline board reach the slip the same way — the same reason openShare()
+   * is here. `api.download` and not a plain link: the slip is on the private
+   * disk behind GET /orders/{order}/slip, which is access-checked
+   * (OrderPolicy::view) and therefore needs the session, so an <a href> would
+   * 401 rather than open.
+   *
+   * Failure is a toast, not an inline error. This is a READ — nothing is
+   * half-done if it fails, there is no field to correct, and the row's
+   * inline slot is reserved for the pay action's own errors, which the agent
+   * must not confuse with this.
+   */
+  async function viewSlipFor(referralId: number): Promise<void> {
+    const order = orderFor(referralId)
+    if (!order?.has_slip) return
+
+    try {
+      // api.download takes (path, filename) only — it streams through fetch
+      // and hands the blob to an <a download>, so there is no signal to pass.
+      await api.download(`/orders/${order.id}/slip`, `slip-${order.order_number}.jpg`)
+    } catch (e) {
+      if (isAbortError(e)) return
+      toast.error(apiErrorMessage(e, 'เปิดสลิปไม่สำเร็จ'))
+    }
+  }
+
+  /**
    * Fetch the order that already exists for a referral. OrderController::index()
    * supports ?referral_id= server-side, so this is one narrow request, not a
    * client-side scan of every order the agent owns.
@@ -235,6 +273,7 @@ export function useReferralOrders(signal?: AbortSignal) {
     orderFor,
     openShare,
     openShareFor,
+    viewSlipFor,
     findActiveOrder,
     collectPayment,
   }
