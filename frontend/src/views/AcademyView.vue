@@ -146,10 +146,6 @@ const overallFraction = computed(() =>
 const overallPercentText = computed(() =>
   requiredLessonTotal.value ? Math.round(overallFraction.value * 100) + '%' : '—',
 )
-// ProgressRing takes a raw stroke colour, and the palette is CSS-variable
-// driven per company (ADR-018), so read the variable rather than a hex.
-const RING_COLOR = 'rgb(var(--brand-600))'
-
 // The one BR-1 sentence this screen owns, declared once so the HeroHeader
 // description and the next-step card cannot drift apart.
 const BR1_NOTE = 'ผ่านใบรับรอง Basic เพื่อปลดล็อกการส่ง Referral และ Pipeline (BR-1)'
@@ -456,7 +452,6 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
               :fraction="overallFraction"
               :center-text="overallPercentText"
               label="ความคืบหน้า"
-              :color="RING_COLOR"
               class="shrink-0"
             />
             <!-- `flex-1 min-w-0` deliberately: a long English lesson title in

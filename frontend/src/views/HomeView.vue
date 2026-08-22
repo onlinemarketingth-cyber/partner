@@ -85,8 +85,6 @@ interface TasksData {
 // what AnnouncementModal renders; see utils/announcementBanners.ts.
 type Announcement = BannerAwareAnnouncement
 
-const BRAND = '#2F4183'
-
 const auth = useAuthStore()
 const loading = ref(true)
 const errorMessage = ref('')
@@ -390,7 +388,6 @@ const allTasksEmpty = computed(
               :fraction="levelFraction"
               :center-text="'Lv ' + home.gamification.level_number"
               label="เลเวล"
-              :color="BRAND"
             />
             <div class="text-center">
               <p class="text-sm font-bold text-ink-card">
@@ -407,7 +404,6 @@ const allTasksEmpty = computed(
                 :fraction="primaryGoal.progress / 100"
                 :center-text="primaryGoal.progress + '%'"
                 label="เป้าหมาย"
-                :color="BRAND"
               />
               <div class="text-center">
                 <p class="text-xs font-bold text-ink-card-muted">{{ primaryGoal.metric_label }}</p>
@@ -418,7 +414,7 @@ const allTasksEmpty = computed(
               </div>
             </template>
             <template v-else>
-              <ProgressRing :fraction="0" center-text="—" label="เป้าหมาย" :color="BRAND" />
+              <ProgressRing :fraction="0" center-text="—" label="เป้าหมาย" />
               <p class="text-xs text-ink-card-subtle text-center">ยังไม่ได้ตั้งเป้าหมาย</p>
             </template>
           </AppCard>
