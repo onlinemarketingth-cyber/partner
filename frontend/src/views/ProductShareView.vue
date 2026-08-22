@@ -369,7 +369,7 @@ function openLightbox(material: SalesMaterialItem) {
          returned by PublicProductShareResource and still used nowhere
          else here; the agent's own name below is the attribution that
          actually matters to the customer. -->
-    <div class="max-w-2xl mx-auto p-4 sm:p-8">
+    <div class="max-w-2xl lg:max-w-5xl mx-auto p-4 sm:p-8">
       <!-- Loading -->
       <!-- Sits directly on the PAGE surface (no card around it), so it
            takes the app ink, not the card ink. -->
@@ -401,6 +401,23 @@ function openLightbox(material: SalesMaterialItem) {
           <span class="font-bold text-ink-card">{{ share.agent_name }}</span>
         </div>
 
+        <!--
+             ── TWO COLUMNS FROM lg UP (human request, 2026-08-21) ──
+
+             Below lg this is byte-for-byte the single column it always was,
+             and that is the case that matters most: this link is opened from
+             LINE on a phone. What was wrong was the OTHER end — on a desktop
+             the page stayed a 672px ribbon down the middle with the gallery
+             pushing the price and the description below the fold, and an
+             empty half-screen either side of them.
+
+             `items-start` so the two columns keep their own heights instead
+             of the shorter one stretching, and `lg:sticky` so the photo stays
+             in view while a long specification list scrolls past it — the
+             gallery is the thing a buyer keeps glancing back at.
+        -->
+        <div class="lg:grid lg:grid-cols-2 lg:gap-6 lg:items-start space-y-4 lg:space-y-0">
+          <div class="lg:sticky lg:top-6">
         <!-- Media gallery — TASK-103, Shopee/Lazada pattern: one large
              stage, prev/next arrows on it, and a thumbnail strip that
              makes the set's size visible at a glance. Aspect is square
@@ -497,6 +514,10 @@ function openLightbox(material: SalesMaterialItem) {
             </button>
           </div>
         </div>
+          </div>
+
+          <!-- Everything a buyer READS, stacked in the second column. -->
+          <div class="space-y-4">
 
         <!-- Name + price + description.
 
@@ -612,6 +633,8 @@ function openLightbox(material: SalesMaterialItem) {
             </div>
           </div>
         </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -632,7 +655,7 @@ function openLightbox(material: SalesMaterialItem) {
       class="fixed inset-x-0 bottom-0 z-40 border-t border-line-card/80 bg-surface-card/95 backdrop-blur px-4 py-3"
       style="padding-bottom: calc(0.75rem + env(safe-area-inset-bottom))"
     >
-      <div class="max-w-2xl mx-auto flex items-center gap-3">
+      <div class="max-w-2xl lg:max-w-5xl mx-auto flex items-center gap-3">
         <div class="min-w-0 flex-1">
           <p class="text-[11px] text-ink-card-subtle">ราคาที่ต้องชำระ</p>
           <p class="text-lg font-bold text-ink-brand leading-tight truncate">
