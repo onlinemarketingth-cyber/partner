@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Public;
 
+use App\Enums\TrackedLinkGroup;
 use App\Models\ProductShareLink;
+use App\Services\Link\TrackedLinkService;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
@@ -52,7 +54,45 @@ class StoreProductShareCheckoutRequest extends FormRequest
      */
     public function rules(): array
     {
-        $link = ProductShareLink::withoutGlobalScopes()->where('token', $this->route('token'))->first();
+        /*
+         * ── THIS LOOKUP MUST UNDERSTAND BOTH FORMS OF THE URL ──
+         *
+         * Human-reported 2026-08-21: a customer filled in the checkout
+         * sheet on a page that had loaded perfectly and got
+         * "ไม่พบข้อมูลที่ต้องการ อาจถูกลบไปแล้ว" — the SPA's generic 404
+         * copy — on a link that was alive.
+         *
+         * TASK-232 gave every public share URL a SHORT CODE (/p/R4TB8WM2XK)
+         * alongside the original 64-character token, and taught
+         * PublicProductShareController::resolveUsableLink() to accept
+         * either. It did not teach THIS class, which had its own copy of
+         * the lookup and matched the `token` column alone.
+         *
+         * So a short link read fine and refused to sell: the GET went
+         * through the controller's resolver and answered 200, and the POST
+         * never reached that resolver at all — Laravel runs a FormRequest
+         * BEFORE the controller body, so this abort fired first. Every
+         * short link in existence could show a product and not take an
+         * order, and the message told the customer the product was gone.
+         *
+         * The docblock above already explains why this check is duplicated
+         * here (a bad token with an incomplete payload must 404, not 422
+         * "phone is required"). That reason still holds — what it did not
+         * survive was a second way of naming the same link.
+         *
+         * resolveTarget() and NOT the controller's resolveViaTrackedLink():
+         * same resolution, no side effect. That one RECORDS A VISIT, and a
+         * submitted order is not a page view — counting it would inflate
+         * every short link's open count by one per purchase.
+         *
+         * Order mirrors the controller's deliberately, so the two read the
+         * same way rather than merely agreeing.
+         */
+        $token = (string) $this->route('token');
+
+        $link = app(TrackedLinkService::class)
+            ->resolveTarget($token, TrackedLinkGroup::ProductShare, ProductShareLink::class)
+            ?? ProductShareLink::withoutGlobalScopes()->where('token', $token)->first();
 
         abort_if(! $link || ! $link->isUsable(), 404);
 
