@@ -13,6 +13,7 @@
  * client-side too).
  */
 import { computed, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { api } from '@/api/client'
 // TASK-079 Phase 2 (UX audit) — one shared error normalizer, no raw HTTP
@@ -42,6 +43,8 @@ type Announcement = BannerAwareAnnouncement
 const FALLBACK_DISPLAY_STYLE: AnnouncementDisplayStyle = 'bottom_sheet'
 const announcementDisplayStyle = ref<AnnouncementDisplayStyle>(FALLBACK_DISPLAY_STYLE)
 
+const route = useRoute()
+const router = useRouter()
 const auth = useAuthStore()
 const loading = ref(true)
 const errorMessage = ref('')
@@ -58,6 +61,7 @@ async function loadAll() {
     ])
     announcements.value = res.data
     announcementDisplayStyle.value = settingsRes?.data.display_style ?? FALLBACK_DISPLAY_STYLE
+    openRequestedAnnouncement()
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข่าวสารไม่สำเร็จ')
   } finally {
@@ -65,6 +69,33 @@ async function loadAll() {
   }
 }
 onMounted(loadAll)
+
+/**
+ * `?a={id}` opens that announcement straight away.
+ *
+ * This is the other half of the 2026-08-22 notification fix. An announcement
+ * notification carries `data.announcement_id`, and until now nothing read it:
+ * the tap dropped the reader on a page of headlines and left them to find
+ * which one had pinged them. On a company that publishes weekly, "which one
+ * was it" is a real question by Friday.
+ *
+ * Resolved AFTER the list loads because the modal renders a row from that
+ * list, not a fetch of its own. An id that is not in the agent's own
+ * company-scoped, audience-filtered list simply opens nothing — the list is
+ * already the authorisation boundary, so a guessed id in the URL discloses
+ * nothing.
+ */
+function openRequestedAnnouncement(): void {
+  const requested = route.query.a
+  if (typeof requested !== 'string') return
+
+  const match = announcements.value.find((a) => String(a.id) === requested)
+  if (match) openAnnouncement(match)
+
+  // Drop the param either way, so a refresh (or a back-navigation into this
+  // page) does not re-open a modal the reader has already dismissed.
+  router.replace({ path: '/announcements' })
+}
 
 const filteredAnnouncements = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()

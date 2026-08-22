@@ -179,7 +179,14 @@ class AgentApprovalService
             NotificationType::ApprovalStatus,
             'การสมัครไม่ได้รับการอนุมัติ',
             $reason !== null && $reason !== '' ? "เหตุผล: {$reason}" : null,
-            null,
+            // A DESTINATION, not null (human-reported 2026-08-22, "คลิ๊ก Noti
+            // แล้วไม่ไปไหน"). Both status notifications below and here shipped
+            // with link = null, which the SPA correctly renders as a tap that
+            // navigates nowhere — indistinguishable, from the applicant's
+            // side, from a broken app. /profile is where an applicant can see
+            // their own account state and the contact route to query it, so
+            // it is the honest answer to "so what do I do now?".
+            '/profile',
         );
 
         return $user->fresh();
@@ -249,7 +256,8 @@ class AgentApprovalService
             NotificationType::ApprovalStatus,
             'สถานะบัญชีของคุณถูกเปลี่ยนแปลง',
             $reason !== null && $reason !== '' ? "เหตุผล: {$reason}" : null,
-            null,
+            // See the rejection notification above — same reasoning.
+            '/profile',
         );
 
         return $user->fresh();

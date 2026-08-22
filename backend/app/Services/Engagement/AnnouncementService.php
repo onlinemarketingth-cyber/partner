@@ -130,7 +130,21 @@ class AnnouncementService
                 NotificationType::Announcement,
                 $announcement->title,
                 null,
-                '/news',
+                // '/news' until 2026-08-22, and there has never been a /news
+                // route in the agent SPA. Both notification surfaces carried a
+                // private "'/news' means home" patch to cover for it, so when
+                // TASK-075 gave announcements a real page of their own the
+                // notifications went on pointing at the home hub — and since
+                // the bell is usually opened FROM home, tapping a news item
+                // navigated to the page you were already on and looked dead
+                // ("คลิ๊ก Noti แล้วไม่ไปไหน").
+                //
+                // The frontend resolver (utils/notificationLink.ts) turns this
+                // into /announcements?a={announcement_id} so the reader lands
+                // on the announcement itself rather than on a list of
+                // headlines. It still accepts the old '/news' value, because
+                // rows already written cannot be rewritten.
+                '/announcements',
                 ['announcement_id' => $announcement->id],
             );
         }

@@ -15,6 +15,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { apiErrorMessage } from '@/utils/apiError'
 import { useToastStore } from '@/stores/toast'
 import { useNotificationsStore, type AppNotification } from '@/stores/notifications'
+import { resolveNotificationLink } from '@/utils/notificationLink'
 
 const router = useRouter()
 const store = useNotificationsStore()
@@ -48,10 +49,6 @@ async function markAllRead(): Promise<void> {
   }
 }
 
-function resolveLink(link: string): string {
-  return link === '/news' ? '/' : link
-}
-
 async function onItemClick(item: AppNotification) {
   try {
     await store.markRead(item.id)
@@ -60,9 +57,11 @@ async function onItemClick(item: AppNotification) {
     // the unread dot didn't clear instead of failing silently.
     toast.error(apiErrorMessage(e, 'ทำเครื่องหมายว่าอ่านแล้วไม่สำเร็จ'))
   }
-  if (item.link && item.link.startsWith('/')) {
-    router.push(resolveLink(item.link))
-  }
+  // Shared with NotificationBell — this view used to keep its own byte-
+  // identical copy of the mapping, and the two drifted apart the moment
+  // /announcements was added. See utils/notificationLink.ts.
+  const target = resolveNotificationLink(item)
+  if (target) router.push(target)
 }
 
 function formatDate(iso: string): string {
@@ -142,17 +141,32 @@ function formatDate(iso: string): string {
         <button v-for="item in items" :key="item.id" type="button" class="w-full text-left" @click="onItemClick(item)">
           <!-- The unread treatment (left rule + tinted fill) is a per-item
                state override on top of the shared surface, so it stays a
-               :class on the card rather than becoming an AppCard prop. -->
+               :class on the card rather than becoming an AppCard prop.
+
+               Human-reported 2026-08-22 ("Ui สีก่อนคลิ๊กมีปัญหา"): it was
+               `border-l-brand-500 bg-brand-50/60`, and `brand-50` is the
+               lightest step of a lightness-generated ramp — permanently pale,
+               whatever the tenant's card is. On a near-black card carrying
+               light `--ink-card`, the unread row was the one row you could
+               not read. ADR-023 §2.2, same class of breakage as the pale chip.
+
+               `--surface-chip` is the card stepped 10% toward its own ink, so
+               it tints in the right direction on either polarity; `--ink-brand`
+               is the brand hue already walked to clear AA on this card. See
+               NotificationBell.vue, which carried the identical pair. -->
           <AppCard
             interactive
             class="flex flex-col gap-1"
-            :class="!item.is_read ? 'border-l-4 border-l-brand-500 bg-brand-50/60' : ''"
+            :class="!item.is_read ? 'border-l-4 border-l-ink-brand bg-surface-chip' : ''"
           >
             <div class="flex items-center gap-2">
-              <span class="text-[11px] font-bold px-2 py-0.5 rounded-full bg-surface-chip text-ink-card-muted">
+              <span
+                class="text-[11px] font-bold px-2 py-0.5 rounded-full text-ink-chip"
+                :class="item.is_read ? 'bg-surface-chip' : 'bg-surface-card'"
+              >
                 {{ item.type_label }}
               </span>
-              <span v-if="!item.is_read" class="w-2 h-2 rounded-full bg-brand-500"></span>
+              <span v-if="!item.is_read" class="w-2 h-2 rounded-full bg-ink-brand shrink-0"></span>
               <span class="ml-auto text-[11px] text-ink-card-subtle">{{ formatDate(item.created_at) }}</span>
             </div>
             <p class="text-sm font-bold text-ink-card">{{ item.title }}</p>
