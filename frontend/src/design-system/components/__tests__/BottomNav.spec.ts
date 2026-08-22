@@ -81,7 +81,10 @@ describe('BottomNav (TASK-169 Phase 4b — ขาย → สินค้า)', (
       { to: '/clients', label: 'ลูกค้า' },
       { to: '/products', label: 'สินค้า' },
       { to: '/academy', label: 'Academy' },
-      { to: '/commission', label: 'ค่าคอม' },
+      // Renamed to ค่าแนะนำ on 2026-08-21 (human). Still overridable per
+      // company through the same nav_commission key — what this asserts
+      // is the FALLBACK a tenant sees when it has configured nothing.
+      { to: '/commission', label: 'ค่าแนะนำ' },
     ])
     // The default icon is `box` — the SAME one HomeView's quick link uses for
     // /products. Two entry points to one screen must not draw it two ways.
@@ -119,7 +122,7 @@ describe('BottomNav (TASK-169 Phase 4b — ขาย → สินค้า)', (
       'ลูกค้า',
       'แคตตาล็อก',
       'Academy',
-      'ค่าคอม',
+      'ค่าแนะนำ',
     ])
   })
 })

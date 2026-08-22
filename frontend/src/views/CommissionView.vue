@@ -63,7 +63,7 @@ const kpis = computed(() => {
   const pending = entries.value.filter((e) => e.payment_status === 'pending')
   const paid = entries.value.filter((e) => e.payment_status === 'paid')
   return [
-    { label: 'คอมมิชชั่นเดือนนี้', value: formatSatang(thisMonth.reduce((sum, e) => sum + e.amount_satang, 0)) },
+    { label: 'ค่าแนะนำเดือนนี้', value: formatSatang(thisMonth.reduce((sum, e) => sum + e.amount_satang, 0)) },
     { label: 'รอจ่าย', value: formatSatang(pending.reduce((sum, e) => sum + e.amount_satang, 0)) },
     { label: 'จ่ายแล้ว', value: formatSatang(paid.reduce((sum, e) => sum + e.amount_satang, 0)) },
   ]
@@ -143,7 +143,7 @@ function formatDate(iso: string): string {
  * Fallbacks match BottomNav.vue exactly — if the two drifted, an unset
  * tenant would see the mismatch this task exists to remove.
  */
-const pageTitle = computed(() => theme.label('nav_commission', 'ค่าคอม'))
+const pageTitle = computed(() => theme.label('nav_commission', 'ค่าแนะนำ'))
 const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
 </script>
 
@@ -152,11 +152,12 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
     <HeroHeader
       :icon="pageIcon"
       :title="pageTitle"
-      subtitle="สรุปคอมมิชชั่นของคุณ"
+      subtitle="สรุปค่าแนะนำของคุณ"
       description="รายการ ledger เป็นแบบอ่านอย่างเดียว — ไม่มีการแก้ไขย้อนหลัง (BR-4)"
       :kpis="kpis"
       accent-color="brand"
       storage-key="commission"
+      :default-collapsed="false"
     >
       <template #tabs>
         <div class="px-4">
@@ -192,8 +193,8 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
         <EmptyState
           v-if="!filteredEntries.length"
           icon="money"
-          title="ยังไม่มีรายการคอมมิชชั่น"
-          message="คอมมิชชั่นจะถูกบันทึกอัตโนมัติเมื่อ Referral ถึงขั้น Complete Payment ใน Pipeline (BR-4)"
+          title="ยังไม่มีรายการค่าแนะนำ"
+          message="ค่าแนะนำจะถูกบันทึกอัตโนมัติเมื่อ Referral ถึงขั้น Complete Payment ใน Pipeline (BR-4)"
           class="mt-4"
         />
         <!-- TASK-082 (UX audit): this was a stack of identical floating
@@ -252,7 +253,7 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
                     </div>
                   </div>
                   <div class="text-left shrink-0 pl-8">
-                    <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">คอมมิชชั่น</p>
+                    <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">ค่าแนะนำ</p>
                     <p class="text-xl font-bold text-ink-card leading-tight">{{ formatSatang(e.amount_satang) }}</p>
                     <!-- Semantic status colours (emerald=paid / amber=pending)
                          are business meaning, not decoration — untouched. -->

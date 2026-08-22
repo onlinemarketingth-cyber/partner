@@ -75,7 +75,7 @@ const navItems: NavItem[] = [
     { name: 'referrals', icon: 'user_plus', label: { th: 'SWS Referral', en: 'SWS Referral' } },
     { name: 'pipeline', icon: 'pipeline', label: { th: 'Pipeline', en: 'Pipeline' } },
     { name: 'academy', icon: 'book', label: { th: 'Academy', en: 'Academy' } },
-    { name: 'commission', icon: 'money', label: { th: 'คอมมิชชั่น', en: 'Commission' } },
+    { name: 'commission', icon: 'money', label: { th: 'ค่าแนะนำ', en: 'Commission' } },
     { name: 'leaderboard', icon: 'trophy', label: { th: 'Leaderboard', en: 'Leaderboard' } },
     // ADR-011 Section 4 (TASK-033)
     { name: 'affiliate-links', icon: 'link', label: { th: 'ลิงก์พันธมิตร', en: 'Affiliate Links' } },

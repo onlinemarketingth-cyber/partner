@@ -61,7 +61,7 @@ const items = computed(() => [
   // entry points to one screen must not name it two different things.
   { to: '/products', icon: theme.icon('nav_products', 'box'), label: theme.label('nav_products', 'สินค้า') },
   { to: '/academy', icon: theme.icon('nav_academy', 'brain'), label: theme.label('nav_academy', 'Academy') },
-  { to: '/commission', icon: theme.icon('nav_commission', 'money'), label: theme.label('nav_commission', 'ค่าคอม') },
+  { to: '/commission', icon: theme.icon('nav_commission', 'money'), label: theme.label('nav_commission', 'ค่าแนะนำ') },
 ])
 
 function isActive(to: string): boolean {

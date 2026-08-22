@@ -237,17 +237,43 @@ onUnmounted(() => {
                 <div class="shrink-0 w-px h-6 bg-line-card hidden sm:block"></div>
             </template>
 
-            <!-- Icon. The halo is a chip surface (TASK-098) — as a bare
-                 `bg-surface-chip` it stayed pale on a dark card and swallowed
-                 the icon. -->
-            <div class="shrink-0 w-9 h-9 rounded-lg flex items-center justify-center bg-surface-chip order-1">
-                <Icon :name="icon" :size="20" :class="iconColor" />
-            </div>
+            <!--
+                COLLAPSED IS A TITLE AND ITS NUMBERS. NOTHING ELSE.
+                (human report with a screenshot, 2026-08-21)
 
-            <!-- Title + Subtitle (key block, no inline KPIs) -->
-            <div class="min-w-0 flex-1 order-1">
-                <h1 class="text-base sm:text-lg font-bold text-ink-card truncate leading-tight">{{ title }}</h1>
-                <p v-if="subtitle" class="text-xs text-ink-card-subtle truncate hidden md:block leading-tight">{{ subtitle }}</p>
+                What this row was, at md and up: the icon halo, then a title
+                clipped to "ค่..." above a subtitle clipped to "ส...", then
+                the KPIs — and the KPIs rendered BEFORE the icon, because the
+                icon and title blocks carry `order-1` while the KPI block
+                below carried no order at all, i.e. order-0. Three separate
+                faults reading as one mess.
+
+                Fixed by deletion rather than by tuning widths:
+
+                * THE ICON IS GONE. Collapsed mode exists to buy back
+                  vertical space, and a 36px decorative halo repeating the
+                  glyph already lit in the bottom nav is the first thing that
+                  should pay for it. Expanded mode keeps it, where there is
+                  room for it to mean something.
+
+                * THE SUBTITLE IS GONE. It was `truncate hidden md:block`, so
+                  it only ever appeared at the widths where the KPIs were
+                  ALSO competing for the row — exactly where it had no space
+                  and became one glyph and an ellipsis. A subtitle that can
+                  only render as "ส..." is not a subtitle.
+
+                * THE TITLE NO LONGER TRUNCATES. `whitespace-nowrap`, and no
+                  `flex-1`: it takes the width it needs and the row wraps
+                  around it (the parent is already `flex-wrap`). A page title
+                  is the one thing here that must always be readable — it is
+                  the answer to "where am I".
+
+                `order-1` matches the KPI block's new `order-1` so the two
+                cannot swap places again; actions keep `order-2` and stay
+                last.
+            -->
+            <div class="min-w-0 order-1">
+                <h1 class="text-base sm:text-lg font-bold text-ink-card whitespace-nowrap leading-tight">{{ title }}</h1>
             </div>
 
             <!-- Sprint B+C: KPI vertical key-value stack — label small above, value bold below
@@ -255,7 +281,7 @@ onUnmounted(() => {
                  TASK-098: these KPIs are bare on the card (no pill), so they
                  take the CARD ink scale; the expanded-mode KPI cards below
                  sit on a pill and take the CHIP ink instead. -->
-            <div v-if="kpis.length" class="hidden md:flex items-center gap-6 ml-auto mr-2 shrink-0">
+            <div v-if="kpis.length" class="hidden md:flex items-center gap-6 ml-auto mr-2 shrink-0 order-1">
                 <div v-for="(k, idx) in kpis.slice(0, 4)" :key="idx" class="text-right">
                     <div class="text-[11px] text-ink-card-muted uppercase tracking-wider font-bold whitespace-nowrap">{{ k.label }}</div>
                     <div class="text-sm font-bold text-ink-card leading-tight">{{ k.value }}</div>
