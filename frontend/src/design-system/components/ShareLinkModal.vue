@@ -1,10 +1,21 @@
 <script setup lang="ts">
 /**
  * ShareLinkModal — TASK-056 P3
- * Reusable share sheet: Link tab (copy + LINE + Email) and QR tab
+ * Reusable share sheet: Link tab (copy + share + Email) and QR tab
  * (image + download + native share sheet). Used by ProductBrowseView
  * (product-share links), OrdersView/ClientsView (order payment links)
  * and MyTeamView (recruit links).
+ *
+ * 2026-08-21 (human) — the Link tab lost its dedicated LINE button and its
+ * full-width "แชร์ผ่านแอปอื่น" button, and gained ONE green "แชร์" in the
+ * slot the LINE button held. Three reasons, in the order they matter:
+ *
+ *   1. The share sheet reaches LINE — and every other app on the phone —
+ *      in one tap, already signed in. The LINE button opened
+ *      social-plugins.line.me in a browser tab and asked for a fresh login.
+ *   2. Two controls were doing the same job, one of them below the fold.
+ *   3. It was on screen for desktop users it does not serve. See
+ *      `hasCoarsePointer` for why navigator.share alone was the wrong gate.
  *
  * TASK-212 — this component USED TO be purely presentational ("the caller
  * only ever hands over a plain https:// URL, this component never talks to
@@ -76,7 +87,48 @@ const tab = ref('link') // 'link' | 'qr'
 const copied = ref(false)
 const qrDataUrl = ref('')
 const qrLoading = ref(false)
-const canNativeShare = computed(() => typeof navigator !== 'undefined' && !!navigator.share)
+/**
+ * Does this device have a primary pointer you touch rather than aim?
+ *
+ * `navigator.share` ALONE IS NOT THE RIGHT GATE, which is what this fixes
+ * (human report, 2026-08-21: hide the share button on Desktop, keep it on
+ * mobile and tablet). Desktop Chrome on Windows and Safari on macOS both
+ * expose navigator.share, so a support check by itself leaves the button on
+ * screen for exactly the people it does not serve: on a desktop the share
+ * sheet is a short list of apps most agents have never installed, and the
+ * useful action there is the copy button two rows up.
+ *
+ * `(pointer: coarse)` asks about the PRIMARY pointer, so a laptop with a
+ * touchscreen and a trackpad still reads as fine/desktop — correct, because
+ * the person is sitting at a keyboard with a browser they can paste into.
+ *
+ * Read once at setup: pointer type does not change under a running session
+ * (rotating a tablet does not turn it into a desktop). matchMedia is guarded
+ * because it is absent in some test environments, and the failure must be
+ * "assume desktop, hide the button" rather than a crash on mount.
+ */
+const hasCoarsePointer = (() => {
+    try {
+        return window.matchMedia?.('(pointer: coarse)').matches ?? false
+    } catch {
+        return false
+    }
+})()
+
+/**
+ * The share button shows only where it actually leads somewhere: the API
+ * exists AND this is a touch device.
+ */
+const canNativeShare = computed(
+    () => typeof navigator !== 'undefined' && !!navigator.share && hasCoarsePointer,
+)
+
+/**
+ * The QR tab's "share this image" button keeps the SUPPORT-ONLY check on
+ * purpose. It is a different action with a different fallback: a QR image
+ * has a Download button sitting beside it, so on a desktop that supports
+ * file sharing the extra route is a bonus rather than a dead end.
+ */
 const canNativeShareFile = computed(() => typeof navigator !== 'undefined' && !!navigator.canShare)
 
 const close = () => emit('update:show', false)
@@ -96,10 +148,18 @@ const copyLink = async () => {
     }
 }
 
-const shareViaLine = () => {
-    const lineUrl = `https://social-plugins.line.me/lineit/share?url=${encodeURIComponent(props.url)}`
-    window.open(lineUrl, '_blank', 'noopener,noreferrer')
-}
+/*
+ * shareViaLine() was removed 2026-08-21 (human request).
+ *
+ * It opened social-plugins.line.me in a new tab — a web hand-off that asks
+ * the person to log into LINE again in a browser, when the phone they are
+ * holding already has the app. The native share sheet reaches LINE in one
+ * tap AND every other app they actually use, so the dedicated button was
+ * costing a slot to do the same job worse.
+ *
+ * Its LINE-green fill moved to the share button, which is where the tap
+ * that ends in LINE now starts. See the template.
+ */
 
 // ── Email, sent by the platform (TASK-212) ───────────────────────────
 const canSendViaSystem = computed(() => !!props.emailType && !!props.emailTargetId)
@@ -262,8 +322,16 @@ watch(() => props.show, (val) => {
                      a pale Primary instead of hoping. The inline style
                      bindings are gone with it.
 
-                     LINE keeps #06C755 and its `text-white`: that green is
-                     LINE's own brand asset, not ours to theme. -->
+                     ONE BUTTON STILL KEEPS #06C755 and its `text-white`, and
+                     as of 2026-08-21 it is the SHARE button rather than the
+                     LINE button that green was introduced for. The dedicated
+                     LINE button is gone (the phone's own share sheet reaches
+                     LINE in one tap, already signed in, instead of a web
+                     hand-off that asks for a fresh login) — but for these
+                     agents the tap that ends in LINE is the same tap, so it
+                     keeps the same colour in the same position. That green
+                     is LINE's brand asset and stays a literal: it is the one
+                     control here that must look identical for every tenant. -->
 
                 <!-- Tabs -->
                 <div class="flex gap-1 p-1 mb-4 rounded-xl bg-surface-chip">
@@ -293,10 +361,29 @@ watch(() => props.show, (val) => {
                         </button>
                     </div>
 
-                    <div class="grid grid-cols-2 gap-2 mb-2">
-                        <button @click="shareViaLine"
+                    <!-- One column when the share button is hidden, so Email
+                         does not sit at half width next to a gap. -->
+                    <div class="grid gap-2 mb-2" :class="canNativeShare ? 'grid-cols-2' : 'grid-cols-1'">
+                        <!--
+                            THE SHARE BUTTON SITS WHERE THE LINE BUTTON WAS,
+                            AND WEARS ITS GREEN (human request, 2026-08-21).
+
+                            Not decoration: for these agents the tap that used
+                            to say LINE still ends in LINE — through the phone's
+                            own share sheet, where the app is already signed in,
+                            instead of a web hand-off that asks them to log in
+                            again. Keeping the colour and the position means the
+                            muscle memory survives the button being replaced.
+
+                            #06C755 stays a literal and is NOT themed: it is
+                            LINE's brand asset, the same reasoning the old
+                            button carried, and the one control in this sheet
+                            that must look identical for every tenant.
+                        -->
+                        <button v-if="canNativeShare" @click="shareLinkNative"
                                 class="min-h-[44px] py-2.5 rounded-xl text-sm font-bold text-white bg-[#06C755] hover:brightness-95 transition-all active:scale-95 flex items-center justify-center gap-1.5">
-                            LINE
+                            <Icon name="share" :size="16" />
+                            {{ t('shareAction', 'แชร์', 'Share') }}
                         </button>
                         <button @click="shareViaEmail"
                                 class="min-h-[44px] py-2.5 rounded-xl text-sm font-bold bg-brand-600 hover:bg-brand-700 text-ink-primary transition-all active:scale-95 flex items-center justify-center gap-1.5">
@@ -334,11 +421,11 @@ watch(() => props.show, (val) => {
                         {{ t('shareEmailSentTo', 'ส่งอีเมลไปที่', 'Emailed to') }} {{ emailSent }}
                     </p>
 
-                    <button v-if="canNativeShare" @click="shareLinkNative"
-                            class="w-full min-h-[44px] py-2.5 rounded-xl text-sm font-bold bg-brand-600 hover:bg-brand-700 text-ink-primary transition-all active:scale-95 flex items-center justify-center gap-1.5">
-                        <Icon name="share" :size="16" />
-                        {{ t('shareMore', 'แชร์ผ่านแอปอื่น', 'Share via other apps') }}
-                    </button>
+                    <!-- The full-width "แชร์ผ่านแอปอื่น" button that used to
+                         sit here is gone: it is the SAME action as the green
+                         button above, which now carries it in one word. Two
+                         controls doing one thing, one of them below the fold
+                         on a phone, was the arrangement this replaced. -->
                 </div>
 
                 <!-- QR tab -->
