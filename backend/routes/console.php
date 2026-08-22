@@ -2,6 +2,7 @@
 
 use App\Console\Commands\DispatchDueFollowUpReminders;
 use App\Console\Commands\DispatchDueRenewalCommissions;
+use App\Console\Commands\DispatchPendingNotificationEmails;
 use App\Console\Commands\PayDueAgentPromotionCredits;
 use App\Console\Commands\PruneChunkedUploadsCommand as PruneChunkedUploads;
 use App\Console\Commands\RecalculateAgentRanks;
@@ -19,6 +20,17 @@ Artisan::command('inspire', function () {
 // entry calling `schedule:run` every minute) must be running for this
 // to actually fire — see SETUP.md once hosting is decided.
 Schedule::command(DispatchDueFollowUpReminders::class)->everyFiveMinutes();
+
+// 2026-08-22 — notification emails that could not be sent inline: the
+// deferred types (announcements, which fan out to every agent in one
+// request) plus retries of any inline send that threw. Five minutes matches
+// the reminder cadence above and shares its cron dependency.
+//
+// withoutOverlapping because a large announcement can take longer than the
+// gap to the next run, and two sweeps racing the same rows would both try to
+// claim them. The mailer's exactly-once check would hold, but the second run
+// would burn a full batch scanning rows the first already took.
+Schedule::command(DispatchPendingNotificationEmails::class)->everyFiveMinutes()->withoutOverlapping();
 
 // TASK-024 (ADR-006) — renewal dates are calendar days, not minutes;
 // daily is enough and keeps this cheap (same infra as above, just a

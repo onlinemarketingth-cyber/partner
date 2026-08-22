@@ -58,7 +58,17 @@ vi.mock('@/api/client', () => ({
   ApiError: class extends Error {},
 }))
 
+const playSound = vi.fn()
+const setMuted = vi.fn()
+
+vi.mock('@/utils/notificationSound', () => ({
+  isNotificationSoundMuted: () => false,
+  playNotificationSound: () => playSound(),
+  setNotificationSoundMuted: (m: boolean) => setMuted(m),
+}))
+
 import NotificationBell from '../NotificationBell.vue'
+import { useNotificationsStore } from '@/stores/notifications'
 
 const ITEMS = [
   {
@@ -159,5 +169,61 @@ describe('NotificationBell — the unread state is theme-derived', () => {
 
     expect(rows(wrapper)[0].find('.rounded-full.bg-ink-brand').exists()).toBe(true)
     expect(rows(wrapper)[1].find('.rounded-full.bg-ink-brand').exists()).toBe(false)
+  })
+})
+
+/**
+ * The chime (2026-08-22, "เพิ่มเสียงการแจ้งเตือน").
+ *
+ * The store deliberately does not play the sound — a store that makes noise
+ * makes noise in every test that imports it — so the wiring from `arrivals`
+ * to the speaker lives here, and only here. If it is lost, the polling still
+ * works, the badge still updates, and nothing ever makes a sound: a silent
+ * failure with no error and no visible symptom except "I thought you added
+ * a sound".
+ */
+describe('NotificationBell — the arrival chime', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    push.mockClear()
+    playSound.mockClear()
+    setMuted.mockClear()
+  })
+
+  it('chimes when a notification arrives', async () => {
+    const wrapper = mount(NotificationBell, { global: { stubs: { Icon: true } } })
+    const store = useNotificationsStore()
+
+    store.arrivals += 1
+    await flushPromises()
+
+    expect(playSound).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('does not chime on mount', async () => {
+    // The bell mounts on every page load. Chiming here would announce
+    // notifications that may be days old, every single time.
+    mount(NotificationBell, { global: { stubs: { Icon: true } } })
+    await flushPromises()
+
+    expect(playSound).not.toHaveBeenCalled()
+  })
+
+  it('mutes and unmutes from the dropdown', async () => {
+    const wrapper = await openBell()
+    const soundButton = wrapper.findAll('button').find((b) => b.attributes('role') === undefined
+      && b.attributes('aria-pressed') !== undefined)
+
+    expect(soundButton).toBeDefined()
+
+    await soundButton!.trigger('click')
+    expect(setMuted).toHaveBeenCalledWith(true)
+
+    await soundButton!.trigger('click')
+    expect(setMuted).toHaveBeenCalledWith(false)
+    // Unmuting previews the sound — which is also the user gesture browsers
+    // require before audio may play at all.
+    expect(playSound).toHaveBeenCalled()
   })
 })

@@ -8,6 +8,7 @@ use App\Http\Requests\Profile\UpdateBackgroundGradientRequest;
 use App\Http\Requests\Profile\UpdateBackgroundImageRequest;
 use App\Http\Requests\Profile\UpdateBankAccountRequest;
 use App\Http\Requests\Profile\UpdateNameRequest;
+use App\Http\Requests\Profile\UpdateNotificationPreferencesRequest;
 use App\Http\Requests\Profile\UpdatePasswordRequest;
 use App\Http\Resources\UserResource;
 use App\Services\Platform\UserProfileService;
@@ -71,6 +72,23 @@ class UserProfileController extends Controller
     public function updateBankAccount(UpdateBankAccountRequest $request, UserProfileService $service): UserResource
     {
         $user = $service->updateBankAccount($request->user(), $request->validated());
+
+        return UserResource::forOwner($user->load('company'));
+    }
+
+    /**
+     * 2026-08-22 — the agent's own off switch for notification email.
+     * Returns the full owner resource so the SPA can refresh its auth user
+     * from the response instead of trusting its local optimistic value.
+     */
+    public function updateNotificationPreferences(
+        UpdateNotificationPreferencesRequest $request,
+        UserProfileService $service,
+    ): UserResource {
+        $user = $service->updateNotificationPreferences(
+            $request->user(),
+            $request->boolean('email_notifications_enabled'),
+        );
 
         return UserResource::forOwner($user->load('company'));
     }

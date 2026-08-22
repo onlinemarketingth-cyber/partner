@@ -125,6 +125,45 @@ async function saveName(): Promise<void> {
   }
 }
 
+/* --- Notification email (2026-08-22) ---------------------------------
+ *
+ * The switch flips OPTIMISTICALLY and rolls back on failure, rather than
+ * waiting for the round-trip. A toggle that ignores the first press for
+ * 300ms gets pressed twice, and the second press is the one that sticks —
+ * leaving the person with the opposite of what they wanted and no idea why.
+ *
+ * The server's answer is still authoritative: the response carries the full
+ * owner resource, and auth.setUser() overwrites whatever this guessed.
+ */
+const emailNotificationsEnabled = ref(auth.user?.email_notifications_enabled ?? true)
+const savingEmailPref = ref(false)
+const emailPrefError = ref('')
+
+async function toggleEmailNotifications(): Promise<void> {
+  if (savingEmailPref.value) return
+
+  const previous = emailNotificationsEnabled.value
+  const next = !previous
+
+  emailNotificationsEnabled.value = next
+  savingEmailPref.value = true
+  emailPrefError.value = ''
+
+  try {
+    const res = await api.put<{ data: AuthUser }>('/me/notification-preferences', {
+      email_notifications_enabled: next,
+    })
+    auth.setUser(res.data)
+    emailNotificationsEnabled.value = res.data.email_notifications_enabled ?? next
+    toast.success(next ? 'เปิดการแจ้งเตือนทางอีเมลแล้ว' : 'ปิดการแจ้งเตือนทางอีเมลแล้ว')
+  } catch {
+    emailNotificationsEnabled.value = previous
+    emailPrefError.value = 'บันทึกไม่สำเร็จ — กรุณาลองใหม่'
+  } finally {
+    savingEmailPref.value = false
+  }
+}
+
 // --- Bank account (TASK-044 Phase A) — self-service, always operates on
 // the caller's own row via PUT /me/bank-account (UpdateBankAccountRequest,
 // all 3 fields optional/nullable). Unlike the Admin edit form, this view
@@ -294,6 +333,47 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
                next to the fields the person has to correct. -->
           <p v-if="nameError" class="text-xs font-bold text-ink-danger">{{ nameError }}</p>
         </div>
+      </div>
+
+      <!-- Notification email (2026-08-22) —————————————————————————————
+           Shipped with the email itself, not after it. Email an agent cannot
+           turn off is not a feature: the first person who does not want it
+           filters the sender, which silently costs them the approval and
+           payment mails too. -->
+      <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
+        <h2 class="text-sm font-bold text-ink-card mb-1">การแจ้งเตือนทางอีเมล</h2>
+        <p class="text-xs text-ink-card-subtle mb-4">
+          ส่งอีเมลเมื่อบัญชีได้รับการอนุมัติ ค่าแนะนำถูกจ่าย ลูกค้าชำระเงินสำเร็จ และมีประกาศใหม่
+        </p>
+
+        <button
+          type="button"
+          :disabled="savingEmailPref"
+          class="w-full min-h-[44px] flex items-center justify-between gap-3 disabled:opacity-60"
+          @click="toggleEmailNotifications"
+        >
+          <span class="text-sm font-bold text-ink-card">
+            {{ emailNotificationsEnabled ? 'เปิดอยู่' : 'ปิดอยู่' }}
+          </span>
+
+          <!-- A switch, not a checkbox: this is an immediate preference
+               change, not a field inside a form the person still has to
+               submit. The track uses the derived surface pair so it stays
+               visible on a dark tenant (ADR-023). -->
+          <span
+            class="relative shrink-0 w-12 h-7 rounded-full transition-colors"
+            :class="emailNotificationsEnabled ? 'bg-surface-primary' : 'bg-surface-chip'"
+            role="switch"
+            :aria-checked="emailNotificationsEnabled"
+          >
+            <span
+              class="absolute top-1 w-5 h-5 rounded-full bg-surface-card shadow transition-all"
+              :class="emailNotificationsEnabled ? 'left-6' : 'left-1'"
+            ></span>
+          </span>
+        </button>
+
+        <p v-if="emailPrefError" class="text-xs font-bold text-ink-danger mt-2">{{ emailPrefError }}</p>
       </div>
 
       <!-- Password -->

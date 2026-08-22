@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppLogo from '@/design-system/components/AppLogo.vue'
 import BottomNav from '@/design-system/components/BottomNav.vue'
@@ -7,6 +7,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import NotificationBell from '@/design-system/components/NotificationBell.vue'
 import ToastHost from '@/design-system/components/ToastHost.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useNotificationsStore } from '@/stores/notifications'
 import { usePageHeaderStore } from '@/stores/pageHeader'
 import { useThemeStore } from '@/stores/theme'
 import { initials } from '@/utils/initials'
@@ -15,6 +16,37 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const theme = useThemeStore()
+
+/**
+ * NOTIFICATION POLLING (2026-08-22).
+ *
+ * Lives here rather than in NotificationBell for one reason: the bell is
+ * rendered in more than one place (App.vue's top bar and TopNavigation), and
+ * it unmounts whenever chrome is hidden. Polling driven from a component that
+ * can have two instances and can disappear is polling that either doubles or
+ * stops without anybody asking it to. App.vue is mounted exactly once, for the
+ * whole session.
+ *
+ * Tied to the AUTH USER, not to mount: polling `/notifications/unread-count`
+ * while logged out is a 401 every minute, and after a logout the next user on
+ * this machine must not inherit the previous one's baseline — that would chime
+ * for notifications that are not theirs. `immediate` so a page loaded with a
+ * live session starts without waiting for a change that already happened.
+ */
+const notifications = useNotificationsStore()
+
+watch(
+  () => auth.user?.id ?? null,
+  (userId) => {
+    notifications.stopPolling()
+    notifications.resetArrivals()
+
+    if (userId !== null) notifications.startPolling()
+  },
+  { immediate: true },
+)
+
+onBeforeUnmount(() => notifications.stopPolling())
 
 // TASK-086 / ADR-021 — written by the mounted view's HeroHeader.
 const pageHeader = usePageHeaderStore()

@@ -163,6 +163,13 @@ const PATHS: Record<string, string> = {
     document:  'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
     return_arrow: 'M9 10h6m0 0l-3-3m3 3l-3 3m-6 4h12a2 2 0 002-2V8a2 2 0 00-2-2H4a2 2 0 00-2 2v8a2 2 0 002 2z',
     pin:       'M5 12l5 5L20 7',
+    // 2026-08-22 — the notification-sound toggle in NotificationBell. A
+    // speaker with two arcs (on) and a speaker with a cross (off), on the
+    // same 24px grid and single-stroke style as everything else here. The
+    // OFF glyph keeps the identical speaker body so the two read as one
+    // control in two states rather than as two different buttons.
+    volume_on:  'M11 5L6 9H2v6h4l5 4V5zM15.5 8.5a5 5 0 010 7M18.5 5.5a9 9 0 010 13',
+    volume_off: 'M11 5L6 9H2v6h4l5 4V5zM22 9l-6 6m0-6l6 6',
     pencil_writing: 'M9 9l-3 3m0 0l3 3M6 12h13M11 5h7a2 2 0 012 2v9',
     paper_check: 'M9 12l2 2 4-4m5 2a9 9 0 11-18 0 9 9 0 0118 0z',
     handshake: 'M3 13l4-4 4 4 6-6 4 4M3 16l4-4 4 4 6-6 4 4',

@@ -10,6 +10,7 @@ use App\Enums\RegistrationChannel;
 use App\Enums\UserRole;
 use App\Models\Scopes\TenantScope;
 use App\Notifications\VerifyRegistrationEmailNotification;
+use Database\Factories\UserFactory;
 use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -37,7 +38,7 @@ use Laravel\Sanctum\HasApiTokens;
 // so this newly-enabled contract changes no existing behavior).
 class User extends Authenticatable implements MustVerifyEmail
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
+    /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, MustVerifyEmailTrait, Notifiable, SoftDeletes;
 
     protected static function booted(): void
@@ -189,6 +190,19 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     protected $attributes = [
         'is_team_leader' => false,
+        /*
+         * 2026-08-22 — the column defaults to TRUE in the database, but a
+         * DB-level default is not hydrated back onto the model that INSERTed
+         * the row. A freshly created User held in memory therefore reads null
+         * here, and NotificationService::wantsEmail() would read that as "not
+         * enabled" and silently skip the email for every notification fired
+         * in the same request that created the user — the approval mail most
+         * of all, which is the one an applicant is actually waiting on.
+         *
+         * Declaring it makes the in-memory object agree with the schema,
+         * which is the same reason is_team_leader is listed above.
+         */
+        'email_notifications_enabled' => true,
     ];
 
     /**
@@ -206,6 +220,11 @@ class User extends Authenticatable implements MustVerifyEmail
             // is a real bool everywhere (MySQL returns tinyint 1/0,
             // SQLite returns int), never a truthy string.
             'is_team_leader' => 'boolean',
+            // 2026-08-22 — the agent's own off switch for notification
+            // email. Cast for the same reason is_team_leader is: MySQL
+            // returns tinyint, SQLite returns int, and NotificationService
+            // branches on it directly.
+            'email_notifications_enabled' => 'boolean',
             'background_config' => 'array',
             'agent_approval_status' => AgentApprovalStatus::class,
             // TASK-115 / ADR-025 §7 — WHO approved this registration and
@@ -262,9 +281,9 @@ class User extends Authenticatable implements MustVerifyEmail
 
     /**
      * @return BelongsTo<AgentRank, $this> ADR-011/TASK-031 — system-derived
-     * (RecalculateAgentRanks), never directly user-writable — deliberately
-     * NOT in $fillable, same "system owns this column" treatment as
-     * users.current_rank_id's own migration comment.
+     *                                     (RecalculateAgentRanks), never directly user-writable — deliberately
+     *                                     NOT in $fillable, same "system owns this column" treatment as
+     *                                     users.current_rank_id's own migration comment.
      */
     public function currentRank(): BelongsTo
     {
@@ -279,10 +298,10 @@ class User extends Authenticatable implements MustVerifyEmail
 
     /**
      * @return HasMany<AgentInviteLink, $this> TASK-112/ADR-025 §3 — recruit
-     * links this agent has minted. Only ever non-empty for a user with
-     * is_team_leader = true (the Service gate in TASK-113), but the
-     * relation itself is unconditional: revoking the flag must not
-     * retroactively hide the links an admin needs to see and revoke.
+     *                                         links this agent has minted. Only ever non-empty for a user with
+     *                                         is_team_leader = true (the Service gate in TASK-113), but the
+     *                                         relation itself is unconditional: revoking the flag must not
+     *                                         retroactively hide the links an admin needs to see and revoke.
      */
     public function agentInviteLinks(): HasMany
     {
@@ -291,9 +310,9 @@ class User extends Authenticatable implements MustVerifyEmail
 
     /**
      * @return BelongsTo<AgentInviteLink, $this> TASK-112/ADR-025 §6 —
-     * reporting only: which leader's link brought this user in. Mirrors
-     * registeredViaInviteCode() below. Survives a later manager_id change,
-     * which is the whole point of storing it separately from manager_id.
+     *                                           reporting only: which leader's link brought this user in. Mirrors
+     *                                           registeredViaInviteCode() below. Survives a later manager_id change,
+     *                                           which is the whole point of storing it separately from manager_id.
      */
     public function recruitedViaAgentLink(): BelongsTo
     {
@@ -356,12 +375,12 @@ class User extends Authenticatable implements MustVerifyEmail
 
     /**
      * @return BelongsTo<User, $this> TASK-115 / ADR-025 §7 — the Company
-     * Admin, Super Admin or team leader who approved this registration.
-     * Null for every account that predates 2026_08_19_090000 and for every
-     * account created directly by an Admin (which is approved by
-     * construction, with no approval event to attribute). Read together with
-     * `approval_source`, which is what tells an Admin queue "leader-approved"
-     * apart from "admin-approved".
+     *                                Admin, Super Admin or team leader who approved this registration.
+     *                                Null for every account that predates 2026_08_19_090000 and for every
+     *                                account created directly by an Admin (which is approved by
+     *                                construction, with no approval event to attribute). Read together with
+     *                                `approval_source`, which is what tells an Admin queue "leader-approved"
+     *                                apart from "admin-approved".
      */
     public function approvedBy(): BelongsTo
     {

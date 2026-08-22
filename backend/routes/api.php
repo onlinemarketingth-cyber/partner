@@ -306,6 +306,8 @@ Route::prefix('v1')->group(function () {
         Route::delete('/me/background', [UserProfileController::class, 'destroyBackground']);
         Route::put('/me/name', [UserProfileController::class, 'updateName']);
         Route::put('/me/password', [UserProfileController::class, 'updatePassword']);
+        // 2026-08-22 — the agent's own notification-email off switch.
+        Route::put('/me/notification-preferences', [UserProfileController::class, 'updateNotificationPreferences']);
 
         // TASK-053 / ADR-016 Phase 1 — personal notifications (the real
         // bell, replacing the stub) + per-agent targets (goal ring).

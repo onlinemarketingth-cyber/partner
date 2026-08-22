@@ -22,7 +22,7 @@
  * sheet; and its `bg-surface-chip text-ink-card-muted` type pill was the
  * light-on-light case. Both are now derived pairs.
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import Icon from './Icon.vue'
@@ -30,14 +30,53 @@ import { useNotificationsStore, type AppNotification } from '@/stores/notificati
 import { resolveNotificationLink } from '@/utils/notificationLink'
 import { useToastStore } from '@/stores/toast'
 import { apiErrorMessage } from '@/utils/apiError'
+import {
+  isNotificationSoundMuted,
+  playNotificationSound,
+  setNotificationSoundMuted,
+} from '@/utils/notificationSound'
 
 const router = useRouter()
 const store = useNotificationsStore()
 const toast = useToastStore()
-const { items, unreadCount, loading } = storeToRefs(store)
+const { items, unreadCount, arrivals, loading } = storeToRefs(store)
 
 const open = ref(false)
 const root = ref<HTMLElement | null>(null)
+
+/**
+ * The chime (human request 2026-08-22, "เพิ่มเสียงการแจ้งเตือน").
+ *
+ * Driven by `arrivals`, not by `unreadCount`. The two diverge constantly: the
+ * agent reads something on their phone and the unread count DROPS, then a new
+ * notification brings it back to where it was — a watcher on the count would
+ * hear no change and stay silent for a notification that really did arrive.
+ * `arrivals` only ever counts up, and only for things this session has not
+ * seen before.
+ *
+ * The store deliberately does not play the sound itself: a store that makes
+ * noise is a store that makes noise in unit tests, in SSR, and in whatever
+ * else imports it later. The component that owns the bell owns the bell's
+ * sound.
+ */
+const soundMuted = ref(isNotificationSoundMuted())
+
+watch(arrivals, (now, before) => {
+  if (now > (before ?? 0)) playNotificationSound()
+})
+
+function toggleSound(event: MouseEvent) {
+  // The dropdown closes on any outside click; this control lives inside it
+  // and must not also count as one.
+  event.stopPropagation()
+  soundMuted.value = !soundMuted.value
+  setNotificationSoundMuted(soundMuted.value)
+
+  // Pressing "unmute" is itself the user gesture browsers require before
+  // audio may play, so this doubles as a preview AND as the moment the
+  // AudioContext is allowed to start.
+  if (!soundMuted.value) playNotificationSound()
+}
 
 function toggle() {
   open.value = !open.value
@@ -145,10 +184,29 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       <div class="px-5 py-3.5 border-b border-line-card-subtle flex items-center gap-2">
         <Icon name="bell" :size="16" class="text-ink-card-muted" />
         <h3 class="font-bold text-ink-card text-sm">การแจ้งเตือน</h3>
+        <!-- A sound the user cannot stop is worse than no sound: an agent
+             working with the portal open in a quiet office would just close
+             the tab. Kept next to the bell rather than buried in Profile,
+             because the moment somebody wants it off is the moment it just
+             went off. -->
+        <button
+          type="button"
+          @click="toggleSound"
+          class="ml-auto w-9 h-9 -my-1 inline-flex items-center justify-center rounded-lg hover:bg-surface-chip transition-colors"
+          :title="soundMuted ? 'เปิดเสียงแจ้งเตือน' : 'ปิดเสียงแจ้งเตือน'"
+          :aria-label="soundMuted ? 'เปิดเสียงแจ้งเตือน' : 'ปิดเสียงแจ้งเตือน'"
+          :aria-pressed="soundMuted"
+        >
+          <Icon
+            :name="soundMuted ? 'volume_off' : 'volume_on'"
+            :size="16"
+            :class="soundMuted ? 'text-ink-card-subtle' : 'text-ink-brand'"
+          />
+        </button>
         <button
           type="button"
           @click="onMarkAll"
-          class="ml-auto text-xs font-bold text-ink-brand hover:opacity-80"
+          class="text-xs font-bold text-ink-brand hover:opacity-80"
         >
           อ่านทั้งหมด
         </button>

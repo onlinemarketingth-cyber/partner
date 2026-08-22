@@ -37,6 +37,14 @@ export interface AuthUser {
    * UserPolicy::approveRegistration), so a tampered store buys nothing.
    */
   is_team_leader: boolean
+  /**
+   * 2026-08-22 — the agent's own off switch for notification email, so
+   * ProfileSettingsView can render the toggle in its true position on load
+   * rather than guessing. Optional on the type (not on the wire) so a stale
+   * cached user from before this field existed does not fail to parse; the
+   * view defaults it to `true`, matching the column default.
+   */
+  email_notifications_enabled?: boolean
   company: { id: number; name: string } | null
   avatar_url: string | null
   background: UserBackground

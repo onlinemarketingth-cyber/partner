@@ -88,6 +88,11 @@ class UserResource extends JsonResource
             // Cast to bool explicitly: MySQL hands back tinyint 1/0 and
             // the JSON contract for both frontends must be a real boolean.
             'is_team_leader' => (bool) $this->is_team_leader,
+            // 2026-08-22 — the agent's own notification-email preference,
+            // so ProfileSettingsView can render the toggle in its true
+            // position on load instead of guessing. Same explicit bool cast
+            // as is_team_leader above, for the same tinyint reason.
+            'email_notifications_enabled' => (bool) $this->email_notifications_enabled,
             // ADR-005/TASK-017..020 — additive fields for the
             // self-registration approval queue (never populated/relevant
             // for agents created directly by an Admin via the "+

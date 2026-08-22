@@ -31,6 +31,11 @@ class Notification extends Model
         'link',
         'data',
         'read_at',
+        // Email delivery intent. `emailed_at` and `email_attempts` are
+        // deliberately NOT fillable: only NotificationMailer may claim or
+        // release a row, and it does so with forceFill. Mass-assigning
+        // "already sent" from anywhere else would silently cancel an email.
+        'email_due_at',
     ];
 
     protected function casts(): array
@@ -39,6 +44,9 @@ class Notification extends Model
             'type' => NotificationType::class,
             'data' => 'array',
             'read_at' => 'datetime',
+            'email_due_at' => 'datetime',
+            'emailed_at' => 'datetime',
+            'email_attempts' => 'integer',
         ];
     }
 

@@ -106,6 +106,22 @@ class UserProfileService
     /**
      * @param  array{first_name: string, last_name: string}  $data
      */
+    /**
+     * The agent's own notification-email preference.
+     *
+     * forceFill rather than update(): the column is deliberately absent
+     * from User::$fillable so that no Admin-facing Request (which accepts a
+     * broad field set) can ever silence somebody else's approval and
+     * payment mail as a side effect of an unrelated edit. This endpoint is
+     * the only writer.
+     */
+    public function updateNotificationPreferences(User $user, bool $enabled): User
+    {
+        $user->forceFill(['email_notifications_enabled' => $enabled])->save();
+
+        return $user->fresh();
+    }
+
     public function updateName(User $user, array $data): User
     {
         // `name` itself is never passed here — User::booted()'s saving()
