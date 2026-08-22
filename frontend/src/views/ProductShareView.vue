@@ -92,6 +92,13 @@ interface SpecItem {
 interface PublicProductShare {
   company_name: string | null
   agent_name: string | null
+  /**
+   * The sharing agent's own contact channels (2026-08-21). Either can be
+   * null — an agent an admin created may never have been given a phone —
+   * and a null must render NO button rather than a dead `tel:`.
+   */
+  agent_phone: string | null
+  agent_email: string | null
   // TASK-159 §3 — the SHARING company's theme, same shape as
   // GET /public/theme/{slug}. Null only when the company could not be
   // resolved at all (not reachable through a live token today).
@@ -394,11 +401,71 @@ function openLightbox(material: SalesMaterialItem) {
            covers the last card. A view-only share keeps the exact
            spacing it had before TASK-137. -->
       <div v-else-if="product" class="space-y-4" :class="product.can_checkout ? 'pb-28' : ''">
-        <!-- Agent attribution -->
-        <div v-if="share?.agent_name" class="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-surface-card/80 border border-line-card/80 text-sm">
-          <Icon name="user" :size="16" class="text-ink-brand" />
-          <span class="text-ink-card-muted">แนะนำโดย</span>
-          <span class="font-bold text-ink-card">{{ share.agent_name }}</span>
+        <!--
+             ATTRIBUTION, AND NOW A WAY TO REACH THE PERSON NAMED IN IT.
+
+             Human request 2026-08-21, "เพิ่มให้ทุกกรณี" — deliberately NOT
+             behind can_checkout. On a product whose journey needs an
+             appointment the buy bar never renders, so a customer who had read
+             the entire page was left with nothing to do but go back to LINE
+             and hope they still had the conversation. The agent's name was
+             already here as ATTRIBUTION; it was not a way to reach them.
+
+             ABOVE THE GALLERY on purpose. Below it would put these past a
+             long description and a specification list on a phone — exactly
+             where somebody who has already decided stops scrolling.
+
+             THE NUMBER AND THE ADDRESS ARE PRINTED, not merely linked.
+             `tel:` does nothing on most desktops, and `mailto:` does nothing
+             on a phone with no mail client configured — silently, both of
+             them. ShareLinkModal's own history is the precedent: its Email
+             button was moved OFF mailto: for exactly that reason. So the
+             value stays readable and selectable whether or not the handler
+             fires, and a customer can always copy it.
+
+             Each channel renders only if the agent HAS one — an agent an
+             admin created may never have been given a phone, and a dead
+             `tel:` is worse than no button.
+        -->
+        <div
+          v-if="share?.agent_name"
+          class="rounded-2xl bg-surface-card/80 border border-line-card/80 px-4 py-3 space-y-3"
+        >
+          <div class="flex items-center gap-2 text-sm">
+            <Icon name="user" :size="16" class="text-ink-brand" />
+            <span class="text-ink-card-muted">แนะนำโดย</span>
+            <span class="font-bold text-ink-card">{{ share.agent_name }}</span>
+          </div>
+
+          <div
+            v-if="share.agent_phone || share.agent_email"
+            class="grid gap-2"
+            :class="share.agent_phone && share.agent_email ? 'sm:grid-cols-2' : ''"
+          >
+            <a
+              v-if="share.agent_phone"
+              :href="`tel:${share.agent_phone}`"
+              class="min-h-[44px] flex items-center gap-2.5 px-3 py-2 rounded-xl bg-surface-chip active:scale-[0.98] transition"
+            >
+              <Icon name="phone" :size="16" class="shrink-0 text-ink-brand" />
+              <span class="min-w-0">
+                <span class="block text-[11px] text-ink-chip/70 leading-tight">โทรหาผู้แนะนำ</span>
+                <span class="block text-sm font-bold text-ink-chip truncate">{{ share.agent_phone }}</span>
+              </span>
+            </a>
+
+            <a
+              v-if="share.agent_email"
+              :href="`mailto:${share.agent_email}`"
+              class="min-h-[44px] flex items-center gap-2.5 px-3 py-2 rounded-xl bg-surface-chip active:scale-[0.98] transition"
+            >
+              <Icon name="mail" :size="16" class="shrink-0 text-ink-brand" />
+              <span class="min-w-0">
+                <span class="block text-[11px] text-ink-chip/70 leading-tight">ส่งอีเมลถึงผู้แนะนำ</span>
+                <span class="block text-sm font-bold text-ink-chip truncate">{{ share.agent_email }}</span>
+              </span>
+            </a>
+          </div>
         </div>
 
         <!--

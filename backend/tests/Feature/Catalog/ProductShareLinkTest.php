@@ -155,6 +155,77 @@ class ProductShareLinkTest extends TestCase
             ->assertJsonMissingPath('data.view_count');
     }
 
+    public function test_public_show_carries_the_sharing_agents_contact_channels(): void
+    {
+        // Human request 2026-08-21. A customer who had read the whole page
+        // and wanted the product had nowhere to go: on a product whose
+        // journey needs an appointment there is no buy bar, and the agent's
+        // name was on the page as ATTRIBUTION rather than as a way to reach
+        // the person selling to them.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create([
+            'company_id' => $company->id,
+            'phone' => '0812345678',
+            'email' => 'somchai@example.com',
+        ]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+        $link = ProductShareLink::factory()->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+            'product_id' => $product->id,
+        ]);
+
+        $this->getJson("/api/v1/public/product-shares/{$link->token}")
+            ->assertOk()
+            ->assertJsonPath('data.agent_phone', '0812345678')
+            ->assertJsonPath('data.agent_email', 'somchai@example.com');
+    }
+
+    public function test_an_agent_with_no_phone_yields_null_rather_than_an_empty_string(): void
+    {
+        // An agent an Admin created may never have been given one, and the
+        // page renders NO button for a null — an empty string would render a
+        // live `tel:` that dials nothing.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id, 'phone' => null]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+        $link = ProductShareLink::factory()->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+            'product_id' => $product->id,
+        ]);
+
+        $this->getJson("/api/v1/public/product-shares/{$link->token}")
+            ->assertOk()
+            ->assertJsonPath('data.agent_phone', null);
+    }
+
+    public function test_the_contact_details_are_the_only_thing_widened(): void
+    {
+        // The two channels a customer needs to reply on, and nothing else.
+        // This payload is unauthenticated: the agent's identity documents,
+        // bank details and team must stay exactly as absent as they were.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create([
+            'company_id' => $company->id,
+            'national_id' => '1101700230708',
+            'bank_account_number' => '1234567890',
+            'bank_name' => 'กสิกรไทย',
+        ]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+        $link = ProductShareLink::factory()->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+            'product_id' => $product->id,
+        ]);
+
+        $body = $this->getJson("/api/v1/public/product-shares/{$link->token}")->assertOk()->getContent();
+
+        $this->assertStringNotContainsString('1101700230708', $body);
+        $this->assertStringNotContainsString('1234567890', $body);
+        $this->assertStringNotContainsString('กสิกรไทย', $body);
+    }
+
     public function test_public_show_404s_for_unknown_token(): void
     {
         $this->getJson('/api/v1/public/product-shares/not-a-real-token')->assertNotFound();

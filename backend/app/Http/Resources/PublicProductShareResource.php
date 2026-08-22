@@ -43,6 +43,42 @@ class PublicProductShareResource extends JsonResource
         return [
             'company_name' => $this->company?->name,
             'agent_name' => $this->agent?->name,
+            /*
+             * ── THE SHARING AGENT'S OWN CONTACT DETAILS (human, 2026-08-21) ──
+             *
+             * "เพิ่มปุ่มโทร email ใช้เบอร์ของ agent ที่ส่งให้ เพิ่มให้ทุกกรณี".
+             *
+             * A customer who read this page and wanted the product had
+             * nowhere to go. On a product whose journey needs an appointment
+             * `can_checkout` is false, so the page carried a price, a
+             * description and no action at all — and the agent's name was on
+             * it as ATTRIBUTION, not as a way to reach them.
+             *
+             * ── A DELIBERATE DISCLOSURE, AND NOT THE KIND §6 FORBIDS ──
+             *
+             * Everywhere else here a user's phone and email are withheld from
+             * people who should not have them: a team leader cannot see a
+             * teammate's (PendingRecruitResource, ADR-024 §3), and this very
+             * payload still refuses to carry an id, an order number or an
+             * amount. Those are cases where the person never chose to be
+             * reachable by the reader.
+             *
+             * This is the opposite, and the difference is consent by action:
+             * an agent MINTS this link and sends it to a customer in order to
+             * be contacted about it. Publishing the contact details of the
+             * person selling to you is what the link is for.
+             *
+             * STILL WITHHELD, and must stay so: the agent's id, national ID,
+             * bank details, team and numbers. Only the two channels a
+             * customer needs in order to reply.
+             *
+             * Read from the AGENT's own row — never the request, never the
+             * company's. `agent?->` because a soft-deleted agent leaves the
+             * relation null, and null renders no button rather than a dead
+             * `tel:` — see ProductShareView.vue.
+             */
+            'agent_phone' => $this->agent?->phone,
+            'agent_email' => $this->agent?->email,
             // TASK-159 §3 — the SHARING company's theme, resolved from the
             // token (the link's own company_id), so a customer who opened
             // /p/{token} with no slug anywhere in the URL still sees this
