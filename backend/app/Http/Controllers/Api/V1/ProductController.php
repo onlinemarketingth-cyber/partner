@@ -143,7 +143,17 @@ class ProductController extends Controller
     {
         abort_if($request->user()?->isAgent() && ! $product->is_active, 404);
 
-        return new ProductResource($product->load(['brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory']));
+        // `media` is loaded here as of 2026-08-21: ProductResource wraps
+        // `thumbnail_url` in when(relationLoaded('media')), so without it the
+        // key was simply ABSENT from this endpoint — index() loaded the
+        // relation and show() never did, which nothing noticed until the new
+        // agent-facing product detail page asked show() for a picture and got
+        // no key at all rather than a null. Ordered the same way index()
+        // orders it so both endpoints resolve the same cover.
+        return new ProductResource($product->load([
+            'brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory',
+            'media' => fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order'),
+        ]));
     }
 
     public function update(UpdateProductRequest $request, Product $product, ProductService $service): ProductResource

@@ -132,6 +132,18 @@ const router = createRouter({
       component: () => import('../views/ProductBrowseView.vue'),
       meta: { navLabel: 'สินค้า' },
     },
+    // The AGENT's product page (human request, 2026-08-21). Deliberately not
+    // the same thing as /p/{token}: that one is the CUSTOMER's page — public,
+    // token-scoped, carrying the sharing agent's attribution. This one is
+    // authenticated and reached by id, and exists so the person doing the
+    // selling can read the product before sharing it, instead of minting a
+    // link to themselves to find out what is on it.
+    {
+      path: '/products/:id',
+      name: 'product-detail',
+      component: () => import('../views/ProductDetailView.vue'),
+      meta: { navLabel: 'รายละเอียดสินค้า' },
+    },
     // ADR-017 (TASK-054) — authenticated order / payment collection.
     {
       path: '/orders',

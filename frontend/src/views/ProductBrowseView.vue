@@ -45,11 +45,14 @@
  */
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, ApiError } from '@/api/client'
-// TASK-079 Phase 2 (UX audit) — every row's error copy used to end in a
-// raw HTTP status. ApiError is still imported: the 422 branch in
-// shareProduct() below needs the status to tell a real BR-1 rejection
-// apart from a generic FormRequest message (see its comment).
+import { api } from '@/api/client'
+// TASK-079 Phase 2 (UX audit) — every row's error copy used to end in a raw
+// HTTP status; apiErrorMessage() below is what replaced that.
+//
+// ApiError itself is no longer imported here: the 422 branch that needed the
+// status — telling a real BR-1 rejection apart from a generic FormRequest
+// message — moved into useProductShare() on 2026-08-21 when the product
+// detail page became the second caller of that flow.
 // TASK-079 Phase 4 — isAbortError() for the page-level AbortController.
 import { apiErrorMessage, isAbortError } from '@/utils/apiError'
 import { useAuthStore } from '@/stores/auth'
@@ -60,6 +63,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ProductCard, { type ProductCardItem } from '@/design-system/components/ProductCard.vue'
 import ShareLinkModal from '@/design-system/components/ShareLinkModal.vue'
+import { useProductShare } from '@/composables/useProductShare'
 // TASK-080 — announcements can now also render as an inline banner
 // carousel on this page (page key 'products'), opening the same modal
 // HomeView/AnnouncementsListView already use.
@@ -77,13 +81,6 @@ interface Certification {
   id: number
   user_id: number
   cert_tier: { id: number; key: string; name: string } | null
-}
-interface ProductShareLinkItem {
-  id: number
-  product_id: number
-  public_url: string
-  /** TASK-235 — /p/<code>. Null before the feature; fall back, never swap. */
-  short_url: string | null
 }
 interface BannerProduct {
   id: number
@@ -459,48 +456,20 @@ onMounted(async () => {
 })
 
 // ── Share ────────────────────────────────────────────────────────────────
-const sharingProductId = ref<number | null>(null)
-const shareError = ref('')
-const showShareModal = ref(false)
-const shareLink = ref<ProductShareLinkItem | null>(null)
-const shareHeading = ref('')
-
-async function shareProduct(product: { id: number; name: string }) {
-  if (!hasPassedBasic.value || sharingProductId.value) return
-  sharingProductId.value = product.id
-  shareError.value = ''
-  try {
-    const res = await api.post<{ data: ProductShareLinkItem }>('/product-shares', { product_id: product.id }, pageAbort.signal)
-    shareLink.value = res.data
-    shareHeading.value = product.name
-    showShareModal.value = true
-  } catch (e) {
-    // Bug fix (2026-08-01, human-reported: raw "The agent id field is
-    // required" leaking to the UI) — that message assumed a 422 on the
-    // `agent_id` key was ALWAYS ProductShareLinkService::create()'s own
-    // friendly BR-1 message. It is not: StoreProductShareLinkRequest
-    // also puts a `requiredIf(! isAgent())` rule directly on agent_id,
-    // so if the acting session isn't recognized as an Agent (wrong
-    // role, or a role change after the account still holds a stale
-    // Basic-cert row that made hasPassedBasic look true), Laravel's own
-    // generic auto-message lands on that same key and used to be shown
-    // to the user verbatim. Never surface a raw FormRequest message —
-    // only ever show the known, translated BR-1 sentence, or a safe
-    // generic fallback.
-    if (isAbortError(e)) return
-    if (e instanceof ApiError && e.status === 422) {
-      const body = e.body as { errors?: Record<string, string[]> }
-      const rawMessage = body.errors?.agent_id?.[0] ?? body.errors?.product_id?.[0] ?? ''
-      shareError.value = rawMessage.startsWith('BR-1')
-        ? rawMessage
-        : 'สร้างลิงก์แชร์ไม่สำเร็จ กรุณาลองใหม่ หรือติดต่อผู้ดูแลระบบหากยังไม่สามารถแชร์ได้'
-    } else {
-      shareError.value = apiErrorMessage(e, 'สร้างลิงก์แชร์ไม่สำเร็จ')
-    }
-  } finally {
-    sharingProductId.value = null
-  }
-}
+//
+// Moved into useProductShare() on 2026-08-21, when ProductDetailView became
+// the second screen with a "แชร์" button on a product. What was extracted is
+// mostly the 422 handling — see the composable's docblock for the production
+// incident it exists for. A second copy of that would be the copy that misses
+// the next correction.
+const {
+  sharingProductId,
+  shareError,
+  showShareModal,
+  shareLink,
+  shareHeading,
+  shareProduct,
+} = useProductShare({ canShare: () => hasPassedBasic.value, signal: pageAbort.signal })
 </script>
 
 <template>

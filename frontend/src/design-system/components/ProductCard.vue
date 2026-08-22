@@ -23,6 +23,7 @@
  * TASK-067's own `authStore.user?.id` filter) — this component holds
  * no certification logic of its own, it just renders the prop.
  */
+import { RouterLink } from 'vue-router'
 import Icon from './Icon.vue'
 import AuthenticatedMedia from './AuthenticatedMedia.vue'
 
@@ -56,7 +57,24 @@ function formatBaht(satang: number): string {
        into the background (human-reported 2026-08-04). `text-ink-brand` is
        the same hue walked toward whichever pole this card needs until it
        clears AA — so it still reads as the brand colour. -->
-  <div class="bg-surface-card/95 border border-line-card rounded-xl overflow-hidden flex flex-col h-full">
+  <!--
+       THE CARD IS A LINK TO THE PRODUCT (human request, 2026-08-21:
+       "ตัวสินค้าต้องคลิ๊กดูรายละเอียดหน้าใหม่ได้พร้อมปุ่มแชร์").
+
+       Before this the only thing an agent could do to a product was share
+       it — the name was clipped to two lines, the price was a number, and
+       the description existed only on the page the CUSTOMER would see.
+       An agent had to share a link to themselves to read what they were
+       selling.
+
+       RouterLink and not a click handler, so the row keeps everything a
+       link gives for free: middle-click and long-press open it in a new
+       tab, the status bar previews the destination, and the browser treats
+       it as navigation rather than as script. -->
+  <RouterLink
+    :to="{ name: 'product-detail', params: { id: product.id } }"
+    class="bg-surface-card/95 border border-line-card rounded-xl overflow-hidden flex flex-col h-full transition hover:border-brand-400 active:scale-[0.99]"
+  >
     <AuthenticatedMedia :src="product.thumbnail_url" type="image" class="w-full aspect-square object-cover" />
     <div class="p-3 flex flex-col flex-1">
       <p v-if="product.category" class="text-[11px] text-ink-card-subtle uppercase tracking-wider font-bold mb-0.5">
@@ -65,6 +83,9 @@ function formatBaht(satang: number): string {
       <p class="text-sm font-bold text-ink-card leading-tight line-clamp-2">{{ product.name }}</p>
       <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.price_satang) }}</p>
 
+      <!-- `.stop.prevent` is load-bearing now that the card is a link:
+           without it, every share press would ALSO navigate, and the
+           modal would open on a page that is already leaving. -->
       <button
         :disabled="!hasPassedBasic || sharing"
         :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'สร้าง/เปิดลิงก์แชร์'"
@@ -72,11 +93,11 @@ function formatBaht(satang: number): string {
         :class="hasPassedBasic
           ? 'bg-surface-primary text-ink-primary hover:opacity-90'
           : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
-        @click="emit('share', product)"
+        @click.stop.prevent="emit('share', product)"
       >
         <Icon name="share" :size="14" />
         {{ sharing ? 'กำลังสร้าง...' : 'แชร์' }}
       </button>
     </div>
-  </div>
+  </RouterLink>
 </template>
