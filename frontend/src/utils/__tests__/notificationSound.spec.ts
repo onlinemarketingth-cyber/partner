@@ -69,8 +69,12 @@ describe('notification sound', () => {
     playNotificationSound()
 
     // Two tones, the second offset after the first — a chime, not a beep.
+    // Destructured rather than indexed: under noUncheckedIndexedAccess
+    // `started[0]` is `number | undefined`, and the length assertion above
+    // has already established there are two.
+    const [first, second] = started
     expect(started).toHaveLength(2)
-    expect(started[1]).toBeGreaterThan(started[0])
+    expect(second ?? 0).toBeGreaterThan(first ?? 0)
   })
 
   it('plays nothing when muted', () => {

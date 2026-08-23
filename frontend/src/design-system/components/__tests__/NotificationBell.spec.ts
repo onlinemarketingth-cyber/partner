@@ -109,6 +109,23 @@ function rows(wrapper: ReturnType<typeof mount>) {
   return wrapper.findAll('button').filter((b) => b.text().includes('สถานะบัญชี') || b.text().includes('ข่าวสาร'))
 }
 
+/**
+ * One row, by index, or a failure that says which one was missing.
+ *
+ * `rows(wrapper)[0]` is `DOMWrapper | undefined` under
+ * noUncheckedIndexedAccess, and the tempting fix is `!`. That silences the
+ * compiler and turns "the dropdown rendered no rows" — a real regression this
+ * file exists to catch — into `Cannot read properties of undefined`, pointing
+ * at the test rather than at the component. Throwing here names the actual
+ * problem instead.
+ */
+function row(wrapper: ReturnType<typeof mount>, index: number) {
+  const found = rows(wrapper)[index]
+  if (!found) throw new Error(`Expected a notification row at index ${index}, found ${rows(wrapper).length}.`)
+
+  return found
+}
+
 describe('NotificationBell — a tap always does something visible', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -118,7 +135,7 @@ describe('NotificationBell — a tap always does something visible', () => {
   it('keeps the panel open when the notification has nowhere to go', async () => {
     const wrapper = await openBell()
 
-    await rows(wrapper)[0].trigger('click')
+    await row(wrapper, 0).trigger('click')
     await flushPromises()
 
     expect(push).not.toHaveBeenCalled()
@@ -129,7 +146,7 @@ describe('NotificationBell — a tap always does something visible', () => {
   it('closes the panel and navigates when there IS a destination', async () => {
     const wrapper = await openBell()
 
-    await rows(wrapper)[1].trigger('click')
+    await row(wrapper, 1).trigger('click')
     await flushPromises()
 
     // /news, on the page you are already standing on, was the report.
@@ -145,7 +162,7 @@ describe('NotificationBell — the unread state is theme-derived', () => {
   })
 
   it('tints an unread row with a derived surface, never a brand ramp step', async () => {
-    const classes = rows(await openBell())[0].classes().join(' ')
+    const classes = row(await openBell(), 0).classes().join(' ')
 
     expect(classes).toContain('bg-surface-chip')
     expect(classes).toContain('border-ink-brand')
@@ -156,7 +173,7 @@ describe('NotificationBell — the unread state is theme-derived', () => {
   })
 
   it('leaves a read row on the card surface, with hover intact', async () => {
-    const classes = rows(await openBell())[1].classes().join(' ')
+    const classes = row(await openBell(), 1).classes().join(' ')
 
     expect(classes).toContain('hover:bg-surface-chip')
     expect(classes).not.toContain('bg-surface-chip ')
@@ -167,8 +184,8 @@ describe('NotificationBell — the unread state is theme-derived', () => {
     // and to anyone glancing at a phone in sunlight.
     const wrapper = await openBell()
 
-    expect(rows(wrapper)[0].find('.rounded-full.bg-ink-brand').exists()).toBe(true)
-    expect(rows(wrapper)[1].find('.rounded-full.bg-ink-brand').exists()).toBe(false)
+    expect(row(wrapper, 0).find('.rounded-full.bg-ink-brand').exists()).toBe(true)
+    expect(row(wrapper, 1).find('.rounded-full.bg-ink-brand').exists()).toBe(false)
   })
 })
 
@@ -212,15 +229,18 @@ describe('NotificationBell — the arrival chime', () => {
 
   it('mutes and unmutes from the dropdown', async () => {
     const wrapper = await openBell()
-    const soundButton = wrapper.findAll('button').find((b) => b.attributes('role') === undefined
-      && b.attributes('aria-pressed') !== undefined)
+    const soundButton = wrapper
+      .findAll('button')
+      .find((b) => b.attributes('aria-pressed') !== undefined)
 
-    expect(soundButton).toBeDefined()
+    // Named rather than `!`-asserted: if the control disappears, "the mute
+    // button is gone" is the useful failure, not a TypeError two lines down.
+    if (!soundButton) throw new Error('The notification-sound toggle is missing from the dropdown.')
 
-    await soundButton!.trigger('click')
+    await soundButton.trigger('click')
     expect(setMuted).toHaveBeenCalledWith(true)
 
-    await soundButton!.trigger('click')
+    await soundButton.trigger('click')
     expect(setMuted).toHaveBeenCalledWith(false)
     // Unmuting previews the sound — which is also the user gesture browsers
     // require before audio may play at all.
