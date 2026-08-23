@@ -71,14 +71,22 @@ describe('AnnouncementModal — the image is shown whole (TASK-228)', () => {
     expect(classes).not.toContain('object-cover')
   })
 
-  it.each(STYLES)('caps the image at 80vh so the title survives, in the %s style', (style) => {
+  it.each(STYLES)('caps the image below the panel height, in the %s style', (style) => {
     // Reported 2026-08-21: a tall portrait poster filled the sheet and the
     // headline sat below the fold, so the announcement opened as a picture
     // with no words. TASK-228's docblock had recorded that exact trade-off
     // as accepted; production disagreed.
+    //
+    // 80vh → 58vh on 2026-08-22, and the reason is the whole point of this
+    // case. The PANEL is now capped at 80vh too (see the sizing describe
+    // below). An image capped at the same height as its container fills it
+    // completely, so the title lands below the fold again — shrinking the
+    // modal alone would have changed nothing a human could see. The two
+    // numbers are related, and this assertion is the only thing that says so.
     const classes = bannerImage(mountModal(style))!.classes()
 
-    expect(classes).toContain('max-h-[80vh]')
+    expect(classes).toContain('max-h-[58vh]')
+    expect(classes).not.toContain('max-h-[80vh]')
     // The cap and object-contain are a pair: max-height alone would squash
     // the image, because w-full is still forcing the width.
     expect(classes).toContain('object-contain')
@@ -126,5 +134,84 @@ describe('AnnouncementModal — the image is shown whole (TASK-228)', () => {
       global: { stubs: { Icon: true, Teleport: true } },
     })
     expect(bannerImage(wrapper as never)).toBeUndefined()
+  })
+})
+
+/**
+ * THE PANEL IS 80% OF THE SCREEN (human, 2026-08-22, with a screenshot:
+ * "ปรับให้เป็น 80% ของ Screen พอ").
+ *
+ * The caps were 100% / 85vh / 92vh. At 92vh the strip of backdrop above a
+ * bottom sheet is about a finger's width on a phone — visually identical to
+ * full screen, which is what the screenshot showed. A later change that
+ * rounds 80vh back up produces no error and no other failing test; it just
+ * quietly undoes the request.
+ */
+describe('AnnouncementModal — the panel is 80% of the screen', () => {
+  function panel(wrapper: ReturnType<typeof mountModal>) {
+    const found = wrapper.find('.ann-modal-panel')
+    if (!found.exists()) throw new Error('The modal panel did not render.')
+
+    return found
+  }
+
+  it.each(STYLES)('caps the %s panel at 80vh, never the full viewport', (style) => {
+    const classes = panel(mountModal(style)).classes().join(' ')
+
+    expect(classes).toMatch(/(^|\s)(max-)?h-\[80vh\]/)
+    // The three values this replaced. None of them would fail anything else.
+    expect(classes).not.toContain('max-h-none')
+    expect(classes).not.toContain('max-h-[92vh]')
+    expect(classes).not.toContain('max-h-[85vh]')
+  })
+
+  it('gives full_screen a scrim now that it no longer covers the screen', () => {
+    // It deliberately had NO backdrop: the overlay WAS the panel, so a scrim
+    // would have been invisible underneath it (ADR-023 §2.1 / TASK-098). At
+    // 80% that inverts — a card-coloured sheet behind a card-coloured panel
+    // makes the 80% impossible to see, and it reads as full-screen as before.
+    const overlay = mountModal('full_screen').find('.fixed.inset-0')
+
+    expect(overlay.classes().join(' ')).toContain('bg-black/60')
+  })
+})
+
+/**
+ * THE COLLAPSED STRIP AND THE PANEL ARE MUTUALLY EXCLUSIVE.
+ *
+ * Caught while making the change above, not before it. The strip was `v-if`
+ * and the panel its `v-else-if`; moving the panel inside <Transition> severed
+ * that pairing, because a v-else-if cannot reach across an element boundary.
+ * Both then render at once — a "non-blocking bar" with a blocking modal on
+ * top of it, which is the one state bottom_strip exists to avoid.
+ */
+describe('AnnouncementModal — bottom_strip stays exclusive', () => {
+  function mountStrip(startExpanded: boolean) {
+    return mount(AnnouncementModal, {
+      props: { show: true, announcement: ANNOUNCEMENT, displayStyle: 'bottom_strip' as const, startExpanded },
+      global: { stubs: { Icon: true, Teleport: true } },
+    })
+  }
+
+  it('shows only the strip while collapsed', () => {
+    const wrapper = mountStrip(false)
+
+    expect(wrapper.find('.ann-modal-panel').exists()).toBe(false)
+    expect(wrapper.find('.fixed.bottom-0').exists()).toBe(true)
+  })
+
+  it('shows only the panel once expanded', () => {
+    const wrapper = mountStrip(true)
+
+    expect(wrapper.find('.ann-modal-panel').exists()).toBe(true)
+    expect(wrapper.find('.fixed.bottom-0.inset-x-0').exists()).toBe(false)
+  })
+
+  it('swaps the strip for the panel when tapped', async () => {
+    const wrapper = mountStrip(false)
+
+    await wrapper.find('.fixed.bottom-0').trigger('click')
+
+    expect(wrapper.find('.ann-modal-panel').exists()).toBe(true)
   })
 })

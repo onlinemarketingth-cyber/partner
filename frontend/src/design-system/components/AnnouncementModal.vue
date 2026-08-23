@@ -68,6 +68,24 @@ watch(
   },
 )
 
+/**
+ * Is the big panel showing?
+ *
+ * This used to be implicit: the collapsed bottom_strip bar was `v-if` and the
+ * panel was its `v-else-if`, so they could never both render. Wrapping the
+ * panel in its own <Transition> broke that pairing — a `v-else-if` cannot
+ * reach across an element boundary — and without stating the condition, a
+ * collapsed strip would render with the full panel sitting on top of it.
+ *
+ * Written out rather than restored as a chain, so the fix survives anyone
+ * moving these two blocks again.
+ */
+const showExpanded = computed(
+  () =>
+    Boolean(props.show && props.announcement) &&
+    !(displayStyle.value === 'bottom_strip' && !stripExpanded.value),
+)
+
 function handleBackdropClick() {
   // bottom_strip: backdrop tap collapses back to the non-blocking strip
   // instead of fully dismissing — only the X button fully closes it.
@@ -81,10 +99,24 @@ function handleBackdropClick() {
 const overlayClasses = computed(() => {
   switch (displayStyle.value) {
     case 'full_screen':
-      // TASK-098 / ADR-023: full_screen has NO backdrop — the overlay IS
-      // the panel surface, so it takes the card token rather than a fixed
-      // white (which on a dark tenant covered the screen in a white sheet).
-      return 'bg-surface-card'
+      /*
+       * 2026-08-22 (human, with a screenshot): "ปรับให้เป็น 80% ของ Screen พอ".
+       *
+       * This used to be `bg-surface-card` with NO scrim, because the overlay
+       * WAS the panel — full_screen covered the viewport edge to edge, so a
+       * backdrop would have been invisible underneath it.
+       *
+       * Once the panel is 80% that reasoning inverts: a card-coloured sheet
+       * behind a card-coloured panel makes the 80% impossible to see, and the
+       * modal reads exactly as full-screen as before. The scrim is what turns
+       * "80% tall" into something the eye can actually register as a panel
+       * floating over the page.
+       *
+       * ADR-023 note: `bg-black/60` is a SCRIM, not a surface — same call the
+       * other three styles here already made. It is not themed and must not
+       * be: it darkens whatever is behind it, on any tenant.
+       */
+      return 'bg-black/60 items-center justify-center p-4'
     case 'centered_card':
       return 'bg-black/60 items-center justify-center p-4'
     case 'bottom_strip':
@@ -93,16 +125,31 @@ const overlayClasses = computed(() => {
       return 'bg-black/60 items-end sm:items-center justify-center'
   }
 })
+/*
+ * EVERY STYLE IS CAPPED AT 80vh (human, 2026-08-22).
+ *
+ * They were 100% / 85vh / 92vh. At 92vh the sliver of backdrop left above a
+ * bottom sheet is about a finger's width — indistinguishable from full
+ * screen on a phone, which is what the screenshot showed and what the
+ * request is about. 80vh leaves a tenth of the screen at each end, so the
+ * page behind stays visible and the panel reads as a panel.
+ *
+ * The four styles keep their distinct GEOMETRY — where the panel sits, how
+ * wide it is, which corners are round. Only the height agrees now.
+ */
 const cardClasses = computed(() => {
   switch (displayStyle.value) {
     case 'full_screen':
-      return 'w-full h-full max-h-none rounded-none'
+      // No longer literally full-screen. It stays the WIDEST style (the
+      // others clamp to max-w-md / max-w-lg), which is what distinguishes it
+      // now — see the admin-setting note in the task report.
+      return 'w-full h-[80vh] rounded-3xl'
     case 'centered_card':
-      return 'w-full max-w-md rounded-3xl max-h-[85vh]'
+      return 'w-full max-w-md rounded-3xl max-h-[80vh]'
     case 'bottom_strip':
     case 'bottom_sheet':
     default:
-      return 'w-full sm:max-w-lg sm:rounded-3xl rounded-t-3xl max-h-[92vh]'
+      return 'w-full sm:max-w-lg sm:rounded-3xl rounded-t-3xl max-h-[80vh]'
   }
 })
 /**
@@ -143,11 +190,26 @@ const cardClasses = computed(() => {
  * sides, which is the honest way to show a whole portrait image in a
  * landscape slot.
  *
- * The card's own `max-h-[85vh]`/`max-h-[92vh]` + `overflow-y-auto` still
- * stand behind this, so the modal can never grow past the viewport.
+ * The card's own max-height + `overflow-y-auto` still stand behind this, so
+ * the modal can never grow past the viewport.
+ *
+ * ── LOWERED TO 58vh, 2026-08-22 ──
+ *
+ * The panel is now capped at 80vh (see cardClasses). An image also capped at
+ * 80vh therefore fills the ENTIRE panel on any portrait poster, and the title
+ * is pushed below the fold inside a scrollable card — which is the exact
+ * complaint 80vh was introduced to fix, reappearing one level down. Shrinking
+ * the modal without shrinking the image would have changed nothing the human
+ * can see.
+ *
+ * 58vh is roughly three quarters of the panel, leaving the title, the date
+ * and the first lines of the body visible without scrolling — the point of
+ * the cap in the first place. `object-contain` still guarantees a clamped
+ * image is letterboxed rather than squashed, and an ordinary wide banner is
+ * far below this cap so it renders untouched.
  */
 const imageClasses = computed(() =>
-  displayStyle.value === 'full_screen' ? 'max-h-[80vh]' : 'rounded-t-3xl max-h-[80vh]',
+  displayStyle.value === 'full_screen' ? 'max-h-[58vh]' : 'rounded-t-3xl max-h-[58vh]',
 )
 
 function formatDate(iso: string): string {
@@ -185,13 +247,29 @@ function formatDate(iso: string): string {
     </div>
 
     <!-- Expanded detail overlay: full_screen / bottom_sheet / centered_card, or bottom_strip once tapped -->
-    <div
-      v-else-if="show && announcement"
-      class="fixed inset-0 z-[70] flex"
-      :class="overlayClasses"
-      @click.self="handleBackdropClick"
-    >
-      <div class="bg-surface-card overflow-y-auto relative" :class="cardClasses">
+    <!-- FADE UP (human, 2026-08-22: "มี Animation Fade ขึ้นข้าๆ").
+         The modal used to appear in a single frame, which on a panel this
+         large reads as a flash rather than as something opening. The scrim
+         and the panel are animated SEPARATELY — the scrim only fades, the
+         panel fades AND rises — because a backdrop that slides is a backdrop
+         you notice, and the whole job of a scrim is to not be noticed.
+         Leaving is quicker than entering (200ms vs 340ms): dismissing is a
+         decision already made, and waiting to watch it play out is the part
+         that feels sluggish. The global prefers-reduced-motion rule in
+         assets/main.css already neutralises both with !important. -->
+    <Transition name="ann-modal">
+      <!-- `&& announcement` is not redundant with showExpanded, which already
+           checks it: vue-tsc narrows the template's `announcement` to
+           non-null from the v-if EXPRESSION, not from a computed that
+           happens to test the same thing. Without it every `announcement.x`
+           below is a "possibly null" error. -->
+      <div
+        v-if="showExpanded && announcement"
+        class="fixed inset-0 z-[70] flex"
+        :class="overlayClasses"
+        @click.self="handleBackdropClick"
+      >
+        <div class="ann-modal-panel bg-surface-card overflow-y-auto relative" :class="cardClasses">
         <button
           type="button"
           class="absolute top-3 right-3 w-8 h-8 rounded-full bg-black/40 text-white flex items-center justify-center z-10 hover:bg-black/60"
@@ -237,8 +315,57 @@ function formatDate(iso: string): string {
           </div>
 
           <p class="text-sm text-ink-card whitespace-pre-line leading-relaxed">{{ announcement.content }}</p>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+/*
+ * The scrim fades; the panel fades AND rises.
+ *
+ * Two separate rules rather than one on the wrapper, because animating the
+ * backdrop's position is the difference between "a panel opened" and "the
+ * whole screen moved". The scrim must not draw attention to itself.
+ *
+ * The easing is a decelerating curve (fast out, slow in): the panel arrives
+ * quickly and settles, which reads as physical. A linear or ease-in-out rise
+ * over the same 340ms feels like it is being dragged.
+ *
+ * 24px of travel, not more. A large panel rising a long distance looks like
+ * it is coming from off-screen; the intent here is that it appears in place
+ * and settles.
+ *
+ * NOT wrapped in a prefers-reduced-motion query: assets/main.css already
+ * flattens every transition-duration to 0.01ms with !important under that
+ * media query, so adding one here would be dead code that looks load-bearing.
+ */
+.ann-modal-enter-active {
+  transition: opacity 240ms ease-out;
+}
+.ann-modal-leave-active {
+  transition: opacity 200ms ease-in;
+}
+.ann-modal-enter-from,
+.ann-modal-leave-to {
+  opacity: 0;
+}
+
+.ann-modal-enter-active .ann-modal-panel {
+  transition:
+    transform 340ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 240ms ease-out;
+}
+.ann-modal-leave-active .ann-modal-panel {
+  transition:
+    transform 200ms ease-in,
+    opacity 200ms ease-in;
+}
+.ann-modal-enter-from .ann-modal-panel,
+.ann-modal-leave-to .ann-modal-panel {
+  opacity: 0;
+  transform: translateY(24px);
+}
+</style>
