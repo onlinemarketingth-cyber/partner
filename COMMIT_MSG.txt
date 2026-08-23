@@ -1,105 +1,136 @@
-feat(links): one short-link system across all seven link types, with stats
+feat(notifications): a chime when something arrives, and email for the events that matter
 
-Seven kinds of public link existed in six unrelated tables, none of them
-connected. Token lengths were 64, 40 and unbounded; four revoked softly,
-affiliate links HARD DELETED, pay links could not be switched off at all;
-one had per-click history, two had a bare counter, four counted nothing.
-Nobody could answer "how many links does this company have out in the
-world, and are any of them working".
+Human request 2026-08-22: "เพิ่มเสียงการแจ้งเตือน แบบการแจ้งเตือนอื่นๆ พร้อมส่ง
+email แจ้งเตือนให้กับ Agent".
 
-THE COMPANY SIGNUP LINK DID NOT EXIST. company_invite_codes has been in
-the schema since ADR-005 and the app has only ever READ it: no route, no
-controller, no service, no policy, no screen, and no code anywhere that
-could create one. Setting a company up meant typing an INSERT against
-production, and what it produced was not a link — a recruit reached
-/register on their own and typed the code in. The branded
-/login?company=<slug> link people were already sharing only themed the
-login page; RegisterView never read that parameter. That is the whole of
-what "it does not exist" meant, and it is built here.
+── 1. THE SOUND NEEDED SOMETHING TO SOUND FOR ──
 
-The design adds a SECOND DOOR rather than replacing the first. The 40-
-and 64-character URLs are in LINE conversations, customers' inboxes and
-posts that were shared onward; rewriting them breaks links the CUSTOMER
-is holding, and they just see a dead page. So tracked_links is a registry
-that resolves to the same rows, resolvers try the short code first and
-fall back to the legacy token, and both stay open indefinitely. Tests
-pin that, so a later "nobody uses the old ones now" has to argue.
+The unread badge was fetched exactly once, on mount. It could sit at 0 for an
+entire working day while notifications piled up server-side. A chime bolted
+onto that would have been a chime that only ever fires on page refresh: built,
+demoable, useless.
 
-Bot previews cannot inflate the counts, and that is the point rather
-than a detail. Counting happens when the SPA calls the resolve API, and
-LINE/Facebook take the HTML without running the JavaScript — they never
-reach it. Not filtered afterwards; out of reach from the start. The
-redirect-service design we did not build would have needed a
-hand-maintained crawler list forever, and an agent who shares a link and
-immediately sees "5 opens" before any human looked stops believing the
-number permanently.
+So the store polls. One GET returning a single integer, once a minute, paused
+while the tab is hidden and refreshed the moment it comes back. A websocket is
+the better answer eventually — it is also a broker, a daemon, socket auth and
+a reconnect story; this costs about a kilobyte an hour per open tab and no new
+infrastructure. Right trade for a badge, wrong trade for a chat.
 
-Decisions worth the words. The alphabet drops 0 O o 1 l I because codes
-get read off flyers and business cards, and each of those six is a
-support ticket from somebody who typed it correctly as far as they could
-tell. Payment codes are 14 characters where every other group gets 10:
-that page shows an order's contents and total and was behind a
-40-character token, so a shorter front door would have been reducing
-protection to buy convenience. Prefixes (/p/ /pay/ /j/ /c/) instead of a
-flat /{code}, because this app serves real pages at the top level and the
-first future page colliding with a live code would kill that customer's
-link with nothing connecting the two events. Conversion rate divides by
-UNIQUE opens — four reads before buying is one person who converted, and
-agents use this number to choose where to spend effort. Nothing-opened-
-yet is null, never 0%: "0%" says the link is failing, "—" says nobody has
-looked, and those call for opposite actions.
+The chime watches `arrivals`, NOT `unreadCount`. The two diverge constantly:
+reading a notification on a phone LOWERS the count, and a genuinely new one
+that merely restores the previous number would be silent under a count
+watcher. `arrivals` only counts up, and the first reading of a session
+establishes a baseline rather than announcing three-day-old items as though
+they had just landed.
 
-Two old bugs fixed on the way. Affiliate destroy() hard-deleted and
-affiliate_link_clicks cascades, so an agent tidying up a link erased
-every click it ever recorded — the only real per-click history in the
-app, and the only one of six tables that hard-deleted at all. And
-product_share_links.view_count has been incremented on every public page
-load since TASK-056 and rendered by no screen in either frontend; it is
-surfaced now as legacy_view_count, reported separately from click_count
-because the two count different things over different periods and a sum
-would be true of neither.
+Web Audio, not an .mp3: a build asset, a request, a cache entry and a content
+hash for ~300ms of two sine tones is a bad deal, and a synthesised tone cannot
+404 on a stale deploy. Autoplay is the hard part, not the sound — the context
+is created lazily on first play (a suspended context made at boot stays
+suspended in Safari), resume() is attempted every time, and every failure path
+is a silent no-op because this fires on a 60-second timer.
 
-Three open questions were decided rather than asked, per instruction, and
-are recorded in the doc with reasons. Company Admins may mint the company
-signup link (it is recruitment material, same category as the theme and
-branded login link they already own; routing it through Super Admin
-produces one permanent link nobody dares expire, which is worse). Agents
-may not — a company-wide link attributes to nobody, so it would walk
-straight past ADR-025's is_team_leader gate. Legacy links work forever.
-An agent sees every number on their own links and none on anybody else's,
-checked on show() too because an id is guessable.
+The mute ships WITH the sound, in the bell itself, because the moment somebody
+wants it off is the moment it just went off. Stored per-device in
+localStorage: the same person may want it on at their desk and off on the
+phone they carry into meetings.
 
-48 tests added; 1706 backend, 153 frontend, 117 frontend-admin, pint and
-eslint clean, vue-tsc --build clean. Two existing tests were REPLACED
-with their inverse rather than deleted, each with the reason inline:
-the expiry NOT NULL constraint (paper does not expire; the API still
-requires an explicit answer) and the affiliate hard delete (that line was
-the bug, not the spec).
+── 2. EMAIL, WITHOUT DEPENDING ON INFRASTRUCTURE THAT MAY NOT BE RUNNING ──
 
-Clicking it on a real browser found three bugs the suite could not, and
-all three are fixed here. The company signup page told a recruit "step 2
-of 2" above "enter your company's invite code" — on a screen with no code
-field and no way back to step 1. The same two computeds already suppressed
-both for the ?ref= arrival, with a comment explaining why; the company link
-is the identical situation and was simply not covered. /in/<code> had no
-route in this SPA, and a missing route here does not 404 — RouterView
-renders nothing, so the visitor gets the app frame wrapped around an empty
-page, which reads as "the site is broken" rather than "that link is wrong".
-Chasing it turned up the sales-material link being built against the
-frontend origin when it is the API that serves it. And pressing Share still
-returned the 64-character URL, because minting sat after
-ProductShareLinkService's idempotent early return — so a short code could
-only ever be issued for a product nobody had shared before, which in a real
-database is the rarest case. Each of the three is now pinned by a test that
-fails against the old code.
+Two constraints this codebase already learned the hard way:
 
-NOT DONE, and stated plainly: four of the seven groups (/j/ /pay/ /l/ /m/)
-have never been clicked, and no conversion counter has been seen leave zero
-— that half of the feature is proven by tests alone. Five migrations ship
-here where the last batch had none, so back the database up. Nothing is
-backfilled — a new code is not the code anybody is holding — though an
-existing product share does mint one the next time an agent presses Share. used_count on the company signup link
-has no row lock, for the same recorded reason the duplicate-document
-check in that path does not — flagged in the code where it matters. QR is
-not yet wired into the new screens, and the visits table has no archive
-plan yet.
+  * NO QUEUE WORKER IS GUARANTEED. NewAgentRegistrationNotification's docblock
+    records the 2026-08-17 fix — with QUEUE_CONNECTION=database and no
+    `queue:work`, a ShouldQueue notification inserts a `jobs` row and returns.
+    No mail, no error, nothing to look at.
+  * AN ANNOUNCEMENT IS N RECIPIENTS. AnnouncementService loops over every
+    targeted agent inside the admin's POST. One SMTP round-trip each is a
+    request that times out on any company big enough to matter — with the
+    announcement already saved.
+
+So delivery splits by shape, not by convenience:
+
+  SINGLE-RECIPIENT events (approved, rejected, commission paid, payment
+  confirmed) send INLINE, via DB::afterCommit. One round-trip on a request
+  that already exists. No queue, no cron. These are the mails an agent is
+  actually waiting on, and their blast radius is zero infrastructure.
+
+  ANNOUNCEMENTS are stamped email_due_at and swept by
+  `notifications:send-emails` every five minutes, in bounded batches.
+
+That split is the point: if the scheduler is not running — and routes/console.php
+notes a real cron entry is still a hosting to-do — announcements degrade to
+in-app only, and everything urgent still sends. A missing cron cannot take
+every email down.
+
+afterCommit and not a bare send(): OrderService::confirmPayment() calls
+notify() INSIDE the transaction that writes the order and the commission
+ledger. Sending there would hold row locks open across a network round-trip on
+the hottest write path, and a later rollback would have already told the agent
+their money was paid when the ledger row no longer exists.
+
+NotificationMailer catches Throwable, and that is the safe behaviour rather
+than the lazy one: the commission WAS paid, the agent WAS approved. If SMTP is
+down the right outcome is "no email", never "the payout failed". It is safe
+only because the failure is recorded — attempts increment, the reason is
+logged with the row id, email_due_at stays set for retry. `emailed_at` is
+stamped BEFORE the send, so a crash mid-send loses one email rather than
+mailing somebody 288 times a day and getting the sending domain blacklisted.
+
+WHICH EVENTS: approval_status, commission_paid, order_payment_confirmed,
+announcement. NOT exam_passed/exam_failed — those fire from the agent's own
+submit request, so the score is on their screen at the moment the mail would
+send; emailing it is spam, and spam is how a sender ends up filtered, taking
+the approval and payment mail with it. NOT follow_up_due, which already has
+its own richer mail. In config/notifications.php rather than buried in a
+service — a step better than hardcoding, a step short of the admin screen BR-7
+ultimately wants. Flagged below, not silently called done.
+
+AN OFF SWITCH SHIPS IN THE SAME CHANGE. Email an agent cannot stop is not a
+feature; the first person who does not want it filters the sender and silently
+loses the mails that mattered. users.email_notifications_enabled, defaulting
+true, with a switch in Profile and PUT /me/notification-preferences. Checked
+both at write time AND at send time, because a deferred announcement can sit
+for minutes and somebody who switched it off in that window must not receive
+the one already in flight.
+
+── TESTS ──
+
+33 new cases: 17 backend (NotificationEmailTest), 11 store polling, 6 sound,
+plus 3 added to the bell spec.
+
+Mutation-checked, eight ways — each one a change that looks like an
+improvement and breaks the feature silently:
+  ShouldQueue on the mail                    → 1 fails
+  announcements no longer deferred           → 2 fail
+  mailer's exactly-once guard removed        → 1 fails
+  opt-out ignored at send time               → 1 fails
+  arrivals derived from any count change     → 3 fail
+  visibility guard removed from polling      → 3 fail
+  mute ignored                               → 1 fails
+  chime unwired from the bell                → 1 fails
+
+The exactly-once mutation initially SURVIVED — the test was pinning the
+sweep's whereNull query, not the mailer's guard. Test added
+(test_the_mailer_itself_refuses_an_already_sent_row) and the mutation now
+fails it. Recorded here because a mutation check that finds nothing is worth
+less than one that finds this.
+
+Full suites green — backend 1789 passed (6589 assertions), frontend 263
+passed. vue-tsc, eslint and pint clean.
+
+── STILL NEEDED ON THE SERVER ──
+
+  php artisan migrate                (2 new migrations)
+  a cron entry: * * * * * php artisan schedule:run
+     Without it: announcement emails and retries never send, and
+     DispatchDueFollowUpReminders — already scheduled since TASK-016 — has
+     never run either. Everything urgent still emails without it.
+  MAIL_MAILER is `log` in .env.example; production needs real SMTP.
+
+Deferred, not done: an admin screen for the per-company "which events email"
+setting (BR-7); a digest so a company publishing several announcements a day
+does not send several mails; websocket push in place of polling.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0136fjw31bVdmJ41crFhLtM8
