@@ -32,6 +32,7 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { useAuthStore } from '@/stores/auth'
+import { generateQrDataUrl } from '@/utils/qrCode'
 
 /** CompanyInviteCodeResource, field for field. */
 interface SignupLink {
@@ -151,6 +152,45 @@ async function copy(link: SignupLink) {
     // screen and selectable, so failing quietly beats an error toast about
     // something the admin can still do by hand.
   }
+}
+
+// ── QR code (TASK-240) ─────────────────────────────────────────────────
+/**
+ * Generated on demand, one row at a time — not for every link the moment
+ * the list loads. A company with dozens of signup links printed over the
+ * years would otherwise mean dozens of canvas renders nobody asked to see,
+ * for links most admins came here to copy, not to scan.
+ *
+ * Cached by link id in a Map so re-opening the same row's QR is instant
+ * and a background `load()` refresh (e.g. after revoking a link) never
+ * throws away a QR the admin already has open.
+ */
+const qrDataUrl = ref<Map<number, string>>(new Map())
+const openQrId = ref<number | null>(null)
+const qrGenerating = ref<number | null>(null)
+
+async function toggleQr(link: SignupLink) {
+  if (openQrId.value === link.id) {
+    openQrId.value = null
+
+    return
+  }
+  openQrId.value = link.id
+  if (qrDataUrl.value.has(link.id)) return
+
+  qrGenerating.value = link.id
+  const dataUrl = await generateQrDataUrl(link.signup_url, 220)
+  qrDataUrl.value.set(link.id, dataUrl)
+  if (qrGenerating.value === link.id) qrGenerating.value = null
+}
+
+function downloadQr(link: SignupLink): void {
+  const dataUrl = qrDataUrl.value.get(link.id)
+  if (!dataUrl) return
+  const a = document.createElement('a')
+  a.href = dataUrl
+  a.download = `signup-qr-${link.code}.png`
+  a.click()
 }
 
 // ── Revoke ──────────────────────────────────────────────────────────────
@@ -371,6 +411,15 @@ defineProps<{ embedded?: boolean }>()
               {{ status(link).label }}
             </span>
             <button
+              type="button"
+              data-test="toggle-qr"
+              class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 inline-flex items-center gap-1"
+              @click="toggleQr(link)"
+            >
+              <Icon name="qr_code" :size="13" />
+              {{ openQrId === link.id ? 'ซ่อน QR' : 'QR' }}
+            </button>
+            <button
               v-if="!link.revoked_at"
               data-test="revoke-signup-link"
               class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1"
@@ -379,6 +428,29 @@ defineProps<{ embedded?: boolean }>()
               ปิดลิงก์
             </button>
           </div>
+        </div>
+
+        <!-- TASK-240 — QR for this link, generated on demand (see toggleQr). -->
+        <div v-if="openQrId === link.id" class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-3">
+          <p v-if="qrGenerating === link.id" class="text-xs text-slate-400">กำลังสร้าง QR...</p>
+          <template v-else-if="qrDataUrl.get(link.id)">
+            <img
+              :src="qrDataUrl.get(link.id)"
+              alt="QR โค้ดลิงก์สมัครตัวแทน"
+              class="w-24 h-24 rounded-lg border border-slate-200 shrink-0 bg-white"
+            />
+            <div class="min-w-0">
+              <p class="text-xs text-slate-500">สแกนเพื่อเปิดลิงก์สมัครนี้โดยตรง</p>
+              <button
+                type="button"
+                data-test="download-qr"
+                class="mt-1 text-xs font-bold text-brand-600 hover:text-brand-700"
+                @click="downloadQr(link)"
+              >
+                ดาวน์โหลด QR
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </TransitionGroup>

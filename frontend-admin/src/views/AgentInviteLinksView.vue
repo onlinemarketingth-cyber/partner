@@ -33,6 +33,7 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { type AgentItem, fetchAllPages } from './agentEdit'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { generateQrDataUrl } from '@/utils/qrCode'
 
 /**
  * TASK-113 — AgentInviteLinkResource, field for field.
@@ -133,6 +134,61 @@ function linkStatus(link: AgentInviteLink): { label: string; usable: boolean } {
 function isOrphanedByFlag(link: AgentInviteLink): boolean {
   const owner = agents.value.find((a) => a.id === link.agent_id)
   return link.is_usable && owner !== undefined && !owner.is_team_leader
+}
+
+// ── Copy + QR (TASK-240) ───────────────────────────────────────────────
+/**
+ * This screen never rendered `public_url` at all before TASK-240 — the row
+ * showed everything about a link except the link itself. Adding a QR here
+ * with nothing to scan-and-compare it against, or copy by hand as a
+ * fallback when scanning isn't convenient, would have shipped half a
+ * feature, so both land together.
+ */
+const copiedId = ref<number | null>(null)
+
+async function copyInviteLink(link: AgentInviteLink) {
+  try {
+    await navigator.clipboard.writeText(link.public_url)
+    copiedId.value = link.id
+    setTimeout(() => {
+      if (copiedId.value === link.id) copiedId.value = null
+    }, 2000)
+  } catch {
+    // Clipboard permission denied, or an insecure context — the URL is
+    // still on screen and selectable.
+  }
+}
+
+/**
+ * Generated on demand, one row at a time — see the same note on
+ * CompanySignupLinksView.vue's identical cache, which this mirrors.
+ */
+const qrDataUrl = ref<Map<number, string>>(new Map())
+const openQrId = ref<number | null>(null)
+const qrGenerating = ref<number | null>(null)
+
+async function toggleQr(link: AgentInviteLink) {
+  if (openQrId.value === link.id) {
+    openQrId.value = null
+
+    return
+  }
+  openQrId.value = link.id
+  if (qrDataUrl.value.has(link.id)) return
+
+  qrGenerating.value = link.id
+  const dataUrl = await generateQrDataUrl(link.public_url, 220)
+  qrDataUrl.value.set(link.id, dataUrl)
+  if (qrGenerating.value === link.id) qrGenerating.value = null
+}
+
+function downloadQr(link: AgentInviteLink): void {
+  const dataUrl = qrDataUrl.value.get(link.id)
+  if (!dataUrl) return
+  const a = document.createElement('a')
+  a.href = dataUrl
+  a.download = `invite-qr-${link.id}.png`
+  a.click()
 }
 
 // Admin revoke — soft (revoked_at), confirmed rather than one-click: there is
@@ -241,6 +297,17 @@ defineProps<{ embedded?: boolean }>()
                 {{ link.label || 'ลิงก์ไม่มีชื่อ' }}
                 <span class="text-xs font-normal text-slate-400">· เจ้าของ: {{ linkOwnerName(link) }}</span>
               </p>
+              <button
+                class="mt-1 flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-full"
+                :title="link.public_url"
+                @click="copyInviteLink(link)"
+              >
+                <span class="truncate">{{ link.public_url }}</span>
+                <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
+                <span class="shrink-0 font-normal text-slate-400">
+                  {{ copiedId === link.id ? 'คัดลอกแล้ว' : 'คัดลอก' }}
+                </span>
+              </button>
               <p class="text-xs text-slate-500 mt-1">{{ linkUsageLabel(link) }} · {{ linkExpiryLabel(link) }}</p>
               <p class="text-xs text-slate-400">สร้างเมื่อ {{ formatDate(link.created_at) }}</p>
               <p v-if="isOrphanedByFlag(link)" class="text-xs text-amber-600 mt-1">
@@ -256,6 +323,14 @@ defineProps<{ embedded?: boolean }>()
               {{ linkStatus(link).label }}
             </span>
             <button
+              type="button"
+              class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 inline-flex items-center gap-1"
+              @click="toggleQr(link)"
+            >
+              <Icon name="qr_code" :size="13" />
+              {{ openQrId === link.id ? 'ซ่อน QR' : 'QR' }}
+            </button>
+            <button
               v-if="!link.revoked_at"
               class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1"
               @click="askRevokeLink(link)"
@@ -263,6 +338,28 @@ defineProps<{ embedded?: boolean }>()
               ยกเลิกลิงก์
             </button>
           </div>
+        </div>
+
+        <!-- TASK-240 — QR for this link, generated on demand (see toggleQr). -->
+        <div v-if="openQrId === link.id" class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-3">
+          <p v-if="qrGenerating === link.id" class="text-xs text-slate-400">กำลังสร้าง QR...</p>
+          <template v-else-if="qrDataUrl.get(link.id)">
+            <img
+              :src="qrDataUrl.get(link.id)"
+              alt="QR โค้ดลิงก์ชวนทีม"
+              class="w-24 h-24 rounded-lg border border-slate-200 shrink-0 bg-white"
+            />
+            <div class="min-w-0">
+              <p class="text-xs text-slate-500">สแกนเพื่อเปิดลิงก์ชวนทีมนี้โดยตรง</p>
+              <button
+                type="button"
+                class="mt-1 text-xs font-bold text-brand-600 hover:text-brand-700"
+                @click="downloadQr(link)"
+              >
+                ดาวน์โหลด QR
+              </button>
+            </div>
+          </template>
         </div>
       </div>
     </TransitionGroup>

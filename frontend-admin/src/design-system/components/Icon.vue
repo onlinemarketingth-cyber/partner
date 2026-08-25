@@ -178,6 +178,10 @@ const PATHS: Record<string, string> = {
     map_pin:   'M17.657 16.657L13.414 20.9a2 2 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0zM15 11a3 3 0 11-6 0 3 3 0 016 0z',
     camera:    'M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9zM15 13a3 3 0 11-6 0 3 3 0 016 0z',
     signature: 'M11 5h2M11 9h2M5 19l4-4 4 4 4-4 4 4M5 13h14',
+
+    // TASK-240 — QR code icon (viewfinder corners + a few module dots),
+    // for the per-link QR generation added to the admin Links screens.
+    qr_code:   'M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M9 9h2.5v2.5H9zM12.5 9h2.5v2.5h-2.5zM9 12.5h2.5V15H9zM13.5 14h1v1h-1z',
 }
 
 // Sprint UI-STD-1 — Normalize: accept both "arrow-left" and "arrow_left" forms
