@@ -61,6 +61,25 @@ import {
 const props = defineProps<{
   node: TeamNode
   /**
+   * Render only the parts a TABLE ROW cannot carry (2026-08-22).
+   *
+   * SalesTeamView's top level is now a table, and this card is what a row
+   * expands INTO. The row already shows the header, the three KPIs and the
+   * two money figures; repeating them under the row would be the same
+   * numbers twice, three lines apart.
+   *
+   * What a row genuinely cannot hold stays: the per-stage spread, the
+   * downline list, and every approval control — the cert grants, the team
+   * leader flag, the manager select, approve/reject with its reason box.
+   *
+   * Reusing this component rather than re-implementing those in a row is
+   * deliberate. All of that behaviour is injected, stateful and already
+   * working; a second copy would be a second place for it to drift, which
+   * is the failure this codebase keeps finding (notificationLink, the
+   * agent-roster fetch). The card stays the one owner of agent actions.
+   */
+  compact?: boolean
+  /**
    * TASK-127 (human, 2026-08-05): "ในหน้าหัวหน้าทีมไม่ควรซ้ำซ้อนว่าเป็น
    * หัวหน้าทีมของคนนี้อีก".
    *
@@ -316,19 +335,22 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
 
 <template>
   <div
-    class="bg-white/95 rounded-2xl flex flex-col overflow-hidden hover:shadow-sm transition-shadow border"
-    :class="showLeaderChrome ? 'border-amber-200' : 'border-slate-200'"
+    class="flex flex-col overflow-hidden"
+    :class="compact
+      ? 'bg-transparent'
+      : ['bg-white/95 rounded-2xl hover:shadow-sm transition-shadow border', showLeaderChrome ? 'border-amber-200' : 'border-slate-200']"
   >
     <!-- Gold top bar marks the admin-granted DESIGNATION (is_team_leader),
          not "has people" — see the docblock. Rendered in EVERY context
          including the หัวหน้าทีม tab: that tab holds both granted and
          not-yet-granted agents, so the bar is the fastest way to tell them
          apart across a grid (TASK-127 r3, human request). -->
-    <div v-if="showLeaderChrome" class="h-1.5 bg-amber-400"></div>
+    <div v-if="showLeaderChrome && !compact" class="h-1.5 bg-amber-400"></div>
 
     <div class="p-4 flex flex-col gap-3">
-      <!-- Header -->
-      <div class="flex items-center gap-3">
+      <!-- Header. Suppressed in compact: the table row above carries the
+           avatar, the name, the badges and the two action buttons. -->
+      <div v-if="!compact" class="flex items-center gap-3">
         <img v-if="node.avatar_url" :src="node.avatar_url" alt="" class="w-11 h-11 rounded-full object-cover shrink-0" />
         <div
           v-else
@@ -433,8 +455,8 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
         </div>
       </div>
 
-      <!-- 3 headline KPIs -->
-      <div class="grid grid-cols-3 gap-2 text-center py-2 border-y border-slate-100">
+      <!-- 3 headline KPIs — columns 3-5 of the table row in compact mode. -->
+      <div v-if="!compact" class="grid grid-cols-3 gap-2 text-center py-2 border-y border-slate-100">
         <div>
           <p class="text-lg font-bold text-slate-900 leading-none">{{ node.client_count }}</p>
           <p class="text-[10px] text-slate-400 font-bold mt-1">ลูกค้า</p>
@@ -460,7 +482,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
                     keeps its suffix because for that figure it is true and
                     load-bearing (pending commission is excluded).
       -->
-      <div class="grid grid-cols-2 gap-2 text-center">
+      <div v-if="!compact" class="grid grid-cols-2 gap-2 text-center">
         <div class="rounded-lg bg-slate-50 py-1.5">
           <p class="text-sm font-bold text-slate-900 leading-none">฿{{ formatBaht(node.total_sales_satang) }}</p>
           <p class="text-[10px] text-slate-400 font-bold mt-1">ยอดขาย</p>
@@ -478,7 +500,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
         card says nothing: a caveat that is always on screen is a caveat
         nobody reads.
       -->
-      <p v-if="node.closed_deals_without_order > 0" class="text-[10px] text-slate-500 leading-snug">
+      <p v-if="node.closed_deals_without_order > 0" class="text-[11px] text-slate-500 leading-snug">
         อีก {{ node.closed_deals_without_order.toLocaleString('th-TH') }} ดีลปิดแล้วแต่ยังไม่มีคำสั่งซื้อ ยอดนี้จึงยังไม่รวม
       </p>
 

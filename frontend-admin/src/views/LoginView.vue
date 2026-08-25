@@ -121,12 +121,22 @@ async function handleSubmit() {
         </button>
       </div>
 
+      <!-- ONE pill, and no company name — deliberately.
+
+           The Agent Portal's login card names the company, because that page
+           resolves a tenant theme before it renders (?company=<slug>, or a
+           cached slug) and an agent belongs to exactly one company.
+
+           This console does not and cannot. There is no theme store in this
+           app, a Super Admin belongs to no company at all, and a Company
+           Admin's company is unknown until they have authenticated. The
+           previous hardcoded "Thai Life" was therefore wrong for every
+           operator of this platform except one — and a fallback string would
+           be the same mistake with extra steps. The company an admin is
+           working in is chosen in the header AFTER login (ADR-038). -->
       <div class="mt-8 flex items-center gap-2">
         <span class="inline-flex items-center px-3 py-1 rounded-full border border-slate-200 text-xs font-bold text-slate-500">
           Admin Portal
-        </span>
-        <span class="inline-flex items-center px-3 py-1 rounded-full border border-slate-200 text-xs font-bold text-slate-500">
-          Thai Life
         </span>
       </div>
 
@@ -155,6 +165,7 @@ async function handleSubmit() {
           </label>
           <div class="relative">
             <Icon name="mail" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <!-- Generic placeholder — see the Agent Portal's LoginView. -->
             <input
               id="email"
               v-model="email"
@@ -163,7 +174,7 @@ async function handleSubmit() {
               required
               class="w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
               :class="emailError ? 'border-rose-300' : 'border-slate-200'"
-              placeholder="admin@thailife.test"
+              placeholder="name@example.com"
             />
           </div>
         </div>

@@ -283,4 +283,30 @@ enum Ability: string
      * case.
      */
     case CommissionRateCapUpdate = 'commission.rate_cap.update';
+
+    // ---------------------------------------------------------------
+    // ADR-027 / TASK-139 — which payment gateway takes a company's money.
+    // ---------------------------------------------------------------
+
+    /**
+     * Configure and activate a company's payment gateway.
+     *
+     * SUPER ADMIN ONLY, and here the reasoning is the opposite of
+     * SettingsMailUpdate's rather than the same. That one is Super-Admin-only
+     * because the setting is platform infrastructure with no per-company
+     * scope to grant. This one is COMPLETELY per-company — and is
+     * Super-Admin-only anyway, on the human's instruction (2026-08-22),
+     * because of what it does: it names the bank account a company's customer
+     * revenue lands in.
+     *
+     * A Company Admin who could edit this could redirect their own company's
+     * income, and the change would look like an ordinary settings edit in
+     * every screen the platform has. That is not a permission worth granting
+     * for convenience.
+     *
+     * Covers both writing credentials and switching the active provider;
+     * they are not separable in any way that would help, since either alone
+     * can move where money goes.
+     */
+    case SettingsPaymentGatewayUpdate = 'settings.payment_gateway.update';
 }

@@ -45,6 +45,13 @@ class OrderResource extends JsonResource
             // orders created before the feature; every share surface falls
             // back to `public_pay_url`, which those customers already hold.
             'short_pay_url' => $this->shortUrl(),
+            // 2026-08-22 — lets the Admin payments screen open the client
+            // modal straight from an order row. Not a new disclosure: it is
+            // the id of a client this same reader can already open, and every
+            // reader of this Resource is inside the company (TenantScope +
+            // OrderPolicy). Read off the column, not the relation, so it is
+            // present whether or not `client` was eager-loaded.
+            'client_id' => $this->client_id,
             'client_name' => $this->whenLoaded('client', fn () => $this->client?->name),
             // TASK-212 — prefills <ShareLinkModal>'s recipient field so the
             // agent confirms an address rather than retyping one (human's
@@ -64,6 +71,39 @@ class OrderResource extends JsonResource
             ]),
             'referral_id' => $this->referral_id,
             'has_slip' => $this->slip_path !== null,
+            /*
+             * ADR-027 / TASK-139 — how this order is being paid, for staff.
+             *
+             * `payment_provider` and `gateway_mode` are the ORDER's own
+             * stamps, not the company's current setting: an order taken
+             * through a gateway the company has since switched away from
+             * must still say so, or its history reads as though it was
+             * always collected the way today's setting says.
+             *
+             * `gateway_mode` in particular is not decoration. A charge made
+             * with a test key looks exactly like revenue in every report
+             * unless the row it came from says otherwise.
+             */
+            'payment_provider' => $this->payment_provider?->value,
+            'payment_provider_label' => $this->payment_provider?->label(),
+            'gateway_mode' => $this->gateway_mode,
+            /*
+             * MONEY ARRIVED — true from the moment the charge id is claimed,
+             * which is BEFORE the order is confirmed.
+             *
+             * `has_slip` above answers "is there proof a person must judge";
+             * this answers "is there proof a machine already produced". Both
+             * are needed on the same screen, because an order with this true
+             * and `status` not paid is the one case where somebody has been
+             * charged and the sale is not closed.
+             *
+             * The charge id itself is deliberately NOT sent. Staff cannot act
+             * on it, it is looked up in the provider's dashboard by order
+             * number (which is what OmiseGateway puts in `description`), and
+             * an identifier that can mark an order paid does not need to be
+             * in every list payload.
+             */
+            'gateway_payment_received' => $this->hasGatewayPayment(),
             'paid_at' => $this->paid_at,
             // TASK-176 §1.3 — WHO confirmed this payment. Already recorded in
             // orders.verified_by_user_id since ADR-017; it was simply never

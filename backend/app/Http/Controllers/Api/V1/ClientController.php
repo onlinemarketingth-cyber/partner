@@ -2,13 +2,17 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\OrderStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Customer\StoreClientRequest;
 use App\Http\Requests\Customer\UpdateClientRequest;
 use App\Http\Resources\ClientResource;
 use App\Models\Client;
+use App\Models\ClientActivity;
+use App\Models\Order;
 use App\Services\Customer\ClientService;
 use App\Support\CompanyScopeFilter;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -43,9 +47,98 @@ class ClientController extends Controller
      */
     private const RELATIONS = ['referrals.product', 'referrals.agent', 'referrals.coAgent', 'category'];
 
+    /**
+     * What a SINGLE client additionally arrives with.
+     *
+     * ── THE ORDER WAS ALWAYS IN THE RESOURCE AND NEVER IN THE PAYLOAD ──
+     *
+     * Human, 2026-08-22: "ผมเช็คได้ยังไงว่าลูกค้าคนนี้อยู่ในสถานะใด จ่ายเงิน
+     * หรือยัง รอทำอะไร ในหน้าเดียว".
+     *
+     * ReferralResource has carried an `order` block — status, amount, paid_at,
+     * has_slip, who verified it — since TASK-190. But it is `whenLoaded('orders')`,
+     * and `orders` was not in RELATIONS, so on this endpoint the key was simply
+     * ABSENT. Not null, not empty: absent. Every client the admin opened showed
+     * a sales stage with no answer to "has this person paid", and nothing looked
+     * broken from either side — the resource was doing exactly what it was told.
+     *
+     * This is the whole fix for the payment half of that question.
+     *
+     * ── WHY IT IS NOT IN RELATIONS ABOVE ──
+     *
+     * index() lists every client in the company. Orders would be a fourth
+     * eager-load across the entire list to fill a block the list does not
+     * render, growing the payload for nothing. The constant above is shared
+     * precisely so index and show cannot drift on what they BOTH need; this
+     * one is the honest statement that a detail view needs more.
+     *
+     * verifiedBy rides along because ReferralResource checks
+     * `relationLoaded('verifiedBy')` and prints "ไม่ทราบ" otherwise — without
+     * it the admin would see "confirmed by nobody" on every paid order.
+     */
+    private const DETAIL_RELATIONS = ['referrals.orders', 'referrals.orders.verifiedBy'];
+
+    /**
+     * Roll-ups the LIST needs, as scalar subqueries.
+     *
+     * ── WHY SUBQUERIES AND NOT RELATIONS (human, 2026-08-22) ──
+     *
+     * The client list showed a name, a phone and a status, and answering
+     * "who needs attention today" meant opening customers one at a time.
+     * It needs payment state and last-contact date per row.
+     *
+     * The obvious move — eager-load `orders` and `activities` — is the one
+     * DETAIL_RELATIONS above deliberately refuses, and for a reason that
+     * still holds: this endpoint returns every client in the company, and a
+     * relation attaches whole objects to each of them to render four words.
+     *
+     * A correlated scalar subquery is a different cost entirely. Each adds
+     * ONE value per row, no objects, no hydration, no N+1 — the database
+     * answers while it is already reading the row. Four of them cost less
+     * than one eager-loaded `orders` relation on a list of any real size.
+     *
+     * They are also the honest shape for the question: the row does not want
+     * the orders, it wants to know whether any of them is waiting.
+     */
+    private function withListRollups(Builder $query): Builder
+    {
+        $unpaidStatuses = [OrderStatus::Pending->value, OrderStatus::AwaitingVerification->value];
+
+        return $query->addSelect([
+            // Orders the customer still owes money on.
+            'unpaid_orders_count' => Order::withoutGlobalScopes()
+                ->selectRaw('COUNT(*)')
+                ->whereColumn('client_id', 'clients.id')
+                ->whereIn('status', $unpaidStatuses),
+            // ...and how much, so the row can say "รอชำระ ฿8,900" rather than
+            // making somebody open the customer to find out if it matters.
+            'unpaid_amount_satang' => Order::withoutGlobalScopes()
+                ->selectRaw('COALESCE(SUM(amount_satang), 0)')
+                ->whereColumn('client_id', 'clients.id')
+                ->whereIn('status', $unpaidStatuses),
+            // The only state blocked on US: a slip nobody has verified. It
+            // outranks the other two in the chip, because it is the one an
+            // admin can act on right now.
+            'awaiting_slip_orders_count' => Order::withoutGlobalScopes()
+                ->selectRaw('COUNT(*)')
+                ->whereColumn('client_id', 'clients.id')
+                ->where('status', OrderStatus::AwaitingVerification->value)
+                ->whereNotNull('slip_path'),
+            'paid_orders_count' => Order::withoutGlobalScopes()
+                ->selectRaw('COUNT(*)')
+                ->whereColumn('client_id', 'clients.id')
+                ->where('status', OrderStatus::Paid->value),
+            // Who has been left alone. `activities` is the contact log, so
+            // MAX(occurred_at) is "last time anybody touched this person".
+            'last_activity_at' => ClientActivity::withoutGlobalScopes()
+                ->selectRaw('MAX(occurred_at)')
+                ->whereColumn('client_id', 'clients.id'),
+        ]);
+    }
+
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = Client::query()->with(self::RELATIONS);
+        $query = $this->withListRollups(Client::query()->select('clients.*'))->with(self::RELATIONS);
 
         // TASK-209 — Super Admin's header company scope, applied in SQL.
         CompanyScopeFilter::apply($query, $request);
@@ -102,12 +195,17 @@ class ClientController extends Controller
 
     public function show(Client $client): ClientResource
     {
-        return new ClientResource($client->load(self::RELATIONS));
+        return new ClientResource($client->load([...self::RELATIONS, ...self::DETAIL_RELATIONS]));
     }
 
     public function update(UpdateClientRequest $request, Client $client, ClientService $service): ClientResource
     {
-        return new ClientResource($service->update($client, $request->validated())->load(self::RELATIONS));
+        // Same relation set as show(): the Admin client modal re-renders from
+        // THIS response after a save, so dropping the detail relations here
+        // would blank the payment block the moment anybody edited a name.
+        return new ClientResource(
+            $service->update($client, $request->validated())->load([...self::RELATIONS, ...self::DETAIL_RELATIONS])
+        );
     }
 
     public function destroy(Client $client): Response

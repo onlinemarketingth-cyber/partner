@@ -138,6 +138,31 @@ async function mountView(agents: ReturnType<typeof makeAgent>[], clientsTotal: n
   return wrapper
 }
 
+/**
+ * Open every agent row and return the page text.
+ *
+ * ── WHY THIS HELPER APPEARED (2026-08-22) ──
+ *
+ * The top level became a TABLE (human: "ตอนนี้ดูยากมาก" — six cards of ~25
+ * numbers each, none comparable to another). The per-stage counts, the money
+ * LABELS and the uncounted-deals sentence moved into the row's expansion,
+ * which is SalesTeamCard in compact mode.
+ *
+ * Four cases below started failing on that change, and that is the system
+ * working exactly as intended: they were written so a redesign could not
+ * quietly drop the rules they defend. The rules are unchanged and still
+ * enforced — only the click needed to reach them is new. Nothing here was
+ * weakened to make the redesign pass.
+ */
+async function expandedText(wrapper: ReturnType<typeof mount>): Promise<string> {
+  for (const row of wrapper.findAll('tbody tr')) {
+    await row.trigger('click')
+  }
+  await flushPromises()
+
+  return wrapper.text()
+}
+
 beforeEach(() => {
   get.mockReset()
 })
@@ -170,7 +195,7 @@ describe('ลูกค้ารวม header KPI', () => {
 describe('per-agent stage strip', () => {
   it('renders ALL eight stages the server sent, with their Thai labels', async () => {
     const wrapper = await mountView([makeAgent()])
-    const text = wrapper.text()
+    const text = await expandedText(wrapper)
 
     for (const key of Object.keys(ALL_EIGHT_STAGES)) {
       expect(text).toContain(PIPELINE_STAGE_LABELS_TH[key])
@@ -181,7 +206,7 @@ describe('per-agent stage strip', () => {
     const wrapper = await mountView([
       makeAgent({ deals_by_stage: { complete_registered: 2, complete_payment: 1 }, total_deals: 3 }),
     ])
-    const text = wrapper.text()
+    const text = await expandedText(wrapper)
 
     expect(text).toContain(PIPELINE_STAGE_LABELS_TH.complete_registered)
     expect(text).toContain(PIPELINE_STAGE_LABELS_TH.complete_payment)
@@ -235,7 +260,7 @@ describe('per-agent closed_deals_without_order disclosure', () => {
   it('states it as a sentence when the server reports any', async () => {
     const wrapper = await mountView([makeAgent({ closed_deals_without_order: 4 })])
 
-    expect(wrapper.text()).toContain('อีก 4 ดีลปิดแล้วแต่ยังไม่มีคำสั่งซื้อ')
+    expect(await expandedText(wrapper)).toContain('อีก 4 ดีลปิดแล้วแต่ยังไม่มีคำสั่งซื้อ')
   })
 
   it('says NOTHING when it is 0 — a permanent caveat is an ignored caveat', async () => {

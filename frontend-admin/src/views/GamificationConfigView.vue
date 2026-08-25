@@ -29,6 +29,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { fetchAllPages } from './agentEdit'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 interface GamificationRule {
@@ -106,13 +107,19 @@ async function loadAll() {
     const [r, b, u, ub, lt] = await Promise.all([
       api.get<{ data: GamificationRule[] }>(activeCompany.scopedPath('/gamification-rules')),
       api.get<{ data: Badge[] }>(activeCompany.scopedPath('/badges')),
-      api.get<{ data: AgentOption[] }>(activeCompany.scopedPath('/users')),
+      // fetchAllPages, not a bare GET (2026-08-22). UserController::index()
+      // paginates at 15 with no ?per_page support, so this loaded only the
+      // first page of the roster — the same bug found on the client list,
+      // where it surfaced as "Agent: #3". Here it silently truncates the
+      // agent picker instead, which is harder to notice and worse: an admin
+      // simply cannot find the person they are looking for.
+      fetchAllPages<AgentOption>('/users?include_inactive=1'),
       api.get<{ data: UserBadgeItem[] }>(activeCompany.scopedPath('/user-badges')),
       api.get<{ data: LevelThresholdItem[] }>(activeCompany.scopedPath('/level-thresholds')),
     ])
     rules.value = r.data
     badges.value = b.data
-    agents.value = u.data.filter((a) => a.role === 'agent' && a.is_active)
+    agents.value = u.filter((a) => a.role === 'agent' && a.is_active)
     awardedBadges.value = ub.data
     levelThresholds.value = lt.data.sort((a, z) => a.level_number - z.level_number)
   } catch (e) {

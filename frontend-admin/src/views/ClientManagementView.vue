@@ -14,11 +14,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
+import ClientDetailModal from '@/design-system/components/ClientDetailModal.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { fetchAllPages } from './agentEdit'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
 interface ReferralItem {
@@ -27,6 +29,23 @@ interface ReferralItem {
   branch: string
   preferred_time: string | null
   current_stage: { key: string; label: string }
+}
+
+/**
+ * Per-row roll-ups (2026-08-22), from ClientController::withListRollups().
+ *
+ * OPTIONAL, not merely nullable, and that distinction is the contract: the
+ * detail endpoint does not select them, so `undefined` means "nobody asked"
+ * and must render as "ไม่ทราบ" rather than as "no orders". Declaring them
+ * non-optional would let a confident wrong answer through — the same failure
+ * that hid the missing `order` relation for weeks.
+ */
+interface ClientRollups {
+  unpaid_orders_count?: number
+  unpaid_amount_satang?: number
+  awaiting_slip_orders_count?: number
+  paid_orders_count?: number
+  last_activity_at?: string | null
 }
 interface ClientItem {
   id: number
@@ -43,9 +62,11 @@ interface ClientItem {
   address: string | null
   province: string | null
   occupation: string | null
+  client_category_name?: string | null
   referrals: ReferralItem[]
   created_at: string
 }
+type ClientRow = ClientItem & ClientRollups
 interface AgentOption {
   id: number
   name: string
@@ -55,7 +76,7 @@ const loading = ref(false)
 const searching = ref(false)
 const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
-const clients = ref<ClientItem[]>([])
+const clients = ref<ClientRow[]>([])
 const agents = ref<AgentOption[]>([])
 
 // Search state — free-text (partial name/phone/email) + national ID
@@ -113,10 +134,32 @@ async function loadAll() {
   try {
     const [c, u] = await Promise.all([
       api.get<{ data: ClientItem[] }>(buildClientsPath()),
-      api.get<{ data: AgentOption[] }>(activeCompany.scopedPath('/users')),
+      /*
+       * fetchAllPages, NOT a bare GET (fixed 2026-08-22).
+       *
+       * The screenshot showed "Agent: #3" on three of four rows. Cause:
+       * UserController::index() calls paginate() with no argument — 15 per
+       * page, no ?per_page support — so this loaded only the first 15 users,
+       * ORDERED BY NAME, while clients come back ORDERED BY LATEST. There is
+       * no reason a recent client's referrer sits in the alphabetically-first
+       * fifteen, which is why the fallback fired for most rows rather than a
+       * few. Thai Life has 27 users; 12 of them were never in the map.
+       *
+       * agentEdit.ts documents this exact bug being found and fixed once
+       * before, and every other roster-consuming view was migrated to the
+       * helper. This call site was missed.
+       *
+       * include_inactive=1 for the same reason every sibling uses it: a
+       * deactivated agent is soft-deleted and excluded by default, so their
+       * clients would still miss the lookup even in a small company.
+       *
+       * No scopedPath() wrapper — fetchAllPages applies the company scope
+       * itself, and wrapping it again emits company_id twice.
+       */
+      fetchAllPages<AgentOption>('/users?include_inactive=1'),
     ])
     clients.value = c.data
-    agents.value = u.data
+    agents.value = u
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
   } finally {
@@ -173,8 +216,132 @@ onMounted(async () => {
   }
 })
 
+/*
+ * THE ROW OPENS A MODAL, NOT A PAGE (human, 2026-08-22).
+ *
+ * "ผมคลิ๊กรายละเอียดแล้วพบว่า หน้าจอลายละเอียดนั้นดูแล้วกลับมาดูอีกคน" —
+ * checking three customers meant three navigations and three trips back,
+ * losing this list's scroll position, its search and its filters each time.
+ *
+ * The full page (`client-file`) stays: SalesTeamView deep-links into it, and
+ * the `?open=` cross-link below still routes there because arriving from
+ * another screen with an id in the URL is a navigation, not a peek.
+ */
+const openClientId = ref<number | null>(null)
+
 function goToClientFile(client: ClientItem) {
-  router.push({ name: 'client-file', params: { id: client.id } })
+  openClientId.value = client.id
+}
+
+/**
+ * A saved edit must be reflected in the row behind the modal.
+ *
+ * Patching the row in place rather than refetching the list: the admin has a
+ * search term and filters applied, and a reload could drop the row they just
+ * edited out from under the open modal — or reorder the list beneath them.
+ */
+function onClientSaved(updated: { id: number; name: string; phone: string; email: string | null; status: { key: string; label: string } }) {
+  const row = clients.value.find((c) => c.id === updated.id)
+  if (!row) return
+
+  row.name = updated.name
+  row.phone = updated.phone
+  row.email = updated.email
+  row.status = updated.status
+}
+
+/**
+ * The payment chip, per client.
+ *
+ * ── ORDER OF THE BRANCHES IS THE DESIGN ──
+ *
+ * A slip nobody has verified outranks money nobody has sent, because the
+ * first is blocked on US and the second is blocked on the customer. An admin
+ * scanning this list is looking for work they can do right now.
+ *
+ * `undefined` is kept apart from 0 deliberately: the detail endpoint does not
+ * select these, and reporting "no orders" about a customer nobody counted
+ * would be a confident wrong answer.
+ */
+type PaymentTone = 'slip' | 'unpaid' | 'paid' | 'none' | 'unknown'
+
+interface PaymentChip {
+  tone: PaymentTone
+  label: string
+}
+
+function paymentChip(c: ClientRow): PaymentChip {
+  if (c.unpaid_orders_count === undefined) return { tone: 'unknown', label: 'ไม่ทราบ' }
+
+  if ((c.awaiting_slip_orders_count ?? 0) > 0) return { tone: 'slip', label: 'รอตรวจสลิป' }
+
+  if (c.unpaid_orders_count > 0) {
+    const satang = c.unpaid_amount_satang ?? 0
+    return { tone: 'unpaid', label: `รอชำระ ฿${(satang / 100).toLocaleString('th-TH')}` }
+  }
+
+  if ((c.paid_orders_count ?? 0) > 0) return { tone: 'paid', label: 'ชำระแล้ว' }
+
+  return { tone: 'none', label: '—' }
+}
+
+function paymentChipClasses(tone: PaymentTone): string {
+  switch (tone) {
+    case 'slip':
+      // Amber, never green: a slip is a CLAIM of payment. Showing it as
+      // settled is how an unverified transfer becomes revenue on a screen.
+      return 'bg-amber-50 text-amber-700'
+    case 'unpaid':
+      return 'bg-rose-50 text-rose-700'
+    case 'paid':
+      return 'bg-emerald-50 text-emerald-700'
+    default:
+      return 'bg-slate-100 text-slate-400'
+  }
+}
+
+/** The deal shown on the row: the newest, with a count of the rest. */
+function primaryDeal(c: ClientRow): ReferralItem | null {
+  return c.referrals.length > 0 ? (c.referrals[c.referrals.length - 1] ?? null) : null
+}
+
+/**
+ * "3 วันที่แล้ว", not "20 สิงหาคม 2569".
+ *
+ * The question this column answers is "who has been left alone", and a full
+ * date makes the reader do the subtraction before they can answer it.
+ */
+function relativeTime(iso: string | null | undefined): string {
+  if (iso === undefined) return 'ไม่ทราบ'
+  if (iso === null) return 'ยังไม่มีการติดต่อ'
+
+  const then = new Date(iso).getTime()
+  if (Number.isNaN(then)) return 'ยังไม่มีการติดต่อ'
+
+  const minutes = Math.max(0, Math.round((Date.now() - then) / 60000))
+  if (minutes < 60) return `${minutes} นาที`
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} ชม.`
+
+  const days = Math.round(hours / 24)
+  if (days < 7) return `${days} วัน`
+
+  const weeks = Math.round(days / 7)
+  if (weeks < 5) return `${weeks} สัปดาห์`
+
+  return `${Math.round(days / 30)} เดือน`
+}
+
+/** A row with work waiting on our side gets the attention treatment. */
+function needsAttention(c: ClientRow): boolean {
+  return (c.awaiting_slip_orders_count ?? 0) > 0
+}
+
+function agentNameFor(c: ClientRow): string {
+  // "ไม่ระบุ", never `#3`. A raw database id means nothing to the person
+  // reading it, and printing one is how a lookup miss got shipped.
+  return agentNameById.value.get(c.referring_agent_id) ?? 'ไม่ระบุ'
 }
 
 function statusBadgeClasses(statusKey: string): string {
@@ -275,35 +442,115 @@ watch(() => activeCompany.companyId, () => loadAll())
     <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
     <template v-else>
       <EmptyState v-if="!clients.length" icon="users" title="ไม่พบลูกค้า" class="mt-4" />
-      <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
-        <div
-          v-for="c in clients"
-          :key="c.id"
-          class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between hover:shadow-sm transition-shadow cursor-pointer"
-          @click="goToClientFile(c)"
-        >
-          <div class="flex items-start gap-3">
-            <Icon name="user" :size="18" class="text-brand-600 mt-0.5" />
-            <div>
-              <p class="text-sm font-bold text-slate-900">{{ c.name }}</p>
-              <p class="text-xs text-slate-400">
-                {{ c.phone }}<span v-if="c.email"> · {{ c.email }}</span> · Agent: {{ agentNameById.get(c.referring_agent_id) ?? `#${c.referring_agent_id}` }}
-              </p>
-              <p v-if="c.national_id_masked" class="text-xs text-slate-400 flex items-center gap-1">
-                <Icon name="shield" :size="12" /> {{ c.national_id_masked }}
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col items-end gap-1 shrink-0">
-            <span :class="['text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap', statusBadgeClasses(c.status.key)]">{{ c.status.label }}</span>
-            <span v-if="c.consent_given_at" class="text-xs font-bold text-emerald-600 flex items-center gap-1">
-              <Icon name="shield_check" :size="14" /> ให้ความยินยอมแล้ว
-            </span>
-            <span v-else class="text-xs font-bold text-amber-600">ยังไม่ยินยอม</span>
-          </div>
+      <!-- ═══ THE LIST (redesigned 2026-08-22) ═══
+           Human: "ดูยากมาก … แค่นี้ น้อยไปมาก".
+
+           A TABLE, not cards. Cards suit things read one at a time; a table
+           suits things compared to each other, which is what this screen is
+           for. The old row used justify-between, so on a 2554px screen the
+           name sat at one edge and its status at the other with ~1500px of
+           nothing between — reading one row meant sweeping the whole display,
+           and there were no columns to scan down instead.
+
+           Everything except the payment chip and the last-contact column was
+           ALREADY in the payload. `referrals` in particular — product name,
+           price and current stage, eager-loaded since TASK-049 and rendered
+           nowhere. The single biggest improvement here cost no backend work
+           at all; it was data arriving in the browser and being discarded. -->
+      <div class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full border-collapse min-w-[900px]">
+            <thead>
+              <tr class="bg-slate-50/70">
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200">ลูกค้า</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">สถานะ</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200">ดีล / สินค้า</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">การชำระเงิน</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">Agent</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">อัปเดตล่าสุด</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="c in clients"
+                :key="c.id"
+                class="cursor-pointer hover:bg-slate-50 transition-colors"
+                :class="needsAttention(c) ? 'bg-amber-50/40' : ''"
+                @click="goToClientFile(c)"
+              >
+                <td class="px-4 py-3.5 border-b border-slate-100" :class="needsAttention(c) ? 'shadow-[inset_3px_0_0_theme(colors.amber.500)]' : ''">
+                  <div class="flex items-center gap-2">
+                    <p class="text-[15px] font-bold text-slate-900">{{ c.name }}</p>
+                    <!-- Consent drops to an icon. It is a legal fact, not a
+                         signal that anybody must act — it was louder than the
+                         actual status before. -->
+                    <Icon
+                      v-if="c.consent_given_at"
+                      name="shield_check"
+                      :size="14"
+                      class="text-emerald-500 shrink-0"
+                      title="ให้ความยินยอมแล้ว"
+                    />
+                    <Icon v-else name="shield" :size="14" class="text-amber-400 shrink-0" title="ยังไม่ให้ความยินยอม" />
+                  </div>
+                  <!-- tabular-nums so digits line up down the column and the
+                       eye can compare them without reading each one. -->
+                  <p class="text-[13px] text-slate-500 tabular-nums">
+                    {{ c.phone || 'ไม่ระบุเบอร์' }}
+                    <span v-if="c.client_category_name" class="text-slate-400"> · {{ c.client_category_name }}</span>
+                  </p>
+                </td>
+
+                <td class="px-4 py-3.5 border-b border-slate-100">
+                  <span :class="['text-[12px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap', statusBadgeClasses(c.status.key)]">
+                    {{ c.status.label }}
+                  </span>
+                </td>
+
+                <td class="px-4 py-3.5 border-b border-slate-100">
+                  <template v-if="primaryDeal(c)">
+                    <p class="text-[14.5px] text-slate-800 leading-snug">
+                      {{ primaryDeal(c)?.product?.name ?? 'ไม่ระบุสินค้า' }}
+                      <span
+                        v-if="c.referrals.length > 1"
+                        class="text-[12px] font-bold text-slate-500 bg-slate-100 rounded px-1.5 ml-1 align-[1px]"
+                      >+{{ c.referrals.length - 1 }}</span>
+                    </p>
+                    <p class="text-[13px] text-slate-500">{{ primaryDeal(c)?.current_stage.label }}</p>
+                  </template>
+                  <!-- Spelled out: an empty cell reads as "failed to load",
+                       a dim sentence reads as an answer. -->
+                  <span v-else class="text-[13.5px] text-slate-300">ยังไม่มีดีล</span>
+                </td>
+
+                <td class="px-4 py-3.5 border-b border-slate-100">
+                  <span :class="['text-[12px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap tabular-nums', paymentChipClasses(paymentChip(c).tone)]">
+                    {{ paymentChip(c).label }}
+                  </span>
+                </td>
+
+                <td class="px-4 py-3.5 border-b border-slate-100 text-[14.5px]" :class="agentNameFor(c) === 'ไม่ระบุ' ? 'text-slate-300' : 'text-slate-700'">
+                  {{ agentNameFor(c) }}
+                </td>
+
+                <td class="px-4 py-3.5 border-b border-slate-100 text-[13.5px] text-slate-500 whitespace-nowrap tabular-nums">
+                  {{ relativeTime(c.last_activity_at) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
-      </TransitionGroup>
+      </div>
     </template>
     </template>
+
+    <!-- The client file, without leaving this list (2026-08-22). Renders
+         nothing until a row is clicked; `clientId` null IS the closed state,
+         so the modal owns no second "is it open" flag to fall out of sync. -->
+    <ClientDetailModal
+      :client-id="openClientId"
+      @close="openClientId = null"
+      @saved="onClientSaved"
+    />
   </main>
 </template>

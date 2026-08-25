@@ -48,6 +48,20 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const theme = useThemeStore()
+
+/**
+ * The company this login page belongs to, or null.
+ *
+ * Read from the theme the store resolved at boot (`?company=<slug>`, or the
+ * slug cached from a previous visit) — the same source the colours, logo and
+ * font on this card already come from, so the name cannot disagree with the
+ * branding around it.
+ *
+ * Null is a real answer, not a missing one: somebody who opened a bare
+ * /login with nothing cached has not told us which company they belong to,
+ * and the honest response is to show no company at all.
+ */
+const companyName = computed(() => theme.theme?.company?.name ?? null)
 const { lang, t, setLang } = useI18n()
 
 // TASK-055 / ADR-018 — per-company app-name override for the wordmark
@@ -234,8 +248,23 @@ async function handleSubmit() {
         <span class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted">
           {{ t('login_tag_portal', 'พอร์ทัลตัวแทน', 'Agent Portal') }}
         </span>
-        <span class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted">
-          Thai Life
+        <!-- TASK-055 / ADR-018 — the COMPANY's own name, from the theme this
+             page already loaded, never a hardcoded one.
+
+             This used to read "Thai Life" literally, which meant every other
+             tenant's agents signed in to a page naming somebody else's
+             company — on the one screen that is supposed to establish they
+             are in the right place.
+
+             `v-if` rather than a fallback string: when no slug resolved
+             (a bare /login with nothing cached) there is no truthful company
+             to name, and the pill is simply absent. Inventing a platform
+             name here would put a brand on a white-label page. -->
+        <span
+          v-if="companyName"
+          class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted"
+        >
+          {{ companyName }}
         </span>
       </div>
 
@@ -358,6 +387,12 @@ async function handleSubmit() {
             </label>
             <div class="relative">
               <Icon name="mail" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-card-subtle" />
+              <!-- The placeholder is GENERIC on purpose. This is a white-label
+                   portal: every company reaches this page under their own
+                   brand, so the previous "agent@thailife.test" showed one
+                   tenant's name — and a test account at that — to every other
+                   company's agents. `name@example.com` is already the
+                   convention in ProductShareView and ShareLinkModal. -->
               <input
                 id="email"
                 v-model="email"
@@ -366,7 +401,7 @@ async function handleSubmit() {
                 required
                 class="bg-surface-input w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
                 :class="emailError ? 'border-rose-300' : 'border-line-input'"
-                placeholder="agent@thailife.test"
+                placeholder="name@example.com"
               />
             </div>
           </div>

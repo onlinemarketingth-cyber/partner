@@ -85,11 +85,35 @@ const loading = ref(true)
 const errorMessage = ref('')
 const orders = ref<Order[]>([])
 
+/*
+ * FILTER BY PAYMENT STATE (2026-08-22).
+ *
+ * GET /orders has accepted `?status=` all along; this view called it bare, so
+ * an agent looking for "who still owes me money" scrolled the whole list and
+ * read status chips one row at a time. The filter was already built — nobody
+ * had connected it.
+ *
+ * `null` is the "ทั้งหมด" tab and sends no parameter at all, rather than a
+ * sentinel the backend would have to know about.
+ *
+ * Ordered by who is blocked, not by the enum: a slip waiting to be checked is
+ * work THIS agent has to do, while "รอชำระเงิน" waits on the customer.
+ */
+const STATUS_TABS: Array<{ status: string | null; label: string }> = [
+  { status: null, label: 'ทั้งหมด' },
+  { status: 'awaiting_verification', label: 'รอตรวจสลิป' },
+  { status: 'pending', label: 'รอชำระเงิน' },
+  { status: 'paid', label: 'ชำระแล้ว' },
+]
+
+const activeStatus = ref<string | null>(null)
+
 async function loadOrders() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const res = await api.get<ListResponse<Order>>('/orders')
+    const path = activeStatus.value === null ? '/orders' : `/orders?status=${activeStatus.value}`
+    const res = await api.get<ListResponse<Order>>(path)
     orders.value = res.data
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดคำสั่งซื้อไม่สำเร็จ')
@@ -97,6 +121,13 @@ async function loadOrders() {
     loading.value = false
   }
 }
+
+async function selectStatus(status: string | null) {
+  if (activeStatus.value === status) return
+  activeStatus.value = status
+  await loadOrders()
+}
+
 onMounted(loadOrders)
 
 function formatBaht(baht: number): string {
@@ -295,6 +326,28 @@ const hasOrders = computed(() => orders.value.length > 0)
       <!-- TASK-087 — navigation-bar action per Apple HIG; see NavBarAction.vue. -->
       <template #actions>
         <NavBarAction v-if="!showCreate" icon="plus" label="สร้างคำสั่งซื้อ" @click="openCreate" />
+      </template>
+
+      <!-- Filter by payment state (2026-08-22). In the #tabs slot so it
+           flattens into the header card instead of floating as a second
+           surface — same placement AnnouncementsListView uses for its
+           search box. Colours come from the token layer (ADR-023): a fixed
+           ramp step here would be the pale-chip failure again. -->
+      <template #tabs>
+        <div class="px-4 py-3 flex gap-1.5 overflow-x-auto">
+          <button
+            v-for="tab in STATUS_TABS"
+            :key="tab.status ?? 'all'"
+            type="button"
+            class="shrink-0 min-h-[38px] px-3.5 rounded-xl text-xs font-bold transition"
+            :class="activeStatus === tab.status
+              ? 'bg-surface-primary text-ink-primary'
+              : 'bg-surface-chip text-ink-chip hover:opacity-80'"
+            @click="selectStatus(tab.status)"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
       </template>
     </HeroHeader>
 

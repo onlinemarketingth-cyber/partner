@@ -969,6 +969,9 @@ const introLine = computed(() => {
           </label>
           <div class="relative">
             <Icon name="mail" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-card-subtle" />
+            <!-- Generic placeholder — same reason as LoginView: white-label,
+                 so no tenant name (and no test account) on a page every
+                 company's applicants see. -->
             <input
               id="email"
               ref="emailInputEl"
@@ -977,7 +980,7 @@ const introLine = computed(() => {
               autocomplete="username"
               class="bg-surface-input w-full pl-9 pr-9 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
               :class="emailError || emailTaken ? 'border-rose-300' : 'border-line-input'"
-              placeholder="agent@thailife.test"
+              placeholder="name@example.com"
               :aria-invalid="emailTaken ? 'true' : undefined"
               aria-describedby="email_status"
               @input="onEmailInput"

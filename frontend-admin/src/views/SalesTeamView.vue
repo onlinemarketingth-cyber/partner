@@ -50,6 +50,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
 import SalesTeamGrid from './SalesTeamGrid.vue'
+import SalesTeamTable from './SalesTeamTable.vue'
 // TASK-129 — the SAME edit form จัดการตัวแทน uses, mounted here so the card's
 // pencil opens it in place (human request 2026-08-05). It loads the agent
 // itself from GET /users/{id}: this page's rows come from
@@ -805,13 +806,25 @@ watch(() => activeCompany.companyId, () => { loadAll() })
              on cards painted from the "รออนุมัติเข้าทีม" tab (see
              SalesTeamCard's own docblock for why the buttons are scoped to
              one tab even though the amber chip itself is not). -->
-        <SalesTeamGrid
+        <!-- 2026-08-22 (human: "ตอนนี้ดูยากมาก") — the top level is a TABLE.
+             Each agent was a card of ~25 numbers, and because a card is an
+             independent block the same figure sat at a different pixel on
+             every one, so nothing could be compared. The sort controls above
+             have existed all along and were inert for exactly that reason.
+
+             SalesTeamGrid is NOT retired: it is still what the ขยายดูลูกทีม
+             modal below renders, where a handful of cards is the right shape
+             and there is nothing to compare across. -->
+        <SalesTeamTable
           v-else
           :nodes="listForActiveTab"
           :pre-sorted="isFlat"
           :in-leaders-tab="activeTab === 'leaders'"
           :show-approval-actions="activeTab === 'pending'"
+          :sort-field="sortField || null"
+          :sort-dir="sortDir"
           class="mt-4"
+          @sort="setSort"
         />
       </template>
     </template>

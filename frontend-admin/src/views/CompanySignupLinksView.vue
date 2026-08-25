@@ -197,11 +197,25 @@ function status(link: SignupLink): { label: string; ok: boolean } {
 
 onMounted(load)
 watch(() => activeCompany.companyId, load)
+
+/**
+ * Rendered inside LinksHubView's tab bar rather than as its own page
+ * (2026-08-22 — the three link screens became one page with three tabs).
+ *
+ * The hub owns the HeroHeader and the company-scope notice, so `embedded`
+ * suppresses this file's copies of both. Nothing else changes: every fetch,
+ * filter, mutation and watcher here is untouched. Rewriting them into the
+ * hub would have made a second copy of working code, which is the drift this
+ * codebase keeps paying for.
+ */
+defineProps<{ embedded?: boolean }>()
+
 </script>
 
 <template>
-  <main class="min-h-screen px-4 py-6 lg:px-8">
+  <main :class="embedded ? '' : 'min-h-screen px-4 py-6 lg:px-8'">
     <HeroHeader
+      v-if="!embedded"
       icon="link"
       title="ลิงก์สมัครตัวแทน"
       subtitle="ลิงก์เปิดรับสมัครตัวแทนของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ"
@@ -209,7 +223,7 @@ watch(() => activeCompany.companyId, load)
       storage-key="company-signup-links"
     />
 
-    <CompanyScopeNotice action="จัดการลิงก์สมัครตัวแทน" />
+    <CompanyScopeNotice v-if="!embedded" action="จัดการลิงก์สมัครตัวแทน" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

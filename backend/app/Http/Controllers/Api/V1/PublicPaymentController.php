@@ -5,12 +5,16 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\TrackedLinkGroup;
 use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Order\ChargeOrderRequest;
 use App\Http\Requests\Order\SubmitSlipRequest;
 use App\Http\Resources\PublicOrderResource;
 use App\Models\Company;
 use App\Models\Order;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Order\OrderService;
+use App\Services\Payment\GatewayPaymentService;
+use App\Services\Payment\Gateways\GatewayException;
+use Illuminate\Validation\ValidationException;
 
 // ADR-017 (TASK-054) — the PUBLIC, UNAUTHENTICATED payment page
 // (GET /pay/{token}, POST /pay/{token}/slip), registered outside
@@ -49,6 +53,35 @@ class PublicPaymentController extends Controller
             $request->file('slip'),
             $request->only(['shipping_recipient_name', 'shipping_phone', 'shipping_address']),
         );
+
+        return new PublicOrderResource($order->load(self::RELATIONS));
+    }
+
+    /**
+     * ADR-027 / TASK-139 — turn a browser-side payment token into a charge.
+     *
+     * PUBLIC and unauthenticated like its slip sibling, and throttled harder
+     * still (see routes/api.php): this one moves money.
+     *
+     * `payment_token` is a ONE-TIME token the provider's own JS produced in
+     * the customer's browser out of card details this server never sees and
+     * never will. That is the whole PCI position, and it is why there is no
+     * card number anywhere in this request.
+     *
+     * A GatewayException here carries the CUSTOMER'S message — "บัตรถูก
+     * ปฏิเสธ", "ยอดเกินวงเงิน" — passed through as a 422 validation error so
+     * the pay page shows it against the card field. A generic failure would
+     * turn a fixable decline into an abandoned sale.
+     */
+    public function charge(string $token, ChargeOrderRequest $request, GatewayPaymentService $payments): PublicOrderResource
+    {
+        $order = $this->resolve($token);
+
+        try {
+            $order = $payments->chargeWithToken($order, (string) $request->validated('payment_token'));
+        } catch (GatewayException $e) {
+            throw ValidationException::withMessages(['payment_token' => $e->getMessage()]);
+        }
 
         return new PublicOrderResource($order->load(self::RELATIONS));
     }

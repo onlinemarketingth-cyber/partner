@@ -43,6 +43,20 @@ class Company extends Model
         'default_pipeline_template_id',
     ];
 
+    /**
+     * ADR-027 — the column defaults to 'manual' in the database, but a
+     * DB-level default is not hydrated back onto the model that INSERTed the
+     * row. Without this a freshly created Company reads null here, and
+     * anything asking "how does this company take money" gets no answer
+     * during the request that created it. Same fix, same reason, as
+     * User::$attributes['email_notifications_enabled'].
+     *
+     * @var array<string, mixed>
+     */
+    protected $attributes = [
+        'payment_provider' => 'manual',
+    ];
+
     protected function casts(): array
     {
         return [

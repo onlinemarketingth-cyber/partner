@@ -16,198 +16,78 @@
  * payload for privileged viewers — fall back to national_id_masked
  * otherwise. health_notes stays in its own PDPA-flagged sub-box.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
-
-interface ReferralItem {
-  id: number
-  product: { id: number; name: string; price_satang: number } | null
-  agent: { id: number; name: string } | null
-  /*
-   * TASK-174 — OPTIONAL, not merely nullable, and that is the entire
-   * mechanism by which this screen stops showing a co-agent once the
-   * company's split is switched off.
-   *
-   * `ReferralResource` OMITS both keys while the switch is off (it does not
-   * null them — the stored `co_agent_id` is deliberately preserved, spec §3),
-   * so `r.co_agent` is `undefined` here and every `v-if="r.co_agent"` below
-   * simply does not render. This screen therefore asks nothing: it does not
-   * fetch the flag and does not repeat the predicate, because a second copy
-   * of the rule is precisely what spec §4 forbids — the absent key IS the
-   * server's answer.
-   *
-   * Declaring these `| null` instead would tell TS a missing field is a real
-   * value, which is how a stale split gets rendered as "แบ่ง undefined%".
-   */
-  co_agent?: { id: number; name: string } | null
-  split_percentage?: number | null
-  branch: string
-  preferred_time: string | null
-  current_stage: { key: string; label: string }
-  meeting_number: number | null
-  submitted_at: string
-}
-interface ClientDetail {
-  id: number
-  referring_agent_id: number
-  name: string
-  phone: string
-  email: string | null
-  national_id_masked: string | null
-  // Only present for privileged viewers (Section 6) — may be absent.
-  national_id?: string | null
-  consent_given_at: string | null
-  health_notes: string | null
-  status: { key: string; label: string }
-  lead_source: string | null
-  date_of_birth: string | null
-  address: string | null
-  province: string | null
-  occupation: string | null
-  referrals: ReferralItem[]
-  created_at: string
-}
-interface ClientDocumentItem {
-  id: number
-  original_filename: string
-  size_bytes: number
-}
-interface ClientActivityItem {
-  id: number
-  logged_by_name: string
-  type: { key: string; label: string }
-  summary: string
-  occurred_at: string
-  follow_up_at: string | null
-}
-interface StageLogItem {
-  id: number
-  from_stage: { key: string; label: string } | null
-  to_stage: { key: string; label: string }
-  changed_by: { id: number; name: string } | null
-  changed_at: string
-}
+/*
+ * ── EVERYTHING THIS PAGE KNOWS NOW LIVES IN A COMPOSABLE (2026-08-22) ──
+ *
+ * The client detail gained a SECOND surface: ClientDetailModal, opened from
+ * the client list so an admin can check several people without navigating
+ * back each time. Two surfaces meant the interfaces, the three-endpoint
+ * load, the related-agent dedupe, the stage-log cache and every formatter
+ * were about to exist twice.
+ *
+ * That is the exact shape of the bug fixed earlier the same day in the
+ * notification link resolver: two copies of one rule, and nobody updates the
+ * second. So the knowledge moved to composables/useClientFile.ts and both
+ * surfaces read it; this file kept only its layout.
+ *
+ * Nothing about what this page DISPLAYS changed in that move, with one
+ * addition: the deal list now states payment and what is being waited on,
+ * because ClientController finally eager-loads the order the resource has
+ * always been ready to send.
+ */
+import {
+  formatDate,
+  formatDateTime,
+  formatMoney,
+  formatSize,
+  paymentBadgeClasses,
+  statusBadgeClasses,
+  useClientFile,
+  type ClientDocumentItem,
+} from '@/composables/useClientFile'
 
 const route = useRoute()
 const router = useRouter()
 
 const clientId = computed(() => Number(route.params.id))
 
-const loading = ref(false)
-const hasLoadedOnce = ref(false)
-const errorMessage = ref('')
-const client = ref<ClientDetail | null>(null)
-const documents = ref<ClientDocumentItem[]>([])
-const activities = ref<ClientActivityItem[]>([])
+const file = useClientFile()
+const {
+  loading,
+  hasLoadedOnce,
+  errorMessage,
+  client,
+  documents,
+  activities,
+  expandedReferralId,
+  stageLogsByReferral,
+  loadingLogsFor,
+  relatedAgents,
+  nationalIdDisplay,
+  referralSummaries,
+} = file
 
-async function loadAll() {
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const [c, docs, acts] = await Promise.all([
-      api.get<{ data: ClientDetail }>(`/clients/${clientId.value}`),
-      api.get<{ data: ClientDocumentItem[] }>(`/clients/${clientId.value}/documents`),
-      api.get<{ data: ClientActivityItem[] }>(`/clients/${clientId.value}/activities`),
-    ])
-    client.value = c.data
-    documents.value = docs.data
-    activities.value = acts.data
-  } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
-  } finally {
-    loading.value = false
-    hasLoadedOnce.value = true
-  }
-}
-onMounted(loadAll)
+const toggleStageLogs = file.toggleStageLogs
+
+onMounted(() => file.load(clientId.value))
 
 const kpis = computed(() => {
   const c = client.value
   if (!c) return []
+
   return [
     { label: 'ดีล/สินค้าที่สนใจ', value: c.referrals.length },
     { label: 'Agent ที่เกี่ยวข้อง', value: relatedAgents.value.length },
     { label: 'เอกสารแนบ', value: documents.value.length },
   ]
 })
-
-// Section c — distinct agents touching this client: every referral's
-// selling agent + co-agent, plus the referring agent. Deduped by id.
-// Visually answers "1 ลูกค้า มีหลาย agent". referring agent has no name
-// in the payload beyond an id, so it shows as "#id" unless that same
-// person also appears as a seller/co-seller on some referral.
-interface RelatedAgent {
-  id: number
-  name: string
-  isReferring: boolean
-  roles: string[]
-}
-const relatedAgents = computed<RelatedAgent[]>(() => {
-  const c = client.value
-  if (!c) return []
-  const byId = new Map<number, RelatedAgent>()
-  const add = (id: number, name: string, role: string) => {
-    const existing = byId.get(id)
-    if (existing) {
-      if (!existing.roles.includes(role)) existing.roles.push(role)
-    } else {
-      byId.set(id, { id, name, isReferring: false, roles: [role] })
-    }
-  }
-  for (const r of c.referrals) {
-    if (r.agent) add(r.agent.id, r.agent.name, 'ผู้ขาย')
-    if (r.co_agent) add(r.co_agent.id, r.co_agent.name, 'ผู้ขายร่วม')
-  }
-  const ref = byId.get(c.referring_agent_id)
-  if (ref) {
-    ref.isReferring = true
-    if (!ref.roles.includes('ผู้แนะนำ')) ref.roles.push('ผู้แนะนำ')
-  } else {
-    byId.set(c.referring_agent_id, {
-      id: c.referring_agent_id,
-      name: `#${c.referring_agent_id}`,
-      isReferring: true,
-      roles: ['ผู้แนะนำ'],
-    })
-  }
-  return [...byId.values()]
-})
-
-const nationalIdDisplay = computed(() => {
-  const c = client.value
-  if (!c) return 'ยังไม่ระบุ'
-  return c.national_id ?? c.national_id_masked ?? 'ยังไม่ระบุ'
-})
-
-// ── Per-referral stage-log timeline (sales-process audit) ──────────
-// Lazy-load + cache per referral id — re-expanding never refetches.
-const expandedReferralId = ref<number | null>(null)
-const stageLogsByReferral = ref<Record<number, StageLogItem[]>>({})
-const loadingLogsFor = ref<number | null>(null)
-
-async function toggleStageLogs(referralId: number) {
-  if (expandedReferralId.value === referralId) {
-    expandedReferralId.value = null
-    return
-  }
-  expandedReferralId.value = referralId
-  if (stageLogsByReferral.value[referralId]) return
-
-  loadingLogsFor.value = referralId
-  try {
-    const res = await api.get<{ data: StageLogItem[] }>(`/referrals/${referralId}/stage-logs`)
-    stageLogsByReferral.value[referralId] = res.data
-  } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดประวัติไม่สำเร็จ (${e.status})` : 'โหลดประวัติไม่สำเร็จ'
-  } finally {
-    loadingLogsFor.value = null
-  }
-}
 
 function goToPipeline(referralId: number) {
   router.push({ name: 'referral-pipeline-management', query: { open: String(referralId) } })
@@ -223,36 +103,6 @@ async function downloadDocument(doc: ClientDocumentItem) {
     errorMessage.value = e instanceof ApiError ? `ดาวน์โหลดไม่สำเร็จ (${e.status})` : 'ดาวน์โหลดไม่สำเร็จ'
   }
 }
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-function formatDateTime(iso: string | null): string {
-  if (!iso) return 'ยังไม่ระบุ'
-  return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
-}
-function formatDate(iso: string | null): string {
-  if (!iso) return 'ยังไม่ระบุ'
-  return new Date(iso).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })
-}
-function formatMoney(satang: number): string {
-  // BR-3: amounts are integer satang — divide by 100 only for display.
-  return (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-function statusBadgeClasses(statusKey: string): string {
-  switch (statusKey) {
-    case 'interested':
-      return 'bg-emerald-50 text-emerald-700'
-    case 'not_interested':
-      return 'bg-rose-50 text-rose-600'
-    case 'contacted':
-      return 'bg-brand-50 text-brand-700'
-    default:
-      return 'bg-slate-100 text-slate-600'
-  }
-}
 </script>
 
 <template>
@@ -264,7 +114,7 @@ function statusBadgeClasses(statusKey: string): string {
         icon="user"
         :title="client?.name ?? 'แฟ้มทะเบียนลูกค้า'"
         subtitle="แฟ้มทะเบียนลูกค้า"
-        description="ดูอย่างเดียว — การแก้ไขข้อมูล/อัปโหลดเอกสารยังเป็นสิทธิ์ของ Agent Portal เท่านั้น"
+        description="ดูอย่างเดียวในหน้านี้ — แก้ไขข้อมูลได้จากหน้ารายชื่อลูกค้า (Super Admin / Company Admin)"
         :kpis="kpis"
         accent-color="brand"
         storage-key="admin-client-file"
@@ -344,6 +194,54 @@ function statusBadgeClasses(statusKey: string): string {
               <Icon name="shield" :size="14" class="text-amber-600" /> บันทึกสุขภาพ (PDPA — ข้อมูลอ่อนไหว)
             </span>
             {{ client.health_notes }}
+          </div>
+        </section>
+
+        <!-- ═══ a2. สถานะ · การชำระเงิน · รอดำเนินการ ═══
+             Human, 2026-08-22: "ผมเช็คได้ยังไงว่าลูกค้าคนนี้อยู่ในสถานะใด
+             จ่ายเงินหรือยัง รอทำอะไร ในหน้าเดียว".
+
+             The stage was always here; payment and "who is being waited on"
+             were not. The order block existed in ReferralResource the whole
+             time and ClientController never eager-loaded it, so the key was
+             absent rather than empty — see DETAIL_RELATIONS there.
+
+             Placed ABOVE the deal list on purpose: this is the question
+             somebody opens a client to answer, and the detail below is what
+             they read once they know the answer. -->
+        <section v-if="referralSummaries.length" class="bg-white/95 border border-slate-200 rounded-xl p-5 mt-4">
+          <h2 class="text-sm font-bold text-slate-700 flex items-center gap-2 mb-3">
+            <Icon name="deal" :size="16" class="text-brand-600" /> สถานะ · การชำระเงิน · รอดำเนินการ
+          </h2>
+          <div class="space-y-2">
+            <div v-for="s in referralSummaries" :key="s.referral.id" class="rounded-xl border border-slate-200 p-3">
+              <div class="flex items-start gap-2 flex-wrap">
+                <p class="text-sm font-bold text-slate-800 flex-1 min-w-0">
+                  {{ s.referral.product?.name ?? 'ไม่ระบุสินค้า' }}
+                </p>
+                <span :class="['text-xs font-bold px-2 py-0.5 rounded-lg border whitespace-nowrap', paymentBadgeClasses(s.payment)]">
+                  {{ s.paymentLabel }}
+                </span>
+              </div>
+              <div class="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                <p class="text-slate-600">
+                  <span class="text-slate-400 block">ขั้นตอนปัจจุบัน</span>
+                  <span class="font-bold">{{ s.stageLabel }}</span>
+                </p>
+                <p class="text-slate-600">
+                  <span class="text-slate-400 block">รอดำเนินการ</span>
+                  <span class="font-bold">{{ s.waitingOn }}</span>
+                </p>
+                <p class="text-slate-600">
+                  <span class="text-slate-400 block">มูลค่า</span>
+                  <span class="font-bold">{{ s.amountSatang === null ? 'ไม่ระบุ' : `฿${formatMoney(s.amountSatang)}` }}</span>
+                </p>
+              </div>
+              <p v-if="s.referral.order?.paid_at" class="mt-2 text-xs text-slate-400">
+                ชำระเมื่อ {{ formatDateTime(s.referral.order.paid_at) }}
+                <template v-if="s.referral.order.verified_by"> · ตรวจสอบโดย {{ s.referral.order.verified_by.name }}</template>
+              </p>
+            </div>
           </div>
         </section>
 

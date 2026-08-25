@@ -250,7 +250,10 @@ async function loadInviteLinks() {
 /** <AgentEditModal>'s "ดูในแท็บ ลิงก์ชวนทีม" shortcut — now a real navigation
  *  since the links list lives on its own route (AgentInviteLinksView.vue). */
 function showLinksForAgent(agentId: number) {
-  router.push({ name: 'agent-invite-links', query: { agent: String(agentId) } })
+  // The links page is one page with three tabs now; this jump aims at the
+  // team one. `agent` still filters it — AgentInviteLinksView reads the same
+  // query it always did, from the same route object.
+  router.push({ name: 'links-hub', query: { tab: 'team', agent: String(agentId) } })
 }
 
 // ═══ <AgentEditModal> (TASK-129) ═══

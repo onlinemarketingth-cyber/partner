@@ -165,7 +165,7 @@ class AbilityCatalogueTest extends TestCase
         $superAdmin = PermissionResolver::abilitiesFor(UserRole::SuperAdmin);
         $companyAdmin = PermissionResolver::abilitiesFor(UserRole::CompanyAdmin);
 
-        $this->assertCount(32, $superAdmin);
+        $this->assertCount(33, $superAdmin);
         $this->assertCount(29, $companyAdmin);
 
         $this->assertContains(Ability::ReportPlatformView, $superAdmin);
@@ -173,16 +173,30 @@ class AbilityCatalogueTest extends TestCase
         $this->assertContains(Ability::SettingsMailUpdate, $superAdmin);
         $this->assertNotContains(Ability::SettingsMailUpdate, $companyAdmin);
         $this->assertContains(Ability::CommissionRateCapUpdate, $superAdmin);
+        /*
+         * ADR-027 — names the bank account a company's customer revenue lands
+         * in. Super Admin only, and unlike its two neighbours above NOT
+         * because the setting is platform-wide: this one is entirely per
+         * company. It is withheld from Company Admin because a Company Admin
+         * who could edit it could redirect their own company's income, and the
+         * change would look like an ordinary settings edit on every screen.
+         */
+        $this->assertContains(Ability::SettingsPaymentGatewayUpdate, $superAdmin);
+        $this->assertNotContains(Ability::SettingsPaymentGatewayUpdate, $companyAdmin);
         $this->assertNotContains(Ability::CommissionRateCapUpdate, $companyAdmin);
 
-        // Company Admin's list is Super Admin's minus exactly those three
-        // cases — no other divergence exists today.
+        // Company Admin's list is Super Admin's minus exactly those FOUR
+        // cases — no other divergence exists today. Enumerated rather than
+        // derived, so a new Super-Admin-only grant cannot slip into the
+        // platform unnoticed: adding one here is a deliberate edit somebody
+        // has to justify, which is the whole purpose of this assertion.
         $this->assertEqualsCanonicalizing(
             array_values(array_filter(
                 $superAdmin,
                 fn (Ability $a) => $a !== Ability::ReportPlatformView
                     && $a !== Ability::SettingsMailUpdate
-                    && $a !== Ability::CommissionRateCapUpdate,
+                    && $a !== Ability::CommissionRateCapUpdate
+                    && $a !== Ability::SettingsPaymentGatewayUpdate,
             )),
             $companyAdmin,
         );

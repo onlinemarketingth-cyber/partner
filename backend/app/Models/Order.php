@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
+use App\Enums\PaymentProvider;
 use App\Models\Concerns\HasTrackedLink;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -64,6 +65,35 @@ class Order extends Model
         'shipping_recipient_name',
         'shipping_phone',
         'shipping_address',
+        // ADR-027 / TASK-139 — stamped ONCE by OrderService at creation from
+        // the company's active gateway, then never re-read from the company.
+        // A /pay link already in a customer's hand must not change what it
+        // asks for because an admin flipped a setting afterwards.
+        'payment_provider',
+        'gateway_mode',
+    ];
+
+    /*
+     * ADR-027 / TASK-139 — `gateway_charge_id` is DELIBERATELY ABSENT from
+     * $fillable.
+     *
+     * It is the idempotency key behind a UNIQUE index, and the only writer is
+     * GatewayPaymentService's conditional UPDATE. A charge id that could
+     * arrive through mass assignment is a charge id a request payload can
+     * choose, and choosing it means choosing whether a second webhook is
+     * treated as a duplicate — which is the guard, not a field.
+     */
+
+    /*
+     * The database's own defaults, mirrored so a model INSERTED in this
+     * process carries them too. Without this an Order::create() that does not
+     * mention `payment_provider` has it as null in memory even though the row
+     * says 'manual' — and the code that decides which pay page to render then
+     * reads null on the very request that created the order.
+     */
+    protected $attributes = [
+        'payment_provider' => 'manual',
+        'gateway_mode' => 'live',
     ];
 
     protected function casts(): array
@@ -71,10 +101,25 @@ class Order extends Model
         return [
             'status' => OrderStatus::class,
             'payment_method' => PaymentMethod::class,
+            'payment_provider' => PaymentProvider::class,
             'amount_satang' => 'integer',
             'paid_at' => 'datetime',
             'refunded_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Did money actually arrive through a gateway for this order?
+     *
+     * The charge id is the receipt. It is claimed at the database BEFORE the
+     * order is confirmed, so this can be true for a brief moment — or, in the
+     * rare case where confirmation itself fails, for longer — while `status`
+     * still says Pending. That gap is exactly why this exists: the public pay
+     * page must never invite a second card payment for money already taken.
+     */
+    public function hasGatewayPayment(): bool
+    {
+        return filled($this->gateway_charge_id);
     }
 
     /** An order can only be paid from these non-terminal states. */

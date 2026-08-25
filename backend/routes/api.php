@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
 use App\Http\Controllers\Api\V1\CompanyController;
 use App\Http\Controllers\Api\V1\CompanyInviteCodeController;
+use App\Http\Controllers\Api\V1\CompanyPaymentGatewayController;
 use App\Http\Controllers\Api\V1\CompanyThemeController;
 use App\Http\Controllers\Api\V1\ComplianceReportController;
 use App\Http\Controllers\Api\V1\ConfigHealthReportController;
@@ -62,6 +63,7 @@ use App\Http\Controllers\Api\V1\ModuleLessonQuizOptionController;
 use App\Http\Controllers\Api\V1\ModuleLessonQuizQuestionController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\OrderController;
+use App\Http\Controllers\Api\V1\PaymentWebhookController;
 use App\Http\Controllers\Api\V1\PipelineTemplateController;
 use App\Http\Controllers\Api\V1\PlatformCommissionSettingController;
 use App\Http\Controllers\Api\V1\PlatformMailSettingController;
@@ -230,6 +232,47 @@ Route::prefix('v1')->group(function () {
     Route::post('/pay/{token}/slip', [PublicPaymentController::class, 'submitSlip'])
         ->middleware('throttle:10,1')
         ->name('public-payment.slip');
+
+    /*
+     * ADR-027 / TASK-139 — the CARD half of the same public pay page.
+     *
+     * Throttled to 5/min rather than the slip's 10: each request here is a
+     * real charge attempt against the company's gateway account, and a
+     * stream of them from one address is either card testing or an attack on
+     * the company's provider-side fraud reputation. A person paying for one
+     * order does not need six attempts a minute.
+     *
+     * The body carries a one-time provider token, never a card number — see
+     * ChargeOrderRequest.
+     */
+    Route::post('/pay/{token}/charge', [PublicPaymentController::class, 'charge'])
+        ->middleware('throttle:5,1')
+        ->name('public-payment.charge');
+
+    /*
+     * ADR-027 / TASK-139 — WHERE A PAYMENT PROVIDER TELLS US MONEY ARRIVED.
+     *
+     * The highest-consequence unauthenticated route in this application: it
+     * can mark an order paid, which writes an immutable BR-4 commission
+     * ledger row. Flagged here as ADR-011 flags every unauthenticated
+     * endpoint, so it is never mistaken for an accident.
+     *
+     * Its ONLY protection is the provider's signature, verified in the
+     * controller against THAT COMPANY's own webhook secret. There is no
+     * permissive path and no environment in which the check is skipped.
+     *
+     * `{company}` is in the URL because the secret to verify against must be
+     * chosen before the payload can be trusted at all — reading it from the
+     * body would let a forger nominate the key their forgery is checked
+     * with.
+     *
+     * Throttled generously (120/min): a legitimate provider retrying a batch
+     * of events must not be throttled into looking like a failure, and the
+     * signature — not the rate limit — is what stops abuse.
+     */
+    Route::post('/webhooks/payments/{provider}/{company}', PaymentWebhookController::class)
+        ->middleware('throttle:120,1')
+        ->name('payment-webhooks.handle');
 
     // TASK-055 / ADR-018 — PUBLIC per-company theme by slug, for pre-login
     // white-label branding. Unauthenticated + throttled, resolved outside
@@ -965,6 +1008,10 @@ Route::prefix('v1')->group(function () {
         // side lives on the PUBLIC /pay/{token} routes registered outside
         // this auth:sanctum group.
         Route::get('/orders', [OrderController::class, 'index']);
+        // BEFORE /orders/{order} — a route parameter would swallow the word
+        // "summary" and try to resolve an Order with that id, which is a 404
+        // on a route that exists.
+        Route::get('/orders/summary', [OrderController::class, 'summary']);
         Route::post('/orders', [OrderController::class, 'store']);
         Route::get('/orders/{order}', [OrderController::class, 'show']);
         Route::post('/orders/{order}/confirm', [OrderController::class, 'confirm']);
@@ -998,6 +1045,18 @@ Route::prefix('v1')->group(function () {
         // enforce that gate themselves (show() via abort_unless, update()
         // via UpdatePlatformMailSettingRequest::authorize()), same
         // belt-and-suspenders shape as every other Settings* pair.
+        /*
+         * ADR-027 / TASK-139 — which gateway takes a company's money.
+         *
+         * Super Admin only, INCLUDING the read (see the controller): the list
+         * is a map of where every tenant's revenue goes. `{company}` is
+         * explicit because the only role allowed here has no company of its
+         * own.
+         */
+        Route::get('/companies/{company}/payment-gateways', [CompanyPaymentGatewayController::class, 'index']);
+        Route::put('/companies/{company}/payment-gateways/{provider}', [CompanyPaymentGatewayController::class, 'update']);
+        Route::post('/companies/{company}/payment-gateways/activate', [CompanyPaymentGatewayController::class, 'activate']);
+
         Route::get('/platform/mail-settings', [PlatformMailSettingController::class, 'show']);
         Route::put('/platform/mail-settings', [PlatformMailSettingController::class, 'update']);
         // TASK-201 — "ทดสอบส่งอีเมล" button. Same auth group/gate as the

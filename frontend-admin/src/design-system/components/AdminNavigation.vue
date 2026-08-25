@@ -134,11 +134,12 @@ const navItems: NavItem[] = [
       { name: 'agent-management', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } },
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
-      { name: 'agent-invite-links', icon: 'link', label: { th: 'ลิงก์ชวนทีม', en: 'Invite Links' } },
-      // TASK-233 — the company-wide signup link, beside the team one.
-      { name: 'company-signup-links', icon: 'link', label: { th: 'ลิงก์สมัครตัวแทน', en: 'Signup Links' } },
-      // TASK-234 — the stats view over every group of link.
-      { name: 'company-links', icon: 'chart', label: { th: 'ลิงก์ทั้งบริษัท', en: 'All Links' } },
+      // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
+      // ลิงก์ทั้งบริษัท) collapsed into one, because their names could not be
+      // told apart and the screens behind them were two CRUD surfaces and one
+      // analytics surface over the SAME links. Now three tabs on one page;
+      // the old routes redirect to the matching tab. See LinksHubView.
+      { name: 'links-hub', icon: 'link', label: { th: 'ลิงก์', en: 'Links' } },
       // TASK-050 (moved, human request 2026-07-23) — "ทีมขาย" leadership
       // cockpit lives as a sub-menu of "จัดการตัวแทน", right BEFORE
       // "ค่าคอมมิชชั่น", rather than as its own top-level pillar.
@@ -165,6 +166,11 @@ const navItems: NavItem[] = [
     subMenus: [
       { name: 'client-management', icon: 'user', label: { th: 'ลูกค้า', en: 'Clients' } },
       { name: 'referral-pipeline-management', icon: 'pipeline', label: { th: 'ดีล / Pipeline', en: 'Deals / Pipeline' } },
+      // Sits under ลูกค้า rather than under Commission on purpose: this is
+      // money coming IN from a customer, which is the same conversation as
+      // the deal and the client file. Commission is money going OUT to an
+      // agent, and it already has its own pillar.
+      { name: 'order-payments', icon: 'money', label: { th: 'คำสั่งซื้อ / การชำระเงิน', en: 'Orders / Payments' } },
     ],
   },
   // Untouched by TASK-043 (spec §4/§5) — stays a distinct top-level
@@ -233,6 +239,11 @@ const navItems: NavItem[] = [
       // not per-company) — visibleSubMenus/visibleActiveSubMenus filter
       // it out for Company Admin, who still sees "ธีม / แบรนด์" above.
       { name: 'mail-settings', icon: 'mail', label: { th: 'ตั้งค่า Email SMTP', en: 'Mail Settings' }, superAdminOnly: true },
+      // ADR-027 (TASK-139) — Super-Admin-only for the same reason as
+      // "ตั้งค่า Email SMTP" above, but for a stronger one: this screen
+      // holds the credentials each tenant's customer payments are taken
+      // with, and its READ is gated server-side too.
+      { name: 'payment-gateways', icon: 'credit_card', label: { th: 'ช่องทางรับชำระเงิน', en: 'Payment Gateways' }, superAdminOnly: true },
     ],
   },
   // ADR-033 (TASK-189) §2.1/F2 — voucher redemption lookup. Its own

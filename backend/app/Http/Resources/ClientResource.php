@@ -60,6 +60,44 @@ class ClientResource extends JsonResource
             // no referral yet, or several referrals for different
             // products, is represented exactly as-is — never collapsed
             // to one fake "status").
+            /*
+             * ── LIST ROLL-UPS (2026-08-22) ──
+             *
+             * Present only when ClientController::withListRollups() supplied
+             * them, i.e. on index(). `whenNotNull` on a subquery column: an
+             * endpoint that did not select them leaves the attribute absent
+             * rather than sending a fabricated 0, and the frontend renders
+             * "ไม่ทราบ" for absent instead of a confident wrong "no orders".
+             * Same undefined-vs-null discipline as `order` in
+             * ReferralResource — see useClientFile.ts.
+             *
+             * Cast explicitly: subquery aggregates come back as strings from
+             * MySQL and ints from SQLite, and a JSON contract that changes
+             * shape between environments is a bug that only appears in prod.
+             */
+            'unpaid_orders_count' => $this->when(
+                $this->unpaid_orders_count !== null,
+                fn () => (int) $this->unpaid_orders_count,
+            ),
+            'unpaid_amount_satang' => $this->when(
+                $this->unpaid_amount_satang !== null,
+                fn () => (int) $this->unpaid_amount_satang,
+            ),
+            'awaiting_slip_orders_count' => $this->when(
+                $this->awaiting_slip_orders_count !== null,
+                fn () => (int) $this->awaiting_slip_orders_count,
+            ),
+            'paid_orders_count' => $this->when(
+                $this->paid_orders_count !== null,
+                fn () => (int) $this->paid_orders_count,
+            ),
+            // Nullable on purpose even when selected: a client nobody has
+            // logged an activity for has no last-contact date, and "never"
+            // is a real answer the row shows as "ยังไม่มีการติดต่อ".
+            'last_activity_at' => $this->when(
+                array_key_exists('last_activity_at', $this->resource->getAttributes()),
+                fn () => $this->last_activity_at,
+            ),
             'referrals' => $this->whenLoaded('referrals', fn () => ReferralResource::collection($this->referrals)),
             'created_at' => $this->created_at,
         ];

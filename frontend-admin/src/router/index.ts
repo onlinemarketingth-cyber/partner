@@ -86,38 +86,42 @@ const router = createRouter({
       component: () => import('../views/AgentApprovalsView.vue'),
       meta: { navLabel: 'รออนุมัติ' },
     },
-    {
-      path: '/agents/invite-links',
-      name: 'agent-invite-links',
-      component: () => import('../views/AgentInviteLinksView.vue'),
-      meta: { navLabel: 'ลิงก์ชวนทีม' },
-    },
     /*
-     * TASK-233 — the company's OWN signup link, which had no screen at all
-     * before today (see CompanySignupLinksView's header). Sits next to
-     * "ลิงก์ชวนทีม" because an admin looking for one is looking for the
-     * other, and the difference between them — company-wide versus
-     * attributed to a team leader — is the thing they need to see side by
-     * side to pick correctly.
-     */
-    {
-      path: '/agents/signup-links',
-      name: 'company-signup-links',
-      component: () => import('../views/CompanySignupLinksView.vue'),
-      meta: { navLabel: 'ลิงก์สมัครตัวแทน' },
-    },
-    /*
-     * TASK-234 — every link the company has out in the world, in one table.
+     * 2026-08-22 — ONE links page with three tabs, replacing three menu
+     * entries nobody could tell apart by name (human request).
      *
-     * Six token tables existed and not one screen showed them together; the
-     * only counter visible anywhere was a sales-material `view_count`
-     * buried in a modal inside the product editor.
+     * They were never three unrelated screens: TrackedLinkGroup already
+     * contains company_signup and team_signup, so ลิงก์ทั้งบริษัท has always
+     * covered the links the other two manage — as numbers rather than as
+     * things you can act on. Two CRUD surfaces and one analytics surface,
+     * over one subject. See LinksHubView's docblock.
      */
     {
       path: '/agents/links',
-      name: 'company-links',
-      component: () => import('../views/CompanyLinksView.vue'),
-      meta: { navLabel: 'ลิงก์ทั้งบริษัท' },
+      name: 'links-hub',
+      component: () => import('../views/LinksHubView.vue'),
+      meta: { navLabel: 'ลิงก์' },
+    },
+    /*
+     * The three old addresses still resolve.
+     *
+     * Each was a real route for months and is in somebody's bookmarks and in
+     * at least one in-app push (AgentRosterView's "ดูในแท็บ ลิงก์ชวนทีม").
+     * Deleting them would turn a consolidation into a set of broken links —
+     * exactly what this page exists to stop happening to the COMPANY's links.
+     *
+     * `redirect` as a function so the incoming query survives: the invite
+     * route carries `?agent=<id>`, which the hub forwards to the team tab.
+     */
+    {
+      path: '/agents/invite-links',
+      name: 'agent-invite-links',
+      redirect: (to) => ({ name: 'links-hub', query: { ...to.query, tab: 'team' } }),
+    },
+    {
+      path: '/agents/signup-links',
+      name: 'company-signup-links',
+      redirect: (to) => ({ name: 'links-hub', query: { ...to.query, tab: 'signup' } }),
     },
     {
       path: '/gamification',
@@ -153,6 +157,15 @@ const router = createRouter({
       name: 'referral-pipeline-management',
       component: () => import('../views/ReferralPipelineManagementView.vue'),
       meta: { navLabel: 'Referral & Pipeline' },
+    },
+    // 2026-08-22 (human: "ระบบตอนนี้ดูเฉพาะลูกค้าที่ชำระมา รอชำระที่ไหน") —
+    // the Admin console had no order screen at all. GET /orders?status= and
+    // OrderPolicy were both already there; only the view was missing.
+    {
+      path: '/order-payments',
+      name: 'order-payments',
+      component: () => import('../views/OrderPaymentsView.vue'),
+      meta: { navLabel: 'คำสั่งซื้อ / การชำระเงิน' },
     },
     {
       path: '/commission',
@@ -304,6 +317,17 @@ const router = createRouter({
       name: 'mail-settings',
       component: () => import('../views/MailSettingsView.vue'),
       meta: { navLabel: 'ตั้งค่า Email SMTP', requiresSuperAdmin: true },
+    },
+    // ADR-027 (TASK-139) — per-company payment gateway credentials. Same
+    // `requiresSuperAdmin: true` convention as '/mail-settings' above (UX
+    // only — real enforcement is Ability::SettingsPaymentGatewayUpdate,
+    // which gates the READ here too, unlike most settings screens: the
+    // list is a map of where every tenant's revenue goes).
+    {
+      path: '/payment-gateways',
+      name: 'payment-gateways',
+      component: () => import('../views/PaymentGatewaySettingsView.vue'),
+      meta: { navLabel: 'ช่องทางรับชำระเงิน', requiresSuperAdmin: true },
     },
   ],
 })

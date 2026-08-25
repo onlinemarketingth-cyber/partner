@@ -33,6 +33,10 @@ import { generateQrDataUrl } from '@/utils/qrCode'
 // loadPublic() bails at resolveSlug(). The theme now rides along on the
 // order payload instead; see the `theme` field on PublicOrder.
 import { useThemeStore, type Theme } from '@/stores/theme'
+// ADR-027 (TASK-139) — Omise's own hosted card form. Loaded on demand from
+// inside that util, never at import time: most orders here are paid by bank
+// transfer and must not fetch a third-party script to do it.
+import { openCardForm } from '@/utils/omiseCard'
 
 const route = useRoute()
 const token = route.params.token as string
@@ -59,6 +63,38 @@ interface PublicVoucher {
   quota_remaining: number | null
   expires_at: string | null
 }
+/**
+ * ADR-027 (TASK-139) — how this order is being paid, from the server.
+ *
+ * `intent` is null whenever a card must NOT be offered: the order is on the
+ * manual bank-transfer flow, the company has switched its gateway off, the
+ * order is no longer payable, or money has already been taken. The page never
+ * decides that for itself — the same rule has to hold at the charge endpoint,
+ * and two copies of it would eventually disagree and show a form that cannot
+ * work.
+ */
+interface PaymentIntent {
+  kind: 'tokenize' | 'redirect' | 'qr'
+  amount_satang: number
+  public_key: string | null
+  redirect_url: string | null
+  extra: Record<string, unknown>
+}
+interface PublicGateway {
+  provider: string | null
+  /** 'test' | 'live' — shown to the customer, because a test charge is not a purchase. */
+  mode: string | null
+  /**
+   * Money has arrived through the gateway.
+   *
+   * Read INSTEAD of `status` when deciding whether to offer payment: the
+   * charge is recorded before the order is confirmed, so this can be true
+   * while status is still 'pending'. Offering a card form in that gap would
+   * charge somebody twice.
+   */
+  payment_received: boolean
+  intent: PaymentIntent | null
+}
 interface PublicOrder {
   order_number: string
   amount_satang: number
@@ -71,6 +107,8 @@ interface PublicOrder {
   client_name: string | null
   company_payment: CompanyPayment
   promptpay_payload: string
+  // ADR-027 (TASK-139) — which gateway this order is being paid through.
+  gateway: PublicGateway
   // ADR-033 (TASK-189) §2.5/D3 — whether the pay page must render the
   // shipping-address form, and the current values (so a customer who
   // already filled it in sees them on a re-visit).
@@ -413,7 +451,74 @@ const isCancelled = computed(() => order.value?.status === 'cancelled')
 // Awaiting verification means a slip is already in — either just uploaded or
 // previously submitted. Hide the upload form and show the "waiting" notice.
 const awaitingVerification = computed(() => uploaded.value || order.value?.status === 'awaiting_verification')
-const showUploadForm = computed(() => !isPaid.value && !isCancelled.value && !awaitingVerification.value)
+const showUploadForm = computed(
+  () => !isPaid.value && !isCancelled.value && !awaitingVerification.value && !paymentReceived.value,
+)
+
+// ── Card payment (ADR-027 / TASK-139) ───────────────────────────────────────
+//
+// The bank-transfer path below is UNTOUCHED and stays on screen alongside
+// this. A customer without a card, or one whose card is declined, still has
+// the account number and the slip upload they have always had — removing
+// that to make room for a card form would take away the only method that
+// works for most people on this platform today.
+const cardError = ref('')
+const charging = ref(false)
+
+/** True the moment money has arrived, even before the order says 'paid'. */
+const paymentReceived = computed(() => order.value?.gateway.payment_received === true)
+
+/** The card form is offered only when the SERVER says a charge is possible. */
+const cardIntent = computed(() => {
+  const gateway = order.value?.gateway
+  if (!gateway || gateway.intent?.kind !== 'tokenize' || !gateway.intent.public_key) return null
+  return gateway.intent
+})
+const isTestMode = computed(() => order.value?.gateway.mode === 'test')
+
+async function payByCard() {
+  const intent = cardIntent.value
+  const ord = order.value
+  if (!intent?.public_key || !ord || charging.value) return
+
+  cardError.value = ''
+  charging.value = true
+  try {
+    // Named cardToken, not token: `token` in this file is the pay LINK's
+    // token, and two different secrets sharing one name in one function is
+    // how the wrong one ends up in a URL.
+    const cardToken = await openCardForm({
+      publicKey: intent.public_key,
+      // BR-3 — satang all the way through, no conversion at any layer.
+      amountSatang: intent.amount_satang,
+      description: ord.product_name ?? ord.order_number,
+      merchantLabel: themeStore.theme?.company?.name ?? '',
+    })
+
+    // null = the customer closed the form. Not a failure, and showing a red
+    // message for it would tell them they had done something wrong.
+    if (cardToken === null) return
+
+    const res = await api.post<{ data: PublicOrder }>(`/pay/${token}/charge`, {
+      payment_token: cardToken,
+    })
+    order.value = res.data
+    await renderVoucherQr()
+  } catch (e) {
+    if (e instanceof ApiError && e.body && typeof e.body === 'object') {
+      const body = e.body as { message?: string; errors?: Record<string, string[]> }
+      // The provider's own decline reason, surfaced verbatim: "ยอดเกินวงเงิน"
+      // is something only the cardholder can act on, and a generic failure
+      // turns a fixable problem into an abandoned sale.
+      cardError.value =
+        body.errors?.payment_token?.[0] ?? body.message ?? 'ชำระเงินไม่สำเร็จ กรุณาลองใหม่หรือใช้บัตรอื่น'
+    } else {
+      cardError.value = e instanceof Error ? e.message : 'ชำระเงินไม่สำเร็จ กรุณาลองใหม่'
+    }
+  } finally {
+    charging.value = false
+  }
+}
 </script>
 
 <template>
@@ -541,6 +646,60 @@ const showUploadForm = computed(() => !isPaid.value && !isCancelled.value && !aw
         </div>
 
         <template v-else>
+          <!-- ADR-027 (TASK-139) — CARD PAYMENT.
+               First, because it is the method that finishes in one step; the
+               bank-transfer instructions below are untouched and remain the
+               fallback for a customer with no card or a declined one. -->
+          <div v-if="cardIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
+            <div class="flex items-center gap-2">
+              <Icon name="credit_card" :size="16" class="text-ink-brand" />
+              <p class="text-sm font-bold text-ink-card">ชำระด้วยบัตรเครดิต / เดบิต</p>
+            </div>
+
+            <!-- A test-mode charge is not a purchase, and the person about to
+                 type a card number is entitled to know which one this is. -->
+            <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
+              โหมดทดสอบ — รายการนี้จะไม่มีการเรียกเก็บเงินจริง
+            </p>
+
+            <div v-if="cardError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
+              <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+              <span>{{ cardError }}</span>
+            </div>
+
+            <button
+              type="button"
+              :disabled="charging"
+              class="w-full py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              @click="payByCard"
+            >
+              {{ charging ? 'กำลังดำเนินการ...' : `ชำระ ${formatBaht(order.amount_baht)} ด้วยบัตร` }}
+            </button>
+
+            <!-- Said plainly, because it is the reason this form is an
+                 iframe belonging to Omise rather than inputs belonging to
+                 us, and a customer typing a card number deserves to know. -->
+            <p class="text-xs text-ink-card-subtle text-center">
+              กรอกเลขบัตรในหน้าต่างที่ปลอดภัยของ Omise — ระบบของเราไม่เห็นและไม่เก็บเลขบัตรของคุณ
+            </p>
+          </div>
+
+          <!-- Money has arrived but the order is not marked paid yet. Rare,
+               and deliberately visible rather than hidden: the alternative is
+               a customer who has been charged looking at a payment form. -->
+          <div
+            v-if="paymentReceived && !isPaid"
+            class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-center gap-3"
+          >
+            <Icon name="check" :size="20" class="text-ink-brand shrink-0" />
+            <div>
+              <p class="text-sm font-bold text-ink-brand">ได้รับการชำระเงินของคุณแล้ว</p>
+              <p class="text-xs text-ink-card-muted">
+                กรุณาอย่าชำระซ้ำ — ระบบกำลังยืนยันคำสั่งซื้อ หากสถานะยังไม่เปลี่ยนภายใน 15 นาที กรุณาติดต่อผู้ขาย
+              </p>
+            </div>
+          </div>
+
           <!-- PromptPay QR -->
           <div v-if="order.payment_method === 'promptpay' && qrDataUrl" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
             <p class="text-sm font-bold text-ink-card">สแกนเพื่อชำระผ่าน PromptPay</p>

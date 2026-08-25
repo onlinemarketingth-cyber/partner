@@ -126,6 +126,9 @@ class PermissionResolver
             Ability::ReportPlatformView,
             Ability::SettingsMailUpdate,
             Ability::CommissionRateCapUpdate,
+            // ADR-027 — names the account a company's revenue lands in.
+            // Not granted to Company Admin: see the case's own docblock.
+            Ability::SettingsPaymentGatewayUpdate,
             Ability::ReportComplianceView,
             Ability::ReportConfigHealthView,
             Ability::SalesTeamOverviewView,

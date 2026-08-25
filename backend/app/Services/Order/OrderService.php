@@ -5,14 +5,17 @@ namespace App\Services\Order;
 use App\Enums\NotificationType;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
+use App\Enums\PaymentProvider;
 use App\Enums\PipelineStage;
 use App\Enums\TrackedLinkGroup;
+use App\Models\Company;
 use App\Models\Order;
 use App\Models\Referral;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Notification\NotificationService;
+use App\Services\Payment\CompanyPaymentGatewayService;
 use App\Services\Referral\PipelineService;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
@@ -56,7 +59,39 @@ class OrderService
         // every order has one from the moment it exists rather than the
         // first time somebody opens the share modal.
         private TrackedLinkService $trackedLinks,
+        // ADR-027 / TASK-139 — read ONCE per order, at creation, to stamp
+        // which gateway this order belongs to. See gatewayStampFor().
+        private CompanyPaymentGatewayService $paymentGateways,
     ) {}
+
+    /**
+     * Which gateway, and in which mode, this order is being created for.
+     *
+     * Manual whenever the company has no ACTIVE, VERIFIED gateway — failing
+     * closed onto the flow that cannot take money by mistake, rather than
+     * onto a card form backed by credentials nobody proved.
+     *
+     * `gateway_mode` is recorded per order rather than read from the settings
+     * row later, for the same reason as the provider: settings change and
+     * history does not. Without it a charge made with a test key is
+     * indistinguishable from revenue in every report this system produces.
+     *
+     * @return array{payment_provider: string, gateway_mode: string}
+     */
+    private function gatewayStampFor(int $companyId): array
+    {
+        $company = Company::withoutGlobalScopes()->find($companyId);
+        $config = $company ? $this->paymentGateways->activeConfig($company) : null;
+
+        if ($config === null) {
+            return ['payment_provider' => PaymentProvider::Manual->value, 'gateway_mode' => 'live'];
+        }
+
+        return [
+            'payment_provider' => $config['provider']->value,
+            'gateway_mode' => $config['is_live'] ? 'live' : 'test',
+        ];
+    }
 
     /**
      * Create an order for a referral. company_id/client_id/agent_id/
@@ -114,6 +149,21 @@ class OrderService
             'amount_satang' => $this->productPricingService->effectivePriceSatang($referral->product),
             'payment_method' => $method,
             'status' => OrderStatus::Pending,
+            /*
+             * ADR-027 / TASK-139 — stamped HERE, once, and never re-read
+             * from the company afterwards.
+             *
+             * The /pay link this order is about to mint goes into a
+             * customer's LINE chat with instructions they read. If the pay
+             * page resolved the provider live from the company, an admin
+             * switching gateways would silently re-write the payment
+             * instructions on every link already sent, mid-transaction.
+             *
+             * Falls back to Manual when nothing is configured or verified —
+             * the flow every company uses today, and the one that cannot
+             * take money by mistake.
+             */
+            ...$this->gatewayStampFor($referral->company_id),
         ]);
 
         // TASK-232 — the pay link's short code.
@@ -250,7 +300,24 @@ class OrderService
          * customer's behalf is the intended companion change; it is NOT in
          * here, because who may do that is its own decision.
          */
-        if ($order->status !== OrderStatus::AwaitingVerification) {
+        /*
+         * ADR-027 / TASK-139 — A GATEWAY CHARGE ID IS ALSO PROOF.
+         *
+         * The rule this check enforces is "proof of payment must be on file".
+         * Until now there was exactly one kind of proof, so the code could
+         * check for the state a slip upload produces. There are two now, and
+         * this is the rule stated, rather than one of its cases.
+         *
+         * The charge id is the STRONGER of the two: a slip is a photograph a
+         * person judges, while a charge id came back from the gateway's own
+         * API against the company's own account, and sits behind a UNIQUE
+         * index so it cannot be presented twice.
+         *
+         * GatewayPaymentService claims it BEFORE calling this method, on
+         * purpose — by the time control arrives here the proof is a committed
+         * row, not a promise from the caller.
+         */
+        if ($order->status !== OrderStatus::AwaitingVerification && ! $order->hasGatewayPayment()) {
             throw ValidationException::withMessages([
                 'status' => 'ยังไม่มีหลักฐานการชำระเงินในระบบ — ต้องมีสลิปก่อนจึงจะยืนยันการชำระเงินได้',
             ]);

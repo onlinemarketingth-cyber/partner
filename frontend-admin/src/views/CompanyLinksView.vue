@@ -155,11 +155,45 @@ function formatDate(iso: string | null): string {
 
 onMounted(load)
 watch(() => activeCompany.companyId, load)
+
+/**
+ * Rendered inside LinksHubView's tab bar rather than as its own page
+ * (2026-08-22 — the three link screens became one page with three tabs).
+ *
+ * The hub owns the HeroHeader and the company-scope notice, so `embedded`
+ * suppresses this file's copies of both. Nothing else changes: every fetch,
+ * filter, mutation and watcher here is untouched. Rewriting them into the
+ * hub would have made a second copy of working code, which is the drift this
+ * codebase keeps paying for.
+ */
+defineProps<{ embedded?: boolean }>()
+
+/**
+ * "จัดการลิงก์นี้" — the jump this page could never offer as a standalone
+ * screen (2026-08-22).
+ *
+ * Only two of the seven TrackedLinkGroup values have a management surface:
+ * company_signup and team_signup. Every other group is created elsewhere in
+ * the product (a product share from the agent portal, a payment link from an
+ * order) and has nothing to manage here — those rows get NO button rather
+ * than one that leads somewhere unhelpful. A control that appears on every
+ * row and works on two is worse than a control on two rows.
+ */
+const emit = defineEmits<{ manage: [tab: 'signup' | 'team'] }>()
+
+function manageTabFor(group: string): 'signup' | 'team' | null {
+  if (group === 'company_signup') return 'signup'
+  if (group === 'team_signup') return 'team'
+
+  return null
+}
+
 </script>
 
 <template>
-  <main class="min-h-screen px-4 py-6 lg:px-8">
+  <main :class="embedded ? '' : 'min-h-screen px-4 py-6 lg:px-8'">
     <HeroHeader
+      v-if="!embedded"
       icon="link"
       title="ลิงก์ทั้งบริษัท"
       subtitle="ลิงก์ทุกกลุ่มที่บริษัทนี้ปล่อยออกไป พร้อมจำนวนคนที่เปิดจริงและผลลัพธ์"
@@ -167,7 +201,7 @@ watch(() => activeCompany.companyId, load)
       storage-key="company-links"
     />
 
-    <CompanyScopeNotice action="ดูสถิติลิงก์" />
+    <CompanyScopeNotice v-if="!embedded" action="ดูสถิติลิงก์" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -245,6 +279,7 @@ watch(() => activeCompany.companyId, load)
             <th class="text-right px-4 py-2 font-bold">ผลลัพธ์</th>
             <th class="text-right px-4 py-2 font-bold">อัตรา</th>
             <th class="text-right px-4 py-2 font-bold">เปิดล่าสุด</th>
+            <th class="text-right px-4 py-2 font-bold"><span class="sr-only">จัดการ</span></th>
           </tr>
         </thead>
         <tbody>
@@ -263,6 +298,16 @@ watch(() => activeCompany.companyId, load)
             <td class="px-4 py-2 text-right font-bold text-emerald-600">{{ link.conversion_count }}</td>
             <td class="px-4 py-2 text-right text-slate-700">{{ rateLabel(link) }}</td>
             <td class="px-4 py-2 text-right text-slate-500 text-xs">{{ formatDate(link.last_clicked_at) }}</td>
+            <td class="px-4 py-2 text-right">
+              <button
+                v-if="manageTabFor(link.group)"
+                type="button"
+                class="min-h-[32px] px-2.5 rounded-lg text-[12px] font-bold text-brand-700 hover:bg-brand-50 transition whitespace-nowrap"
+                @click="emit('manage', manageTabFor(link.group)!)"
+              >
+                จัดการ
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
