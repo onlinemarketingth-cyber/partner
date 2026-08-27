@@ -41,6 +41,15 @@ return [
             env('FRONTEND_URL'),
             env('ADMIN_FRONTEND_URL'),
         ],
+        // 2026-08-27 — additional first-party origins the agent portal is
+        // served from, comma-separated in .env (e.g. the Parked Domain
+        // alias apps.liveto100club.com). Additive on purpose: it does NOT
+        // replace FRONTEND_URL, which config/services.php reads as the ONE
+        // canonical host for building public share/pay links — a share link
+        // must resolve to the same place for every recipient regardless of
+        // which domain the agent happened to be signed in to when minting
+        // it, so that value stays single-valued.
+        array_filter(array_map('trim', explode(',', (string) env('CORS_EXTRA_ORIGINS', '')))),
         env('APP_ENV') === 'local'
             ? ['http://agent.localhost:5178', 'http://admin.localhost:5179']
             : [],

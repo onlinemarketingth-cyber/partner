@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { api, ApiError, ensureCsrfCookie } from '@/api/client'
+import { api, ApiError, ensureCsrfCookie, setToken } from '@/api/client'
 import { forgetPortalChoice } from '@/utils/portalChoice'
 
 // Matches App\Enums\UserRole (backend). Kept as a string union rather than
@@ -146,7 +146,26 @@ export const useAuthStore = defineStore('auth', () => {
    */
   async function login(email: string, password: string, remember = false): Promise<void> {
     await ensureCsrfCookie()
-    const res = await api.post<{ data: AuthUser }>('/login', { email, password, remember })
+    const res = await api.post<{ data: AuthUser; token?: string }>('/login', {
+      email,
+      password,
+      remember,
+    })
+
+    /*
+     * 2026-08-27 — store the Bearer token the backend mints for this app
+     * (AuthController::login, gated on the X-Auth-Mode header the client
+     * sends). Set BEFORE user.value so no reactive watcher can fire a
+     * request in the window between "logged in" and "has a token".
+     *
+     * `token` is optional on the type, not on the wire: a build talking
+     * to a backend deployed before this change would receive no token,
+     * and calling setToken(undefined) would be worse than leaving the
+     * previous value alone — so a falsy token is simply not stored, and
+     * the first authenticated call 401s honestly instead of half-working.
+     */
+    if (res.token) setToken(res.token)
+
     user.value = res.data
   }
 
@@ -154,6 +173,13 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       await api.post('/logout')
     } finally {
+      // Cleared in `finally`, never only on success: if the revoke call
+      // fails (offline, server down) the person still pressed logout, and
+      // leaving a usable token in localStorage on a machine somebody is
+      // walking away from is the worst possible way to honour that. The
+      // server-side revoke is what makes it unusable elsewhere; this is
+      // what makes it gone from here.
+      setToken(null)
       user.value = null
       // A Super Admin's "stay in the Agent Portal" choice belongs to the
       // person, not to the browser. Cleared here so the next sign-in on

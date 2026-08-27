@@ -1,103 +1,127 @@
 /**
  * Base API client for Sync Vision Agent.
  *
- * Talks to the Laravel API (Sanctum, cookie-based SPA auth) at
- * VITE_API_BASE_URL. All endpoints live under /api/v1 per CLAUDE.md
- * Section 3 (API versioning).
+ * ── 2026-08-27: COOKIE SESSION -> BEARER TOKEN ──
  *
- * Business logic must never live here or in any Vue component — this
- * file only handles transport (CSRF cookie handshake, headers, JSON).
+ * This app is served from more than one first-party host
+ * (partner.syncvision.io and the Parked Domain alias
+ * apps.liveto100club.com). A Sanctum session cookie is HOST-ONLY by
+ * design, so a cookie set while visiting one of those hosts can never be
+ * read or sent by a page loaded from the other — that is a browser
+ * boundary, not a CORS setting, and no server config can move it.
+ *
+ * So the agent portal now authenticates with a Sanctum personal access
+ * token: /login returns one (the request opts in via X-Auth-Mode, see
+ * authHeaders below), it is stored client-side, and every subsequent call
+ * carries it in an Authorization header instead of relying on a cookie.
+ * Tokens are host-agnostic, so the same build works on any first-party
+ * domain.
+ *
+ * THE ADMIN CONSOLE (frontend-admin) IS DELIBERATELY UNCHANGED — it has
+ * its own copy of this file and stays on cookie-session auth. It runs on
+ * exactly one host, so it never had this problem, and leaving it alone
+ * keeps the blast radius of this change to one app.
+ *
+ * ── WHAT THIS TRADES AWAY ──
+ *
+ * An httpOnly cookie cannot be read by JavaScript; a token in
+ * localStorage can. That makes any XSS in this app a full session theft
+ * rather than a scoped nuisance, which is a real cost in an app that
+ * moves money. The mitigations that come with it: the token carries a
+ * server-side 12h expiry (Sanctum's default is none at all), logout
+ * revokes it server-side rather than merely forgetting it, and any 401
+ * purges it immediately (see notifyIfUnauthorized). None of that
+ * substitutes for not having XSS.
+ *
+ * All endpoints live under /api/v1 per CLAUDE.md Section 3 (API
+ * versioning). Business logic must never live here or in any Vue
+ * component — this file only handles transport (auth header, headers,
+ * JSON).
  */
 
 /**
  * TASK-241 — falls back to '' (relative / same-origin) when unset, rather
  * than trusting the env var is always a real host string.
  *
- * Every build to date has set `VITE_API_BASE_URL` explicitly (dev in
- * `.env`, prod in the gitignored `.env.production`), so this fallback has
- * never fired and changes nothing for `partner.syncvision.io` today. It
- * exists for a build meant to run under a NEW host that should call its
- * own origin's `/api` and `/sanctum` rather than a cross-origin API host
- * — e.g. an `.env.<name>` file that sets `VITE_API_BASE_URL=` (empty),
- * built with `vite build --mode <name>`. An empty API_BASE_URL makes
- * every `${API_BASE_URL}/api/v1${path}` template below resolve to a
- * clean relative `/api/v1${path}`, instead of the literal string
- * "undefined/api/v1${path}" a genuinely-missing env var would have
- * produced before this fallback existed.
+ * With token auth this may safely be an ABSOLUTE, cross-origin URL: there
+ * is no cookie to be blocked and no CSRF handshake to complete, only a
+ * CORS allowance on the server (config/cors.php's CORS_EXTRA_ORIGINS).
  */
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 
-function getCookie(name: string): string | null {
-  const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))
-  return match?.[2] ? decodeURIComponent(match[2]) : null
+/**
+ * Where the token lives between page loads.
+ *
+ * localStorage (not sessionStorage) so a refresh or a second tab does not
+ * throw the person back to the login screen. Every read/write is wrapped:
+ * a browser with storage blocked (private mode on some platforms, a
+ * hardened profile) must still run the app for the length of one page
+ * view rather than white-screen at module scope.
+ */
+const TOKEN_KEY = 'sva_token'
+
+let token: string | null = (() => {
+  try {
+    return localStorage.getItem(TOKEN_KEY)
+  } catch {
+    return null
+  }
+})()
+
+/** The token this tab is currently using, if any. */
+export function getToken(): string | null {
+  return token
 }
 
 /**
- * Delete a stale XSRF-TOKEN left over from the parent-domain cookie era.
+ * Store (or, with null, forget) the auth token.
  *
- * ── THE INCIDENT THIS FIXES (2026-08-21, production) ──
- *
- * ADR-039 step 5 removed SESSION_DOMAIN, so Laravel stopped issuing the
- * XSRF-TOKEN scoped to `.partner.syncvision.io` and started issuing a
- * host-only one. Every browser that had visited before was then holding
- * BOTH, with the same name and different scopes.
- *
- * `document.cookie` returns both, getCookie() above matches the FIRST, and
- * the first is whichever the browser feels like — in practice the stale one.
- * The client then sent a token belonging to a cookie the server no longer
- * issues, and every login died with 419 CSRF mismatch. Read-only pages were
- * unaffected, which is what made it look like a login bug rather than a
- * cookie bug.
- *
- * ── WHY THE APP HAS TO DO THIS AND NOT THE SERVER ──
- *
- * The server cannot delete a cookie it no longer scopes: a Set-Cookie that
- * clears the old one would have to name the old Domain, which is exactly
- * the thing we just stopped doing. The browser holding it is the only party
- * that can drop it, and JS may delete a parent-domain cookie by naming the
- * same domain. So this runs here, once, at module load.
- *
- * ── SELF-LIMITING ON PURPOSE ──
- *
- * Only fires when there is genuinely MORE THAN ONE cookie of this name. In
- * the steady state — everyone past the migration, or a browser that never
- * saw the old scope — it touches nothing at all and costs one string split.
- * Cookie-deleting code that runs unconditionally, forever, is the kind of
- * thing that quietly logs somebody out three years from now.
- *
- * Safe to delete this function once no active user can still be carrying a
- * cookie from before 2026-08-21.
+ * Called by stores/auth.ts on login and logout, and by
+ * notifyIfUnauthorized() below the moment the server tells us the token
+ * is no longer good.
  */
-function purgeDuplicateXsrfCookies(): void {
+export function setToken(next: string | null): void {
+  token = next
   try {
-    if (typeof document === 'undefined') return
-
-    const duplicates = document.cookie.split('; ').filter((c) => c.startsWith('XSRF-TOKEN=')).length
-    if (duplicates < 2) return
-
-    // Walk the parent domains of the current host and clear the name at each
-    // scope. The host-only cookie carries no Domain attribute, so none of
-    // these match it and the good one survives. Stops at two labels: a
-    // browser rejects a cookie set on a public suffix anyway.
-    const labels = window.location.hostname.split('.')
-    for (let i = 0; i <= labels.length - 2; i++) {
-      const domain = labels.slice(i).join('.')
-      document.cookie = `XSRF-TOKEN=; Max-Age=0; path=/; domain=.${domain}`
-    }
+    if (next) localStorage.setItem(TOKEN_KEY, next)
+    else localStorage.removeItem(TOKEN_KEY)
   } catch {
-    // A browser that will not let us read or write cookies is a browser
-    // where the app has larger problems than a stale token. Never throw
-    // from module scope — that white-screens everything downstream.
+    // In-memory `token` above is still correct for this page view, which
+    // is the most this browser can offer. Never throw from here.
   }
 }
 
-purgeDuplicateXsrfCookies()
-
-/** Must be called once (e.g. before login) to obtain the XSRF-TOKEN cookie. */
+/**
+ * KEPT AS A NO-OP ON PURPOSE — do not delete, and do not "clean up" the
+ * four call sites that still await it (LoginView, RegisterView x3).
+ *
+ * Those calls exist because Sanctum applied CSRF verification to every
+ * request coming from a stateful domain, including the pre-login public
+ * POSTs (register, resolve-invite-code, resend-verification). The agent
+ * portal's hosts are no longer stateful domains, so no CSRF token is
+ * required for any of them and there is nothing left to fetch.
+ *
+ * Leaving the function as a resolved promise means this transport change
+ * touches zero view files: fewer files changed is fewer places for a
+ * merge or a rebase to go wrong, and every one of those call sites is
+ * still CORRECT to call it if the auth mode is ever revisited. Delete it
+ * only when removing the call sites too, in a change that is about the
+ * views rather than about auth.
+ */
 export async function ensureCsrfCookie(): Promise<void> {
-  await fetch(`${API_BASE_URL}/sanctum/csrf-cookie`, {
-    credentials: 'include',
-  })
+  // Intentionally empty — see the docblock above.
+}
+
+function authHeaders(headers: Headers): Headers {
+  // The server mints a token ONLY for a request that asks for one
+  // (AuthController::login / LoginRequest::authenticate). The admin
+  // console never sends this, which is exactly how the two apps' auth
+  // modes stay apart on one shared backend. Harmless on every other
+  // endpoint, which simply ignores it.
+  headers.set('X-Auth-Mode', 'token')
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  return headers
 }
 
 export class ApiError extends Error {
@@ -111,37 +135,45 @@ export class ApiError extends Error {
 
 // Bug fix: the router guard only calls authStore.fetchUser() ONCE per
 // page load (status flips 'idle' -> 'ready' and stays there) — so if
-// the Sanctum session expires mid-use (cookie times out, backend
-// restarts, etc.), every subsequent API call 401s but the SPA keeps
-// showing stale page content with a confusing raw "(401)" error
-// instead of sending the person back to login. This is a transport-
-// layer concern (detecting the session died), not business logic, so
-// it's a plain callback hook here — main.ts wires it to the auth store
-// + router once, at boot. Excludes /me itself: a 401 there during the
-// normal "am I logged in?" check is expected and already handled by
-// authStore.fetchUser()'s own catch block, not an error to react to.
+// the token expires or is revoked mid-use, every subsequent API call
+// 401s but the SPA keeps showing stale page content with a confusing
+// raw "(401)" error instead of sending the person back to login. This is
+// a transport-layer concern (detecting the session died), not business
+// logic, so it's a plain callback hook here — main.ts wires it to the
+// auth store + router once, at boot. Excludes /me itself: a 401 there
+// during the normal "am I logged in?" check is expected and already
+// handled by authStore.fetchUser()'s own catch block, not an error to
+// react to.
 let unauthorizedHandler: (() => void) | null = null
+
 export function setUnauthorizedHandler(handler: () => void): void {
   unauthorizedHandler = handler
 }
+
 function notifyIfUnauthorized(path: string, status: number): void {
-  if (status === 401 && path !== '/me') {
-    unauthorizedHandler?.()
-  }
+  if (status !== 401) return
+
+  // 2026-08-27 — a 401 means this token is dead (expired, revoked, or
+  // revoked from another device). Drop it here rather than in the store:
+  // a stale value left in localStorage would be replayed on every
+  // subsequent page load and 401 again, which reads as "the app is
+  // broken" instead of "please sign in". Runs for /me too — the token is
+  // just as dead there — while the handler below still stays out of that
+  // path, which fetchUser() handles itself.
+  setToken(null)
+
+  if (path !== '/me') unauthorizedHandler?.()
 }
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers)
   headers.set('Accept', 'application/json')
   if (options.body) headers.set('Content-Type', 'application/json')
-
-  const xsrfToken = getCookie('XSRF-TOKEN')
-  if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
+  authHeaders(headers)
 
   const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
     ...options,
     headers,
-    credentials: 'include',
   })
 
   notifyIfUnauthorized(path, res.status)
@@ -157,15 +189,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   const headers = new Headers()
   headers.set('Accept', 'application/json')
-
-  const xsrfToken = getCookie('XSRF-TOKEN')
-  if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
+  authHeaders(headers)
 
   const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
     method: 'POST',
     headers,
     body: formData,
-    credentials: 'include',
   })
 
   notifyIfUnauthorized(path, res.status)
@@ -180,18 +209,16 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
 /**
  * Streams an authenticated file download and saves it under the given
  * filename. Never link a raw/public file URL (Section 5 rule 6) — the
- * browser must carry the same session cookie + XSRF token as any other
- * API call, so this goes through fetch(), not a plain <a href>.
+ * request must carry the same Authorization header as any other API
+ * call, and a plain <a href> cannot, so this goes through fetch().
  */
 async function requestDownload(path: string, filename: string): Promise<void> {
   const headers = new Headers()
-  const xsrfToken = getCookie('XSRF-TOKEN')
-  if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
+  authHeaders(headers)
 
   const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
     method: 'GET',
     headers,
-    credentials: 'include',
   })
 
   notifyIfUnauthorized(path, res.status)
@@ -221,9 +248,9 @@ async function requestDownload(path: string, filename: string): Promise<void> {
  * paths, so requestDownload()'s prefixing would produce a broken URL.
  * Everything else is identical and for the same reason: the file lives
  * behind an authenticated route (§5 rule 6), so a plain `<a href>` —
- * which cannot carry the Sanctum session cookie cross-origin — is not
- * an option. Same absolute-URL exception useAuthenticatedMedia.ts and
- * PdfViewerModal.vue already make.
+ * which cannot carry the Authorization header — is not an option. Same
+ * absolute-URL exception useAuthenticatedMedia.ts and PdfViewerModal.vue
+ * already make.
  *
  * The filename is taken from the server's Content-Disposition when the
  * caller does not supply one: uploaded lesson files are stored as
@@ -231,10 +258,9 @@ async function requestDownload(path: string, filename: string): Promise<void> {
  */
 async function requestDownloadAbsolute(url: string, filename?: string): Promise<void> {
   const headers = new Headers()
-  const xsrfToken = getCookie('XSRF-TOKEN')
-  if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
+  authHeaders(headers)
 
-  const res = await fetch(url, { method: 'GET', headers, credentials: 'include' })
+  const res = await fetch(url, { method: 'GET', headers })
 
   if (!res.ok) {
     const isJson = res.headers.get('content-type')?.includes('application/json')
@@ -257,25 +283,23 @@ async function requestDownloadAbsolute(url: string, filename?: string): Promise<
 }
 
 /**
- * Fetches a sanctum-protected binary endpoint (video/image stream,
+ * Fetches an authenticated binary endpoint (video/image stream,
  * thumbnail) as a Blob. Unlike requestDownload(), this does NOT trigger
- * a file save — the caller turns the blob into an object URL for
- * inline <img>/<video> display (ADR-007). Cross-origin + credentialed,
- * same reasoning as requestDownload(): a plain <img src="..."> cannot
- * carry the Sanctum session cookie here, so every authenticated media
- * element must go through fetch() first. Ported verbatim from
- * frontend-admin/src/api/client.ts (Agent Portal needs the same
- * product media gallery + Academy video playback).
+ * a file save — the caller turns the blob into an object URL for inline
+ * <img>/<video> display (ADR-007).
+ *
+ * A plain <img src> / <video src> cannot carry an Authorization header,
+ * so every authenticated media element must go through fetch() first.
+ * That constraint is unchanged by the move to tokens — only the header
+ * being carried is different.
  */
 async function requestBlob(path: string): Promise<Blob> {
   const headers = new Headers()
-  const xsrfToken = getCookie('XSRF-TOKEN')
-  if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
+  authHeaders(headers)
 
   const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
     method: 'GET',
     headers,
-    credentials: 'include',
   })
 
   notifyIfUnauthorized(path, res.status)

@@ -55,6 +55,28 @@ class LoginRequest extends FormRequest
     {
         $this->ensureIsNotRateLimited();
 
+        /*
+         * 2026-08-27 — TOKEN MODE (agent portal, multi-domain).
+         *
+         * The agent portal authenticates with a Bearer personal access
+         * token, so its requests are deliberately NOT on a Sanctum
+         * stateful domain any more: no session middleware runs for them,
+         * and `Auth::guard('web')->attempt()` below would fatal on the
+         * session write it performs. `validate()` is attempt() minus that
+         * write — same credential check, same provider, same hashing —
+         * so the branch below shares every rule this one does and only
+         * skips the part that needs a session that does not exist.
+         *
+         * The admin console still logs in the original way (its own
+         * domain remains stateful, it never sends this header), so the
+         * whole block below is untouched for it.
+         */
+        if ($this->header('X-Auth-Mode') === 'token') {
+            $this->authenticateStateless();
+
+            return;
+        }
+
         if (! Auth::guard('web')->attempt($this->only('email', 'password'), $this->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey());
 
@@ -96,6 +118,56 @@ class LoginRequest extends FormRequest
 
             throw $e;
         }
+    }
+
+    /**
+     * Credential check + account gate WITHOUT touching the session.
+     *
+     * Deliberately mirrors authenticate()'s session path line for line —
+     * same throttle hit on failure, same single non-enumerable 422, same
+     * RateLimiter::clear() placement, same LoginGateService call. The two
+     * differences are both forced by the absence of a session:
+     *
+     *   1. validate() instead of attempt() — checks the password against
+     *      the same user provider but writes nothing.
+     *   2. setUser() instead of the gate's logout() undo — nothing was
+     *      persisted to undo, so a blocked account simply never gets the
+     *      user set, and no token is ever minted for it upstream.
+     *
+     * `remember` is meaningless here and ignored on purpose: token
+     * lifetime is the token's own expiry, not a remember-me cookie.
+     *
+     * @throws \Illuminate\Validation\ValidationException
+     * @throws \App\Exceptions\LoginBlockedException
+     */
+    protected function authenticateStateless(): void
+    {
+        $guard = Auth::guard('web');
+
+        if (! $guard->validate($this->only('email', 'password'))) {
+            RateLimiter::hit($this->throttleKey());
+
+            // Same single branch, same reason as the session path above:
+            // "no such user" and "wrong password" must stay
+            // indistinguishable. Do not split this into two messages.
+            throw ValidationException::withMessages([
+                'email' => __('auth.failed'),
+            ]);
+        }
+
+        RateLimiter::clear($this->throttleKey());
+
+        /** @var \App\Models\User $user */
+        $user = $guard->getLastAttempted();
+
+        // Throws LoginBlockedException -> 403 before the user is ever set
+        // on the guard, so a blocked account cannot reach the token-minting
+        // code in AuthController::login() at all.
+        app(LoginGateService::class)->assertMayLogIn($user);
+
+        // In-memory only (no session write): gives AuthController's
+        // $request->user() the authenticated user for this one request.
+        $guard->setUser($user);
     }
 
     /**
