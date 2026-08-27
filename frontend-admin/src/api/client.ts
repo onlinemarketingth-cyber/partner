@@ -11,7 +11,14 @@
 
 import { readPersistedActiveCompanyId } from '@/utils/activeCompanyStorage'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string
+/**
+ * TASK-241 — falls back to '' (relative / same-origin) when unset. See
+ * frontend/src/api/client.ts's identical fallback for the full reasoning;
+ * this app has no build targeting a new host today, but the two clients
+ * are meant to stay in step (docblock elsewhere in this file already
+ * notes code "ported verbatim" between them).
+ */
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 
 function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))

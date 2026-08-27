@@ -47,6 +47,29 @@
   RewriteCond %{HTTP_HOST} ^partner\.syncvision\.io$ [NC]
   RewriteRule ^admin(/|$) - [F,L]
 
+  # TASK-241 — do not let the SPA fallback below swallow /api or /sanctum.
+  #
+  # A same-origin build (VITE_API_BASE_URL empty, ADR-039-style) reaches
+  # the Laravel backend through a symlink at THIS docroot (e.g.
+  # `api -> .../backend/public`), not through real files Apache can see
+  # by walking this directory alone. `/api/v1/products` has no literal
+  # file or directory on disk at that exact path — only a Laravel ROUTE
+  # does, one directory level down inside the symlink target — so the
+  # `!-f`/`!-d` check two rules below sees "nothing here" and rewrites
+  # the request to Vue's own index.html instead of letting it reach
+  # Laravel. Every API call then 404s (or gets HTML back where JSON was
+  # expected), which breaks login and any page that fetches data —
+  # exactly the failure this rule exists to prevent.
+  #
+  # `[L]` with no target (`-`) means "stop rewriting, unchanged" — it
+  # does NOT itself make the symlink work. If the host's Apache config
+  # has `Options -FollowSymLinks` for this docroot, this rule alone will
+  # not fix it (that needs a hosting-level change); it only stops THIS
+  # file from actively working against the symlink once symlinks are
+  # followed.
+  RewriteCond %{REQUEST_URI} ^/(api|sanctum)(/|$)
+  RewriteRule ^ - [L]
+
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d

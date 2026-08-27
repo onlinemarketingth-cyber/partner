@@ -9,7 +9,23 @@
  * file only handles transport (CSRF cookie handshake, headers, JSON).
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string
+/**
+ * TASK-241 — falls back to '' (relative / same-origin) when unset, rather
+ * than trusting the env var is always a real host string.
+ *
+ * Every build to date has set `VITE_API_BASE_URL` explicitly (dev in
+ * `.env`, prod in the gitignored `.env.production`), so this fallback has
+ * never fired and changes nothing for `partner.syncvision.io` today. It
+ * exists for a build meant to run under a NEW host that should call its
+ * own origin's `/api` and `/sanctum` rather than a cross-origin API host
+ * — e.g. an `.env.<name>` file that sets `VITE_API_BASE_URL=` (empty),
+ * built with `vite build --mode <name>`. An empty API_BASE_URL makes
+ * every `${API_BASE_URL}/api/v1${path}` template below resolve to a
+ * clean relative `/api/v1${path}`, instead of the literal string
+ * "undefined/api/v1${path}" a genuinely-missing env var would have
+ * produced before this fallback existed.
+ */
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 
 function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))
