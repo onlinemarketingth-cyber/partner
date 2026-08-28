@@ -30,6 +30,7 @@ import { useToastStore } from '@/stores/toast'
 import { initials } from '@/utils/initials'
 import { compressImage } from '@/utils/imageCompression'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
+import NationalIdSegments from '@/design-system/components/NationalIdSegments.vue'
 import AppButton from '@/design-system/components/AppButton.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import type { AuthUser } from '@/stores/auth'
@@ -192,6 +193,65 @@ async function saveBankAccount(): Promise<void> {
     bankError.value = e instanceof ApiError ? 'บันทึกไม่สำเร็จ — ตรวจสอบข้อมูลที่กรอก' : 'บันทึกไม่สำเร็จ'
   } finally {
     bankBusy.value = false
+  }
+}
+
+// --- Identity document (2026-08-27) ---
+//
+// Removed from the registration form on purpose (see RegisterView.vue's own
+// note) and collected here instead, where the person already has an account
+// of their own to protect. Same self-scoped pattern as the bank section
+// above: PUT /me/id-document always operates on the caller's own row.
+//
+// UNLIKE the bank fields, the server REQUIRES both values when this form is
+// submitted — an empty submission could only ever be a mistake. The
+// per-company duplicate check also runs on this endpoint, so a number
+// already used by somebody else in the company comes back as a 422 on
+// `national_id` and is shown inline below.
+type IdDocumentType = 'thai_national_id' | 'passport'
+
+const idDocumentType = ref<IdDocumentType>(auth.user?.id_document_type ?? 'thai_national_id')
+const nationalId = ref(auth.user?.national_id ?? '')
+const idDocBusy = ref(false)
+const idDocError = ref('')
+
+const isThaiIdDocument = computed(() => idDocumentType.value === 'thai_national_id')
+
+function selectIdDocumentType(next: IdDocumentType): void {
+  if (idDocumentType.value === next) return
+  idDocumentType.value = next
+  // Clear the number with the type, same reasoning as the registration form
+  // had: a 13-digit Thai ID under a "passport" label is a guaranteed 422,
+  // and a confusing one. The two documents share one column; they must not
+  // share a value in this form.
+  nationalId.value = ''
+  idDocError.value = ''
+}
+
+async function saveIdDocument(): Promise<void> {
+  idDocBusy.value = true
+  idDocError.value = ''
+  try {
+    const res = await api.put<{ data: AuthUser }>('/me/id-document', {
+      id_document_type: idDocumentType.value,
+      // Passport letters go up uppercased to match what the field shows;
+      // the backend upper-cases before hashing either way, so this only
+      // avoids storing a value that renders one way and is stored another.
+      national_id: isThaiIdDocument.value ? nationalId.value.trim() : nationalId.value.trim().toUpperCase(),
+    })
+    auth.setUser(res.data)
+    toast.success('บันทึกเอกสารยืนยันตัวตนแล้ว')
+  } catch (e) {
+    // The server's own message when it has one — it carries the two cases
+    // the person can act on (bad shape, already used in this company).
+    // Rewriting them here would replace a specific answer with a vague one.
+    const body = e instanceof ApiError ? (e.body as { errors?: Record<string, string[]>; message?: string }) : null
+    idDocError.value =
+      body?.errors?.national_id?.[0] ??
+      body?.errors?.id_document_type?.[0] ??
+      (e instanceof ApiError ? 'บันทึกไม่สำเร็จ — ตรวจสอบข้อมูลที่กรอก' : 'บันทึกไม่สำเร็จ')
+  } finally {
+    idDocBusy.value = false
   }
 }
 
@@ -445,6 +505,101 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
     </div>
 
     <div class="mt-4 grid grid-cols-1 gap-4">
+      <!-- 2026-08-27 — "can you be paid yet?", answered before the two forms
+           that answer it rather than after. The flag is the SERVER's
+           (User::hasCompletePayoutDetails via UserResource), never re-derived
+           here, so this notice and the payout gate can never disagree.
+
+           Shown only while something is missing: a permanent green "all
+           good" panel is noise on every visit after the first. -->
+      <div
+        v-if="auth.user && !auth.user.payout_details_complete"
+        class="bg-surface-warning border border-line-card rounded-2xl p-4 flex items-start gap-3"
+      >
+        <Icon name="info" :size="18" class="mt-0.5 shrink-0 text-ink-warning" />
+        <div>
+          <p class="text-sm font-bold text-ink-warning">ยังกรอกข้อมูลรับเงินไม่ครบ</p>
+          <p class="text-xs text-ink-card-subtle mt-0.5">
+            ต้องมีทั้งเอกสารยืนยันตัวตนและบัญชีธนาคารครบถ้วน จึงจะเบิกค่าคอมมิชชั่นได้ — กรอกไว้ล่วงหน้าได้เลย
+          </p>
+        </div>
+      </div>
+
+      <!-- Identity document — collected here, not at sign-up (2026-08-27) -->
+      <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
+        <h2 class="text-sm font-bold text-ink-card mb-1">เอกสารยืนยันตัวตน</h2>
+        <p class="text-xs text-ink-card-subtle mb-3">
+          ใช้ยืนยันตัวตนก่อนโอนค่าคอมมิชชั่น — เห็นเฉพาะคุณเท่านั้น (Admin เห็นแบบปิดบัง)
+        </p>
+
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <button
+            type="button"
+            :aria-pressed="idDocumentType === 'thai_national_id'"
+            class="min-h-[44px] px-3 py-2.5 rounded-xl border text-sm font-bold transition-colors"
+            :class="
+              idDocumentType === 'thai_national_id'
+                ? 'bg-brand-600 border-brand-600 text-ink-primary'
+                : 'bg-surface-card border-line-card text-ink-card-muted hover:border-brand-500'
+            "
+            @click="selectIdDocumentType('thai_national_id')"
+          >
+            บัตรประชาชน
+          </button>
+          <button
+            type="button"
+            :aria-pressed="idDocumentType === 'passport'"
+            class="min-h-[44px] px-3 py-2.5 rounded-xl border text-sm font-bold transition-colors"
+            :class="
+              idDocumentType === 'passport'
+                ? 'bg-brand-600 border-brand-600 text-ink-primary'
+                : 'bg-surface-card border-line-card text-ink-card-muted hover:border-brand-500'
+            "
+            @click="selectIdDocumentType('passport')"
+          >
+            หนังสือเดินทาง
+          </button>
+        </div>
+
+        <label class="text-xs font-bold text-ink-card-muted block mb-1">
+          {{ isThaiIdDocument ? 'เลขบัตรประชาชน 13 หลัก' : 'เลขที่หนังสือเดินทาง' }}
+        </label>
+        <!-- A Thai ID gets the card's own five groups (NationalIdSegments);
+             a passport is one free-form field, because its number has no
+             printed grouping to mirror. Same split the registration form
+             used before this moved here. -->
+        <NationalIdSegments
+          v-if="isThaiIdDocument"
+          id="profile_national_id"
+          v-model="nationalId"
+          :invalid="Boolean(idDocError)"
+          aria-label="เลขบัตรประชาชน 13 หลัก"
+          @update:model-value="idDocError = ''"
+        />
+        <input
+          v-else
+          id="profile_national_id"
+          v-model="nationalId"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          autocapitalize="characters"
+          maxlength="12"
+          placeholder="เช่น AA1234567"
+          class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case w-full px-3 py-2 rounded-xl border text-sm uppercase tracking-wide focus:outline-none focus:ring-2 focus:ring-brand-200"
+          :class="idDocError ? 'border-rose-400' : 'border-line-input'"
+          @input="idDocError = ''"
+        />
+        <p class="text-xs text-ink-card-subtle mt-1">
+          {{ isThaiIdDocument
+            ? 'กรอกตามกลุ่มตัวเลขที่พิมพ์บนหน้าบัตร ครบแล้วระบบจะเลื่อนช่องถัดไปให้เอง'
+            : 'ตัวอักษรภาษาอังกฤษและตัวเลข 6-12 ตัว ตามที่ปรากฏบนหนังสือเดินทาง' }}
+        </p>
+
+        <AppButton :loading="idDocBusy" class="mt-3" @click="saveIdDocument">บันทึกเอกสารยืนยันตัวตน</AppButton>
+        <p v-if="idDocError" class="mt-2 text-xs font-bold text-ink-danger">{{ idDocError }}</p>
+      </div>
+
       <!-- Bank account (TASK-044 Phase A) -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
         <h2 class="text-sm font-bold text-ink-card mb-4">ข้อมูลบัญชีธนาคาร</h2>

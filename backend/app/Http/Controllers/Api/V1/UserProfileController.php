@@ -7,6 +7,7 @@ use App\Http\Requests\Profile\UpdateAvatarRequest;
 use App\Http\Requests\Profile\UpdateBackgroundGradientRequest;
 use App\Http\Requests\Profile\UpdateBackgroundImageRequest;
 use App\Http\Requests\Profile\UpdateBankAccountRequest;
+use App\Http\Requests\Profile\UpdateIdDocumentRequest;
 use App\Http\Requests\Profile\UpdateNameRequest;
 use App\Http\Requests\Profile\UpdateNotificationPreferencesRequest;
 use App\Http\Requests\Profile\UpdatePasswordRequest;
@@ -72,6 +73,21 @@ class UserProfileController extends Controller
     public function updateBankAccount(UpdateBankAccountRequest $request, UserProfileService $service): UserResource
     {
         $user = $service->updateBankAccount($request->user(), $request->validated());
+
+        return UserResource::forOwner($user->load('company'));
+    }
+
+    /**
+     * 2026-08-27 — the agent's own identity document, supplied after
+     * sign-up. Returns the full owner resource (same as every other method
+     * here) so the SPA refreshes its auth user from the response rather
+     * than trusting a local optimistic value — which matters here because
+     * `payout_details_complete` is derived server-side and gates the
+     * commission payout flow.
+     */
+    public function updateIdDocument(UpdateIdDocumentRequest $request, UserProfileService $service): UserResource
+    {
+        $user = $service->updateIdDocument($request->user(), $request->validated());
 
         return UserResource::forOwner($user->load('company'));
     }

@@ -27,6 +27,10 @@ class Company extends Model
 
     protected $fillable = [
         'name',
+        // 2026-08-27 — minimum an agent may ask to withdraw, in satang
+        // (BR-3). NULL means no minimum, which is a real setting and not a
+        // missing one — see the migration's own note.
+        'min_withdrawal_satang',
         'slug',
         'is_active',
         'commission_plan_type',
@@ -61,6 +65,9 @@ class Company extends Model
     {
         return [
             'is_active' => 'boolean',
+            // BR-3 — satang, always an integer. Cast explicitly so a value
+            // read back from MySQL is never a numeric string in comparisons.
+            'min_withdrawal_satang' => 'integer',
             'commission_plan_type' => CommissionPlanType::class,
             // TASK-056 P2 bugfix — deliberately NOT in $fillable: only
             // ClientCategoryService::ensureDefaults() ever writes this, a

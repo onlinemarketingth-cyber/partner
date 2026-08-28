@@ -38,6 +38,8 @@ use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
 use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
+use App\Http\Controllers\Api\V1\CommissionWithdrawalRequestController;
+use App\Http\Controllers\Api\V1\CommissionWithdrawalSettingController;
 use App\Http\Controllers\Api\V1\CompanyController;
 use App\Http\Controllers\Api\V1\CompanyInviteCodeController;
 use App\Http\Controllers\Api\V1\CompanyPaymentGatewayController;
@@ -386,6 +388,12 @@ Route::prefix('v1')->group(function () {
         // self-scoped ($request->user() only) construction as every
         // other /me/* route above.
         Route::put('/me/bank-account', [UserProfileController::class, 'updateBankAccount']);
+
+        // 2026-08-27 — the identity document, filled in after sign-up (it is
+        // no longer asked for on the registration form). Sits next to
+        // /me/bank-account on purpose: the two together are the "can this
+        // person be paid" record, and a payout flow will check both.
+        Route::put('/me/id-document', [UserProfileController::class, 'updateIdDocument']);
 
         // TASK-055 / ADR-018 — per-company white-label theme. /me/theme is
         // readable by ANY authenticated user (agents render the branded
@@ -1085,6 +1093,41 @@ Route::prefix('v1')->group(function () {
             ->only(['index', 'show'])
             ->parameters(['commission-ledger' => 'commission_ledger']);
         Route::post('/commission-ledger/{commission_ledger}/mark-paid', [CommissionLedgerController::class, 'markPaid']);
+
+        /*
+         * 2026-08-27 — agent-initiated commission withdrawal.
+         *
+         * Sits beside the ledger because it is the same money seen from the
+         * other end: the ledger records what was earned, these record asking
+         * to be paid it. Agent and admin share the routes; the Policy and
+         * index()'s own scoping decide who sees and may act on what, rather
+         * than a second set of /admin-prefixed endpoints that would have to
+         * repeat the tenant rules.
+         *
+         * `available` is deliberately its own GET rather than a field on the
+         * index: it is a computed balance, it is what the request form needs
+         * before anything exists to list, and it must not be derived in the
+         * browser (see the controller).
+         */
+        // The per-company minimum. Registered BEFORE the
+        // /commission-withdrawals/{id} route below so "settings" is never
+        // parsed as a request id — Laravel matches in declaration order, and
+        // a settings page that 404s as a missing model is a confusing way to
+        // learn that.
+        Route::get('/commission-withdrawal-settings', [CommissionWithdrawalSettingController::class, 'show']);
+        Route::put('/commission-withdrawal-settings', [CommissionWithdrawalSettingController::class, 'update']);
+
+        Route::get('/commission-withdrawals/available', [CommissionWithdrawalRequestController::class, 'available']);
+        Route::get('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'index']);
+        Route::post('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'store'])
+            // A payout request is a money action; the throttle is the same
+            // shape used on the other write endpoints that move value.
+            ->middleware('throttle:10,1');
+        Route::get('/commission-withdrawals/{commissionWithdrawalRequest}', [CommissionWithdrawalRequestController::class, 'show']);
+        Route::post('/commission-withdrawals/{commissionWithdrawalRequest}/cancel', [CommissionWithdrawalRequestController::class, 'cancel']);
+        Route::post('/commission-withdrawals/{commissionWithdrawalRequest}/approve', [CommissionWithdrawalRequestController::class, 'approve']);
+        Route::post('/commission-withdrawals/{commissionWithdrawalRequest}/reject', [CommissionWithdrawalRequestController::class, 'reject']);
+        Route::post('/commission-withdrawals/{commissionWithdrawalRequest}/mark-transferred', [CommissionWithdrawalRequestController::class, 'markTransferred']);
 
         // TASK-043 §3 — per-agent commission summary (grouped-by-agent
         // aggregate CommissionLedgerController::index() never provided).

@@ -56,6 +56,23 @@ export interface AuthUser {
   bank_name: string | null
   bank_account_number: string | null
   bank_account_holder_name: string | null
+  /**
+   * 2026-08-27 — the identity document, now collected AFTER sign-up
+   * (ProfileSettingsView) instead of on the registration form. Nullable
+   * because every agent registered from this date on starts without one.
+   * On this /me-scoped shape `national_id` is the FULL value, like
+   * bank_account_number above (UserResource::forOwner()).
+   */
+  national_id: string | null
+  id_document_type: 'thai_national_id' | 'passport' | null
+  /**
+   * Server's own answer to "can this agent be paid?"
+   * (User::hasCompletePayoutDetails) — identity document AND all three bank
+   * fields. Read it, never re-derive it here: the payout gate will use the
+   * server's version, and a second implementation in the browser is how the
+   * prompt and the gate start disagreeing.
+   */
+  payout_details_complete: boolean
 }
 
 export const useAuthStore = defineStore('auth', () => {

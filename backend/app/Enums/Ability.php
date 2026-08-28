@@ -97,6 +97,11 @@ enum Ability: string
     case SettingsAcademyCompletionView = 'settings.academy_completion.view';
 
     /** From CommissionBinarySettingController.php:21. */
+    // 2026-08-27 — the per-company minimum an agent may withdraw. Same
+    // audience as the other commission settings below: it is a commission
+    // rule, and giving it its own ability keeps "who may change what money
+    // does" answerable one line at a time.
+    case SettingsCommissionWithdrawalView = 'settings.commission_withdrawal.view';
     case SettingsCommissionBinaryView = 'settings.commission_binary.view';
 
     /** From CommissionMatrixSettingController.php:17. */
@@ -137,6 +142,7 @@ enum Ability: string
     case SettingsAcademyCompletionUpdate = 'settings.academy_completion.update';
 
     /** From Commission/UpdateCommissionBinarySettingRequest.php:21. */
+    case SettingsCommissionWithdrawalUpdate = 'settings.commission_withdrawal.update';
     case SettingsCommissionBinaryUpdate = 'settings.commission_binary.update';
 
     /** From Commission/UpdateCommissionMatrixSettingRequest.php:18. */

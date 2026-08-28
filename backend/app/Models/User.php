@@ -631,6 +631,35 @@ class User extends Authenticatable implements MustVerifyEmail
      * change. Making it type-aware would only serve to leak the document's
      * shape to a viewer who is not allowed to see the document.
      */
+    /**
+     * "Can this agent actually be paid?" — ONE definition, used everywhere.
+     *
+     * 2026-08-27. The identity document left the registration form, so an
+     * agent can now exist without one; the bank fields have always been
+     * optional (UpdateBankAccountRequest). Neither absence matters until
+     * money is about to move, and at that moment BOTH matter: a payout needs
+     * an account to send to and a verified identity to send it for.
+     *
+     * Deliberately a model method rather than a rule written out at each
+     * call site. The commission-payout flow is not built yet; when it is,
+     * the gate is this one call, and nobody has to rediscover which fields
+     * count. The UI reads the same answer through UserResource's
+     * `payout_details_complete`, so the banner an agent sees and the check
+     * that would refuse their withdrawal can never disagree.
+     *
+     * bank_account_holder_name is included: paying into an account whose
+     * holder is unknown is exactly the case a bank rejects, and finding that
+     * out at transfer time is the expensive way to learn it.
+     */
+    public function hasCompletePayoutDetails(): bool
+    {
+        return filled($this->national_id)
+            && $this->id_document_type !== null
+            && filled($this->bank_name)
+            && filled($this->bank_account_number)
+            && filled($this->bank_account_holder_name);
+    }
+
     public function maskedNationalId(): ?string
     {
         return self::maskNationalId($this->national_id);

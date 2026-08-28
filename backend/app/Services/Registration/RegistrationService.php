@@ -12,6 +12,7 @@ use App\Models\Company;
 use App\Models\CompanyInviteCode;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
+use App\Services\Identity\IdDocumentRegistry;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Platform\UserService;
 use Illuminate\Database\Eloquent\Model;
@@ -300,11 +301,19 @@ class RegistrationService
         // registrations of the same document under the same invite code
         // could both pass this check — see assertDocumentNotAlreadyUsed()'s
         // docblock for why that is a recorded limitation and not a silent one.
-        $this->assertDocumentNotAlreadyUsed(
-            (int) $inviteCode->company_id,
-            $data['national_id'],
-            IdDocumentType::from($data['id_document_type']),
-        );
+        // 2026-08-27 — the document is OPTIONAL at registration now, so this
+        // guard only has something to check when one was actually supplied.
+        // When it was not, NOTHING replaces it here: the check needs a number
+        // to hash, and inventing a weaker stand-in would be worse than being
+        // honest that this path no longer catches that duplicate. It is
+        // caught wherever the profile later saves the number instead.
+        if (! empty($data['national_id']) && ! empty($data['id_document_type'])) {
+            $this->assertDocumentNotAlreadyUsed(
+                (int) $inviteCode->company_id,
+                $data['national_id'],
+                IdDocumentType::from($data['id_document_type']),
+            );
+        }
 
         $user = User::create([
             'first_name' => $data['first_name'],
@@ -317,8 +326,8 @@ class RegistrationService
             // says which kind of document it is; User's saving hook derives
             // `national_id_hash` from the pair. Both come from validated
             // input — they describe the person, not the tenant.
-            'national_id' => $data['national_id'],
-            'id_document_type' => $data['id_document_type'],
+            'national_id' => $data['national_id'] ?? null,
+            'id_document_type' => $data['id_document_type'] ?? null,
             'company_id' => $inviteCode->company_id,
             'role' => UserRole::Agent,
             'agent_approval_status' => AgentApprovalStatus::Pending,
@@ -473,11 +482,16 @@ class RegistrationService
             // (Two different links in the same company are still racy — see
             // the method's own docblock.) A rejection here rolls back the
             // used_count increment above with everything else.
-            $this->assertDocumentNotAlreadyUsed(
-                (int) $link->company_id,
-                $data['national_id'],
-                IdDocumentType::from($data['id_document_type']),
-            );
+            // Same conditional as the invite-code path above, for the same
+            // reason — the two self-registration routes must never disagree
+            // about what identity is required.
+            if (! empty($data['national_id']) && ! empty($data['id_document_type'])) {
+                $this->assertDocumentNotAlreadyUsed(
+                    (int) $link->company_id,
+                    $data['national_id'],
+                    IdDocumentType::from($data['id_document_type']),
+                );
+            }
 
             // Consume the slot first, so the row this transaction holds is
             // already decremented for anyone queued behind us the instant
@@ -495,8 +509,8 @@ class RegistrationService
                 // TASK-122 — same pair as the invite-code path above; the
                 // two self-registration routes must never disagree about
                 // what identity is required.
-                'national_id' => $data['national_id'],
-                'id_document_type' => $data['id_document_type'],
+                'national_id' => $data['national_id'] ?? null,
+                'id_document_type' => $data['id_document_type'] ?? null,
                 // ADR-025 §5 — from the link, never from the body.
                 'company_id' => $link->company_id,
                 'role' => UserRole::Agent,
@@ -592,42 +606,11 @@ class RegistrationService
      */
     private function assertDocumentNotAlreadyUsed(int $companyId, string $document, IdDocumentType $type): void
     {
-        $hash = User::hashNationalId($document, $type);
-
-        if ($hash === null) {
-            // Nothing to compare against — a value that normalizes to
-            // nothing cannot be a duplicate. The Form Request's IdDocument
-            // rule has already rejected any such value on the public paths;
-            // this is only a guard against a future caller that has not.
-            return;
-        }
-
-        // withoutGlobalScopes([TenantScope::class]) — dropped EXPLICITLY,
-        // not because it currently bites. TenantScope no-ops when there is no
-        // authenticated user (see its apply()), which is the normal case on a
-        // public registration request. But if this Service is ever called
-        // from an authenticated context, that scope would filter by the
-        // ACTOR's company rather than the one resolved from the credential —
-        // and a duplicate check that quietly searched the wrong tenant would
-        // pass every time. Dropping it makes the ->where('company_id', ...)
-        // below the single source of truth for the scope, which is the only
-        // thing this method is allowed to be sure about.
-        //
-        // NOT a bare withoutGlobalScopes(): that would also drop
-        // SoftDeletingScope implicitly, and whether deleted rows count is a
-        // decision, not a side effect — hence the explicit ->withTrashed()
-        // (see the docblock for why they count).
-        $exists = User::withoutGlobalScopes([TenantScope::class])
-            ->withTrashed()
-            ->where('company_id', $companyId)
-            ->where('national_id_hash', $hash)
-            ->exists();
-
-        if ($exists) {
-            throw ValidationException::withMessages([
-                'national_id' => 'เลขที่เอกสารนี้ถูกใช้สมัครสมาชิกในบริษัทนี้แล้ว',
-            ]);
-        }
+        // 2026-08-27 — the rule itself moved to IdDocumentRegistry when the
+        // profile became a second place this number can be written from. One
+        // implementation, two callers; the docblock above stays here because
+        // it describes the race window at THIS call site.
+        app(IdDocumentRegistry::class)->assertNotAlreadyUsed($companyId, $document, $type);
     }
 
     /**

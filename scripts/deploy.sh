@@ -12,7 +12,10 @@
 #      Hostinger shared hosting has no Node, so builds always happen
 #      here, never on the server.
 #   3. git push the current branch to GitHub.
-#   4. rsync each app's dist/ to its own subdomain folder on Hostinger.
+#   4. rsync each app's dist/ to its own subdomain folder on Hostinger —
+#      plus every path in FRONTEND_EXTRA_REMOTE_PATHS, so an agent portal
+#      served from more than one domain gets the same build everywhere
+#      rather than silently going stale on the extra hosts.
 #   5. SSH in and update the backend: git fetch + hard reset to the
 #      pushed commit, composer install --no-dev, migrate --force,
 #      re-create public/storage (gitignored, so a hard reset drops it),
@@ -343,6 +346,34 @@ if [[ "$SKIP_FRONTEND" != true ]]; then
   # authenticated request goes through it once ADR-039 step 3 lands.
   run rsync_to "$ROOT_DIR/frontend/dist/" "$FRONTEND_REMOTE_PATH/" --exclude=/admin --exclude=/api --exclude=/backend
   ok "frontend deployed."
+
+  # ── 2026-08-27: THE SAME BUILD, ALSO SERVED FROM OTHER FIRST-PARTY HOSTS ──
+  #
+  # The agent portal now runs on more than one domain
+  # (apps.liveto100club.com alongside partner.syncvision.io). Each has its
+  # own document root on this server, so a deploy that wrote only to
+  # FRONTEND_REMOTE_PATH would leave every other host frozen on whatever
+  # code it had the day it was set up — talking to a backend that has since
+  # moved on. That failure is silent and domain-specific, which is the worst
+  # combination to debug: it works when you test it and not when a user does.
+  #
+  # Space-separated absolute paths in FRONTEND_EXTRA_REMOTE_PATHS. Unset is
+  # normal and skips the whole block — this is additive to every existing
+  # deploy, never a new required setting.
+  #
+  # Same --exclude list as the primary docroot. These hosts do not currently
+  # carry the /api, /backend or /admin siblings (token auth means they call
+  # the API cross-origin instead of through a symlink of their own), but the
+  # excludes stay: if one ever does, a deploy must not be the thing that
+  # deletes it, and a rule that fails safe by construction beats one that
+  # depends on nobody changing the layout.
+  if [[ -n "${FRONTEND_EXTRA_REMOTE_PATHS:-}" ]]; then
+    for extra_path in $FRONTEND_EXTRA_REMOTE_PATHS; do
+      info "Uploading frontend/dist/ -> $extra_path (additional host) ..."
+      run rsync_to "$ROOT_DIR/frontend/dist/" "$extra_path/" --exclude=/admin --exclude=/api --exclude=/backend
+      ok "frontend deployed to $extra_path."
+    done
+  fi
 fi
 
 if [[ "$SKIP_FRONTEND_ADMIN" != true ]]; then

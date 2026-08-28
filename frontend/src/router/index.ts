@@ -223,6 +223,14 @@ const router = createRouter({
       meta: { navLabel: 'Commission' },
     },
     {
+      // 2026-08-27 — sits next to /commission on purpose: the ledger says
+      // what was earned, this says what has been asked for and paid.
+      path: '/withdrawals',
+      name: 'withdrawals',
+      component: () => import('../views/WithdrawalsView.vue'),
+      meta: { navLabel: 'Withdrawals' },
+    },
+    {
       path: '/leaderboard',
       name: 'leaderboard',
       component: () => import('../views/LeaderboardView.vue'),

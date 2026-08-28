@@ -111,20 +111,36 @@ class RegisterRequest extends FormRequest
             'first_name' => ['required', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
-            'phone' => ['nullable', 'string', 'max:32'],
+            // 2026-08-27 — REQUIRED now (was nullable). The identity
+            // document below became optional in the same change, and with it
+            // gone the phone is the only second way to reach a registrant an
+            // approver has. `regex` mirrors the frontend's isValidThaiPhone()
+            // exactly (9-10 digits, leading 0) and runs on the NORMALISED
+            // value the client sends — dashes, spaces and a +66 prefix are
+            // folded to the domestic form before submit, so a person who
+            // typed their number the way they read it is never rejected for
+            // punctuation.
+            'phone' => ['required', 'string', 'max:32', 'regex:/^0\d{8,9}$/'],
             // TASK-122 — WHICH document, then the document itself. The type
             // must be validated first because App\Rules\IdDocument below
             // reads it to decide which check to run (and passes silently
             // when it is missing/unknown, precisely so this field owns that
             // error — see the rule's docblock).
-            'id_document_type' => ['required', Rule::enum(IdDocumentType::class)],
+            // 2026-08-27 — OPTIONAL on this path (human request): the
+            // identity document is no longer asked for at sign-up, it is
+            // collected later from the agent's own profile. Still validated
+            // when present, so an older client that keeps sending it, and
+            // any future re-introduction of the field, are both handled by
+            // the same rules rather than by a second code path.
+            'id_document_type' => ['nullable', 'required_with:national_id', Rule::enum(IdDocumentType::class)],
             // `max:255` mirrors the column's practical ceiling; the real
             // shape check is the type-aware rule. Not `unique:users,...`:
             // the column is encrypted (so a DB unique index is useless
             // against it) and uniqueness is per-COMPANY, which a Form
             // Request cannot express here — RegistrationService owns it.
             'national_id' => [
-                'required',
+                'nullable',
+                'required_with:id_document_type',
                 'string',
                 'max:255',
                 new IdDocument($this->input('id_document_type')),
@@ -167,6 +183,16 @@ class RegisterRequest extends FormRequest
             // value the UI can only produce from a fixed two-item control.
             'id_document_type.required' => 'กรุณาเลือกประเภทเอกสารยืนยันตัวตน (บัตรประชาชน หรือ หนังสือเดินทาง)',
             'national_id.required' => 'กรุณากรอกเลขที่บัตรประชาชน หรือเลขที่หนังสือเดินทาง',
+            // 2026-08-27 — the two fields are optional at sign-up but must
+            // still travel together when either is sent, so these two cover
+            // the half-filled case a stale client could produce.
+            'id_document_type.required_with' => 'กรุณาเลือกประเภทเอกสารยืนยันตัวตน (บัตรประชาชน หรือ หนังสือเดินทาง)',
+            'national_id.required_with' => 'กรุณากรอกเลขที่บัตรประชาชน หรือเลขที่หนังสือเดินทาง',
+            // The Thai wording matches the frontend's reg_phone_invalid, so
+            // a person who trips the client check and then the server one
+            // does not get two different explanations of the same rule.
+            'phone.required' => 'กรุณากรอกเบอร์โทร',
+            'phone.regex' => 'เบอร์โทรไม่ถูกต้อง กรุณากรอกเบอร์ในประเทศไทย เช่น 0812345678',
             'first_name.required' => 'กรุณากรอกชื่อ',
             'last_name.required' => 'กรุณากรอกนามสกุล',
             'email.required' => 'กรุณากรอกอีเมล',

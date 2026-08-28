@@ -196,6 +196,12 @@ class UserResource extends JsonResource
                 ? $this->bank_account_number
                 : User::maskBankAccountNumber($this->bank_account_number),
             'bank_account_holder_name' => $this->bank_account_holder_name,
+            // 2026-08-27 — the SAME answer User::hasCompletePayoutDetails()
+            // gives the (not yet built) payout gate, so the prompt an agent
+            // sees and the check that would refuse their withdrawal can
+            // never drift apart. Not gated behind the reveal check above: it
+            // is a yes/no about completeness, and leaks no digit of anything.
+            'payout_details_complete' => $this->resource->hasCompletePayoutDetails(),
             // TASK-059 — Thai national ID (PDPA §6), same reveal gate as
             // bank_account_number above ($revealBankAccountNumber): full
             // value only to the owner or a viewer who can('view') this

@@ -199,6 +199,10 @@ const navItems: NavItem[] = [
     label: { th: 'Commission', en: 'Commission' },
     subMenus: [
       { name: 'commission-management', icon: 'money', label: { th: 'จ่ายคอมมิชชั่น', en: 'Payouts' } },
+      // 2026-08-27 — agent-initiated payout requests. Under Commission
+      // rather than its own pillar: it is the same money as "จ่ายคอมมิชชั่น"
+      // above, one step earlier in the process.
+      { name: 'commission-withdrawals', icon: 'invoice', label: { th: 'คำขอเบิกค่าคอม', en: 'Withdrawals' } },
       // ADR-011 (TASK-034) — moved in from its own top-level pillar. NOT
       // superAdminOnly: a Company Admin has always been able to set their
       // own company's commission rules, and folding the page into another

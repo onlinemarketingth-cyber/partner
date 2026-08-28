@@ -2,8 +2,10 @@
 
 namespace App\Services\Platform;
 
+use App\Enums\IdDocumentType;
 use App\Models\AuditLog;
 use App\Models\User;
+use App\Services\Identity\IdDocumentRegistry;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -257,6 +259,82 @@ class UserProfileService
 
             return $user->fresh();
         });
+    }
+
+    /**
+     * 2026-08-27 — the agent's own identity document, filled in after
+     * sign-up (see UpdateIdDocumentRequest for why it is no longer asked
+     * for at registration).
+     *
+     * THE PER-COMPANY DUPLICATE CHECK RUNS HERE, not just at registration.
+     * With the field gone from the sign-up form, this is where the number
+     * first enters the system for most people, so the guard has to be on
+     * this path or it may as well not exist. `$user->id` is passed as the
+     * ignored row so re-saving an unchanged number does not report somebody
+     * as a duplicate of themselves.
+     *
+     * Wrapped in a transaction for the same reason updateBankAccount() is:
+     * if the audit write throws after the save has committed, the document
+     * would have changed with no trail of who changed it.
+     *
+     * The AUDIT LOG NEVER HOLDS THE NUMBER — only the masked form and the
+     * document type, exactly as the bank-account audit holds only a masked
+     * account number. An audit trail that quietly accumulates plaintext
+     * national IDs is a PDPA problem wearing a compliance costume.
+     *
+     * @param  array{id_document_type: string, national_id: string}  $data
+     */
+    public function updateIdDocument(User $user, array $data): User
+    {
+        $type = IdDocumentType::from($data['id_document_type']);
+
+        // Before the write, not after: a rejection must leave the row
+        // untouched, and the ValidationException this throws is keyed on
+        // `national_id` so it renders inline on the field.
+        app(IdDocumentRegistry::class)->assertNotAlreadyUsed(
+            (int) $user->company_id,
+            $data['national_id'],
+            $type,
+            (int) $user->id,
+        );
+
+        return DB::transaction(function () use ($user, $data, $type) {
+            $oldValues = $this->maskedIdDocumentFields($user);
+
+            $user->national_id = $data['national_id'];
+            $user->id_document_type = $type;
+
+            // isDirty, so a re-save of the identical document is a no-op
+            // rather than a fresh audit row saying nothing changed. (User's
+            // saving hook re-derives national_id_hash from the pair.)
+            if ($user->isDirty(['national_id', 'id_document_type'])) {
+                $user->save();
+
+                AuditLog::create([
+                    'company_id' => $user->company_id,
+                    'actor_user_id' => $user->id,
+                    'action' => 'user.id_document_updated',
+                    'auditable_type' => User::class,
+                    'auditable_id' => $user->id,
+                    'old_values' => $oldValues,
+                    'new_values' => $this->maskedIdDocumentFields($user->fresh()),
+                    'ip_address' => request()?->ip(),
+                ]);
+            }
+
+            return $user->fresh();
+        });
+    }
+
+    /**
+     * @return array{id_document_type: ?string, national_id: ?string}
+     */
+    private function maskedIdDocumentFields(User $user): array
+    {
+        return [
+            'id_document_type' => $user->id_document_type?->value,
+            'national_id' => $user->maskedNationalId(),
+        ];
     }
 
     /**

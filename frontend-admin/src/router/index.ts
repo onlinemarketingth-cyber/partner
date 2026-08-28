@@ -189,6 +189,15 @@ const router = createRouter({
     // (2026-07-20): one consolidated tabbed route rather than 5 more
     // flat nav items.
     {
+      // 2026-08-27 — the payout queue. Next to /commission because it is
+      // the same money one step further along: the ledger records what was
+      // earned, this records asking for it and paying it out.
+      path: '/commission-withdrawals',
+      name: 'commission-withdrawals',
+      component: () => import('../views/CommissionWithdrawalsView.vue'),
+      meta: { navLabel: 'คำขอเบิกค่าคอม' },
+    },
+    {
       path: '/commission-plans',
       name: 'commission-plan-settings',
       component: () => import('../views/CommissionPlansView.vue'),

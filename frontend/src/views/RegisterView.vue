@@ -61,7 +61,6 @@ import { type Theme, useThemeStore } from '@/stores/theme'
 import { useI18n } from '@/composables/useI18n'
 import Icon from '@/design-system/components/Icon.vue'
 import AppLogo from '@/design-system/components/AppLogo.vue'
-import NationalIdSegments from '@/design-system/components/NationalIdSegments.vue'
 
 const { lang, t, setLang } = useI18n()
 const route = useRoute()
@@ -319,26 +318,28 @@ function changeInviteCode() {
 
 // --- Step 2: registration form ---
 
-/**
- * TASK-123 (backend TASK-122) — the identity document is now REQUIRED on
- * both self-registration paths, so this union mirrors App\Enums\IdDocumentType
- * exactly. Anything else is a 422 on `id_document_type`, which means these
- * two strings are the only values this view may ever put on the wire — hence
- * a closed union and a two-item control, never a free-text field.
+/*
+ * 2026-08-27 — THE IDENTITY DOCUMENT WAS REMOVED FROM THIS FORM ON PURPOSE
+ * (human request). Asking a stranger for a national ID number before they
+ * have any relationship with the company is the heaviest question on the
+ * page. It is now collected AFTER sign-up, from the agent's own profile,
+ * where the person already has an account of their own to protect.
+ *
+ * THE COST, STATED SO NOBODY REDISCOVERS IT AS A SURPRISE: the per-company
+ * duplicate guard keyed on that number (RegistrationService, "เลขที่เอกสารนี้
+ * ถูกใช้สมัครสมาชิกในบริษัทนี้แล้ว") can no longer run at registration.
+ * Email uniqueness is the only duplicate check left on this path; the
+ * ID-number check moves to wherever the profile saves it.
+ *
+ * The phone number became REQUIRED in the same change — with the ID gone it
+ * is the only second way to reach a registrant, and an approver looking at a
+ * pending recruit needs one.
  */
-type IdDocumentType = 'thai_national_id' | 'passport'
-
 const form = ref({
   first_name: '',
   last_name: '',
   email: '',
   phone: '',
-  // Defaulted, not blank: the overwhelming majority of registrants hold a
-  // Thai national ID, and a pre-selected sensible default is one less
-  // decision to make on a phone. RegisterRequest still requires the field,
-  // so the default is a convenience, never an assumption the server trusts.
-  id_document_type: 'thai_national_id' as IdDocumentType,
-  national_id: '',
   password: '',
   password_confirmation: '',
 })
@@ -346,17 +347,14 @@ const form = ref({
 const firstNameInputEl = ref<HTMLInputElement | null>(null)
 const lastNameInputEl = ref<HTMLInputElement | null>(null)
 const emailInputEl = ref<HTMLInputElement | null>(null)
-const nationalIdInputEl = ref<HTMLInputElement | null>(null)
-/** Only mounted on the Thai path — see focusNationalId(). */
-const nationalIdSegmentsEl = ref<{ focus: () => void } | null>(null)
+const phoneInputEl = ref<HTMLInputElement | null>(null)
 const passwordInputEl = ref<HTMLInputElement | null>(null)
 const passwordConfirmInputEl = ref<HTMLInputElement | null>(null)
 
 const firstNameError = ref('')
 const lastNameError = ref('')
 const emailError = ref('')
-const idDocumentTypeError = ref('')
-const nationalIdError = ref('')
+const phoneError = ref('')
 const passwordError = ref('')
 const passwordConfirmError = ref('')
 
@@ -478,93 +476,37 @@ function onEmailBlur(): void {
 // thing that stops being harmless the moment someone adds a toast to it.
 onUnmounted(() => clearTimeout(emailCheckTimer))
 
-const idDocumentTypeOptions = computed<Array<{ value: IdDocumentType; label: string }>>(() => [
-  // Thai wording deliberately identical to IdDocumentType::label() on the
-  // backend, so the label an admin later reads on the agent's record is the
-  // same words the agent chose here.
-  { value: 'thai_national_id', label: t('reg_id_type_thai', 'บัตรประชาชน', 'Thai national ID') },
-  { value: 'passport', label: t('reg_id_type_passport', 'หนังสือเดินทาง', 'Passport') },
-])
-
-const isThaiIdDocument = computed(() => form.value.id_document_type === 'thai_national_id')
-
 /**
- * Label / placeholder / hint / keyboard all follow the SELECTED type. The
- * two documents have nothing in common as far as the person typing is
- * concerned — one is 13 digits off a card, the other is letters and digits
- * off a passport — so a single neutral label would be wrong for both, and a
- * numeric keypad in front of someone holding a passport is simply broken.
+ * Thai phone numbers, normalised before they are checked or sent.
+ *
+ * People type the number the way they read it out — "081-234-5678",
+ * "081 234 5678", "+66 81 234 5678" — and every one of those is the same
+ * number. Stripping to digits here means the person is never told their own
+ * phone number is wrong because of a dash, and the backend stores ONE shape
+ * rather than five variants of the same subscriber.
+ *
+ * +66 is folded back to the domestic 0-prefix rather than rejected: it is
+ * what a phone's own contact card produces, and refusing it would be
+ * refusing correct input.
  */
-const documentNumberLabel = computed(() =>
-  isThaiIdDocument.value
-    ? t('reg_id_number_thai', 'เลขบัตรประชาชน 13 หลัก', 'Thai national ID (13 digits)')
-    : t('reg_id_number_passport', 'เลขที่หนังสือเดินทาง', 'Passport number'),
-)
-const documentNumberPlaceholder = computed(() =>
-  isThaiIdDocument.value
-    ? t('reg_id_number_thai_ph', 'กรอกตัวเลข 13 หลัก', 'Enter 13 digits')
-    : t('reg_id_number_passport_ph', 'เช่น AA1234567', 'e.g. AA1234567'),
-)
-const documentNumberHint = computed(() =>
-  isThaiIdDocument.value
-    ? t(
-        'reg_id_number_thai_hint',
-        'กรอกตามกลุ่มตัวเลขที่พิมพ์บนหน้าบัตร ครบแล้วระบบจะเลื่อนช่องถัดไปให้เอง',
-        'Type each group as printed on your card — it moves to the next box for you.',
-      )
-    : t(
-        'reg_id_number_passport_hint',
-        'ตัวอักษรภาษาอังกฤษและตัวเลข 6-12 ตัว ตามที่ปรากฏบนหนังสือเดินทาง',
-        '6-12 letters and digits, exactly as printed in your passport.',
-      ),
-)
+function normalisePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
 
-function selectIdDocumentType(next: IdDocumentType) {
-  if (form.value.id_document_type === next) return
-  form.value.id_document_type = next
-  // CLEAR THE NUMBER WHENEVER THE TYPE CHANGES. Leaving a 13-digit Thai ID
-  // sitting in a field now labelled "passport" is a guaranteed 422, and a
-  // confusing one: the server would answer "6-12 letters or digits" about
-  // digits the person typed for a different document entirely. The reverse
-  // is worse — a passport number under a Thai-ID label fails a checksum the
-  // person has no way to reason about. The two documents share one column on
-  // the server; they must not share a value in this form.
-  form.value.national_id = ''
-  nationalIdError.value = ''
-  idDocumentTypeError.value = ''
+  if (digits.startsWith('66')) return `0${digits.slice(2)}`
+
+  return digits
 }
 
 /**
- * Focus whichever control is currently showing the document number.
- *
- * The two document types are rendered by two different things — a Thai ID
- * by NationalIdSegments (five boxes), a passport by a plain input — so a
- * single template ref cannot reach both. Every "put the cursor back on the
- * bad field" path goes through here, because a validation message on a
- * field the person then has to hunt for is barely better than no message.
- *
- * ── THE HISTORY THIS REPLACES ──
- *
- * The first fix for the 2026-08-21 report ("validate บัตรประชาชนไม่ผ่าน")
- * was a single field that stripped separators as they were typed. That
- * removed the truncation bug — a card typed as "1-1017-00230-70-8" used to
- * hit maxlength="13" part-way through, and the server then said "must be 13
- * digits" to somebody who had typed thirteen. The boxes remove the same bug
- * a better way: the person can now see their number in the same groups the
- * card prints, so a mistyped digit is visible BEFORE a mod-11 checksum
- * rejects the whole number without saying which digit was wrong.
- *
- * The checksum itself is still not duplicated in the browser — see
- * NationalIdSegments.vue and validateForm() below.
+ * 9 or 10 digits starting with 0 — mobiles are 10 (08x/09x/06x), Bangkok
+ * and provincial landlines are 9 (02x, 03x…). Both are real numbers a
+ * registrant may give, so the check accepts both rather than assuming
+ * everyone signs up from a mobile. Deliberately NOT a per-prefix allowlist:
+ * carriers add ranges, and a form that rejects a number the network
+ * actually issued is worse than one that accepts a typo'd 9 digits.
  */
-function focusNationalId(): void {
-  if (isThaiIdDocument.value) {
-    nationalIdSegmentsEl.value?.focus()
-
-    return
-  }
-
-  nationalIdInputEl.value?.focus()
+function isValidThaiPhone(raw: string): boolean {
+  return /^0\d{8,9}$/.test(normalisePhone(raw))
 }
 
 const showPassword = ref(false)
@@ -576,8 +518,7 @@ function clearFieldErrors() {
   firstNameError.value = ''
   lastNameError.value = ''
   emailError.value = ''
-  idDocumentTypeError.value = ''
-  nationalIdError.value = ''
+  phoneError.value = ''
   passwordError.value = ''
   passwordConfirmError.value = ''
 }
@@ -608,24 +549,22 @@ function validateForm(): boolean {
     emailInputEl.value?.focus()
     return false
   }
-  // TASK-123 — required on this path (RegisterRequest), unlike the Admin
-  // create form where the same two fields stay optional. Only PRESENCE is
-  // checked here: the 13-digit mod-11 checksum and the passport shape have
-  // exactly one implementation, App\Rules\IdDocument, and a second copy in
-  // Vue is how the two drift apart.
-  if (!form.value.id_document_type) {
-    idDocumentTypeError.value = t(
-      'reg_id_type_required',
-      'กรุณาเลือกประเภทเอกสารยืนยันตัวตน',
-      'Please choose your ID document type',
-    )
+  // 2026-08-27 — the phone is REQUIRED here now (see the form ref's note).
+  // Presence and shape are both checked, and in that order, so somebody who
+  // left it blank is told that rather than being told their empty field is
+  // not a valid Thai number.
+  if (!form.value.phone.trim()) {
+    phoneError.value = t('reg_phone_required', 'กรุณากรอกเบอร์โทร', 'Phone number is required')
+    phoneInputEl.value?.focus()
     return false
   }
-  if (!form.value.national_id.trim()) {
-    nationalIdError.value = isThaiIdDocument.value
-      ? t('reg_id_number_thai_required', 'กรุณากรอกเลขบัตรประชาชน', 'Please enter your Thai national ID')
-      : t('reg_id_number_passport_required', 'กรุณากรอกเลขที่หนังสือเดินทาง', 'Please enter your passport number')
-    focusNationalId()
+  if (!isValidThaiPhone(form.value.phone)) {
+    phoneError.value = t(
+      'reg_phone_invalid',
+      'เบอร์โทรไม่ถูกต้อง กรุณากรอกเบอร์ในประเทศไทย เช่น 0812345678',
+      'Enter a valid Thai phone number, e.g. 0812345678',
+    )
+    phoneInputEl.value?.focus()
     return false
   }
   if (!form.value.password) {
@@ -654,19 +593,7 @@ function applyServerFieldErrors(errors: Record<string, string[]>) {
   if (errors.first_name?.[0]) { firstNameError.value = errors.first_name[0]; firstNameInputEl.value?.focus() }
   else if (errors.last_name?.[0]) { lastNameError.value = errors.last_name[0]; lastNameInputEl.value?.focus() }
   else if (errors.email?.[0]) { emailError.value = errors.email[0]; emailInputEl.value?.focus() }
-  // TASK-123 — no focus() for the type: the control is a two-item selector
-  // that always holds a valid value, so this branch only fires if the server
-  // and this view ever disagree about the allowed values. There is nothing
-  // for the person to type, so stealing focus would only move the page away
-  // from the field they can actually fix.
-  else if (errors.id_document_type?.[0]) { idDocumentTypeError.value = errors.id_document_type[0] }
-  // Everything about the document NUMBER lands here, including the
-  // per-company duplicate ("เลขที่เอกสารนี้ถูกใช้สมัครสมาชิกในบริษัทนี้แล้ว",
-  // raised by RegistrationService, not by the Form Request). It is rendered
-  // inline on the number field rather than as a banner because that is the
-  // only field the person can change to get past it — and the backend
-  // deliberately names nobody, so there is nothing else to show.
-  else if (errors.national_id?.[0]) { nationalIdError.value = errors.national_id[0]; focusNationalId() }
+  else if (errors.phone?.[0]) { phoneError.value = errors.phone[0]; phoneInputEl.value?.focus() }
   else if (errors.password?.[0]) { passwordError.value = errors.password[0]; passwordInputEl.value?.focus() }
   else if (errors.invite_code?.[0]) {
     // The code that worked at step 1 stopped being valid by the time
@@ -704,20 +631,9 @@ async function submitRegister() {
       first_name: form.value.first_name,
       last_name: form.value.last_name,
       email: form.value.email,
-      phone: form.value.phone || undefined,
-      // TASK-123 — both required by RegisterRequest; the type is sent FIRST
-      // in the payload for readability only (order is irrelevant on the
-      // wire, but App\Rules\IdDocument reads the type to decide which check
-      // to run, so the two always travel together).
-      id_document_type: form.value.id_document_type,
-      // Passport letters go up on the wire to match what the field visually
-      // shows (the input is CSS-uppercased). Harmless either way — the
-      // backend upper-cases before deriving the blind index — but storing
-      // what the person appeared to type avoids a value that renders one way
-      // and is stored another. Thai IDs are digits, so this is a no-op there.
-      national_id: isThaiIdDocument.value
-        ? form.value.national_id.trim()
-        : form.value.national_id.trim().toUpperCase(),
+      // Normalised, not raw: the person may have typed dashes, spaces or
+      // +66 (see normalisePhone), and the column should hold one shape.
+      phone: normalisePhone(form.value.phone),
       password: form.value.password,
       password_confirmation: form.value.password_confirmation,
     })
@@ -751,15 +667,15 @@ const introLine = computed(() => {
   if (viaRecruitLink.value) {
     return t(
       'reg_sub_ref',
-      'กรอกข้อมูลเพื่อสมัครเข้าทีม',
-      'Fill in your details to join the team',
+      'กรอกข้อมูลเพื่อสมัคร The Partner Members',
+      'Fill in your details to join The Partner Members',
     )
   }
   if (viaCompanyLink.value) {
     return t(
       'reg_sub_company_link',
-      'กรอกข้อมูลเพื่อสมัครเป็นตัวแทน',
-      'Fill in your details to apply as an agent',
+      'กรอกข้อมูลเพื่อสมัคร The Partner Members',
+      'Fill in your details to join The Partner Members',
     )
   }
 
@@ -792,7 +708,7 @@ const introLine = computed(() => {
 
       <div class="mt-8 flex items-center gap-2">
         <span class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted">
-          {{ t('reg_tag_portal', 'สมัครเป็นตัวแทน', 'Become an Agent') }}
+          {{ t('reg_tag_portal', 'The Partner Members', 'The Partner Members') }}
         </span>
         <span v-if="stepLabel" class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted">
           {{ stepLabel }}
@@ -801,8 +717,8 @@ const introLine = computed(() => {
 
       <div class="mt-4">
         <h1 class="text-3xl sm:text-4xl leading-tight text-ink-card">
-          <span class="font-light text-ink-card-muted" :class="lang === 'EN' ? 'italic' : ''">{{ t('reg_hello', 'สมัคร', 'Create your') }}</span>
-          <span class="font-bold"> {{ t('reg_back', 'สมาชิกใหม่', 'account') }}</span>
+          <span class="font-light text-ink-card-muted" :class="lang === 'EN' ? 'italic' : ''">{{ t('reg_hello', 'สมัคร', 'Join') }}</span>
+          <span class="font-bold"> {{ t('reg_back', 'The Partner Members', 'The Partner Members') }}</span>
         </h1>
         <p class="mt-2 text-sm text-ink-card-muted">{{ introLine }}</p>
       </div>
@@ -890,10 +806,14 @@ const introLine = computed(() => {
         >
           <Icon name="users" :size="16" class="mt-0.5 shrink-0" />
           <span>
+            <!-- The company name is READ FROM THE RESOLVED LINK, never
+                 hardcoded: this portal is white-label (ADR-018) and a
+                 recruit of another company must see their own company's
+                 name here, not the one this copy was written against. -->
             {{ t(
               'reg_ref_context',
-              `คุณกำลังสมัครเข้าทีมของ ${refInviterName} ที่ ${refCompanyName}`,
-              `You are joining ${refInviterName}'s team at ${refCompanyName}`,
+              `ร่วมเป็น ${refCompanyName} - The Circle Members · ผู้แนะนำ ${refInviterName}`,
+              `Join ${refCompanyName} - The Circle Members · Referred by ${refInviterName}`,
             ) }}
           </span>
         </div>
@@ -1023,98 +943,25 @@ const introLine = computed(() => {
 
         <div>
           <label for="phone" class="block text-xs font-bold text-ink-card-muted mb-1.5">
-            {{ t('reg_phone', 'เบอร์โทร (ไม่บังคับ)', 'Phone (optional)') }}
+            {{ t('reg_phone', 'เบอร์โทร', 'Phone') }}
+            <span class="text-ink-danger">*</span>
           </label>
           <div class="relative">
             <Icon name="phone" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-card-subtle" />
             <input
               id="phone"
+              ref="phoneInputEl"
               v-model="form.phone"
               type="tel"
+              inputmode="tel"
               autocomplete="tel"
-              class="bg-surface-input w-full pl-9 pr-3 py-2.5 rounded-xl border border-line-input text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
+              class="bg-surface-input w-full pl-9 pr-3 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
+              :class="phoneError ? 'border-rose-400' : 'border-line-input'"
               placeholder="08xxxxxxxx"
+              @input="phoneError = ''"
             />
           </div>
-        </div>
-
-        <!-- TASK-123 (backend TASK-122) — identity document. Two controls,
-             always adjacent: the TYPE decides what the NUMBER means, so
-             separating them would let someone answer the second question
-             without having seen the first. -->
-        <div>
-          <label class="block text-xs font-bold text-ink-card-muted mb-1.5">
-            {{ t('reg_id_type', 'เอกสารยืนยันตัวตน', 'ID document') }}
-            <span class="text-ink-danger">*</span>
-          </label>
-          <!-- One short line on WHY, in plain language. Not a legal notice:
-               a consent/PDPA wall on a signup form is read by nobody and
-               makes an ordinary question look alarming. -->
-          <p class="text-xs text-ink-card-subtle mb-2">
-            {{ t('reg_id_why', 'ใช้เพื่อยืนยันตัวตนของตัวแทนเท่านั้น', 'Used only to verify your identity as an agent.') }}
-          </p>
-          <div class="grid grid-cols-2 gap-2">
-            <button
-              v-for="opt in idDocumentTypeOptions"
-              :key="opt.value"
-              type="button"
-              :aria-pressed="form.id_document_type === opt.value"
-              class="min-h-[44px] px-3 py-2.5 rounded-xl border text-sm font-bold transition-colors"
-              :class="
-                form.id_document_type === opt.value
-                  ? 'bg-brand-600 border-brand-600 text-ink-primary'
-                  : 'bg-surface-card border-line-card text-ink-card-muted hover:border-brand-500'
-              "
-              @click="selectIdDocumentType(opt.value)"
-            >
-              {{ opt.label }}
-            </button>
-          </div>
-          <p v-if="idDocumentTypeError" class="text-xs text-ink-danger mt-1">{{ idDocumentTypeError }}</p>
-        </div>
-
-        <div>
-          <label for="national_id" class="block text-xs font-bold text-ink-card-muted mb-1.5">
-            {{ documentNumberLabel }}
-            <span class="text-ink-danger">*</span>
-          </label>
-          <!-- A Thai ID gets the card's own five groups (see
-               NationalIdSegments.vue). A passport is one free-form field:
-               its number has no printed grouping to mirror, and splitting a
-               6-12 character alphanumeric into fixed boxes would invent a
-               format that does not exist. -->
-          <NationalIdSegments
-            v-if="isThaiIdDocument"
-            id="national_id"
-            ref="nationalIdSegmentsEl"
-            v-model="form.national_id"
-            :invalid="Boolean(nationalIdError)"
-            :aria-label="documentNumberLabel"
-            @update:model-value="nationalIdError = ''"
-          />
-          <div v-else class="relative">
-            <Icon name="shield" :size="16" class="absolute left-3 top-1/2 -translate-y-1/2 text-ink-card-subtle" />
-            <!-- autocomplete off + spellcheck off: this is PDPA-sensitive
-                 (Section 6) and has no business being remembered by the
-                 browser's form-fill store or sent to a spell checker. -->
-            <input
-              id="national_id"
-              ref="nationalIdInputEl"
-              v-model="form.national_id"
-              type="text"
-              autocomplete="off"
-              spellcheck="false"
-              inputmode="text"
-              autocapitalize="characters"
-              maxlength="12"
-              :placeholder="documentNumberPlaceholder"
-              class="bg-surface-input w-full pl-9 pr-3 py-2.5 min-h-[44px] rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors uppercase tracking-wide"
-              :class="nationalIdError ? 'border-rose-400' : 'border-line-input'"
-              @input="nationalIdError = ''"
-            />
-          </div>
-          <p class="text-xs text-ink-card-subtle mt-1">{{ documentNumberHint }}</p>
-          <p v-if="nationalIdError" class="text-xs text-ink-danger mt-1">{{ nationalIdError }}</p>
+          <p v-if="phoneError" class="text-xs text-ink-danger mt-1">{{ phoneError }}</p>
         </div>
 
         <div>
@@ -1195,7 +1042,7 @@ const introLine = computed(() => {
           :disabled="submitting"
           class="w-full py-2.5 rounded-full bg-brand-600 text-ink-primary text-sm font-bold shadow-sm hover:bg-brand-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
         >
-          <span>{{ submitting ? t('reg_submitting', 'กำลังสมัคร...', 'Registering...') : t('reg_submit', 'สมัครสมาชิก', 'Create account') }}</span>
+          <span>{{ submitting ? t('reg_submitting', 'กำลังสมัคร...', 'Registering...') : t('reg_submit', 'สมัคร The Partner Members', 'Join The Partner Members') }}</span>
           <Icon v-if="!submitting" name="arrow_right" :size="16" />
         </button>
       </form>
