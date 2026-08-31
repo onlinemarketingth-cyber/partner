@@ -3,6 +3,7 @@
 use App\Enums\PaymentProvider;
 use App\Services\Payment\Gateways\ManualGateway;
 use App\Services\Payment\Gateways\OmiseGateway;
+use App\Services\Payment\Gateways\StripeGateway;
 
 return [
 
@@ -27,6 +28,7 @@ return [
     'gateways' => [
         PaymentProvider::Manual->value => ManualGateway::class,
         PaymentProvider::Omise->value => OmiseGateway::class,
+        PaymentProvider::Stripe->value => StripeGateway::class,
     ],
 
 ];

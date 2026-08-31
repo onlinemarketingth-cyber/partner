@@ -34,12 +34,14 @@ enum PaymentProvider: string
 {
     case Manual = 'manual';
     case Omise = 'omise';
+    case Stripe = 'stripe';
 
     public function label(): string
     {
         return match ($this) {
             self::Manual => 'โอนเงิน / PromptPay (ตรวจสลิปเอง)',
             self::Omise => 'Omise (Opn Payments)',
+            self::Stripe => 'Stripe (บัตรเครดิต / PromptPay)',
         };
     }
 

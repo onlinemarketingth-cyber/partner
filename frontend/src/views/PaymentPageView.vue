@@ -474,6 +474,38 @@ const cardIntent = computed(() => {
   if (!gateway || gateway.intent?.kind !== 'tokenize' || !gateway.intent.public_key) return null
   return gateway.intent
 })
+/**
+ * 2026-08-27 — the REDIRECT flow (Stripe Checkout).
+ *
+ * Some providers do not tokenise in our page at all: they host the payment
+ * page themselves and we send the customer there. The server already says
+ * which shape it wants via `intent.kind`, so this view only has to honour
+ * it — nothing here names Stripe, and a second redirect-based provider
+ * needs no change at all.
+ */
+const redirectIntent = computed(() => {
+  const gateway = order.value?.gateway
+  if (!gateway || gateway.intent?.kind !== 'redirect' || !gateway.intent.redirect_url) return null
+  return gateway.intent
+})
+
+/**
+ * Leave for the provider's page.
+ *
+ * A full navigation, not window.open: a popup is blocked on most phones,
+ * and a payment flow that silently does nothing when tapped is worse than
+ * one that takes over the tab. The customer comes back to this same page
+ * afterwards (success_url), where the order's own state — not the return
+ * URL — decides what they are shown.
+ */
+function payByRedirect() {
+  const intent = redirectIntent.value
+  if (!intent?.redirect_url || charging.value) return
+
+  charging.value = true
+  window.location.href = intent.redirect_url
+}
+
 const isTestMode = computed(() => order.value?.gateway.mode === 'test')
 
 async function payByCard() {
@@ -650,6 +682,33 @@ async function payByCard() {
                First, because it is the method that finishes in one step; the
                bank-transfer instructions below are untouched and remain the
                fallback for a customer with no card or a declined one. -->
+          <!-- Provider-hosted checkout (Stripe). Same position on the page
+               as the card form: the one-step method first, bank transfer
+               below as the fallback that always works. -->
+          <div v-if="redirectIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
+            <div class="flex items-center gap-2">
+              <Icon name="credit_card" :size="16" class="text-ink-brand" />
+              <p class="text-sm font-bold text-ink-card">ชำระด้วยบัตรเครดิต / เดบิต หรือ PromptPay</p>
+            </div>
+
+            <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
+              โหมดทดสอบ — รายการนี้จะไม่มีการเรียกเก็บเงินจริง
+            </p>
+
+            <button
+              type="button"
+              :disabled="charging"
+              class="w-full py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              @click="payByRedirect"
+            >
+              {{ charging ? 'กำลังพาไปหน้าชำระเงิน...' : `ชำระ ${formatBaht(order.amount_baht)}` }}
+            </button>
+
+            <p class="text-xs text-ink-card-subtle text-center">
+              ระบบจะพาคุณไปยังหน้าชำระเงินที่ปลอดภัยของผู้ให้บริการ แล้วกลับมาที่หน้านี้อัตโนมัติ
+            </p>
+          </div>
+
           <div v-if="cardIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="credit_card" :size="16" class="text-ink-brand" />
