@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * ReferralRow — one deal in a referral list: client, product, branch,
  * preferred time, current pipeline stage, and TASK-141's one-press
@@ -157,7 +160,7 @@ function formatDateTime(iso: string | null): string {
           Muted chip + an explicit "ขั้นตอน:" prefix says what it is.
         -->
         <span class="text-xs text-ink-card-muted bg-surface-chip border border-line-card px-2 py-1 rounded-lg whitespace-nowrap">
-          ขั้นตอน: <span class="font-bold text-ink-card">{{ stageLabelTh(referral.current_stage) }}</span>
+          {{ td('pipeline.step') }} <span class="font-bold text-ink-card">{{ stageLabelTh(referral.current_stage) }}</span>
         </span>
 
         <!-- TASK-141 requirement 3 — the payment state is readable WITHOUT
@@ -202,7 +205,7 @@ function formatDateTime(iso: string | null): string {
           @click="$emit('viewSlip')"
         >
           <Icon name="download" :size="14" />
-          ดูสลิป
+          {{ td('order.view_slip') }}
         </AppButton>
 
         <AppButton
@@ -212,7 +215,7 @@ function formatDateTime(iso: string | null): string {
           @click="$emit('share')"
         >
           <Icon name="share" :size="14" />
-          แชร์ลิงก์ชำระเงิน
+          {{ td('order.share_pay_link') }}
         </AppButton>
         <!-- ONE press: creates the order AND opens the share sheet on the
              returned pay link. -->
@@ -224,7 +227,7 @@ function formatDateTime(iso: string | null): string {
           @click="$emit('collect')"
         >
           <Icon name="money" :size="14" />
-          เก็บเงินเลย
+          {{ td('pipeline.collect_now') }}
         </AppButton>
       </div>
     </div>

@@ -246,7 +246,7 @@ async function handleSubmit() {
       <!-- Outline tag pills, echoing the reference's "Smart glasses / NeuroAtlas" tags -->
       <div class="mt-8 flex items-center gap-2">
         <span class="inline-flex items-center px-3 py-1 rounded-full border border-line-card text-xs font-bold text-ink-card-muted">
-          {{ t('login_tag_portal', 'พอร์ทัลตัวแทน', 'Agent Portal') }}
+          {{ t('login_tag_portal', 'The Partner Members', 'The Partner Members') }}
         </span>
         <!-- TASK-055 / ADR-018 — the COMPANY's own name, from the theme this
              page already loaded, never a hardcoded one.

@@ -56,6 +56,7 @@
  */
 import { computed, watch } from 'vue'
 import Icon from './Icon.vue'
+import { useI18n } from '@/composables/useI18n'
 
 export interface FilterOption {
     value: string | number | null
@@ -75,6 +76,7 @@ export interface SheetAnchor {
     width: number
 }
 
+const { td } = useI18n()
 const props = withDefaults(
     defineProps<{
         /** v-model:open — the sheet is fully controlled by the caller. */
@@ -186,7 +188,7 @@ const anchoredStyle = computed(() => {
                         <button type="button"
                                 @click="close"
                                 class="w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-ink-card-subtle active:bg-surface-chip"
-                                aria-label="ปิด">
+                                :aria-label="td('common.close')">
                             <Icon name="close" :size="18" />
                         </button>
                     </div>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * PipelineBoard — the cross-client stage board for the §4.3 pipeline
  * state machine, wired to the real API.
@@ -865,7 +868,7 @@ function formatDateTime(iso: string): string {
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadAll"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -886,8 +889,8 @@ function formatDateTime(iso: string): string {
         <EmptyState
           v-if="!referrals.length"
           icon="pipeline"
-          title="ยังไม่มีดีลในกระบวนการขาย"
-          message="ดีลเกิดจาก “+ เพิ่มสินค้าที่สนใจ” ในข้อมูลลูกค้า — commission (BR-4) จะ trigger ที่ขั้น Complete Payment"
+          :title="td('pipeline.empty')"
+          :message="td('pipeline.empty_help')"
           class="mt-4"
         />
         <EmptyState
@@ -917,7 +920,7 @@ function formatDateTime(iso: string): string {
             >
               <Icon name="pipeline" :size="14" class="text-ink-card-subtle mt-0.5 shrink-0" />
               <div class="min-w-0">
-                <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider">เส้นทางการขาย</p>
+                <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider">{{ td('pipeline.title') }}</p>
                 <p class="text-xs font-bold" :class="journey.stages.length ? 'text-ink-card-muted' : 'text-ink-danger'">
                   {{ journey.label }}
                 </p>
@@ -963,8 +966,8 @@ function formatDateTime(iso: string): string {
                              UI decision; the column stays NULL so a real
                              branch can never be confused with one. -->
                         <p class="text-xs text-ink-card-muted mt-0.5">
-                          {{ r.product?.name }} · {{ r.branch ?? 'ไม่ระบุสาขา' }}
-                          <span v-if="r.current_stage.key === 'ongoing_next_meeting' && r.meeting_number"> · นัดหมายครั้งที่ {{ r.meeting_number }}</span>
+                          {{ r.product?.name }} · {{ r.branch ?? td('pipeline.no_branch') }}
+                          <span v-if="r.current_stage.key === 'ongoing_next_meeting' && r.meeting_number"> · {{ td('pipeline.meeting_no', '', { n: r.meeting_number }) }}</span>
                         </p>
                         <!-- TASK-177 §4.5 — the order behind this deal, so the
                              agent can see WHAT they are about to confirm (and
@@ -988,7 +991,7 @@ function formatDateTime(iso: string): string {
                           @click.stop="viewSlip(r.order)"
                         >
                           <Icon name="download" :size="14" />
-                          ดูสลิป
+                          {{ td('order.view_slip') }}
                         </button>
                         <!-- §4.5 — "ยืนยันโดย …" only on a closed bill, and
                              never blank (see verifiedByLine). -->
@@ -1029,11 +1032,11 @@ function formatDateTime(iso: string): string {
                         size="sm"
                         :loading="confirmingOrderId === r.order?.id"
                         :disabled="confirmingOrderId !== null"
-                        title="ยืนยันว่าได้รับเงินสำหรับคำสั่งซื้อนี้แล้ว"
+                        :title="td('pipeline.confirm_paid')"
                         data-test="confirm-order"
                         @click.stop="askConfirmOrder(r)"
                       >
-                        รับชำระเงินแล้ว
+                        {{ td('pipeline.paid') }}
                       </AppButton>
                       <!-- `loading` makes the button inert: this advances the
                            §4.3 state machine and a double tap is a real risk.
@@ -1056,19 +1059,19 @@ function formatDateTime(iso: string): string {
                         v-else-if="r.pipeline.next_stage"
                         size="sm"
                         :loading="advancing === r.id"
-                        :title="`เลื่อนไปขั้น ${stageLabelTh(r.pipeline.next_stage)}`"
+                        :title="td('pipeline.advance_to', '', { stage: stageLabelTh(r.pipeline.next_stage) })"
                         data-test="advance"
                         @click.stop="advance(r)"
                       >
-                        ไป: {{ stageLabelTh(r.pipeline.next_stage) }}
+                        {{ td('pipeline.to_stage', '', { stage: stageLabelTh(r.pipeline.next_stage) }) }}
                       </AppButton>
                       <span
                         v-else-if="!r.pipeline.stages.length"
                         class="text-xs font-bold text-ink-danger whitespace-nowrap"
                       >
-                        เส้นทางไม่ถูกต้อง
+                        {{ td('pipeline.invalid') }}
                       </span>
-                      <span v-else class="text-xs font-bold text-ink-card-subtle whitespace-nowrap">จบเส้นทางแล้ว</span>
+                      <span v-else class="text-xs font-bold text-ink-card-subtle whitespace-nowrap">{{ td('pipeline.finished') }}</span>
                       <!--
                         TASK-191 §3.3 — ADDITIVE, deliberately OUTSIDE the
                         v-if/v-else-if chain above. That chain is about "what
@@ -1090,7 +1093,7 @@ function formatDateTime(iso: string): string {
                         @click.stop="shareOrderLink(r)"
                       >
                         <Icon name="share" :size="14" />
-                        แชร์ลิงก์
+                        {{ td('link.share') }}
                       </AppButton>
                     </div>
                   </AppCard>
@@ -1135,14 +1138,14 @@ function formatDateTime(iso: string): string {
             </template>
           </div>
           <p v-else class="mt-3 text-xs font-bold text-ink-danger">
-            อ่านเส้นทางการขายของรายการนี้ไม่ได้ — กรุณาแจ้งผู้ดูแลระบบ
+            {{ td('pipeline.unreadable') }}
           </p>
 
           <h3 class="mt-5 mb-2 text-sm font-bold text-ink-card flex items-center gap-2">
-            <Icon name="list" :size="16" /> ประวัติการเปลี่ยนสถานะ (audit log)
+            <Icon name="list" :size="16" /> {{ td('pipeline.audit') }}
           </h3>
 
-          <EmptyState v-if="!loadingLogs && !stageLogs.length" icon="list" title="ยังไม่มีประวัติ" />
+          <EmptyState v-if="!loadingLogs && !stageLogs.length" icon="list" :title="td('common.no_history')" />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
             <div v-for="log in stageLogs" :key="log.id" class="p-3 rounded-lg border border-line-card text-sm">
               <p class="font-bold text-ink-card">
@@ -1178,7 +1181,7 @@ function formatDateTime(iso: string): string {
           ? `ยืนยันว่าได้รับเงิน ${formatBaht(pendingConfirm.order.amount_satang)} บาท สำหรับ ${pendingConfirm.order.order_number} แล้ว?`
           : ''
       "
-      body="ระบบจะบันทึกคอมมิชชั่นทันทีและแก้ไขภายหลังไม่ได้ (BR-4)"
+      :body="td('pipeline.commission_warning')"
       @confirm="confirmOrderPayment"
       @update:show="
         (v: boolean) => {

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * ProductShareView — PUBLIC, unauthenticated product showcase page
  * (TASK-056 P3). Route: /p/:token (meta.public — full-bleed, no app
@@ -380,20 +383,20 @@ function openLightbox(material: SalesMaterialItem) {
       <!-- Loading -->
       <!-- Sits directly on the PAGE surface (no card around it), so it
            takes the app ink, not the card ink. -->
-      <div v-if="pageState === 'loading'" class="mt-16 py-10 text-center text-sm text-ink-app-muted">กำลังโหลด...</div>
+      <div v-if="pageState === 'loading'" class="mt-16 py-10 text-center text-sm text-ink-app-muted">{{ td('common.loading2') }}</div>
 
       <!-- Invalid / revoked token -->
       <div v-else-if="pageState === 'not_found'" class="mt-16 py-10 text-center bg-surface-card rounded-3xl shadow-xl border border-line-card/80">
         <div class="mx-auto w-14 h-14 rounded-full border border-rose-100 flex items-center justify-center">
           <Icon name="alert" :size="24" class="text-ink-danger" />
         </div>
-        <h2 class="mt-4 text-lg font-bold text-ink-card">ลิงก์นี้ไม่ถูกต้องหรือถูกยกเลิกแล้ว</h2>
-        <p class="mt-2 text-sm text-ink-card-muted">กรุณาติดต่อตัวแทนของคุณเพื่อขอลิงก์ใหม่</p>
+        <h2 class="mt-4 text-lg font-bold text-ink-card">{{ td('share.link_invalid') }}</h2>
+        <p class="mt-2 text-sm text-ink-card-muted">{{ td('public.ask_member_new_link') }}</p>
       </div>
 
       <div v-else-if="pageState === 'error'" class="mt-16 py-10 text-center bg-surface-card rounded-3xl shadow-xl border border-line-card/80">
-        <p class="text-sm text-ink-danger">เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง</p>
-        <button type="button" class="mt-3 text-sm font-bold text-ink-brand hover:underline" @click="load">ลองอีกครั้ง</button>
+        <p class="text-sm text-ink-danger">{{ td('common.error_network2') }}</p>
+        <button type="button" class="mt-3 text-sm font-bold text-ink-brand hover:underline" @click="load">{{ td('common.try_again') }}</button>
       </div>
 
       <!-- Ready.
@@ -433,7 +436,7 @@ function openLightbox(material: SalesMaterialItem) {
         >
           <div class="flex items-center gap-2 text-sm">
             <Icon name="user" :size="16" class="text-ink-brand" />
-            <span class="text-ink-card-muted">แนะนำโดย</span>
+            <span class="text-ink-card-muted">{{ td('share.referred_by') }}</span>
             <span class="font-bold text-ink-card">{{ share.agent_name }}</span>
           </div>
 
@@ -449,7 +452,7 @@ function openLightbox(material: SalesMaterialItem) {
             >
               <Icon name="phone" :size="16" class="shrink-0 text-ink-brand" />
               <span class="min-w-0">
-                <span class="block text-[11px] text-ink-chip/70 leading-tight">โทรหาผู้แนะนำ</span>
+                <span class="block text-[11px] text-ink-chip/70 leading-tight">{{ td('share.call_referrer') }}</span>
                 <span class="block text-sm font-bold text-ink-chip truncate">{{ share.agent_phone }}</span>
               </span>
             </a>
@@ -461,7 +464,7 @@ function openLightbox(material: SalesMaterialItem) {
             >
               <Icon name="mail" :size="16" class="shrink-0 text-ink-brand" />
               <span class="min-w-0">
-                <span class="block text-[11px] text-ink-chip/70 leading-tight">ส่งอีเมลถึงผู้แนะนำ</span>
+                <span class="block text-[11px] text-ink-chip/70 leading-tight">{{ td('share.email_referrer') }}</span>
                 <span class="block text-sm font-bold text-ink-chip truncate">{{ share.agent_email }}</span>
               </span>
             </a>
@@ -523,7 +526,7 @@ function openLightbox(material: SalesMaterialItem) {
               <button
                 type="button"
                 class="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white flex items-center justify-center hover:bg-black/65 active:scale-90 transition"
-                aria-label="ก่อนหน้า"
+                :aria-label="td('common.prev')"
                 @click="activeMediaIndex = (activeMediaIndex - 1 + product.media.length) % product.media.length"
               >
                 <Icon name="chevron_left" :size="20" />
@@ -531,7 +534,7 @@ function openLightbox(material: SalesMaterialItem) {
               <button
                 type="button"
                 class="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/45 text-white flex items-center justify-center hover:bg-black/65 active:scale-90 transition"
-                aria-label="ถัดไป"
+                :aria-label="td('common.next2')"
                 @click="activeMediaIndex = (activeMediaIndex + 1) % product.media.length"
               >
                 <Icon name="chevron_right" :size="20" />
@@ -602,7 +605,7 @@ function openLightbox(material: SalesMaterialItem) {
             <p class="text-2xl font-bold text-ink-brand">{{ formatBaht(product.payable_price_satang) }}</p>
             <template v-if="hasDiscount">
               <p class="text-sm text-ink-card-subtle line-through">{{ formatBaht(product.price_satang) }}</p>
-              <span class="px-2 py-0.5 rounded-full bg-rose-50 text-ink-danger text-[11px] font-bold">ราคาโปรโมชัน</span>
+              <span class="px-2 py-0.5 rounded-full bg-rose-50 text-ink-danger text-[11px] font-bold">{{ td('product.promo_price') }}</span>
             </template>
           </div>
           <p v-if="product.description" class="mt-3 text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">
@@ -612,7 +615,7 @@ function openLightbox(material: SalesMaterialItem) {
 
         <!-- Specs -->
         <div v-if="groupedSpecs.length || product.spec_description" class="bg-surface-card rounded-3xl shadow-xl border border-line-card/80 p-5">
-          <h2 class="text-sm font-bold text-ink-card mb-3">รายละเอียดสินค้า</h2>
+          <h2 class="text-sm font-bold text-ink-card mb-3">{{ td('product.description') }}</h2>
           <p v-if="product.spec_description" class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line mb-3">
             {{ product.spec_description }}
           </p>
@@ -637,7 +640,7 @@ function openLightbox(material: SalesMaterialItem) {
              image's own stream_url IS its thumbnail — fine at this size,
              and it is a file the customer is about to download anyway. -->
         <div v-if="groupedMaterials.length" class="bg-surface-card rounded-3xl shadow-xl border border-line-card/80 p-5">
-          <h2 class="text-sm font-bold text-ink-card mb-3">รายละเอียดเพิ่มเติม</h2>
+          <h2 class="text-sm font-bold text-ink-card mb-3">{{ td('product.more_details') }}</h2>
           <div v-for="[group, materials] in groupedMaterials" :key="group" class="mb-4 last:mb-0">
             <p v-if="groupedMaterials.length > 1 || group !== 'รายละเอียดเพิ่มเติม'"
                class="text-xs font-bold text-ink-card-subtle uppercase tracking-wider mb-2">
@@ -724,12 +727,12 @@ function openLightbox(material: SalesMaterialItem) {
     >
       <div class="max-w-2xl lg:max-w-5xl mx-auto flex items-center gap-3">
         <div class="min-w-0 flex-1">
-          <p class="text-[11px] text-ink-card-subtle">ราคาที่ต้องชำระ</p>
+          <p class="text-[11px] text-ink-card-subtle">{{ td('pay.amount_due') }}</p>
           <p class="text-lg font-bold text-ink-brand leading-tight truncate">
             {{ formatBaht(product.payable_price_satang) }}
           </p>
         </div>
-        <AppButton class="shrink-0" @click="openCheckout">ซื้อเลย</AppButton>
+        <AppButton class="shrink-0" @click="openCheckout">{{ td('share.buy_now') }}</AppButton>
       </div>
     </div>
 
@@ -748,13 +751,13 @@ function openLightbox(material: SalesMaterialItem) {
         >
           <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
-              <h2 id="checkout-sheet-title" class="text-lg font-bold text-ink-card">กรอกข้อมูลเพื่อสั่งซื้อ</h2>
+              <h2 id="checkout-sheet-title" class="text-lg font-bold text-ink-card">{{ td('share.order_form') }}</h2>
               <p class="mt-0.5 text-xs text-ink-card-muted truncate">{{ product?.name }}</p>
             </div>
             <button
               type="button"
               class="shrink-0 min-h-[44px] min-w-[44px] -mr-2 -mt-2 inline-flex items-center justify-center text-ink-card-subtle hover:text-ink-card-muted active:scale-90 transition-transform"
-              aria-label="ปิด"
+              :aria-label="td('common.close2')"
               @click="checkoutOpen = false"
             >
               <Icon name="close" :size="20" />
@@ -767,18 +770,18 @@ function openLightbox(material: SalesMaterialItem) {
 
           <form class="mt-4 space-y-3" @submit.prevent="submitCheckout">
             <div>
-              <label for="checkout-name" class="text-xs font-bold text-ink-card-muted">ชื่อ-นามสกุล</label>
+              <label for="checkout-name" class="text-xs font-bold text-ink-card-muted">{{ td('field.full_name') }}</label>
               <input
                 id="checkout-name"
                 v-model="checkoutForm.name"
                 required
                 autocomplete="name"
                 class="mt-1 w-full min-h-[44px] px-3 py-2 rounded-xl border border-line-input bg-surface-input text-sm text-ink-input"
-                placeholder="ชื่อผู้สั่งซื้อ"
+                :placeholder="td('share.buyer_name')"
               />
             </div>
             <div>
-              <label for="checkout-phone" class="text-xs font-bold text-ink-card-muted">เบอร์โทร</label>
+              <label for="checkout-phone" class="text-xs font-bold text-ink-card-muted">{{ td('field.phone') }}</label>
               <input
                 id="checkout-phone"
                 v-model="checkoutForm.phone"
@@ -792,7 +795,7 @@ function openLightbox(material: SalesMaterialItem) {
             </div>
             <div>
               <label for="checkout-email" class="text-xs font-bold text-ink-card-muted">
-                อีเมล <span class="font-normal text-ink-card-subtle">(ไม่บังคับ)</span>
+                {{ td('field.email') }} <span class="font-normal text-ink-card-subtle">{{ td('common.optional') }}</span>
               </label>
               <input
                 id="checkout-email"
@@ -823,7 +826,7 @@ function openLightbox(material: SalesMaterialItem) {
                 class="mt-0.5 w-5 h-5 shrink-0 rounded border-line-input accent-brand-600"
               />
               <span class="text-xs text-ink-card-muted leading-relaxed">
-                ข้าพเจ้ายินยอมให้เก็บและใช้ชื่อ เบอร์โทร และอีเมล เพื่อติดต่อและดำเนินการสั่งซื้อนี้
+                {{ td('share.consent') }}
               </span>
             </label>
 
@@ -831,8 +834,8 @@ function openLightbox(material: SalesMaterialItem) {
               {{ checkoutError }}
             </p>
 
-            <AppButton type="submit" block :loading="submitting">ยืนยันและไปชำระเงิน</AppButton>
-            <p class="text-[11px] text-ink-card-subtle text-center">ระบบจะพาไปยังหน้าชำระเงินหลังยืนยัน</p>
+            <AppButton type="submit" block :loading="submitting">{{ td('share.confirm_pay') }}</AppButton>
+            <p class="text-[11px] text-ink-card-subtle text-center">{{ td('share.confirm_note') }}</p>
           </form>
         </div>
       </div>

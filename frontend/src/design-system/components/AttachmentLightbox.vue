@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AttachmentLightbox — TASK-101.
  *
@@ -126,12 +129,12 @@ onBeforeUnmount(() => {
             rel="noopener noreferrer"
             class="shrink-0 min-h-[44px] px-3 flex items-center text-xs font-bold text-white/80 hover:text-white"
           >
-            เปิดในแท็บใหม่
+            {{ td('common.open_new_tab') }}
           </a>
           <button
             type="button"
             class="shrink-0 w-11 h-11 rounded-full flex items-center justify-center text-white/80 hover:text-white hover:bg-white/10 active:scale-90 transition"
-            aria-label="ปิด"
+            :aria-label="td('common.close2')"
             @click="emit('close')"
           >
             <Icon name="x" :size="20" />
@@ -160,7 +163,7 @@ onBeforeUnmount(() => {
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
             allowfullscreen
           ></iframe>
-          <p v-else class="text-sm text-white/60">เปิดไฟล์นี้ไม่ได้</p>
+          <p v-else class="text-sm text-white/60">{{ td('file.cannot_open') }}</p>
 
           <!-- Arrows. 44px targets, and vertically centred on the stage
                rather than the viewport so they never collide with the
@@ -169,7 +172,7 @@ onBeforeUnmount(() => {
             v-if="hasMultiple"
             type="button"
             class="absolute left-2 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 active:scale-90 transition"
-            aria-label="ก่อนหน้า"
+            :aria-label="td('common.prev')"
             @click="go(-1)"
           >
             <Icon name="chevron_left" :size="22" />
@@ -178,7 +181,7 @@ onBeforeUnmount(() => {
             v-if="hasMultiple"
             type="button"
             class="absolute right-2 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-black/50 text-white flex items-center justify-center hover:bg-black/70 active:scale-90 transition"
-            aria-label="ถัดไป"
+            :aria-label="td('common.next2')"
             @click="go(1)"
           >
             <Icon name="chevron_right" :size="22" />

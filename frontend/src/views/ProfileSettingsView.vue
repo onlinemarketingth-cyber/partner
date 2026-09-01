@@ -27,6 +27,8 @@ import { api, ApiError } from '@/api/client'
 // no way to tell which one just happened. Those refs are gone; a toast
 // auto-dismisses and names the specific thing that was saved.
 import { useToastStore } from '@/stores/toast'
+// Sprint TZI18N-2 — payout section strings come from /lang/{th,en}.json.
+import { useI18n } from '@/composables/useI18n'
 import { initials } from '@/utils/initials'
 import { compressImage } from '@/utils/imageCompression'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -35,6 +37,7 @@ import AppButton from '@/design-system/components/AppButton.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import type { AuthUser } from '@/stores/auth'
 
+const { td } = useI18n()
 const auth = useAuthStore()
 const themeStore = useThemeStore()
 const router = useRouter()
@@ -240,7 +243,7 @@ async function saveIdDocument(): Promise<void> {
       national_id: isThaiIdDocument.value ? nationalId.value.trim() : nationalId.value.trim().toUpperCase(),
     })
     auth.setUser(res.data)
-    toast.success('บันทึกเอกสารยืนยันตัวตนแล้ว')
+    toast.success(td('payout.id_saved'))
   } catch (e) {
     // The server's own message when it has one — it carries the two cases
     // the person can act on (bad shape, already used in this company).
@@ -249,7 +252,7 @@ async function saveIdDocument(): Promise<void> {
     idDocError.value =
       body?.errors?.national_id?.[0] ??
       body?.errors?.id_document_type?.[0] ??
-      (e instanceof ApiError ? 'บันทึกไม่สำเร็จ — ตรวจสอบข้อมูลที่กรอก' : 'บันทึกไม่สำเร็จ')
+      (e instanceof ApiError ? td('payout.save_failed') : td('common.error_generic'))
   } finally {
     idDocBusy.value = false
   }
@@ -312,17 +315,17 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
       :icon="pageIcon"
       icon-color="text-ink-brand"
       :title="pageTitle"
-      subtitle="รูปโปรไฟล์และข้อมูลส่วนตัว"
+      :subtitle="td('profile.subtitle')"
       accent-color="brand"
       storage-key="profile-settings"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     />
 
     <div class="mt-4 grid grid-cols-1 gap-4">
       <!-- Avatar -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-4">รูปโปรไฟล์</h2>
+        <h2 class="text-sm font-bold text-ink-card mb-4">{{ td('profile.avatar') }}</h2>
         <div class="flex items-center gap-4">
           <img
             v-if="auth.user?.avatar_url"
@@ -337,7 +340,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             <!-- TASK-079 Phase 4 — AppButton: its spinner replaces the
                  "กำลังอัปโหลด..." label swap (no reflow) and it brings the
                  44px tap target these buttons never had. -->
-            <AppButton :loading="avatarBusy" @click="triggerAvatarPicker">อัปโหลดรูป</AppButton>
+            <AppButton :loading="avatarBusy" @click="triggerAvatarPicker">{{ td('profile.upload_photo') }}</AppButton>
             <button
               v-if="auth.user?.avatar_url"
               type="button"
@@ -345,13 +348,13 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
               @click="removeAvatar"
               class="px-4 py-2 rounded-xl bg-surface-chip text-ink-card-muted font-bold text-sm hover:bg-slate-200 disabled:opacity-50"
             >
-              ลบรูป
+              {{ td('profile.remove_photo') }}
             </button>
           </div>
           <input ref="avatarInput" type="file" accept="image/jpeg,image/png,image/webp" class="hidden" @change="onAvatarSelected" />
         </div>
         <p v-if="avatarError" class="mt-3 text-xs font-bold text-ink-danger">{{ avatarError }}</p>
-        <p class="mt-3 text-xs text-ink-card-subtle">jpg / png / webp ขนาดไม่เกิน 4MB</p>
+        <p class="mt-3 text-xs text-ink-card-subtle">{{ td('profile.photo_hint') }}</p>
       </div>
 
       <!-- TASK-160 — the personal background picker was here (gradient /
@@ -369,10 +372,10 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
     <div class="mt-4 grid grid-cols-1 gap-4">
       <!-- Name -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-4">ชื่อ-นามสกุล</h2>
+        <h2 class="text-sm font-bold text-ink-card mb-4">{{ td('field.full_name') }}</h2>
         <div class="space-y-3">
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">ชื่อ</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('field.first_name') }}</label>
             <input
               v-model="firstName"
               type="text"
@@ -380,14 +383,14 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             />
           </div>
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">นามสกุล</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('field.last_name') }}</label>
             <input
               v-model="lastName"
               type="text"
               class="bg-surface-input text-ink-input w-full px-3 py-2 rounded-xl border border-line-input text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>
-          <AppButton :loading="nameBusy" @click="saveName">บันทึกชื่อ</AppButton>
+          <AppButton :loading="nameBusy" @click="saveName">{{ td('profile.save_name') }}</AppButton>
           <!-- Success is a toast now (TASK-079 Phase 2) — the old inline
                "บันทึกสำเร็จ" never cleared itself. Errors stay inline,
                next to the fields the person has to correct. -->
@@ -401,9 +404,9 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
            filters the sender, which silently costs them the approval and
            payment mails too. -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-1">การแจ้งเตือนทางอีเมล</h2>
+        <h2 class="text-sm font-bold text-ink-card mb-1">{{ td('profile.email_notifications') }}</h2>
         <p class="text-xs text-ink-card-subtle mb-4">
-          ส่งอีเมลเมื่อบัญชีได้รับการอนุมัติ ค่าแนะนำถูกจ่าย ลูกค้าชำระเงินสำเร็จ และมีประกาศใหม่
+          {{ td('profile.email_notifications_help') }}
         </p>
 
         <button
@@ -438,10 +441,10 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
 
       <!-- Password -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-4">เปลี่ยนรหัสผ่าน</h2>
+        <h2 class="text-sm font-bold text-ink-card mb-4">{{ td('profile.change_password') }}</h2>
         <div class="space-y-3">
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">รหัสผ่านปัจจุบัน</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('profile.current_password') }}</label>
             <div class="relative">
               <input
                 v-model="currentPassword"
@@ -460,7 +463,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             </div>
           </div>
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">รหัสผ่านใหม่</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('profile.new_password') }}</label>
             <div class="relative">
               <input
                 v-model="newPassword"
@@ -479,7 +482,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             </div>
           </div>
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">ยืนยันรหัสผ่านใหม่</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('profile.confirm_new_password') }}</label>
             <div class="relative">
               <input
                 v-model="newPasswordConfirmation"
@@ -497,9 +500,9 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
               </button>
             </div>
           </div>
-          <AppButton :loading="passwordBusy" @click="savePassword">เปลี่ยนรหัสผ่าน</AppButton>
+          <AppButton :loading="passwordBusy" @click="savePassword">{{ td('profile.change_password') }}</AppButton>
           <p v-if="passwordError" class="text-xs font-bold text-ink-danger">{{ passwordError }}</p>
-          <p class="text-xs text-ink-card-subtle">อย่างน้อย 8 ตัวอักษร มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข</p>
+          <p class="text-xs text-ink-card-subtle">{{ td('profile.password_rule') }}</p>
         </div>
       </div>
     </div>
@@ -518,18 +521,18 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
       >
         <Icon name="info" :size="18" class="mt-0.5 shrink-0 text-ink-warning" />
         <div>
-          <p class="text-sm font-bold text-ink-warning">ยังกรอกข้อมูลรับเงินไม่ครบ</p>
+          <p class="text-sm font-bold text-ink-warning">{{ td('payout.incomplete_title') }}</p>
           <p class="text-xs text-ink-card-subtle mt-0.5">
-            ต้องมีทั้งเอกสารยืนยันตัวตนและบัญชีธนาคารครบถ้วน จึงจะเบิกค่าคอมมิชชั่นได้ — กรอกไว้ล่วงหน้าได้เลย
+            {{ td('payout.incomplete_body') }}
           </p>
         </div>
       </div>
 
       <!-- Identity document — collected here, not at sign-up (2026-08-27) -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-1">เอกสารยืนยันตัวตน</h2>
+        <h2 class="text-sm font-bold text-ink-card mb-1">{{ td('payout.id_document') }}</h2>
         <p class="text-xs text-ink-card-subtle mb-3">
-          ใช้ยืนยันตัวตนก่อนโอนค่าคอมมิชชั่น — เห็นเฉพาะคุณเท่านั้น (Admin เห็นแบบปิดบัง)
+          {{ td('payout.id_document_why') }}
         </p>
 
         <div class="grid grid-cols-2 gap-2 mb-3">
@@ -544,7 +547,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             "
             @click="selectIdDocumentType('thai_national_id')"
           >
-            บัตรประชาชน
+            {{ td('payout.id_type_thai') }}
           </button>
           <button
             type="button"
@@ -557,12 +560,12 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
             "
             @click="selectIdDocumentType('passport')"
           >
-            หนังสือเดินทาง
+            {{ td('payout.id_type_passport') }}
           </button>
         </div>
 
         <label class="text-xs font-bold text-ink-card-muted block mb-1">
-          {{ isThaiIdDocument ? 'เลขบัตรประชาชน 13 หลัก' : 'เลขที่หนังสือเดินทาง' }}
+          {{ isThaiIdDocument ? td('payout.id_number_thai') : td('payout.id_number_passport') }}
         </label>
         <!-- A Thai ID gets the card's own five groups (NationalIdSegments);
              a passport is one free-form field, because its number has no
@@ -573,7 +576,7 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
           id="profile_national_id"
           v-model="nationalId"
           :invalid="Boolean(idDocError)"
-          aria-label="เลขบัตรประชาชน 13 หลัก"
+          :aria-label="td('payout.id_number_thai')"
           @update:model-value="idDocError = ''"
         />
         <input
@@ -585,63 +588,61 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
           spellcheck="false"
           autocapitalize="characters"
           maxlength="12"
-          placeholder="เช่น AA1234567"
+          :placeholder="td('payout.passport_ph')"
           class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder placeholder:normal-case w-full px-3 py-2 rounded-xl border text-sm uppercase tracking-wide focus:outline-none focus:ring-2 focus:ring-brand-200"
           :class="idDocError ? 'border-rose-400' : 'border-line-input'"
           @input="idDocError = ''"
         />
         <p class="text-xs text-ink-card-subtle mt-1">
-          {{ isThaiIdDocument
-            ? 'กรอกตามกลุ่มตัวเลขที่พิมพ์บนหน้าบัตร ครบแล้วระบบจะเลื่อนช่องถัดไปให้เอง'
-            : 'ตัวอักษรภาษาอังกฤษและตัวเลข 6-12 ตัว ตามที่ปรากฏบนหนังสือเดินทาง' }}
+          {{ isThaiIdDocument ? td('payout.id_hint_thai') : td('payout.id_hint_passport') }}
         </p>
 
-        <AppButton :loading="idDocBusy" class="mt-3" @click="saveIdDocument">บันทึกเอกสารยืนยันตัวตน</AppButton>
+        <AppButton :loading="idDocBusy" class="mt-3" @click="saveIdDocument">{{ td('payout.id_save') }}</AppButton>
         <p v-if="idDocError" class="mt-2 text-xs font-bold text-ink-danger">{{ idDocError }}</p>
       </div>
 
       <!-- Bank account (TASK-044 Phase A) -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
-        <h2 class="text-sm font-bold text-ink-card mb-4">ข้อมูลบัญชีธนาคาร</h2>
-        <p class="text-xs text-ink-card-subtle mb-3">ใช้สำหรับการโอนค่าคอมมิชชั่น — เห็นเฉพาะคุณเท่านั้น (Admin เห็นเลขบัญชีแบบปิดบัง)</p>
+        <h2 class="text-sm font-bold text-ink-card mb-4">{{ td('bank.title') }}</h2>
+        <p class="text-xs text-ink-card-subtle mb-3">{{ td('bank.help') }}</p>
         <div class="grid grid-cols-1 gap-3">
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">ธนาคาร</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('bank.name') }}</label>
             <input
               v-model="bankName"
               type="text"
-              placeholder="เช่น ธนาคารกสิกรไทย"
+              :placeholder="td('bank.name_ph')"
               class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-xl border border-line-input text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">เลขที่บัญชี</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('bank.account_number') }}</label>
             <input
               v-model="bankAccountNumber"
               type="text"
               inputmode="numeric"
-              placeholder="เลขที่บัญชีธนาคาร"
+              :placeholder="td('bank.account_number_ph')"
               class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-xl border border-line-input text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>
           <div>
-            <label class="text-xs font-bold text-ink-card-muted block mb-1">ชื่อบัญชี</label>
+            <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('bank.account_name') }}</label>
             <input
               v-model="bankAccountHolderName"
               type="text"
-              placeholder="ชื่อ-นามสกุล เจ้าของบัญชี"
+              :placeholder="td('bank.holder_ph')"
               class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-xl border border-line-input text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>
         </div>
-        <AppButton :loading="bankBusy" class="mt-3" @click="saveBankAccount">บันทึกบัญชีธนาคาร</AppButton>
+        <AppButton :loading="bankBusy" class="mt-3" @click="saveBankAccount">{{ td('bank.save') }}</AppButton>
         <p v-if="bankError" class="mt-2 text-xs font-bold text-ink-danger">{{ bankError }}</p>
       </div>
 
       <!-- Sign out -->
       <div class="bg-surface-card/95 border border-line-card rounded-2xl p-5 shadow-sm">
-        <h3 class="text-sm font-bold text-ink-card mb-1">บัญชีผู้ใช้</h3>
-        <p class="text-xs text-ink-card-subtle mb-3">ออกจากระบบบนอุปกรณ์นี้</p>
+        <h3 class="text-sm font-bold text-ink-card mb-1">{{ td('profile.account') }}</h3>
+        <p class="text-xs text-ink-card-subtle mb-3">{{ td('profile.signout_help') }}</p>
         <button
           type="button"
           :disabled="loggingOut"

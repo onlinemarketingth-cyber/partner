@@ -32,7 +32,12 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useToastStore } from '@/stores/toast'
+// Sprint TZI18N-2 — every visible string on this screen comes from
+// /lang/{th,en}.json via td(). Nothing user-facing is hardcoded here, so the
+// language switch in the top bar actually changes this page.
+import { useI18n } from '@/composables/useI18n'
 
+const { td } = useI18n()
 const toast = useToastStore()
 
 interface WithdrawalRequest {
@@ -100,7 +105,7 @@ async function load(): Promise<void> {
     available.value = avail
     requests.value = list.data
   } catch (e) {
-    errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลการเบิกไม่สำเร็จ')
+    errorMessage.value = apiErrorMessage(e, td('withdrawal.load_failed'))
   } finally {
     loading.value = false
   }
@@ -122,7 +127,7 @@ async function submit(): Promise<void> {
   const baht = Number(amountBaht.value)
 
   if (!Number.isFinite(baht) || baht <= 0) {
-    formError.value = 'กรุณากรอกจำนวนเงินให้ถูกต้อง'
+    formError.value = td('withdrawal.amount_invalid')
     return
   }
 
@@ -130,7 +135,7 @@ async function submit(): Promise<void> {
   try {
     await api.post('/commission-withdrawals', { amount_satang: Math.round(baht * 100) })
     amountBaht.value = ''
-    toast.success('ส่งคำขอเบิกแล้ว รอแอดมินตรวจสอบ')
+    toast.success(td('withdrawal.submitted'))
     await load()
   } catch (e) {
     // The server's own message when it has one: it carries the specific
@@ -138,7 +143,7 @@ async function submit(): Promise<void> {
     // and replacing those with a generic sentence would throw away the only
     // part the agent can act on.
     const body = e instanceof ApiError ? (e.body as { errors?: Record<string, string[]> }) : null
-    formError.value = body?.errors?.amount_satang?.[0] ?? apiErrorMessage(e, 'ส่งคำขอไม่สำเร็จ')
+    formError.value = body?.errors?.amount_satang?.[0] ?? apiErrorMessage(e, td('withdrawal.submit_failed'))
   } finally {
     submitting.value = false
   }
@@ -147,10 +152,10 @@ async function submit(): Promise<void> {
 async function cancel(request: WithdrawalRequest): Promise<void> {
   try {
     await api.post(`/commission-withdrawals/${request.id}/cancel`)
-    toast.success('ยกเลิกคำขอแล้ว')
+    toast.success(td('withdrawal.cancelled'))
     await load()
   } catch (e) {
-    toast.error(apiErrorMessage(e, 'ยกเลิกไม่สำเร็จ'))
+    toast.error(apiErrorMessage(e, td('withdrawal.cancel_failed')))
   }
 }
 
@@ -159,7 +164,7 @@ onMounted(load)
 
 <template>
   <main class="p-4 pb-24 max-w-3xl mx-auto">
-    <HeroHeader title="เบิกค่าคอมมิชชั่น" subtitle="ขอรับเงินค่าคอมมิชชั่นที่สะสมไว้" />
+    <HeroHeader :title="td('withdrawal.title')" :subtitle="td('withdrawal.subtitle')" />
 
     <LoadingSkeleton v-if="loading" class="mt-4" />
 
@@ -167,10 +172,10 @@ onMounted(load)
 
     <template v-else>
       <AppCard class="mt-4">
-        <p class="text-xs font-bold text-ink-card-muted">ยอดที่เบิกได้</p>
+        <p class="text-xs font-bold text-ink-card-muted">{{ td('withdrawal.available') }}</p>
         <p class="text-3xl font-bold text-ink-card mt-1">{{ formatSatang(available?.available_satang ?? 0) }}</p>
         <p v-if="available?.min_withdrawal_satang" class="text-xs text-ink-card-subtle mt-1">
-          ขั้นต่ำในการเบิก {{ formatSatang(available.min_withdrawal_satang) }}
+          {{ td('withdrawal.minimum') }} {{ formatSatang(available.min_withdrawal_satang) }}
         </p>
 
         <!-- The gate, shown before the form rather than after a failed
@@ -182,17 +187,17 @@ onMounted(load)
         >
           <Icon name="info" :size="16" class="mt-0.5 shrink-0 text-ink-warning" />
           <div class="text-sm">
-            <p class="font-bold text-ink-warning">ยังเบิกไม่ได้</p>
+            <p class="font-bold text-ink-warning">{{ td('withdrawal.blocked_title') }}</p>
             <p class="text-xs text-ink-card-subtle mt-0.5">
-              ต้องกรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อน
-              <RouterLink to="/profile" class="font-bold underline">ไปที่หน้าโปรไฟล์</RouterLink>
+              {{ td('withdrawal.blocked_body') }}
+              <RouterLink to="/profile" class="font-bold underline">{{ td('withdrawal.blocked_cta') }}</RouterLink>
             </p>
           </div>
         </div>
 
         <div v-else class="mt-4">
           <label for="withdraw_amount" class="text-xs font-bold text-ink-card-muted block mb-1">
-            จำนวนเงินที่ต้องการเบิก (บาท)
+            {{ td('withdrawal.amount_label') }}
           </label>
           <div class="flex gap-2">
             <input
@@ -212,26 +217,26 @@ onMounted(load)
               class="px-3 rounded-xl border border-line-card text-xs font-bold text-ink-card-muted hover:border-brand-500 disabled:opacity-60"
               @click="fillMaximum"
             >
-              ทั้งหมด
+              {{ td('withdrawal.fill_max') }}
             </button>
           </div>
           <p v-if="formError" class="mt-1 text-xs font-bold text-ink-danger">{{ formError }}</p>
           <AppButton :loading="submitting" :disabled="!canRequest" class="mt-3" block @click="submit">
-            ส่งคำขอเบิก
+            {{ td('withdrawal.submit') }}
           </AppButton>
         </div>
       </AppCard>
 
-      <h2 class="mt-6 mb-2 text-sm font-bold text-ink-card">ประวัติการเบิก</h2>
+      <h2 class="mt-6 mb-2 text-sm font-bold text-ink-card">{{ td('withdrawal.history') }}</h2>
 
-      <EmptyState v-if="requests.length === 0" icon="money" title="ยังไม่มีคำขอเบิก" message="เมื่อคุณส่งคำขอ รายการจะแสดงที่นี่" />
+      <EmptyState v-if="requests.length === 0" icon="money" :title="td('withdrawal.empty_title')" :message="td('withdrawal.empty_body')" />
 
       <div v-else class="space-y-2">
         <AppCard v-for="r in requests" :key="r.id">
           <div class="flex items-start justify-between gap-3">
             <div>
               <p class="text-lg font-bold text-ink-card">{{ formatSatang(r.amount_satang) }}</p>
-              <p class="text-xs text-ink-card-subtle mt-0.5">ขอเมื่อ {{ formatDate(r.created_at) }}</p>
+              <p class="text-xs text-ink-card-subtle mt-0.5">{{ td('withdrawal.requested_on') }} {{ formatDate(r.created_at) }}</p>
               <p v-if="r.bank_account_number_masked" class="text-xs text-ink-card-subtle">
                 {{ r.bank_name }} {{ r.bank_account_number_masked }}
               </p>
@@ -239,11 +244,11 @@ onMounted(load)
                    softening or summarising it here would remove the only
                    part that tells them what to change. -->
               <p v-if="r.rejection_reason" class="mt-1 text-xs font-bold text-ink-danger">
-                เหตุผล: {{ r.rejection_reason }}
+                {{ td('withdrawal.reason') }}: {{ r.rejection_reason }}
               </p>
               <p v-if="r.transferred_at" class="mt-1 text-xs text-ink-success">
-                โอนเมื่อ {{ formatDate(r.transferred_at) }}
-                <span v-if="r.transfer_reference">· อ้างอิง {{ r.transfer_reference }}</span>
+                {{ td('withdrawal.transferred_on') }} {{ formatDate(r.transferred_at) }}
+                <span v-if="r.transfer_reference">· {{ td('withdrawal.reference') }} {{ r.transfer_reference }}</span>
               </p>
             </div>
             <span class="shrink-0 px-2.5 py-1 rounded-full text-xs font-bold" :class="statusClass(r.status)">
@@ -260,7 +265,7 @@ onMounted(load)
             class="mt-3"
             @click="cancel(r)"
           >
-            ยกเลิกคำขอ
+            {{ td('withdrawal.cancel') }}
           </AppButton>
         </AppCard>
       </div>

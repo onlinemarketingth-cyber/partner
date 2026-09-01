@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AcademyLessonView — ONE lesson, on its own route (TASK-167 §2/§4.1).
  *
@@ -282,7 +285,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
       :subtitle="heroSubtitle"
       accent-color="brand"
       back-page="/academy"
-      back-label="กลับไปหน้า Academy"
+      :back-label="td('academy.back')"
     />
 
     <div
@@ -295,7 +298,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="load"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -395,10 +398,10 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
               class="mt-1 min-h-[44px] inline-flex items-center gap-1.5 text-xs font-bold text-ink-brand active:scale-95 transition-transform"
             >
               <Icon name="link" :size="14" />
-              เปิดลิงก์ในแท็บใหม่
+              {{ td('common.open_link_new_tab') }}
             </a>
             <p class="text-[11px] text-ink-card-subtle leading-relaxed">
-              ถ้าวิดีโอด้านบนไม่ขึ้น ให้กดลิงก์นี้เพื่อเปิดดูในแท็บใหม่
+              {{ td('academy.video_fallback') }}
             </p>
           </div>
 
@@ -408,7 +411,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
                position on it, so the honest control is "open it". -->
           <div v-else-if="lesson.content_ref" class="flex flex-col items-start gap-2">
             <p class="text-sm text-ink-card-muted">
-              เนื้อหาบทเรียนนี้เป็นลิงก์ภายนอก จะเปิดในแท็บใหม่
+              {{ td('academy.external_lesson') }}
             </p>
             <button
               type="button"
@@ -416,19 +419,19 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
               @click="openExternal"
             >
               <Icon name="link" :size="14" />
-              เปิดเนื้อหา
+              {{ td('academy.open_content') }}
             </button>
           </div>
 
           <!-- A quiz-only lesson has no content of its own; the quiz block
                below IS the lesson. -->
           <p v-else-if="lesson.content_type === 'quiz'" class="text-sm text-ink-card-muted">
-            บทเรียนนี้เป็นแบบทดสอบท้ายบทเรียน
+            {{ td('academy.is_quiz') }}
           </p>
 
           <!-- Missing content is an AUTHORING gap, not an app error. -->
           <p v-else-if="lessonHasNoContent(lesson)" class="text-xs font-bold text-ink-warning">
-            ยังไม่มีไฟล์เนื้อหาสำหรับบทเรียนนี้ กรุณาแจ้งผู้ดูแลระบบ
+            {{ td('academy.no_file') }}
           </p>
 
           <!-- ADR-028 §2.2 — the download control exists only when the
@@ -441,7 +444,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
             @click="downloadLessonFile"
           >
             <Icon name="download" :size="14" />
-            ดาวน์โหลดไฟล์
+            {{ td('common.download_file') }}
           </button>
         </AppCard>
 
@@ -450,7 +453,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
           <div class="flex items-center gap-3 flex-wrap">
             <template v-if="completedHere">
               <span class="text-xs font-bold text-ink-success inline-flex items-center gap-1">
-                <Icon name="check" :size="14" /> เรียนจบแล้ว
+                <Icon name="check" :size="14" /> {{ td('academy.completed') }}
               </span>
               <!-- The offer that replaced the automatic jump (see onCompleted).
                    Same destination `goAfterLesson()` always chose — quiz if
@@ -492,7 +495,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
               ADR-028 §4 has to be reopened first.
             -->
             <p v-else class="text-xs text-ink-card-muted">
-              ระบบจะบันทึกให้อัตโนมัติเมื่อเรียนเนื้อหาครบแล้ว
+              {{ td('academy.autosave') }}
             </p>
           </div>
 
@@ -534,13 +537,13 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
               v-if="lesson.quiz_passed"
               class="mt-1 text-[11px] font-bold text-ink-success inline-flex items-center gap-1"
             >
-              <Icon name="check_circle" :size="14" /> ผ่านแบบทดสอบท้ายบทเรียนแล้ว
+              <Icon name="check_circle" :size="14" /> {{ td('academy.quiz_passed') }}
             </span>
             <RouterLink
               :to="`/academy/lessons/${lesson.id}/quiz`"
               class="mt-2 min-h-[44px] px-4 py-2 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform inline-flex items-center gap-1.5"
             >
-              ทำแบบทดสอบท้ายบทเรียน
+              {{ td('academy.take_quiz') }}
               <Icon name="chevron_right" :size="14" />
             </RouterLink>
           </template>

@@ -46,7 +46,7 @@ import { useThemeStore, type Theme } from '@/stores/theme'
 
 const themeStore = useThemeStore()
 
-const { lang, t, setLang } = useI18n()
+const { lang, t, td, setLang } = useI18n()
 function toggleLang() {
   setLang(lang.value === 'TH' ? 'EN' : 'TH')
 }
@@ -235,7 +235,7 @@ async function submitLead() {
           {{ t('lead_not_found_title', 'ลิงก์นี้ไม่ถูกต้องหรือหมดอายุ', 'This link is invalid or no longer active') }}
         </h2>
         <p class="mt-2 text-sm text-ink-card-muted">
-          {{ t('lead_not_found_body', 'กรุณาติดต่อตัวแทนของคุณเพื่อขอลิงก์ใหม่', 'Please contact your agent for a new link') }}
+          {{ t('lead_not_found_body', 'กรุณาติดต่อสมาชิกผู้แนะนำของคุณเพื่อขอลิงก์ใหม่', 'Please contact your member for a new link') }}
         </p>
       </div>
 
@@ -337,7 +337,7 @@ async function submitLead() {
               ref="branchInputEl"
               v-model="form.branch"
               type="text"
-              placeholder="เช่น สาขาสีลม"
+              :placeholder="td('ph.branch')"
               class="bg-surface-input w-full px-3 py-2.5 rounded-xl border text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
               :class="branchError ? 'border-rose-400' : 'border-line-input'"
               @input="branchError = ''"

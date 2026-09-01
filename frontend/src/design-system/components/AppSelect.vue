@@ -51,6 +51,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, useId } from 'vue'
 import FilterSheet, { type SheetAnchor } from './FilterSheet.vue'
 import Icon from './Icon.vue'
+import { useI18n } from '@/composables/useI18n'
 
 export interface AppSelectOption<V> {
     value: V
@@ -58,6 +59,7 @@ export interface AppSelectOption<V> {
     disabled?: boolean
 }
 
+const { td } = useI18n()
 const props = withDefaults(
     defineProps<{
         modelValue: T
@@ -76,7 +78,7 @@ const props = withDefaults(
         ariaLabel?: string
     }>(),
     {
-        placeholder: 'เลือก',
+        placeholder: '',
         disabled: false,
         title: '',
     },
@@ -109,7 +111,7 @@ const anchor = ref<SheetAnchor | null>(null)
  */
 const isWide = ref(false)
 
-const sheetTitle = computed(() => props.title || props.placeholder)
+const sheetTitle = computed(() => props.title || props.placeholder || td('ui.select_placeholder'))
 const selectedIndex = computed(() => props.options.findIndex((o) => o.value === props.modelValue))
 const selectedOption = computed(() =>
     selectedIndex.value >= 0 ? props.options[selectedIndex.value] : undefined,
@@ -333,7 +335,7 @@ onBeforeUnmount(() => {
         <span
             class="min-w-0 flex-1 truncate"
             :class="selectedOption ? 'text-ink-input' : 'text-ink-input-placeholder'"
-        >{{ selectedOption?.label ?? placeholder }}</span>
+        >{{ selectedOption?.label ?? (placeholder || td('ui.select_placeholder')) }}</span>
         <Icon name="chevron_down" :size="16" class="text-ink-input-placeholder shrink-0" />
     </button>
 

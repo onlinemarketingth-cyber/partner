@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppLogo from '@/design-system/components/AppLogo.vue'
@@ -189,7 +192,7 @@ const backgroundStyle = computed(() => theme.companyBackgroundStyle)
                still 32px; the LINK around it is now 44x44 with the extra
                area transparent, so nothing looks bigger — it just stops
                being a miss. -->
-          <RouterLink to="/profile" class="shrink-0 w-11 h-11 flex items-center justify-center" aria-label="โปรไฟล์">
+          <RouterLink to="/profile" class="shrink-0 w-11 h-11 flex items-center justify-center" :aria-label="td('nav.profile2')">
             <img
               v-if="auth.user?.avatar_url"
               :src="auth.user.avatar_url"

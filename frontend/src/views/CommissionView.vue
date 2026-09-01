@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * CommissionView — commission ledger, read-only, wired to the real API.
  *
@@ -152,8 +155,8 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
     <HeroHeader
       :icon="pageIcon"
       :title="pageTitle"
-      subtitle="สรุปค่าแนะนำของคุณ"
-      description="รายการ ledger เป็นแบบอ่านอย่างเดียว — ไม่มีการแก้ไขย้อนหลัง (BR-4)"
+      :subtitle="td('commission.subtitle')"
+      :description="td('commission.description')"
       :kpis="kpis"
       accent-color="brand"
       storage-key="commission"
@@ -176,7 +179,7 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadAll"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -193,8 +196,8 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
         <EmptyState
           v-if="!filteredEntries.length"
           icon="money"
-          title="ยังไม่มีรายการค่าแนะนำ"
-          message="ค่าแนะนำจะถูกบันทึกอัตโนมัติเมื่อ Referral ถึงขั้น Complete Payment ใน Pipeline (BR-4)"
+          :title="td('commission.empty')"
+          :message="td('commission.empty_help')"
           class="mt-4"
         />
         <!-- TASK-082 (UX audit): this was a stack of identical floating
@@ -211,7 +214,7 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
                is deliberately rarer than the rows around it. -->
           <AppCard variant="raised" class="flex items-baseline justify-between gap-3">
             <div>
-              <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">รวมรายการที่แสดง</p>
+              <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('common.showing_total') }}</p>
               <p class="text-xs text-ink-card-muted">{{ filteredEntries.length }} รายการ</p>
             </div>
             <p class="text-2xl font-bold text-ink-card leading-tight tabular-nums">{{ formatSatang(filteredTotalSatang) }}</p>
@@ -253,7 +256,7 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
                     </div>
                   </div>
                   <div class="text-left shrink-0 pl-8">
-                    <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">ค่าแนะนำ</p>
+                    <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('nav.commission2') }}</p>
                     <p class="text-xl font-bold text-ink-card leading-tight">{{ formatSatang(e.amount_satang) }}</p>
                     <!-- Semantic status colours (emerald=paid / amber=pending)
                          are business meaning, not decoration — untouched. -->

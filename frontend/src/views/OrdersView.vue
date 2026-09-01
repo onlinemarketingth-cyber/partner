@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * OrdersView — Agent Portal order / payment collection (ADR-017 / TASK-054).
  *
@@ -316,12 +319,12 @@ const hasOrders = computed(() => orders.value.length > 0)
   <main class="min-h-screen px-4 py-6 lg:px-8" style="font-family: var(--app-font);">
     <HeroHeader
       icon="cart"
-      title="คำสั่งซื้อ / รับชำระเงิน"
-      subtitle="สร้างลิงก์ชำระเงินและติดตามสถานะ"
+      :title="td('order.title')"
+      :subtitle="td('order.subtitle')"
       accent-color="brand"
       storage-key="orders"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <!-- TASK-087 — navigation-bar action per Apple HIG; see NavBarAction.vue. -->
       <template #actions>
@@ -354,7 +357,7 @@ const hasOrders = computed(() => orders.value.length > 0)
     <!-- Create panel -->
     <AppCard v-if="showCreate" class="mt-4 space-y-4">
       <div class="flex items-center justify-between">
-        <h2 class="text-sm font-bold text-ink-card">สร้างคำสั่งซื้อใหม่</h2>
+        <h2 class="text-sm font-bold text-ink-card">{{ td('order.create_new') }}</h2>
         <button type="button" class="min-h-[44px] min-w-[44px] -mr-2 inline-flex items-center justify-center text-ink-card-subtle hover:text-ink-card-muted active:scale-90 transition-transform" @click="closeCreate">
           <Icon name="close" :size="18" />
         </button>
@@ -366,7 +369,7 @@ const hasOrders = computed(() => orders.value.length > 0)
           <Icon name="check" :size="18" />
           <span class="text-sm font-bold">สร้างคำสั่งซื้อ {{ createdOrder.order_number }} แล้ว</span>
         </div>
-        <p class="text-xs text-ink-card-muted">ส่งลิงก์นี้ให้ลูกค้าเพื่อชำระเงิน</p>
+        <p class="text-xs text-ink-card-muted">{{ td('order.send_pay_link') }}</p>
         <div class="flex items-center gap-2">
           <input
             :value="createdOrder.short_pay_url ?? createdOrder.public_pay_url"
@@ -375,10 +378,10 @@ const hasOrders = computed(() => orders.value.length > 0)
           />
           <AppButton class="shrink-0" @click="openShare(createdOrder)">
             <Icon name="share" :size="14" />
-            แชร์
+            {{ td('common.share') }}
           </AppButton>
         </div>
-        <AppButton variant="secondary" block @click="closeCreate">เสร็จสิ้น</AppButton>
+        <AppButton variant="secondary" block @click="closeCreate">{{ td('common.done') }}</AppButton>
       </div>
 
       <!-- Create form -->
@@ -389,21 +392,21 @@ const hasOrders = computed(() => orders.value.length > 0)
         </div>
 
         <div>
-          <label class="block text-xs font-bold text-ink-card-muted mb-1.5">เลือกรายการอ้างอิง (Referral)</label>
-          <div v-if="referralsLoading" class="text-xs text-ink-card-subtle py-2">กำลังโหลด...</div>
+          <label class="block text-xs font-bold text-ink-card-muted mb-1.5">{{ td('order.pick_referral') }}</label>
+          <div v-if="referralsLoading" class="text-xs text-ink-card-subtle py-2">{{ td('common.loading2') }}</div>
           <div v-else-if="referralsError" class="text-xs text-ink-danger py-2">{{ referralsError }}</div>
           <select
             v-else
             v-model="form.referral_id"
             class="bg-surface-input w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-line-input text-sm text-ink-input focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
           >
-            <option value="" disabled>— เลือกรายการ —</option>
+            <option value="" disabled>{{ td('common.pick_one') }}</option>
             <option v-for="r in referrals" :key="r.id" :value="r.id">{{ referralLabel(r) }}</option>
           </select>
         </div>
 
         <div>
-          <label class="block text-xs font-bold text-ink-card-muted mb-1.5">ช่องทางชำระเงิน</label>
+          <label class="block text-xs font-bold text-ink-card-muted mb-1.5">{{ td('order.payment_method') }}</label>
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -412,7 +415,7 @@ const hasOrders = computed(() => orders.value.length > 0)
               @click="form.payment_method = 'bank_transfer'"
             >
               <Icon name="money" :size="16" />
-              โอนเงิน
+              {{ td('order.bank_transfer') }}
             </button>
             <button
               type="button"
@@ -429,7 +432,7 @@ const hasOrders = computed(() => orders.value.length > 0)
         <!-- TASK-079 Phase 4 — AppButton's own spinner replaces the
              "กำลังสร้าง..." label swap: the label no longer reflows, and
              the button is inert while `loading` (double-submit guard). -->
-        <AppButton :loading="creating" block @click="submitCreate">สร้างคำสั่งซื้อ</AppButton>
+        <AppButton :loading="creating" block @click="submitCreate">{{ td('order.create') }}</AppButton>
       </template>
     </AppCard>
 
@@ -453,7 +456,7 @@ const hasOrders = computed(() => orders.value.length > 0)
       >
         <Icon name="alert" :size="32" class="text-ink-danger" />
         <p class="text-sm text-ink-card-muted font-bold">{{ errorMessage }}</p>
-        <AppButton @click="loadOrders">ลองใหม่</AppButton>
+        <AppButton @click="loadOrders">{{ td('common.retry') }}</AppButton>
       </div>
 
       <!-- Empty -->
@@ -462,8 +465,8 @@ const hasOrders = computed(() => orders.value.length > 0)
         class="mt-4 bg-surface-card/95 border border-dashed border-line-card rounded-2xl p-6 flex flex-col items-center gap-3 text-center"
       >
         <Icon name="cart" :size="32" class="text-ink-card-subtle" />
-        <p class="text-sm text-ink-card-muted font-bold">ยังไม่มีคำสั่งซื้อ</p>
-        <AppButton @click="openCreate">+ สร้างคำสั่งซื้อแรก</AppButton>
+        <p class="text-sm text-ink-card-muted font-bold">{{ td('order.empty') }}</p>
+        <AppButton @click="openCreate">{{ td('order.create_first') }}</AppButton>
       </div>
 
       <!-- Order list -->
@@ -500,7 +503,7 @@ const hasOrders = computed(() => orders.value.length > 0)
             />
             <AppButton variant="secondary" size="sm" class="shrink-0" @click="openShare(order)">
               <Icon name="share" :size="14" />
-              แชร์ลิงก์ชำระเงิน
+              {{ td('order.share_pay_link') }}
             </AppButton>
           </div>
 
@@ -519,7 +522,7 @@ const hasOrders = computed(() => orders.value.length > 0)
           <div class="flex flex-wrap items-center gap-2">
             <AppButton v-if="order.has_slip" variant="secondary" size="sm" @click="viewSlip(order)">
               <Icon name="download" :size="14" />
-              ดูสลิป
+              {{ td('order.view_slip') }}
             </AppButton>
             <button
               v-if="canConfirmOrCancel(order)"
@@ -529,7 +532,7 @@ const hasOrders = computed(() => orders.value.length > 0)
               @click="confirmPayment(order)"
             >
               <Icon name="check" :size="14" />
-              ยืนยันการชำระเงิน
+              {{ td('order.confirm_payment') }}
             </button>
             <button
               v-if="canConfirmOrCancel(order)"
@@ -539,7 +542,7 @@ const hasOrders = computed(() => orders.value.length > 0)
               @click="askCancelOrder(order)"
             >
               <Icon name="x" :size="14" />
-              ยกเลิก
+              {{ td('common.cancel2') }}
             </button>
           </div>
         </AppCard>
@@ -562,7 +565,7 @@ const hasOrders = computed(() => orders.value.length > 0)
          views — see AnnouncementsView.vue). -->
     <ConfirmDialog
       v-model:show="showCancelConfirm"
-      title="ยืนยันการยกเลิกคำสั่งซื้อ"
+      :title="td('order.confirm_cancel')"
       :body="cancelTarget ? `คำสั่งซื้อ ${cancelTarget.order_number} จะถูกยกเลิก และลิงก์ชำระเงินจะใช้ไม่ได้อีก` : ''"
       variant="danger"
       :busy="busyId !== null"

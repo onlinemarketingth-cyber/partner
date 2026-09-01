@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AcademyExamView — the CERTIFICATION exam, on its own route (TASK-167 §2).
  * `/academy/exams/:id`.
@@ -110,7 +113,7 @@ const heroSubtitle = computed(() =>
       :subtitle="heroSubtitle"
       accent-color="brand"
       back-page="/academy"
-      back-label="กลับไปหน้า Academy"
+      :back-label="td('academy.back')"
     />
 
     <div
@@ -123,7 +126,7 @@ const heroSubtitle = computed(() =>
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="load"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -157,7 +160,7 @@ const heroSubtitle = computed(() =>
               class="mt-3 min-h-[44px] px-4 py-2 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform"
               @click="close"
             >
-              ปิด
+              {{ td('common.close2') }}
             </button>
           </div>
         </div>
@@ -166,7 +169,7 @@ const heroSubtitle = computed(() =>
       <EmptyState
         v-else-if="!questions.length"
         icon="check_square"
-        title="แบบประเมินผลนี้ยังไม่มีคำถาม"
+        :title="td('academy.exam_no_questions')"
         class="mt-4"
       />
 

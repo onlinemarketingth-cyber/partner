@@ -23,6 +23,7 @@
  * light-on-light case. Both are now derived pairs.
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useI18n } from '@/composables/useI18n'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import Icon from './Icon.vue'
@@ -38,6 +39,7 @@ import {
 
 const router = useRouter()
 const store = useNotificationsStore()
+const { td } = useI18n()
 const toast = useToastStore()
 const { items, unreadCount, arrivals, loading } = storeToRefs(store)
 
@@ -110,7 +112,7 @@ async function onItemClick(item: AppNotification) {
   try {
     await store.markRead(item.id)
   } catch (e) {
-    toast.error(apiErrorMessage(e, 'ทำเครื่องหมายว่าอ่านแล้วไม่สำเร็จ'))
+    toast.error(apiErrorMessage(e, td('notification.mark_read_failed')))
   }
 
   const target = resolveNotificationLink(item)
@@ -162,7 +164,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       @click="toggle"
       class="relative inline-flex items-center justify-center w-11 h-11 rounded-xl hover:bg-surface-chip transition-colors"
       :class="{ 'bg-surface-chip': open }"
-      title="การแจ้งเตือน"
+      :title="td('notification.title')"
     >
       <!-- Nav chrome: the glyph takes the NAV ink pair, not the card's. -->
       <Icon name="bell" :size="20" :class="open ? 'text-ink-nav' : 'text-ink-nav-muted'" />
@@ -183,7 +185,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
     >
       <div class="px-5 py-3.5 border-b border-line-card-subtle flex items-center gap-2">
         <Icon name="bell" :size="16" class="text-ink-card-muted" />
-        <h3 class="font-bold text-ink-card text-sm">การแจ้งเตือน</h3>
+        <h3 class="font-bold text-ink-card text-sm">{{ td('notification.title') }}</h3>
         <!-- A sound the user cannot stop is worse than no sound: an agent
              working with the portal open in a quiet office would just close
              the tab. Kept next to the bell rather than buried in Profile,
@@ -193,8 +195,8 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           type="button"
           @click="toggleSound"
           class="ml-auto w-9 h-9 -my-1 inline-flex items-center justify-center rounded-lg hover:bg-surface-chip transition-colors"
-          :title="soundMuted ? 'เปิดเสียงแจ้งเตือน' : 'ปิดเสียงแจ้งเตือน'"
-          :aria-label="soundMuted ? 'เปิดเสียงแจ้งเตือน' : 'ปิดเสียงแจ้งเตือน'"
+          :title="soundMuted ? td('notification.sound_on') : td('notification.sound_off')"
+          :aria-label="soundMuted ? td('notification.sound_on') : td('notification.sound_off')"
           :aria-pressed="soundMuted"
         >
           <Icon
@@ -208,18 +210,18 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           @click="onMarkAll"
           class="text-xs font-bold text-ink-brand hover:opacity-80"
         >
-          อ่านทั้งหมด
+          {{ td('notification.mark_all_read') }}
         </button>
       </div>
 
       <!-- Loading -->
       <div v-if="loading && !items.length" class="px-5 py-10 text-center text-ink-card-subtle text-sm">
-        กำลังโหลด…
+        {{ td('common.loading') }}
       </div>
 
       <!-- Empty -->
       <div v-else-if="!items.length" class="px-5 py-10 text-center text-ink-card-subtle text-sm">
-        ยังไม่มีการแจ้งเตือน
+        {{ td('notification.empty') }}
       </div>
 
       <!-- List -->
@@ -294,7 +296,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
           @click="onViewAll"
           class="text-xs font-bold text-ink-brand hover:opacity-80"
         >
-          ดูทั้งหมด
+          {{ td('notification.view_all') }}
         </button>
       </div>
     </div>

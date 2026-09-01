@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 import { useRoute } from 'vue-router'
 import Icon from '@/design-system/components/Icon.vue'
 
@@ -12,7 +15,7 @@ const title = (route.meta.navLabel as string) ?? 'หน้านี้'
       <Icon name="clock" :size="28" class="text-ink-card-subtle" />
       <h1 class="text-lg font-bold text-ink-card">{{ title }}</h1>
       <p class="text-sm text-ink-card-subtle">
-        ยังไม่มี — รอ task spec + endpoint จาก ag-dev ก่อนถึงจะสร้างหน้านี้จริง
+        {{ td('wip.placeholder') }}
       </p>
     </div>
   </main>

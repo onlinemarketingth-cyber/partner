@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * PdfViewerModal (Agent Portal copy) — full-screen, ONE-PAGE-AT-A-TIME,
  * in-app PDF reader.
@@ -462,7 +465,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
     "
     :role="isOverlay ? 'dialog' : undefined"
     :aria-modal="isOverlay ? 'true' : undefined"
-    :aria-label="title || 'เอกสาร PDF'"
+    :aria-label="title || td('pdf.document')"
     @click="onBackdropClick"
   >
     <div
@@ -482,7 +485,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
            the counter brings it back. -->
       <div v-if="!expanded" class="flex items-center gap-2 px-3 py-2.5 border-b border-line-card shrink-0">
         <Icon name="document" :size="16" class="text-ink-card-subtle shrink-0" />
-        <p class="text-sm font-bold text-ink-card truncate flex-1 min-w-0">{{ title || 'เอกสาร PDF' }}</p>
+        <p class="text-sm font-bold text-ink-card truncate flex-1 min-w-0">{{ title || td('pdf.document') }}</p>
 
         <!-- Page counter — TASK-144. Reads as navigation ("where am I in
              this document"), never as a completion percentage: ADR-028 §4
@@ -491,12 +494,12 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           v-if="totalPages"
           type="button"
           class="shrink-0 min-h-[44px] px-2 rounded-lg text-[11px] font-bold text-ink-card-muted tabular-nums whitespace-nowrap hover:bg-surface-chip active:scale-95 transition inline-flex items-center gap-1"
-          title="ขยายเต็มจอ"
-          aria-label="ขยายเต็มจอ"
+          :title="td('media.fullscreen')"
+          :aria-label="td('media.fullscreen')"
           :aria-pressed="expanded"
           @click="toggleExpanded"
         >
-          หน้า {{ currentPage }} / {{ totalPages }}
+          {{ td('pdf.page_of', '', { current: currentPage, total: totalPages }) }}
           <Icon name="maximize" :size="13" />
         </button>
 
@@ -507,8 +510,8 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           v-if="downloadUrl"
           type="button"
           class="shrink-0 w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip active:scale-95 transition"
-          title="ดาวน์โหลดไฟล์"
-          aria-label="ดาวน์โหลดไฟล์"
+          :title="td('common.download_file')"
+          :aria-label="td('common.download_file')"
           @click="emit('download')"
         >
           <Icon name="download" :size="18" />
@@ -522,8 +525,8 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           v-if="!embedded"
           type="button"
           class="shrink-0 w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip active:scale-95 transition"
-          title="ปิด"
-          aria-label="ปิด"
+          :title="td('common.close2')"
+          :aria-label="td('common.close2')"
           @click="emit('close')"
         >
           <Icon name="x" :size="18" />
@@ -542,7 +545,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
       >
         <div v-if="loading" class="flex items-center justify-center text-ink-card-subtle gap-2">
           <Icon name="clock" :size="20" class="animate-pulse" />
-          <span class="text-sm font-bold">กำลังโหลด PDF...</span>
+          <span class="text-sm font-bold">{{ td('media.loading_pdf') }}</span>
         </div>
 
         <div v-else-if="errorMessage" class="flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -554,7 +557,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
             @click="load"
           >
             <Icon name="refresh" :size="14" />
-            ลองใหม่
+            {{ td('common.retry') }}
           </button>
         </div>
 
@@ -593,20 +596,20 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           class="absolute inset-x-3 top-3 flex items-center gap-1.5 rounded-full bg-slate-900/55 backdrop-blur-sm shadow-lg pl-3 pr-1 py-1"
         >
           <Icon name="book" :size="13" class="text-white/70 shrink-0" />
-          <p class="text-[11px] text-white/80 flex-1 min-w-0 truncate">อ่านค้างไว้ที่หน้า {{ resumeTargetPage }}</p>
+          <p class="text-[11px] text-white/80 flex-1 min-w-0 truncate">{{ td('pdf.resume_note', '', { page: resumeTargetPage }) }}</p>
           <button
             type="button"
             class="shrink-0 h-7 px-3 rounded-full bg-brand-600 text-ink-primary text-[11px] font-bold active:scale-95 transition"
             @click="acceptResume"
           >
-            อ่านต่อหน้า {{ resumeTargetPage }}
+            {{ td('pdf.resume_cta', '', { page: resumeTargetPage }) }}
           </button>
           <button
             type="button"
             class="shrink-0 h-7 px-2.5 rounded-full text-[11px] font-bold text-white/70 active:scale-95 transition"
             @click="showResumeBanner = false"
           >
-            เริ่มใหม่
+            {{ td('common.restart') }}
           </button>
         </div>
 
@@ -639,7 +642,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
             type="button"
             class="pointer-events-auto absolute left-3 bottom-0 w-11 h-11 flex items-center justify-center rounded-full bg-slate-900/55 backdrop-blur-sm text-white/90 shadow-lg active:scale-90 transition disabled:opacity-30"
             :disabled="!canGoBack"
-            aria-label="หน้าก่อนหน้า"
+            :aria-label="td('common.prev_page')"
             @click="prevPage"
           >
             <Icon name="chevron_left" :size="18" />
@@ -651,8 +654,8 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
             <button
               type="button"
               class="pointer-events-auto min-h-[44px] px-4 rounded-full bg-slate-900/55 backdrop-blur-sm shadow-lg text-[11px] font-bold text-white/90 tabular-nums active:scale-95 transition inline-flex items-center gap-1.5"
-              title="ออกจากโหมดเต็มจอ"
-              aria-label="ออกจากโหมดเต็มจอ"
+              :title="td('media.exit_fullscreen')"
+              :aria-label="td('media.exit_fullscreen')"
               :aria-pressed="expanded"
               @click="toggleExpanded"
             >
@@ -665,7 +668,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
             type="button"
             class="pointer-events-auto absolute right-3 bottom-0 w-11 h-11 flex items-center justify-center rounded-full bg-slate-900/55 backdrop-blur-sm text-white/90 shadow-lg active:scale-90 transition disabled:opacity-30"
             :disabled="!canGoForward"
-            aria-label="หน้าถัดไป"
+            :aria-label="td('common.next_page')"
             @click="nextPage"
           >
             <Icon name="chevron_right" :size="18" />
@@ -684,11 +687,11 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           type="button"
           class="min-h-[44px] px-4 rounded-lg bg-surface-chip text-ink-card text-xs font-bold inline-flex items-center gap-1.5 active:scale-95 transition disabled:opacity-40"
           :disabled="!canGoBack"
-          aria-label="หน้าก่อนหน้า"
+          :aria-label="td('common.prev_page')"
           @click="prevPage"
         >
           <Icon name="chevron_left" :size="16" />
-          ก่อนหน้า
+          {{ td('common.prev') }}
         </button>
 
         <!-- TASK-158 — the second entry point into reading mode, in the
@@ -696,8 +699,8 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
         <button
           type="button"
           class="min-h-[44px] px-3 rounded-lg text-xs font-bold text-ink-card-muted tabular-nums inline-flex items-center gap-1.5 hover:bg-surface-chip active:scale-95 transition"
-          title="ขยายเต็มจอ"
-          aria-label="ขยายเต็มจอ"
+          :title="td('media.fullscreen')"
+          :aria-label="td('media.fullscreen')"
           :aria-pressed="expanded"
           @click="toggleExpanded"
         >
@@ -709,10 +712,10 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
           type="button"
           class="min-h-[44px] px-4 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold inline-flex items-center gap-1.5 hover:bg-brand-700 active:scale-95 transition disabled:opacity-40"
           :disabled="!canGoForward"
-          aria-label="หน้าถัดไป"
+          :aria-label="td('common.next_page')"
           @click="nextPage"
         >
-          ถัดไป
+          {{ td('common.next2') }}
           <Icon name="chevron_right" :size="16" />
         </button>
       </div>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * The Super Admin chooser — "which of the two apps did you mean?"
  *
@@ -76,8 +79,8 @@ function goToAgentPortal(): void {
     style="font-family: Kanit, sans-serif;"
   >
     <div class="text-center">
-      <p class="text-lg font-bold text-slate-800">คุณเข้าสู่ระบบด้วยบัญชีผู้ดูแลระบบ</p>
-      <p class="text-sm text-slate-500 mt-1">เลือกได้ว่าจะเข้าหน้าไหน</p>
+      <p class="text-lg font-bold text-slate-800">{{ td('sa.signed_in_admin') }}</p>
+      <p class="text-sm text-slate-500 mt-1">{{ td('sa.choose_view') }}</p>
     </div>
 
     <div class="w-full max-w-sm flex flex-col gap-3">
@@ -89,9 +92,9 @@ function goToAgentPortal(): void {
       >
         <Icon name="settings" :size="20" class="shrink-0 mt-0.5" />
         <span>
-          <span class="block font-bold">หน้าผู้ดูแลระบบ</span>
+          <span class="block font-bold">{{ td('sa.admin_view') }}</span>
           <span class="block text-xs text-white/80 mt-0.5">
-            จัดการบริษัท ตัวแทน สินค้า และค่าคอมมิชชั่น
+            {{ td('sa.admin_view_help') }}
           </span>
         </span>
       </a>
@@ -103,7 +106,7 @@ function goToAgentPortal(): void {
       >
         <Icon name="user" :size="20" class="shrink-0 mt-0.5 text-slate-500" />
         <span>
-          <span class="block font-bold text-slate-800">หน้าตัวแทน</span>
+          <span class="block font-bold text-slate-800">{{ td('sa.member_view') }}</span>
           <!--
             THE SENTENCE THIS WHOLE SCREEN EXISTS FOR.
 
@@ -113,14 +116,14 @@ function goToAgentPortal(): void {
             it is a bug report. TASK-218 was raised over exactly that.
           -->
           <span class="block text-xs text-slate-500 mt-0.5">
-            ดูหน้าจอแบบเดียวกับที่ตัวแทนเห็น — บัญชีผู้ดูแลระบบไม่มียอดขายของตัวเอง ตัวเลขต่าง ๆ จึงขึ้นเป็น 0 ทั้งหมด ไม่ใช่ระบบผิดพลาด
+            {{ td('sa.member_view_help') }}
           </span>
         </span>
       </button>
     </div>
 
     <p class="text-xs text-slate-400 text-center max-w-sm">
-      เปลี่ยนใจได้ตลอด — กลับมาหน้านี้ได้จากปุ่ม "หน้าผู้ดูแลระบบ" ที่แถบด้านบน
+      {{ td('sa.change_mind') }}
     </p>
   </main>
 </template>

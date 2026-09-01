@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AcademyView — the Academy / LMS LIST. Lists only (TASK-167 §2).
  *
@@ -400,7 +403,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
     <HeroHeader
       :icon="pageIcon"
       :title="pageTitle"
-      subtitle="เส้นทางการเรียนรู้และใบรับรอง"
+      :subtitle="td('academy.subtitle')"
       :description="BR1_NOTE"
       :kpis="kpis"
       accent-color="brand"
@@ -425,7 +428,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadAll"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -451,7 +454,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
             <ProgressRing
               :fraction="overallFraction"
               :center-text="overallPercentText"
-              label="ความคืบหน้า"
+              :label="td('academy.progress')"
               class="shrink-0"
             />
             <!-- `flex-1 min-w-0` deliberately: a long English lesson title in
@@ -460,7 +463,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                  at 768px. -->
             <div class="min-w-0 flex-1">
               <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">
-                {{ nextStepKind === 'certified' ? 'ใบรับรองของคุณ' : 'ขั้นตอนถัดไป' }}
+                {{ nextStepKind === 'certified' ? td('academy.your_certs') : td('academy.next_step') }}
               </p>
               <p class="text-lg font-bold text-ink-card leading-tight mt-0.5 break-words">
                 {{ nextStepTitle }}
@@ -484,8 +487,8 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
             v-if="requiredLessonTotal"
             class="mt-3 pt-3 border-t border-line-card-subtle text-xs text-ink-card-muted"
           >
-            เรียนจบแล้ว {{ completedLessonCount }} จาก {{ requiredLessonTotal }} บทเรียน
-            <span v-if="completedOptionalCount"> · บทเสริมอีก {{ completedOptionalCount }} บท</span>
+            {{ td('academy.progress_count', '', { done: completedLessonCount, total: requiredLessonTotal }) }}
+            <span v-if="completedOptionalCount"> · {{ td('academy.bonus_extra', '', { n: completedOptionalCount }) }}</span>
           </p>
           <!-- BR-1 stays visible where the decision is made, not only in the
                header: this is the certification that unlocks selling. -->
@@ -495,7 +498,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
         </AppCard>
 
         <!-- ── 2. COURSE SECTIONS → LESSON CHECKLIST (ADR-009) ────── -->
-        <EmptyState v-if="!courseSections.length" icon="book" title="ยังไม่มีบทเรียนในหมวดนี้" class="mt-4" />
+        <EmptyState v-if="!courseSections.length" icon="book" :title="td('academy.no_lessons')" class="mt-4" />
         <div v-else class="mt-4">
           <template v-for="s in courseSections" :key="s.module.id">
             <AppListGroupHeader :label="s.module.title" :count="s.totalCount" />
@@ -511,7 +514,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                 v-if="s.module.enforce_sequential"
                 class="text-[11px] font-bold text-ink-brand inline-flex items-center gap-1"
               >
-                <Icon name="key" :size="12" /> ต้องเรียนตามลำดับ — เปิดบทถัดไปได้เมื่อเรียนบทก่อนหน้าจบ
+                <Icon name="key" :size="12" /> {{ td('academy.sequential') }}
               </p>
               <div class="flex items-center gap-2">
                 <div class="h-1.5 flex-1 min-w-0 rounded-full bg-slate-200 overflow-hidden">
@@ -521,8 +524,8 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                   ></div>
                 </div>
                 <span class="text-[11px] font-bold text-ink-card-subtle tabular-nums shrink-0">
-                  {{ s.doneCount }}/{{ s.totalCount }} บทเรียน
-                  <span v-if="s.optionalCount" class="font-normal">(+{{ s.optionalCount }} บทเสริม)</span>
+                  {{ td('academy.lessons_count', '', { done: s.doneCount, total: s.totalCount }) }}
+                  <span v-if="s.optionalCount" class="font-normal">{{ td('academy.optional_count', '', { n: s.optionalCount }) }}</span>
                 </span>
               </div>
             </div>
@@ -568,7 +571,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                         <span
                           v-if="l.is_optional"
                           class="ml-1.5 align-middle px-1.5 py-0.5 rounded-full bg-surface-chip text-ink-card-subtle text-[10px] font-bold"
-                          >บทเสริม · ไม่นับในความคืบหน้า</span
+                          >{{ td('academy.bonus_lesson') }}</span
                         >
                       </p>
                       <p class="text-[11px] mt-0.5 text-ink-card-subtle font-bold">
@@ -605,7 +608,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                         <span
                           v-if="l.is_optional"
                           class="ml-1.5 align-middle px-1.5 py-0.5 rounded-full bg-surface-chip text-ink-card-subtle text-[10px] font-bold"
-                          >บทเสริม · ไม่นับในความคืบหน้า</span
+                          >{{ td('academy.bonus_lesson') }}</span
                         >
                       </p>
                       <!-- The action label IS the affordance: it names what
@@ -625,7 +628,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
                     <span
                       v-if="completedLessonIds.has(l.id)"
                       class="shrink-0 mt-0.5 text-[11px] font-bold text-ink-success"
-                      >เรียนจบแล้ว</span
+                      >{{ td('academy.completed') }}</span
                     >
                     <Icon name="chevron_right" :size="18" class="text-ink-card-subtle shrink-0 mt-0.5" />
                   </RouterLink>
@@ -657,11 +660,11 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
              two apart by their suffix. The subtitle states the BR-1
              consequence, because that is what actually distinguishes them —
              one costs you a lesson, this one costs you your selling rights. -->
-        <AppListGroupHeader label="แบบประเมินผล" :count="exams.length" />
+        <AppListGroupHeader :label="td('academy.assessment')" :count="exams.length" />
         <p class="px-4 pb-2 text-[11px] text-ink-card-subtle">
-          สอบเพื่อรับใบรับรองระดับ — ผ่านแล้วจึงปลดล็อกสิทธิ์การขาย (BR-1)
+          {{ td('academy.cert_exam') }}
         </p>
-        <EmptyState v-if="!exams.length" icon="check_square" title="ยังไม่มีแบบประเมินผล" />
+        <EmptyState v-if="!exams.length" icon="check_square" :title="td('academy.no_exam')" />
         <AppList v-else>
           <TransitionGroup name="list-fade">
             <AppCard v-for="ex in exams" :id="'exam-' + ex.id" :key="ex.id" variant="flat">
@@ -707,7 +710,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
              At the BOTTOM: a certificate is an ARCHIVE — proof of something
              already finished — so it belongs after the work still to do. -->
         <template v-if="certifications.length">
-          <AppListGroupHeader label="ใบรับรองที่ได้รับ" :count="certifications.length" />
+          <AppListGroupHeader :label="td('academy.certs_earned')" :count="certifications.length" />
           <AppList>
             <TransitionGroup name="list-fade">
               <AppCard v-for="c in certifications" :key="c.id" variant="flat">

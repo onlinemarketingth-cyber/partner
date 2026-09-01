@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * Sprint UI-WS-1.1 / UI-WS-4 — Reusable Workspace Header (Apple HIG polish)
  *
@@ -324,7 +327,7 @@ onUnmounted(() => {
                 <slot name="actions" />
                 <button v-if="!isMobile" @click="toggleCollapsed"
                         class="w-8 h-8 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip hover:text-ink-card transition"
-                        title="ขยาย">
+                        :title="td('common.expand')">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="6 9 12 15 18 9"/>
                     </svg>
@@ -361,7 +364,7 @@ onUnmounted(() => {
                         <slot name="actions" />
                         <button @click="toggleCollapsed"
                                 class="w-9 h-9 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip hover:text-ink-card transition"
-                                title="ย่อ">
+                                :title="td('common.collapse')">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="18 15 12 9 6 15"/>
                             </svg>

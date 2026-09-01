@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * LeaderboardView — gamification ranking, wired to the real API.
  *
@@ -132,15 +135,15 @@ onMounted(loadAll)
       icon="trophy"
       icon-color="text-gold-600"
       title="Leaderboard"
-      subtitle="อันดับ XP ของทีมขาย"
-      description="XP มาจากการเรียนจบ/ผ่านใบรับรอง และความคืบหน้าใน Pipeline (BR-5)"
+      :subtitle="td('board.subtitle')"
+      :description="td('board.description')"
       :kpis="kpis"
       accent-color="gold"
       storage-key="leaderboard"
     />
 
     <div v-if="isSuperAdmin" class="mt-4 px-4 py-3 rounded-xl bg-surface-chip border border-line-card text-sm text-ink-card-muted">
-      Leaderboard แยกตามบริษัท — Super Admin กรุณาดูผ่าน Admin app แทน (หน้านี้ไม่มีตัวเลือกบริษัท)
+      {{ td('board.super_admin_note') }}
     </div>
     <!-- TASK-079 Phase 2 (UX audit): dead-end error banner — retry lets the
          agent recover without reloading the whole SPA. -->
@@ -151,7 +154,7 @@ onMounted(loadAll)
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadAll"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -165,12 +168,12 @@ onMounted(loadAll)
     <Transition name="content-fade">
       <LoadingSkeleton v-if="!isSuperAdmin && loading && !hasLoadedOnce" type="list" :rows="5" class="mt-4" />
       <div v-else-if="!isSuperAdmin">
-        <h2 class="mt-4 mb-2 text-sm font-bold text-ink-card px-1">Badge ที่ได้รับ</h2>
+        <h2 class="mt-4 mb-2 text-sm font-bold text-ink-card px-1">{{ td('board.badges') }}</h2>
         <EmptyState
           v-if="!badges.length"
           icon="star"
-          title="ยังไม่ได้รับ badge"
-          message="Badge จะได้รับจากการมอบโดย Company Admin — เงื่อนไขอัตโนมัติยังไม่เปิดใช้งาน (BR-7)"
+          :title="td('board.no_badges')"
+          :message="td('board.badge_help')"
         />
         <TransitionGroup v-else tag="div" name="list-fade" class="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div v-for="b in badges" :key="b.id" class="bg-surface-card/95 border border-line-card rounded-xl p-4 text-center">
@@ -179,19 +182,19 @@ onMounted(loadAll)
           </div>
         </TransitionGroup>
 
-        <h2 class="mt-6 mb-2 text-sm font-bold text-ink-card px-1">อันดับ XP</h2>
+        <h2 class="mt-6 mb-2 text-sm font-bold text-ink-card px-1">{{ td('board.xp_rank') }}</h2>
         <EmptyState
           v-if="!rows.length"
           icon="trophy"
-          title="ยังไม่มีข้อมูลอันดับ"
-          message="XP จะถูกบันทึกอัตโนมัติเมื่อเรียนจบโมดูล ผ่านใบรับรอง หรือมีความคืบหน้าใน Pipeline (BR-5)"
+          :title="td('board.empty')"
+          :message="td('board.xp_help')"
         />
         <div v-else-if="topRow" class="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <!-- Spotlight card — rank 1 -->
           <div class="lg:col-span-1 bg-surface-card/95 border border-gold-200 rounded-2xl p-6 shadow-sm flex flex-col items-center text-center">
             <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-gold-600 text-white text-xs font-bold">
               <Icon name="trophy" :size="14" />
-              อันดับ 1
+              {{ td('board.rank_one') }}
             </span>
             <img
               v-if="topRow.user.avatar_url"
@@ -224,7 +227,7 @@ onMounted(loadAll)
             <p class="mt-3 text-base font-bold text-ink-card">
               {{ topRow.user.name }}
             </p>
-            <p v-if="topRow.user.id === auth.user?.id" class="text-xs font-bold text-gold-600">(คุณ)</p>
+            <p v-if="topRow.user.id === auth.user?.id" class="text-xs font-bold text-gold-600">{{ td('common.you') }}</p>
             <p class="text-xs text-ink-card-muted mt-0.5">Lv.{{ topRow.level_number }}</p>
             <p class="mt-4 text-3xl font-bold text-gold-600 leading-none">{{ topRow.total_xp.toLocaleString('th-TH') }}</p>
             <p class="text-xs font-bold text-ink-card-muted mt-1">XP</p>
@@ -251,7 +254,7 @@ onMounted(loadAll)
               <div class="flex-1 min-w-0">
                 <p class="text-sm font-bold text-ink-card truncate">
                   {{ row.user.name }}
-                  <span v-if="row.user.id === auth.user?.id" class="text-xs font-bold text-gold-600">(คุณ)</span>
+                  <span v-if="row.user.id === auth.user?.id" class="text-xs font-bold text-gold-600">{{ td('common.you') }}</span>
                 </p>
                 <p class="text-xs text-ink-card-muted">Lv.{{ row.level_number }}</p>
               </div>

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AnnouncementsListView — TASK-075 (2026-08-02, human-confirmed via
  * AskUserQuestion): full announcements list + search, reached via the
@@ -137,12 +140,12 @@ function closeAnnouncementModal() {
   <main class="min-h-screen px-4 py-6 lg:px-8" style="font-family: var(--app-font);">
     <HeroHeader
       icon="megaphone"
-      title="ข่าวสารทั้งหมด"
-      subtitle="ประกาศและข่าวสารจากบริษัท"
+      :title="td('news.all')"
+      :subtitle="td('news.subtitle')"
       accent-color="brand"
       storage-key="announcements"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <template #tabs>
         <div class="px-4 py-3">
@@ -151,7 +154,7 @@ function closeAnnouncementModal() {
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="ค้นหาข่าวสาร..."
+              :placeholder="td('news.search_ph')"
               class="text-ink-input placeholder:text-ink-input-placeholder w-full min-h-[44px] pl-9 pr-3 py-2.5 rounded-xl border border-line-input text-sm bg-surface-input focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-400"
             />
           </div>
@@ -184,7 +187,7 @@ function closeAnnouncementModal() {
       >
         <Icon name="alert" :size="32" class="text-ink-danger" />
         <p class="text-sm text-ink-card-muted font-bold">{{ errorMessage }}</p>
-        <AppButton @click="loadAll">ลองใหม่</AppButton>
+        <AppButton @click="loadAll">{{ td('common.retry') }}</AppButton>
       </div>
 
       <!-- Empty (no announcements at all) -->
@@ -193,7 +196,7 @@ function closeAnnouncementModal() {
         class="flex flex-col items-center justify-center gap-2 py-16 text-center"
       >
         <Icon name="megaphone" :size="40" class="text-ink-card-subtle" />
-        <p class="text-sm text-ink-card-muted font-bold">ยังไม่มีข่าวสาร</p>
+        <p class="text-sm text-ink-card-muted font-bold">{{ td('news.empty') }}</p>
       </div>
 
       <!-- Empty (search has no matches) -->
@@ -202,7 +205,7 @@ function closeAnnouncementModal() {
         class="flex flex-col items-center justify-center gap-2 py-16 text-center"
       >
         <Icon name="search" :size="40" class="text-ink-card-subtle" />
-        <p class="text-sm text-ink-card-muted font-bold">ไม่พบข่าวสารที่ค้นหา</p>
+        <p class="text-sm text-ink-card-muted font-bold">{{ td('news.no_result') }}</p>
       </div>
 
       <!-- List. TASK-079 Phase 3 (UX audit): `hover:` never fires on a touchscreen,

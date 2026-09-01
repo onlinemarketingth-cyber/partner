@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * ProductBrowseView — Agent Portal "สินค้า" (TASK-056 P3, redesigned
  * TASK-070 / ADR-020 into a 4-row consumer-app-style storefront).
@@ -476,13 +479,13 @@ const {
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="box"
-      title="สินค้า"
-      subtitle="ค้นหาสินค้าและแชร์ให้ลูกค้า"
-      description="แชร์หน้าสินค้าสาธารณะให้ลูกค้าดูคลิป รายละเอียด และเอกสารการขาย — ระบุตัวคุณเป็นผู้แนะนำโดยอัตโนมัติ"
+      :title="td('nav.products2')"
+      :subtitle="td('product.subtitle')"
+      :description="td('product.description')"
       accent-color="brand"
       storage-key="product-browse"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <template #tabs>
         <!-- Row 1: Search + Filter -->
@@ -493,7 +496,7 @@ const {
               <input
                 v-model="searchQuery"
                 type="text"
-                placeholder="ค้นหาสินค้า..."
+                :placeholder="td('product.search_ph')"
                 class="placeholder:text-ink-input-placeholder w-full min-h-[44px] pl-9 pr-3 py-2 rounded-lg border border-line-input bg-surface-input text-ink-input text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
               />
             </div>
@@ -527,14 +530,14 @@ const {
                 v-model.number="filters.categoryId"
                 class="w-full min-h-[44px] px-2.5 py-2 rounded-lg border border-line-input bg-surface-input text-ink-input text-xs focus:outline-none focus:ring-2 focus:ring-brand-200"
               >
-                <option :value="null">ทุกหมวดหมู่</option>
+                <option :value="null">{{ td('product.all_categories') }}</option>
                 <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
               </select>
               <select
                 v-model.number="filters.brandId"
                 class="w-full min-h-[44px] px-2.5 py-2 rounded-lg border border-line-input bg-surface-input text-ink-input text-xs focus:outline-none focus:ring-2 focus:ring-brand-200"
               >
-                <option :value="null">ทุกแบรนด์</option>
+                <option :value="null">{{ td('product.all_brands') }}</option>
                 <option v-for="brand in brands" :key="brand.id" :value="brand.id">{{ brand.name }}</option>
               </select>
             </div>
@@ -543,20 +546,20 @@ const {
                 v-model.number="filters.priceMinBaht"
                 type="number"
                 min="0"
-                placeholder="ราคาต่ำสุด (฿)"
+                :placeholder="td('product.min_price')"
                 class="placeholder:text-ink-input-placeholder w-full min-h-[44px] px-2.5 py-2 rounded-lg border border-line-input bg-surface-input text-ink-input text-xs focus:outline-none focus:ring-2 focus:ring-brand-200"
               />
               <input
                 v-model.number="filters.priceMaxBaht"
                 type="number"
                 min="0"
-                placeholder="ราคาสูงสุด (฿)"
+                :placeholder="td('product.max_price')"
                 class="placeholder:text-ink-input-placeholder w-full min-h-[44px] px-2.5 py-2 rounded-lg border border-line-input bg-surface-input text-ink-input text-xs focus:outline-none focus:ring-2 focus:ring-brand-200"
               />
             </div>
             <div class="flex items-center gap-2">
-              <AppButton size="sm" class="flex-1" @click="applyFilters">นำตัวกรองไปใช้</AppButton>
-              <AppButton variant="secondary" size="sm" @click="clearFilters">ล้างตัวกรอง</AppButton>
+              <AppButton size="sm" class="flex-1" @click="applyFilters">{{ td('filter.apply') }}</AppButton>
+              <AppButton variant="secondary" size="sm" @click="clearFilters">{{ td('filter.clear') }}</AppButton>
             </div>
           </div>
         </div>
@@ -583,7 +586,7 @@ const {
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadProducts"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
     <div v-if="shareError" class="mt-4 px-4 py-3 rounded-xl bg-surface-danger border border-line-card text-sm text-ink-danger">
@@ -596,7 +599,7 @@ const {
       class="mt-4 flex items-start gap-3 px-4 py-3 rounded-xl bg-surface-warning border border-line-card text-sm text-ink-warning"
     >
       <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-      <span>คุณต้องผ่านการรับรอง Basic ก่อนจึงจะแชร์ลิงก์สินค้าได้ (BR-1) — ไปที่หน้า Academy เพื่อเริ่มเรียน</span>
+      <span>{{ td('cert.needs_basic_share') }}</span>
     </div>
 
     <!-- TASK-080 — announcement banners (page key 'products'), placed
@@ -675,7 +678,7 @@ const {
     <!-- Row 4: Recommended for you -->
     <div v-if="recommendedError && !isBrowsingFiltered" class="mt-4 px-1 text-xs text-ink-danger">{{ recommendedError }}</div>
     <template v-else-if="recommended.length && !isBrowsingFiltered">
-      <h2 class="mt-4 px-1 text-sm font-bold text-ink-app">แนะนำสำหรับคุณ</h2>
+      <h2 class="mt-4 px-1 text-sm font-bold text-ink-app">{{ td('product.recommended') }}</h2>
       <div class="mt-2 flex gap-3 overflow-x-auto no-scrollbar pb-1">
         <div v-for="product in recommended" :key="'rec-' + product.id" class="shrink-0 w-40">
           <ProductCard
@@ -732,7 +735,7 @@ const {
             class="ml-auto min-h-[44px] px-3 text-xs font-bold text-ink-brand active:scale-95 transition"
             @click="clearAllFilters"
           >
-            ล้างตัวกรอง
+            {{ td('filter.clear') }}
           </button>
         </div>
 
@@ -745,8 +748,8 @@ const {
         <EmptyState
           v-if="!products.length"
           icon="box"
-          title="ไม่พบสินค้า"
-          message="ลองค้นหาด้วยคำอื่น ปรับตัวกรอง หรือติดต่อแอดมินเพื่อเพิ่มสินค้า"
+          :title="td('product.none_found')"
+          :message="td('product.none_found_help')"
           class="mt-4"
         />
         <div v-else class="grid grid-cols-2 gap-3 mt-4">

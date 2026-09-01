@@ -16,8 +16,10 @@
  */
 import Icon from './Icon.vue'
 import type { BannerAwareAnnouncement } from '@/utils/announcementBanners'
+import { useI18n } from '@/composables/useI18n'
 
 defineProps<{ items: BannerAwareAnnouncement[] }>()
+const { td } = useI18n()
 const emit = defineEmits<{ (e: 'select', announcement: BannerAwareAnnouncement): void }>()
 </script>
 
@@ -50,7 +52,7 @@ const emit = defineEmits<{ (e: 'select', announcement: BannerAwareAnnouncement):
       >
         <Icon name="megaphone" :size="24" class="opacity-80" />
         <p class="text-sm font-bold leading-snug line-clamp-3">{{ item.title }}</p>
-        <span v-if="item.is_pinned" class="text-[11px] font-bold opacity-80">ปักหมุด</span>
+        <span v-if="item.is_pinned" class="text-[11px] font-bold opacity-80">{{ td('ui.pinned') }}</span>
       </div>
 
       <!-- Title overlay only on image banners — the fallback tile above

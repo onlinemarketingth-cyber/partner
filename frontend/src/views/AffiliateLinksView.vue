@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AffiliateLinksView — "My Affiliate Links" (ADR-011 Section 4 / TASK-033).
  *
@@ -213,20 +216,20 @@ function formatDate(iso: string): string {
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="link"
-      title="ลิงก์พันธมิตร"
-      subtitle="สร้างลิงก์ติดตามผลเพื่อแนะนำลูกค้า"
-      description="แชร์ลิงก์นี้ให้ลูกค้า — ทุกคลิกและทุกการสมัครจะถูกบันทึกและนับเครดิตให้คุณ (ADR-011)"
+      :title="td('nav.affiliate2')"
+      :subtitle="td('affiliate.subtitle')"
+      :description="td('affiliate.description')"
       :kpis="kpis"
       accent-color="brand"
       storage-key="affiliate-links"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <template #actions>
         <span
           v-if="attributionSetting"
           class="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-chip text-xs font-bold text-ink-card-muted whitespace-nowrap"
-          title="ตั้งค่าโดยแอดมิน — คลิกล่าสุดต้องอยู่ในช่วงเวลานี้จึงจะนับเป็นการแปลง"
+          :title="td('affiliate.window_note')"
         >
           <Icon name="clock" :size="14" />
           หน้าต่างนับเครดิต {{ attributionSetting.attribution_window_days }} วัน
@@ -243,7 +246,7 @@ function formatDate(iso: string): string {
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadAll"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -263,12 +266,12 @@ function formatDate(iso: string): string {
           class="mt-4 flex items-start gap-3 px-4 py-3 rounded-xl bg-surface-warning border border-line-card text-sm text-ink-warning"
         >
           <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-          <span>คุณต้องผ่านการรับรอง Basic ก่อนจึงจะสร้างลิงก์พันธมิตรได้ (BR-1) — ไปที่หน้า Academy เพื่อเริ่มเรียน</span>
+          <span>{{ td('affiliate.needs_basic') }}</span>
         </div>
 
         <!-- Generate new link -->
         <div v-else class="mt-4 bg-surface-card/95 border border-line-card rounded-xl p-4">
-          <p class="text-sm font-bold text-ink-card mb-2">สร้างลิงก์ใหม่</p>
+          <p class="text-sm font-bold text-ink-card mb-2">{{ td('link.create_new') }}</p>
           <div v-if="createError" class="mb-2 px-3 py-2 rounded-lg bg-surface-danger border border-line-card text-xs text-ink-danger">
             {{ createError }}
           </div>
@@ -278,18 +281,18 @@ function formatDate(iso: string): string {
                button in 384px. Same root cause as the list-row squeeze. -->
           <div class="flex flex-col gap-2">
             <select v-model="selectedProductId" class="bg-surface-input text-ink-input flex-1 min-h-[44px] px-3 py-2 rounded-lg border border-line-input text-sm">
-              <option value="">ทุกสินค้า (ไม่ระบุ)</option>
+              <option value="">{{ td('product.any') }}</option>
               <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
-            <AppButton :loading="creating" @click="createLink">+ สร้างลิงก์ใหม่</AppButton>
+            <AppButton :loading="creating" @click="createLink">{{ td('link.create_new_plus') }}</AppButton>
           </div>
         </div>
 
         <EmptyState
           v-if="!links.length"
           icon="link"
-          title="ยังไม่มีลิงก์พันธมิตร"
-          message="สร้างลิงก์แรกของคุณด้านบนเพื่อเริ่มแชร์และติดตามผล"
+          :title="td('affiliate.empty')"
+          :message="td('affiliate.empty_help')"
           class="mt-4"
         />
         <!-- TASK-082 (UX audit): the per-link card is gone — affiliate links
@@ -347,16 +350,16 @@ function formatDate(iso: string): string {
                 <div class="flex items-center gap-1 shrink-0">
                   <button
                     class="w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip hover:text-ink-brand transition-all active:scale-90"
-                    title="คัดลอกลิงก์"
-                    aria-label="คัดลอกลิงก์"
+                    :title="td('link.copy')"
+                    :aria-label="td('link.copy')"
                     @click="copyLink(link)"
                   >
                     <Icon :name="copiedLinkId === link.id ? 'check' : 'copy'" :size="16" />
                   </button>
                   <button
                     class="w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-danger hover:text-ink-danger transition-all active:scale-90"
-                    title="ยกเลิกลิงก์"
-                    aria-label="ยกเลิกลิงก์"
+                    :title="td('link.revoke')"
+                    :aria-label="td('link.revoke')"
                     @click="askRevoke(link.id)"
                   >
                     <Icon name="trash" :size="16" />
@@ -371,11 +374,11 @@ function formatDate(iso: string): string {
                    tier and are unchanged. -->
               <div class="mt-3 pt-3 border-t border-line-card-subtle flex items-center gap-6">
                 <div>
-                  <p class="text-[11px] text-ink-card-subtle uppercase tracking-wide font-bold">คลิก</p>
+                  <p class="text-[11px] text-ink-card-subtle uppercase tracking-wide font-bold">{{ td('stat.clicks') }}</p>
                   <p class="text-xl font-bold text-ink-card leading-tight">{{ link.clicks_count }}</p>
                 </div>
                 <div>
-                  <p class="text-[11px] text-ink-card-subtle uppercase tracking-wide font-bold">การแปลง</p>
+                  <p class="text-[11px] text-ink-card-subtle uppercase tracking-wide font-bold">{{ td('stat.conversions') }}</p>
                   <p class="text-xl font-bold text-ink-card leading-tight">{{ link.conversions_count }}</p>
                 </div>
               </div>
@@ -387,8 +390,8 @@ function formatDate(iso: string): string {
 
     <ConfirmDialog
       v-model:show="showRevokeConfirm"
-      title="ยืนยันการยกเลิกลิงก์"
-      body="ลิงก์นี้จะใช้งานไม่ได้อีกต่อไป แต่สถิติคลิก/การแปลงที่บันทึกไว้แล้วจะยังอยู่"
+      :title="td('link.confirm_revoke')"
+      :body="td('link.revoke_body')"
       variant="danger"
       :busy="revoking"
       @confirm="confirmRevoke"

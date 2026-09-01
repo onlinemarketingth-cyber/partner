@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * NotificationsView — full-page notification list (TASK-053 Phase 3).
  * Reads live state from useNotificationsStore(). Clicking an item marks
@@ -78,17 +81,17 @@ function formatDate(iso: string): string {
   <main class="min-h-screen px-4 py-6 lg:px-8" style="font-family: var(--app-font);">
     <HeroHeader
       icon="bell"
-      title="การแจ้งเตือน"
-      subtitle="ความเคลื่อนไหวล่าสุดของคุณ"
+      :title="td('notification.title2')"
+      :subtitle="td('notification.subtitle')"
       accent-color="brand"
       storage-key="notifications"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <!-- TASK-087 — text form of the navigation-bar action (the iOS
            "Done"/"Edit" style); see NavBarAction.vue. -->
       <template #actions>
-        <NavBarAction @click="markAllRead">อ่านทั้งหมด</NavBarAction>
+        <NavBarAction @click="markAllRead">{{ td('notification.mark_all_read2') }}</NavBarAction>
       </template>
     </HeroHeader>
 
@@ -115,7 +118,7 @@ function formatDate(iso: string): string {
           class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
           @click="loadList"
         >
-          ลองใหม่
+          {{ td('common.retry') }}
         </button>
       </div>
 
@@ -130,7 +133,7 @@ function formatDate(iso: string): string {
         class="flex flex-col items-center justify-center gap-2 py-16 text-center"
       >
         <Icon name="bell" :size="40" class="text-ink-card-subtle" />
-        <p class="text-sm text-ink-card-muted font-bold">ยังไม่มีการแจ้งเตือน</p>
+        <p class="text-sm text-ink-card-muted font-bold">{{ td('notification.empty2') }}</p>
       </div>
 
       <!-- List -->

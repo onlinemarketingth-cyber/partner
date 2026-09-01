@@ -7,7 +7,7 @@
  *   const { lang, t } = useI18n()
  *   <button>{{ t('add', 'เพิ่ม', 'Add') }}</button>
  */
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, shallowRef, onMounted, onUnmounted } from 'vue'
 // The read below happens at IMPORT time, so it must not be able to throw:
 // anything thrown here takes down every component that imports this module,
 // however far from i18n it is. See safeStorage.js for the full reasoning.
@@ -60,16 +60,45 @@ export function useI18n() {
      *   Example: td('doc.receipt')  → 'ใบเสร็จรับเงิน' หรือ 'Receipt'
      *   Example: td('missing.key', 'ค่า default') → ใช้ fallback ถ้าไม่พบ key
      */
-    const td = (dotKey, fallback = '') => {
-        const dict = lang.value === 'EN' ? _dictEn : _dictTh
-        if (!dict) return fallback || dotKey
-        const parts = String(dotKey).split('.')
-        let cur = dict
-        for (const p of parts) {
-            if (cur && typeof cur === 'object' && p in cur) cur = cur[p]
-            else return fallback || dotKey
+    /**
+     * @param {string} dotKey
+     * @param {string} [fallback]
+     * @param {Record<string, string|number>|null} [params]  values for {slot}s
+     * @returns {string}
+     */
+    const td = (dotKey, fallback = '', params = null) => {
+        const dict = lang.value === 'EN' ? _dictEn.value : _dictTh.value
+        let out = null
+        if (dict) {
+            let cur = dict
+            for (const p of String(dotKey).split('.')) {
+                if (cur && typeof cur === 'object' && p in cur) cur = cur[p]
+                else { cur = null; break }
+            }
+            if (typeof cur === 'string') out = cur
         }
-        return typeof cur === 'string' ? cur : (fallback || dotKey)
+        if (out === null) out = fallback || dotKey
+
+        /*
+         * PLACEHOLDERS — 2026-09-22.
+         *
+         * Sentences that wrap a number or a name ("เรียนจบแล้ว 3 จาก 8 บทเรียน")
+         * cannot be split into fragments and reassembled: Thai and English put
+         * the pieces in different orders, and a template that concatenates
+         * them produces correct Thai and broken English. So the whole sentence
+         * is ONE dictionary entry with {named} slots, and each language decides
+         * where its slots go.
+         *
+         * Values are substituted as plain text into a Vue interpolation, never
+         * into v-html, so there is no markup for a value to escape into.
+         */
+        if (params) {
+            for (const [k, v] of Object.entries(params)) {
+                out = out.split('{' + k + '}').join(String(v))
+            }
+        }
+
+        return out
     }
 
     /** dispatch event ให้ทั้ง app เปลี่ยน lang */
@@ -83,22 +112,38 @@ export function useI18n() {
     return { lang, t, td, setLang }
 }
 
-// === Sprint TZI18N-2: Lazy-load dictionary JSON files ===
-let _dictTh = null
-let _dictEn = null
+/*
+ * === Sprint TZI18N-2: dictionary state ===
+ *
+ * BUG FIX 2026-09-22 — these were plain module variables, and that made
+ * td() silently useless.
+ *
+ * The dictionaries load asynchronously (fetch, below). A template that calls
+ * td() renders BEFORE the fetch resolves, so it gets the fallback — and
+ * because a plain `let` is not reactive, Vue is never told anything changed
+ * and never re-renders. The English text arrived and nothing on screen ever
+ * used it. Nobody had noticed because the JSON files did not exist yet, so
+ * every call was returning its fallback for a second, more obvious reason.
+ *
+ * shallowRef, not ref: these are large read-only trees. Deep reactivity
+ * would walk every key on assignment for no benefit — nothing ever mutates
+ * a dictionary in place, it is replaced wholesale exactly once.
+ */
+const _dictTh = shallowRef(null)
+const _dictEn = shallowRef(null)
 
 async function _loadDict() {
     if (typeof window === 'undefined') return
-    if (!_dictTh) {
+    if (!_dictTh.value) {
         try {
             const res = await fetch('/lang/th.json', { cache: 'default' })
-            if (res.ok) _dictTh = await res.json()
+            if (res.ok) _dictTh.value = await res.json()
         } catch {}
     }
-    if (!_dictEn) {
+    if (!_dictEn.value) {
         try {
             const res = await fetch('/lang/en.json', { cache: 'default' })
-            if (res.ok) _dictEn = await res.json()
+            if (res.ok) _dictEn.value = await res.json()
         } catch {}
     }
 }

@@ -23,7 +23,9 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import Icon from './Icon.vue'
 import { useThemeStore } from '@/stores/theme'
+import { useI18n } from '@/composables/useI18n'
 
+const { td } = useI18n()
 const route = useRoute()
 const theme = useThemeStore()
 
@@ -54,14 +56,24 @@ const theme = useThemeStore()
 // tenant's own words silently relabelling a different destination.
 // `nav_sales` follows `nav_profile`: still a valid key, no longer read
 // anywhere, never recycled for a different tab.
+/*
+ * Sprint TZI18N-2 — the FALLBACK is translated, the theme override is not.
+ *
+ * theme.label(key, fallback) lets a company rename a tab for its own people
+ * ("ลูกค้า" -> "สมาชิก", say). That override is a deliberate per-tenant
+ * choice and must keep winning, so it is untouched here — only the default
+ * that shows when a company has NOT renamed the tab now follows the
+ * language switch. Translating the override too would silently discard a
+ * setting an admin chose on purpose.
+ */
 const items = computed(() => [
-  { to: '/', icon: theme.icon('nav_home', 'home'), label: theme.label('nav_home', 'หน้าหลัก') },
-  { to: '/clients', icon: theme.icon('nav_clients', 'users'), label: theme.label('nav_clients', 'ลูกค้า') },
-  // `box` + 'สินค้า' are HomeView's own quick-link for /products — the two
-  // entry points to one screen must not name it two different things.
-  { to: '/products', icon: theme.icon('nav_products', 'box'), label: theme.label('nav_products', 'สินค้า') },
-  { to: '/academy', icon: theme.icon('nav_academy', 'brain'), label: theme.label('nav_academy', 'Academy') },
-  { to: '/commission', icon: theme.icon('nav_commission', 'money'), label: theme.label('nav_commission', 'ค่าแนะนำ') },
+  { to: '/', icon: theme.icon('nav_home', 'home'), label: theme.label('nav_home', td('nav.home')) },
+  { to: '/clients', icon: theme.icon('nav_clients', 'users'), label: theme.label('nav_clients', td('nav.clients')) },
+  // The products tab and HomeView's own quick-link for /products must not
+  // name one screen two different things — both read this same key.
+  { to: '/products', icon: theme.icon('nav_products', 'box'), label: theme.label('nav_products', td('nav.products')) },
+  { to: '/academy', icon: theme.icon('nav_academy', 'brain'), label: theme.label('nav_academy', td('nav.academy')) },
+  { to: '/commission', icon: theme.icon('nav_commission', 'money'), label: theme.label('nav_commission', td('nav.commission')) },
 ])
 
 function isActive(to: string): boolean {

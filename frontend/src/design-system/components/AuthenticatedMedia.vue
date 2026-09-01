@@ -11,7 +11,9 @@
 import { computed, toRef } from 'vue'
 import { useAuthenticatedMedia } from '@/composables/useAuthenticatedMedia'
 import Icon from './Icon.vue'
+import { useI18n } from '@/composables/useI18n'
 
+const { td } = useI18n()
 const props = withDefaults(
   defineProps<{
     src: string | null
@@ -38,12 +40,12 @@ const showPlaceholder = computed(() => !props.src || loading.value || error.valu
   <button
     v-if="showPlaceholder && error"
     type="button"
-    :title="error + ' — แตะเพื่อลองใหม่'"
+    :title="`${error} — ${td('ui.retry_hint')}`"
     :class="['flex flex-col items-center justify-center gap-1 bg-surface-chip text-ink-card-subtle', props.class]"
     @click.stop.prevent="retry"
   >
     <Icon name="refresh" :size="20" class="text-rose-300" />
-    <span class="text-[10px] font-bold">ลองใหม่</span>
+    <span class="text-[10px] font-bold">{{ td('ui.retry') }}</span>
   </button>
   <div v-else-if="showPlaceholder" :class="['flex items-center justify-center bg-surface-chip text-ink-card-subtle', props.class]">
     <Icon v-if="loading" name="clock" :size="20" class="animate-pulse" />

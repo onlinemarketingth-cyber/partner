@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * MyTeamView — TASK-109 / ADR-024. The team leader's monitoring screen.
  *
@@ -854,14 +857,14 @@ watch(showCreateSheet, (open) => {
   <main class="min-h-screen px-4 py-6 lg:px-8" style="font-family: var(--app-font);">
     <HeroHeader
       icon="users"
-      title="ทีมของฉัน"
-      subtitle="ภาพรวมของลูกทีมทั้งสาย"
-      description="หน้านี้ดูได้อย่างเดียว — ไม่สามารถแก้ไขข้อมูลหรือเลื่อนสถานะให้ลูกทีมได้"
+      :title="td('nav.my_team2')"
+      :subtitle="td('team.subtitle')"
+      :description="td('team.description')"
       :kpis="kpis"
       accent-color="brand"
       storage-key="my-team"
       back-page="/"
-      back-label="หน้าหลัก"
+      :back-label="td('nav.home2')"
     >
       <!-- TASK-116 — gated on the FLAG, never on `isLeader` (= has direct
            reports). A newly designated leader has no reports yet and would
@@ -876,7 +879,7 @@ watch(showCreateSheet, (open) => {
           @click="openCreateSheet"
         >
           <Icon name="user_plus" :size="16" />
-          <span>ชวนเข้าทีม</span>
+          <span>{{ td('team.invite') }}</span>
         </button>
       </template>
 
@@ -899,7 +902,7 @@ watch(showCreateSheet, (open) => {
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-surface-chip active:scale-95 transition"
         @click="loadTeam"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -921,7 +924,7 @@ watch(showCreateSheet, (open) => {
           class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-surface-chip active:scale-95 transition"
           @click="loadRecruitData"
         >
-          ลองใหม่
+          {{ td('common.retry') }}
         </button>
       </div>
 
@@ -932,7 +935,7 @@ watch(showCreateSheet, (open) => {
            nothing. The links section below is the stable home for the
            feature, so nothing becomes undiscoverable by hiding this. -->
       <template v-if="pendingRecruits.length">
-        <AppListGroupHeader label="รออนุมัติเข้าทีม" :count="pendingRecruits.length" />
+        <AppListGroupHeader :label="td('team.pending_tab')" :count="pendingRecruits.length" />
         <AppList>
           <AppCard v-for="recruit in pendingRecruits" :key="recruit.id" variant="flat">
             <!-- THE WHOLE ROW OPENS THE DETAIL SHEET, and the approve button
@@ -970,7 +973,7 @@ watch(showCreateSheet, (open) => {
                      as well as in the sheet so it is visible before the
                      leader ever taps. -->
                 <p v-if="!recruit.email_verified" class="text-[11px] text-ink-warning mt-0.5">
-                  ยังไม่ได้ยืนยันอีเมล — เข้าสู่ระบบไม่ได้จนกว่าจะยืนยัน
+                  {{ td('team.unverified_email') }}
                 </p>
               </div>
 
@@ -983,7 +986,7 @@ watch(showCreateSheet, (open) => {
       </template>
 
       <!-- ── ลิงก์ชวนเข้าทีม ─────────────────────────────────────────── -->
-      <AppListGroupHeader label="ลิงก์ชวนเข้าทีมของฉัน" :count="inviteLinks.length" />
+      <AppListGroupHeader :label="td('team.my_invites')" :count="inviteLinks.length" />
 
       <LoadingSkeleton v-if="recruitLoading && !inviteLinks.length" type="list" :rows="2" />
 
@@ -995,15 +998,15 @@ watch(showCreateSheet, (open) => {
       >
         <Icon name="link" :size="24" class="text-ink-card-subtle shrink-0" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-bold text-ink-card-muted">ยังไม่มีลิงก์ชวนเข้าทีม</p>
-          <p class="text-xs text-ink-card-subtle mt-0.5">สร้างลิงก์แล้วส่งให้คนที่คุณอยากชวน เขาจะสมัครเข้ามาอยู่ในทีมของคุณ</p>
+          <p class="text-sm font-bold text-ink-card-muted">{{ td('team.no_invites') }}</p>
+          <p class="text-xs text-ink-card-subtle mt-0.5">{{ td('team.invite_help') }}</p>
         </div>
         <button
           type="button"
           class="shrink-0 min-h-[44px] px-3.5 rounded-xl bg-brand-600 text-ink-primary text-xs font-bold active:scale-95 transition"
           @click="openCreateSheet"
         >
-          + สร้างลิงก์แรก
+          {{ td('link.create_first') }}
         </button>
       </div>
 
@@ -1031,8 +1034,8 @@ watch(showCreateSheet, (open) => {
               <button
                 type="button"
                 class="w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-chip hover:text-ink-brand transition-all active:scale-90"
-                aria-label="แชร์ลิงก์"
-                title="แชร์ลิงก์"
+                :aria-label="td('link.share')"
+                :title="td('link.share')"
                 @click="openShare(link)"
               >
                 <Icon name="share" :size="16" />
@@ -1041,8 +1044,8 @@ watch(showCreateSheet, (open) => {
                 v-if="!link.revoked_at"
                 type="button"
                 class="w-11 h-11 flex items-center justify-center rounded-lg text-ink-card-subtle hover:bg-surface-danger hover:text-ink-danger transition-all active:scale-90"
-                aria-label="ยกเลิกลิงก์"
-                title="ยกเลิกลิงก์"
+                :aria-label="td('link.revoke')"
+                :title="td('link.revoke')"
                 @click="askRevoke(link)"
               >
                 <Icon name="trash" :size="16" />
@@ -1061,7 +1064,7 @@ watch(showCreateSheet, (open) => {
       class="mt-4 flex items-start gap-3 px-4 py-3 rounded-xl bg-surface-warning border border-line-card text-sm text-ink-warning"
     >
       <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-      <span>สิทธิ์การชวนเข้าทีมของคุณถูกปิดอยู่ในขณะนี้ หากต้องการชวนสมาชิกใหม่ กรุณาติดต่อผู้ดูแลระบบของบริษัท</span>
+      <span>{{ td('team.invite_disabled') }}</span>
     </div>
 
     <!-- Single-rooted per branch: App.vue wraps <RouterView> in a
@@ -1079,9 +1082,9 @@ watch(showCreateSheet, (open) => {
       >
         <Icon name="users" :size="24" class="text-ink-card-subtle shrink-0" />
         <div class="min-w-0">
-          <p class="text-sm font-bold text-ink-card-muted">คุณยังไม่มีลูกทีม</p>
+          <p class="text-sm font-bold text-ink-card-muted">{{ td('team.no_downline') }}</p>
           <p class="text-xs text-ink-card-subtle mt-0.5">
-            เมื่อผู้ดูแลระบบกำหนดให้มีสมาชิกอยู่ใต้สายงานของคุณ ข้อมูลทีมจะแสดงที่หน้านี้
+            {{ td('team.no_downline_help') }}
           </p>
         </div>
       </div>
@@ -1097,15 +1100,15 @@ watch(showCreateSheet, (open) => {
              duplicating the header strip on desktop. -->
         <AppCard v-if="totals" variant="raised" class="sm:hidden grid grid-cols-3 gap-2">
           <div>
-            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">ลูกทีมทั้งสาย</p>
+            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('team.whole_downline') }}</p>
             <p class="text-lg font-bold text-ink-card leading-tight tabular-nums">{{ formatCount(totals.member_count) }}</p>
           </div>
           <div>
-            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">ยอดขายรวม</p>
+            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('stat.total_sales') }}</p>
             <p class="text-lg font-bold text-ink-card leading-tight tabular-nums">{{ formatBaht(totals.sales_satang) }}</p>
           </div>
           <div>
-            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">ดีลที่ปิดได้</p>
+            <p class="text-[11px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('stat.closed_deals') }}</p>
             <p class="text-lg font-bold text-ink-card leading-tight tabular-nums">{{ formatCount(totals.closed_deals) }}</p>
           </div>
         </AppCard>
@@ -1124,8 +1127,8 @@ watch(showCreateSheet, (open) => {
         >
           <Icon name="users" :size="24" class="text-ink-card-subtle shrink-0" />
           <div class="min-w-0">
-            <p class="text-sm font-bold text-ink-card-muted">ไม่มีสมาชิกที่ตรงเงื่อนไขนี้</p>
-            <p class="text-xs text-ink-card-subtle mt-0.5">ลองเลือกแท็บ “ทั้งหมด” แล้วกางสายงานเพื่อดูสมาชิกระดับถัดไป</p>
+            <p class="text-sm font-bold text-ink-card-muted">{{ td('team.no_match') }}</p>
+            <p class="text-xs text-ink-card-subtle mt-0.5">{{ td('team.try_all_tab') }}</p>
           </div>
         </div>
 
@@ -1213,15 +1216,15 @@ watch(showCreateSheet, (open) => {
                      read from the ledger by the API, never recomputed. -->
                 <div class="mt-2 grid grid-cols-3 gap-2 pl-12">
                   <div>
-                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">ยอดขาย</p>
+                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('stat.sales') }}</p>
                     <p class="text-xs font-bold text-ink-card tabular-nums">{{ formatBaht(row.node.sales_satang) }}</p>
                   </div>
                   <div>
-                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">คอมของเขา</p>
+                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('team.their_commission') }}</p>
                     <p class="text-xs font-bold text-ink-card tabular-nums">{{ formatBaht(row.node.commission_satang) }}</p>
                   </div>
                   <div>
-                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">โอเวอร์ไรด์ของฉัน</p>
+                    <p class="text-[10px] font-bold uppercase tracking-wide text-ink-card-subtle">{{ td('team.my_override') }}</p>
                     <p class="text-xs font-bold text-ink-card tabular-nums">{{ formatBaht(row.node.my_override_satang) }}</p>
                   </div>
                 </div>
@@ -1231,7 +1234,7 @@ watch(showCreateSheet, (open) => {
         </AppList>
 
         <p v-if="!showsHierarchy && visibleRows.length" class="mt-2 px-1 text-[11px] text-ink-card-subtle">
-          กรองจากสมาชิกที่โหลดมาแล้วเท่านั้น — เลือก “ทั้งหมด” แล้วกางสายงานเพื่อโหลดระดับถัดไป
+          {{ td('team.filter_note') }}
         </p>
       </div>
     </Transition>
@@ -1272,7 +1275,7 @@ watch(showCreateSheet, (open) => {
             <button
               type="button"
               class="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-ink-card-subtle active:bg-surface-chip"
-              aria-label="ปิด"
+              :aria-label="td('common.close2')"
               @click="closeSheet"
             >
               <Icon name="close" :size="18" />
@@ -1280,7 +1283,7 @@ watch(showCreateSheet, (open) => {
           </div>
 
           <div class="max-h-[55vh] overflow-y-auto px-5 pb-5">
-            <p v-if="sheetLoading" class="py-6 text-center text-sm text-ink-card-muted">กำลังโหลด…</p>
+            <p v-if="sheetLoading" class="py-6 text-center text-sm text-ink-card-muted">{{ td('common.loading3') }}</p>
 
             <!-- The configured-restriction card. NOT an error: the company
                  chose counts_only (or has never configured the feature, whose
@@ -1319,17 +1322,17 @@ watch(showCreateSheet, (open) => {
                 handed a door that 403s.
               -->
               <p class="text-xs text-ink-chip leading-relaxed">
-                บริษัทตั้งค่าให้หัวหน้าทีมเห็นเฉพาะ<strong class="font-bold">จำนวนและสถานะ</strong>ของลูกค้าลูกทีม
+                {{ td('team.visibility_prefix') }}<strong class="font-bold">{{ td('team.count_and_status') }}</strong>ของลูกค้าลูกทีม
                 ไม่แสดงรายชื่อ — ไม่ใช่ระบบผิดพลาด และไม่เกี่ยวกับสิทธิ์หัวหน้าทีมของคุณ
                 <br />
-                ผู้ดูแลระบบของบริษัทเปลี่ยนได้ที่หน้า “การมองเห็นข้อมูลทีม” ในระบบผู้ดูแล
+                {{ td('team.visibility_admin_note') }}
               </p>
             </div>
 
             <p v-else-if="sheetError" class="py-6 text-center text-sm text-ink-danger">{{ sheetError }}</p>
 
             <p v-else-if="!sheetClients.length" class="py-6 text-center text-sm text-ink-card-muted">
-              สมาชิกคนนี้ยังไม่มีลูกค้าในระบบ
+              {{ td('team.member_no_clients') }}
             </p>
 
             <template v-else>
@@ -1372,7 +1375,7 @@ watch(showCreateSheet, (open) => {
           class="fixed inset-x-0 bottom-0 z-[61] mx-auto w-full max-w-md rounded-t-3xl bg-surface-card shadow-[0_-8px_24px_rgba(0,0,0,0.18)] pb-[env(safe-area-inset-bottom)]"
           role="dialog"
           aria-modal="true"
-          aria-label="สร้างลิงก์ชวนเข้าทีม"
+          :aria-label="td('team.create_invite')"
         >
           <div class="flex justify-center pt-3 pb-1">
             <div class="h-1 w-10 rounded-full bg-surface-chip"></div>
@@ -1380,15 +1383,15 @@ watch(showCreateSheet, (open) => {
 
           <div class="flex items-start justify-between gap-2 px-5 py-2">
             <div class="min-w-0">
-              <h2 class="text-base font-bold text-ink-card">สร้างลิงก์ชวนเข้าทีม</h2>
+              <h2 class="text-base font-bold text-ink-card">{{ td('team.create_invite') }}</h2>
               <p class="text-xs text-ink-card-muted mt-0.5">
-                คนที่เปิดลิงก์นี้จะสมัครเข้ามาอยู่ในสายงานของคุณ โดยไม่ต้องกรอกรหัสเชิญของบริษัท
+                {{ td('team.link_help') }}
               </p>
             </div>
             <button
               type="button"
               class="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-ink-card-subtle active:bg-surface-chip"
-              aria-label="ปิด"
+              :aria-label="td('common.close2')"
               @click="showCreateSheet = false"
             >
               <Icon name="close" :size="18" />
@@ -1408,26 +1411,26 @@ watch(showCreateSheet, (open) => {
                  said in plain words next to each field rather than left for
                  the leader to infer from an empty box. -->
             <div>
-              <label for="link_label" class="block text-xs font-bold text-ink-card-muted mb-1.5">ชื่อเรียกลิงก์ (ไม่บังคับ)</label>
+              <label for="link_label" class="block text-xs font-bold text-ink-card-muted mb-1.5">{{ td('links.label') }}</label>
               <input
                 id="link_label"
                 v-model="createForm.label"
                 type="text"
                 maxlength="255"
                 class="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-line-input bg-surface-input text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
-                placeholder="เช่น รับสมัครรอบเดือนสิงหาคม"
+                :placeholder="td('team.label_ph')"
               />
-              <p class="text-[11px] text-ink-card-subtle mt-1">ไว้ให้คุณจำเองว่าลิงก์นี้ส่งให้ใคร ผู้สมัครจะไม่เห็นชื่อนี้</p>
+              <p class="text-[11px] text-ink-card-subtle mt-1">{{ td('links.label_help') }}</p>
             </div>
 
             <div>
-              <label class="block text-xs font-bold text-ink-card-muted mb-1.5">วันหมดอายุ (ไม่บังคับ)</label>
+              <label class="block text-xs font-bold text-ink-card-muted mb-1.5">{{ td('links.expiry') }}</label>
               <BuddhistDateInput v-model="createForm.expiresOn" />
-              <p class="text-[11px] text-ink-card-subtle mt-1">เว้นว่าง = ไม่มีวันหมดอายุ · ถ้าเลือกวันไว้ ลิงก์จะใช้ได้ถึงสิ้นวันนั้น</p>
+              <p class="text-[11px] text-ink-card-subtle mt-1">{{ td('links.expiry_help') }}</p>
             </div>
 
             <div>
-              <label for="link_max_uses" class="block text-xs font-bold text-ink-card-muted mb-1.5">จำกัดจำนวนคน (ไม่บังคับ)</label>
+              <label for="link_max_uses" class="block text-xs font-bold text-ink-card-muted mb-1.5">{{ td('links.max_uses') }}</label>
               <input
                 id="link_max_uses"
                 v-model="createForm.maxUses"
@@ -1435,9 +1438,9 @@ watch(showCreateSheet, (open) => {
                 min="1"
                 inputmode="numeric"
                 class="w-full min-h-[44px] px-3 py-2.5 rounded-xl border border-line-input bg-surface-input text-sm text-ink-input placeholder:text-ink-input-placeholder focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
-                placeholder="เช่น 10"
+                :placeholder="td('common.eg_10')"
               />
-              <p class="text-[11px] text-ink-card-subtle mt-1">เว้นว่าง = ไม่จำกัดจำนวนคน</p>
+              <p class="text-[11px] text-ink-card-subtle mt-1">{{ td('links.max_uses_help') }}</p>
             </div>
 
             <button
@@ -1512,13 +1515,13 @@ watch(showCreateSheet, (open) => {
 
           <div class="min-w-0 flex-1">
             <h2 class="text-base font-bold text-ink-card truncate">{{ approveTarget.name }}</h2>
-            <p class="text-xs text-ink-card-muted mt-0.5">รอการอนุมัติเข้าทีมของคุณ</p>
+            <p class="text-xs text-ink-card-muted mt-0.5">{{ td('team.pending_approval') }}</p>
           </div>
 
           <button
             type="button"
             class="shrink-0 w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-ink-card-subtle active:bg-surface-chip"
-            aria-label="ปิด"
+            :aria-label="td('common.close2')"
             @click="closeRecruit"
           >
             <Icon name="close" :size="18" />
@@ -1527,12 +1530,12 @@ watch(showCreateSheet, (open) => {
 
         <div class="max-h-[55vh] overflow-y-auto px-5 pb-4 pt-2 space-y-3">
           <div>
-            <p class="text-[11px] font-bold text-ink-card-subtle">สมัครเมื่อ</p>
+            <p class="text-[11px] font-bold text-ink-card-subtle">{{ td('team.applied_on') }}</p>
             <p class="text-sm text-ink-card">{{ formatDateTime(approveTarget.registered_at) }}</p>
           </div>
 
           <div>
-            <p class="text-[11px] font-bold text-ink-card-subtle">มาจากลิงก์</p>
+            <p class="text-[11px] font-bold text-ink-card-subtle">{{ td('team.via_link') }}</p>
             <!-- invite_link is whenLoaded on the backend, so absent, null and
                  "present with no label" are three different states and none
                  may render as a blank line. -->
@@ -1545,11 +1548,11 @@ watch(showCreateSheet, (open) => {
                to be the confirm dialog's whole body. -->
           <div class="p-3 rounded-xl bg-surface-chip">
             <p class="text-xs text-ink-chip leading-relaxed">
-              การอนุมัติจะรับ <strong class="font-bold">{{ approveTarget.name }}</strong>
-              เข้าเป็นตัวแทนของบริษัท ให้เข้าใช้งานระบบได้ และอยู่ในสายงานของคุณ
+              {{ td('team.approval_will') }} <strong class="font-bold">{{ approveTarget.name }}</strong>
+              {{ td('team.approval_effect') }}
             </p>
             <p v-if="!approveTarget.email_verified" class="text-xs text-ink-warning leading-relaxed mt-2">
-              หมายเหตุ: ผู้สมัครรายนี้ยังไม่ได้ยืนยันอีเมล อนุมัติได้ แต่จะยังเข้าสู่ระบบไม่ได้จนกว่าจะกดลิงก์ยืนยันในอีเมล
+              {{ td('team.approval_unverified') }}
             </p>
           </div>
         </div>
@@ -1569,8 +1572,8 @@ watch(showCreateSheet, (open) => {
 
     <ConfirmDialog
       v-model:show="showRevokeConfirm"
-      title="ยกเลิกลิงก์นี้?"
-      body="ผู้ที่ได้รับลิงก์นี้จะสมัครเข้าทีมด้วยลิงก์นี้ไม่ได้อีก ส่วนสมาชิกที่สมัครเข้ามาแล้วยังอยู่ในทีมของคุณตามเดิม"
+      :title="td('link.confirm_revoke_q')"
+      :body="td('team.revoke_body')"
       variant="danger"
       :busy="revoking"
       @confirm="confirmRevoke"

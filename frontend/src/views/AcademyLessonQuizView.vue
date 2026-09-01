@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * AcademyLessonQuizView — the graded END-OF-LESSON quiz, on its own route
  * (TASK-167 §2/§4.2). `/academy/lessons/:id/quiz`.
@@ -142,10 +145,10 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
     <HeroHeader
       icon="check_square"
       :title="heroTitle"
-      subtitle="แบบทดสอบท้ายบทเรียน"
+      :subtitle="td('academy.quiz_title')"
       accent-color="brand"
       back-page="/academy"
-      back-label="กลับไปหน้า Academy"
+      :back-label="td('academy.back')"
     />
 
     <div
@@ -158,7 +161,7 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="load"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -183,7 +186,7 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
       <EmptyState
         v-else-if="lesson.quiz_question_count === 0"
         icon="check_square"
-        title="บทเรียนนี้ยังไม่มีแบบทดสอบท้ายบทเรียน"
+        :title="td('academy.no_quiz')"
         class="mt-4"
       />
 
@@ -201,7 +204,7 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
               class="mt-2 min-h-[44px] inline-flex items-center gap-1.5 text-xs font-bold text-ink-brand active:scale-95 transition-transform"
             >
               <Icon name="chevron_left" :size="14" />
-              กลับไปเรียนเนื้อหา
+              {{ td('academy.back_to_lesson') }}
             </RouterLink>
           </div>
         </div>
@@ -224,13 +227,13 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
               class="text-lg font-bold leading-tight"
               :class="lastResultPassed ? 'text-ink-success' : 'text-ink-warning'"
             >
-              {{ lastResultPassed ? 'ผ่าน' : 'ยังไม่ผ่าน' }}
+              {{ lastResultPassed ? td('academy.passed') : td('academy.not_passed') }}
             </p>
             <p class="text-xs text-ink-card-muted mt-1 leading-relaxed">
               {{
                 lastResultPassed
-                  ? 'คุณผ่านแบบทดสอบท้ายบทเรียนนี้แล้ว'
-                  : 'ลองทบทวนเนื้อหาแล้วทำแบบทดสอบอีกครั้งได้'
+                  ? td('academy.quiz_passed_msg')
+                  : td('academy.quiz_retry_msg')
               }}
             </p>
             <div class="mt-3 flex items-center gap-2 flex-wrap">
@@ -239,7 +242,7 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
                 class="min-h-[44px] px-4 py-2 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform"
                 @click="close"
               >
-                ปิด
+                {{ td('common.close2') }}
               </button>
               <!-- ADR-029 §2.5 — unlimited retries. Offered only on a fail:
                    after a pass there is nothing left to do here. -->
@@ -249,7 +252,7 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
                 class="min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-brand bg-brand-50 hover:bg-brand-100 active:scale-95 transition-transform inline-flex items-center gap-1.5"
                 @click="retry"
               >
-                <Icon name="refresh" :size="14" /> ทำอีกครั้ง
+                <Icon name="refresh" :size="14" /> {{ td('academy.retake') }}
               </button>
             </div>
           </div>
@@ -296,10 +299,10 @@ const heroTitle = computed(() => lesson.value?.title ?? 'แบบทดสอ�
             class="min-h-[44px] px-4 py-2 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform disabled:opacity-50 inline-flex items-center justify-center"
             @click="submit"
           >
-            {{ submitting ? 'กำลังส่ง...' : 'ส่งคำตอบ' }}
+            {{ submitting ? td('academy.submitting') : td('academy.submit_answers') }}
           </button>
           <span class="text-xs text-ink-card-subtle">
-            ตอบแล้ว {{ answeredCount }}/{{ questions.length }} ข้อ
+            {{ td('academy.answered_count', '', { done: answeredCount, total: questions.length }) }}
           </span>
         </div>
 

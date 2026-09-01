@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * CoAgentEditor — TASK-026's split-commission control for one deal row.
  *
@@ -185,12 +188,12 @@ async function submit(): Promise<void> {
   <div v-if="canEdit" class="mt-3 pt-3 border-t border-line-card-subtle">
     <div class="flex items-center justify-between gap-2">
       <div class="min-w-0">
-        <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider">แบ่งคอมมิชชั่น</p>
+        <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider">{{ td('commission.split') }}</p>
         <p class="text-xs text-ink-card-muted truncate">
           <template v-if="referral.co_agent">
             {{ referral.co_agent.name }} · {{ referral.split_percentage }}%
           </template>
-          <template v-else>ยังไม่ได้แบ่งกับใคร</template>
+          <template v-else>{{ td('commission.split_none') }}</template>
         </p>
       </div>
       <!-- Wording preserved verbatim from ReferralsView: the two states read
@@ -211,7 +214,7 @@ async function submit(): Promise<void> {
         class="bg-surface-input text-ink-input px-3 py-2 rounded-lg border border-line-input text-sm"
       >
         <!-- Selecting this and saving is how a split is REMOVED. -->
-        <option value="">ไม่แบ่งคอมมิชชั่น</option>
+        <option value="">{{ td('commission.no_split') }}</option>
         <option v-for="a in options" :key="a.id" :value="a.id">{{ a.name }}</option>
       </select>
       <input
@@ -220,17 +223,17 @@ async function submit(): Promise<void> {
         min="1"
         max="99"
         :disabled="!form.co_agent_id"
-        placeholder="% ที่ตัวแทนอีกคนจะได้รับ (1-99)"
+        :placeholder="td('commission.split_ph')"
         class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm disabled:bg-surface-chip"
       />
       <div class="md:col-span-2 flex gap-2">
-        <AppButton size="sm" :loading="saving" :disabled="saveDisabled" @click="submit">บันทึก</AppButton>
+        <AppButton size="sm" :loading="saving" :disabled="saveDisabled" @click="submit">{{ td('common.save2') }}</AppButton>
         <button
           type="button"
           class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center"
           @click="open = false"
         >
-          ยกเลิก
+          {{ td('common.cancel2') }}
         </button>
       </div>
     </div>

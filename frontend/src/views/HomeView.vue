@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * HomeView — personal home hub for the Agent Portal mobile app
  * (TASK-053 Phase 3). Aggregates /me/home + /me/tasks + /announcements.
@@ -319,7 +322,7 @@ const allTasksEmpty = computed(
       >
         <Icon name="alert" :size="32" class="text-ink-danger" />
         <p class="text-sm text-ink-card-muted font-bold">{{ errorMessage }}</p>
-        <AppButton @click="loadAll">ลองใหม่</AppButton>
+        <AppButton @click="loadAll">{{ td('common.retry') }}</AppButton>
       </div>
 
       <div v-else-if="home" class="space-y-4">
@@ -364,7 +367,7 @@ const allTasksEmpty = computed(
              /leaderboard is deliberately NOT listed here — human instruction
              2026-08-03 put it on hold. -->
         <AppCard padding="sm">
-          <p class="text-xs font-bold text-ink-card-subtle px-1 pb-2">เมนูทั้งหมด</p>
+          <p class="text-xs font-bold text-ink-card-subtle px-1 pb-2">{{ td('home.all_menus') }}</p>
           <div class="grid grid-cols-3 gap-1">
             <RouterLink
               v-for="link in menuLinks"
@@ -387,7 +390,7 @@ const allTasksEmpty = computed(
             <ProgressRing
               :fraction="levelFraction"
               :center-text="'Lv ' + home.gamification.level_number"
-              label="เลเวล"
+              :label="td('home.level')"
             />
             <div class="text-center">
               <p class="text-sm font-bold text-ink-card">
@@ -403,7 +406,7 @@ const allTasksEmpty = computed(
               <ProgressRing
                 :fraction="primaryGoal.progress / 100"
                 :center-text="primaryGoal.progress + '%'"
-                label="เป้าหมาย"
+                :label="td('home.target')"
               />
               <div class="text-center">
                 <p class="text-xs font-bold text-ink-card-muted">{{ primaryGoal.metric_label }}</p>
@@ -414,8 +417,8 @@ const allTasksEmpty = computed(
               </div>
             </template>
             <template v-else>
-              <ProgressRing :fraction="0" center-text="—" label="เป้าหมาย" />
-              <p class="text-xs text-ink-card-subtle text-center">ยังไม่ได้ตั้งเป้าหมาย</p>
+              <ProgressRing :fraction="0" center-text="—" :label="td('home.target')" />
+              <p class="text-xs text-ink-card-subtle text-center">{{ td('home.no_target') }}</p>
             </template>
           </AppCard>
         </div>
@@ -445,22 +448,22 @@ const allTasksEmpty = computed(
           <!-- TASK-098 — page-level heading: ink-app, not ink-card. It sits on
                the company background, and a tenant with a light background but a
                dark card would get card ink painted onto it. -->
-          <h2 class="text-sm font-bold text-ink-app">งานที่ต้องทำ</h2>
+          <h2 class="text-sm font-bold text-ink-app">{{ td('home.tasks') }}</h2>
           <div class="grid grid-cols-3 gap-2">
             <AppCard padding="sm" class="flex flex-col items-center gap-1">
               <Icon name="clock" :size="20" class="text-ink-warning" />
               <span class="text-lg font-bold text-ink-card">{{ home.task_counts.follow_ups_due }}</span>
-              <span class="text-[11px] leading-tight text-ink-card-muted text-center">ติดตามลูกค้า</span>
+              <span class="text-[11px] leading-tight text-ink-card-muted text-center">{{ td('home.follow_up') }}</span>
             </AppCard>
             <AppCard padding="sm" class="flex flex-col items-center gap-1">
               <Icon name="pipeline" :size="20" class="text-ink-brand" />
               <span class="text-lg font-bold text-ink-card">{{ home.task_counts.open_deals }}</span>
-              <span class="text-[11px] leading-tight text-ink-card-muted text-center">ดีลที่ค้าง</span>
+              <span class="text-[11px] leading-tight text-ink-card-muted text-center">{{ td('home.open_deals') }}</span>
             </AppCard>
             <AppCard padding="sm" class="flex flex-col items-center gap-1">
               <Icon name="brain" :size="20" class="text-ink-danger" />
               <span class="text-lg font-bold text-ink-card">{{ home.task_counts.failed_exams }}</span>
-              <span class="text-[11px] leading-tight text-ink-card-muted text-center">สอบที่ยังไม่ผ่าน</span>
+              <span class="text-[11px] leading-tight text-ink-card-muted text-center">{{ td('home.exams_pending') }}</span>
             </AppCard>
           </div>
 
@@ -470,7 +473,7 @@ const allTasksEmpty = computed(
             class="bg-surface-card/95 border border-dashed border-line-card rounded-2xl p-4 flex items-center justify-center gap-2 text-ink-card-muted"
           >
             <Icon name="check_circle" :size="20" class="text-ink-success" />
-            <span class="text-sm font-bold">ไม่มีงานค้าง</span>
+            <span class="text-sm font-bold">{{ td('home.no_tasks') }}</span>
           </div>
 
           <!-- Follow-ups. TASK-079 Phase 4 — the surface is <AppCard interactive>
@@ -523,9 +526,9 @@ const allTasksEmpty = computed(
         <!-- d. ข่าวสาร -->
         <div class="space-y-3">
           <div class="flex items-center justify-between">
-            <h2 class="text-sm font-bold text-ink-app">ข่าวสาร</h2>
+            <h2 class="text-sm font-bold text-ink-app">{{ td('news.title') }}</h2>
             <AppButton v-if="news.length" to="/announcements" variant="ghost" size="sm" class="-mr-2">
-              ดูทั้งหมด
+              {{ td('common.view_all') }}
             </AppButton>
           </div>
           <div
@@ -533,7 +536,7 @@ const allTasksEmpty = computed(
             class="bg-surface-card/95 border border-dashed border-line-card rounded-2xl p-4 flex items-center justify-center gap-2 text-ink-card-muted"
           >
             <Icon name="megaphone" :size="20" class="text-ink-card-subtle" />
-            <span class="text-sm">ยังไม่มีข่าวสาร</span>
+            <span class="text-sm">{{ td('news.empty') }}</span>
           </div>
           <div v-else class="space-y-2">
             <button v-for="a in news" :key="a.id" type="button" class="w-full text-left" @click="openAnnouncement(a)">

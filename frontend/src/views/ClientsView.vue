@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * ClientsView — Customer domain (Phase 3), wired to the real API.
  *
@@ -1423,8 +1426,8 @@ watch(isListMode, (listMode) => {
     <HeroHeader
       :icon="pageIcon"
       :title="pageTitle"
-      subtitle="รายชื่อลูกค้าที่คุณดูแล"
-      description="เห็นเฉพาะลูกค้าที่คุณเป็นผู้แนะนำเท่านั้น (ตามสิทธิ์ Agent)"
+      :subtitle="td('client.subtitle')"
+      :description="td('client.description')"
       :kpis="kpis"
       accent-color="brand"
       storage-key="clients"
@@ -1435,7 +1438,7 @@ watch(isListMode, (listMode) => {
            over it would be an action with no relationship to what is on
            screen. -->
       <template #actions>
-        <NavBarAction icon="user_plus" label="เพิ่มลูกค้าใหม่" @click="startCreateClient" />
+        <NavBarAction icon="user_plus" :label="td('client.add')" @click="startCreateClient" />
       </template>
 
       <!-- TASK-056 Sprint P4 — search + category filter.
@@ -1470,7 +1473,7 @@ watch(isListMode, (listMode) => {
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="ค้นหาชื่อ, เบอร์โทร, อีเมล..."
+              :placeholder="td('client.search_ph')"
               class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full min-h-[44px] pl-9 pr-3 py-2 rounded-lg border border-line-input text-base focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>
@@ -1506,7 +1509,7 @@ watch(isListMode, (listMode) => {
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="loadClients"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -1515,11 +1518,11 @@ watch(isListMode, (listMode) => {
     <div v-if="showCreateForm && isListMode" class="mt-4 bg-surface-card/95 border border-line-card rounded-xl p-4 space-y-3">
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
-          <label class="text-xs font-bold text-ink-card-muted block mb-1">ชื่อลูกค้า <span class="text-ink-danger">*</span></label>
+          <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('client.name') }} <span class="text-ink-danger">*</span></label>
           <input
             ref="nameInputEl"
             v-model="createForm.name"
-            placeholder="ชื่อลูกค้า"
+            :placeholder="td('client.name')"
             class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border text-sm"
             :class="nameError ? 'border-rose-400' : 'border-line-input'"
             @input="nameError = ''"
@@ -1527,31 +1530,31 @@ watch(isListMode, (listMode) => {
           <p v-if="nameError" class="text-xs text-ink-danger mt-1">{{ nameError }}</p>
         </div>
         <div>
-          <label class="text-xs font-bold text-ink-card-muted block mb-1">เบอร์โทร <span class="text-ink-danger">*</span></label>
+          <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('field.phone') }} <span class="text-ink-danger">*</span></label>
           <input
             ref="phoneInputEl"
             v-model="createForm.phone"
-            placeholder="เบอร์โทร"
+            :placeholder="td('field.phone')"
             class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border text-sm"
             :class="phoneError ? 'border-rose-400' : 'border-line-input'"
             @input="phoneError = ''"
           />
           <p v-if="phoneError" class="text-xs text-ink-danger mt-1">{{ phoneError }}</p>
         </div>
-        <input v-model="createForm.email" placeholder="อีเมล (ถ้ามี)" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm" />
+        <input v-model="createForm.email" :placeholder="td('field.email_opt')" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm" />
         <!-- TASK-049 — national ID (PDPA §6). Optional; server validates
              the Thai 13-digit checksum and encrypts it at rest. -->
         <input
           v-model="createForm.national_id"
           inputmode="numeric"
           maxlength="13"
-          placeholder="เลขบัตรประชาชน (ถ้ามี, 13 หลัก)"
+          :placeholder="td('field.national_id_opt')"
           class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm"
         />
         <input
           v-model="createForm.lead_source"
           list="lead-source-suggestions"
-          placeholder="ที่มาของลูกค้า (ถ้ามี) เช่น Facebook, Walk-in"
+          :placeholder="td('client.source_ph')"
           class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm"
         />
         <datalist id="lead-source-suggestions">
@@ -1559,37 +1562,37 @@ watch(isListMode, (listMode) => {
         </datalist>
         <!-- TASK-014 demographic fields (all optional) -->
         <div>
-          <label class="text-xs font-bold text-ink-card-muted block mb-1">วันเกิด (ถ้ามี)</label>
+          <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('client.dob') }}</label>
           <BuddhistDateInput v-model="createForm.date_of_birth" :years-back="100" :years-forward="0" />
         </div>
         <AppSelect
           v-model="createForm.province"
           :options="provinceOptions"
-          placeholder="จังหวัด (ถ้ามี)"
-          title="จังหวัด"
-          aria-label="จังหวัด"
+          :placeholder="td('field.province_opt')"
+          :title="td('field.province')"
+          :aria-label="td('field.province')"
         />
-        <input v-model="createForm.occupation" placeholder="อาชีพ (ถ้ามี)" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm" />
+        <input v-model="createForm.occupation" :placeholder="td('field.occupation_opt')" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder px-3 py-2 rounded-lg border border-line-input text-sm" />
         <label class="flex items-center gap-2 text-sm text-ink-card-muted">
           <input v-model="createForm.consent" type="checkbox" />
-          ลูกค้าให้ความยินยอม (PDPA)
+          {{ td('client.consent') }}
         </label>
       </div>
       <textarea
         v-model="createForm.address"
-        placeholder="ที่อยู่ (ถ้ามี)"
+        :placeholder="td('field.address_opt')"
         rows="2"
         class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm"
       />
       <textarea
         v-model="createForm.health_notes"
-        placeholder="บันทึกข้อมูลสุขภาพ (ถ้ามี) — จัดเก็บแบบเข้ารหัส"
+        :placeholder="td('client.health_ph')"
         rows="2"
         class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm"
       />
       <div class="flex gap-2">
-        <AppButton :loading="creating" @click="submitCreate">บันทึกลูกค้า</AppButton>
-        <AppButton variant="ghost" @click="showCreateForm = false; nameError = ''; phoneError = ''">ยกเลิก</AppButton>
+        <AppButton :loading="creating" @click="submitCreate">{{ td('client.save') }}</AppButton>
+        <AppButton variant="ghost" @click="showCreateForm = false; nameError = ''; phoneError = ''">{{ td('common.cancel2') }}</AppButton>
       </div>
     </div>
 
@@ -1614,7 +1617,7 @@ watch(isListMode, (listMode) => {
       <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
       <div v-else>
         <!-- List -->
-        <EmptyState v-if="!clients.length" icon="users" title="ยังไม่มีลูกค้าที่คุณแนะนำ" class="mt-4" />
+        <EmptyState v-if="!clients.length" icon="users" :title="td('client.empty')" class="mt-4" />
         <!-- TASK-082 (UX audit): each client used to be its own floating
              card, which is the wrong primitive — a client roster is
              homogeneous, comparable content, and Material says list (never
@@ -1681,7 +1684,7 @@ watch(isListMode, (listMode) => {
                           v-if="mostRecentPaidReferralId(c) !== null"
                           type="button"
                           class="shrink-0 min-h-[44px] min-w-[44px] -my-2.5 inline-flex items-center justify-center text-ink-brand hover:bg-surface-chip rounded-full active:scale-90 transition-transform"
-                          title="แชร์ลิงก์ชำระเงิน / ใบเสร็จ"
+                          :title="td('order.share_pay_receipt')"
                           @click.stop="openShareFor(mostRecentPaidReferralId(c)!)"
                         >
                           <Icon name="share" :size="16" />
@@ -1696,9 +1699,9 @@ watch(isListMode, (listMode) => {
                   <div class="flex flex-col items-start gap-1 shrink-0 pl-8">
                     <span :class="['text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap', statusBadgeClasses(c.status.key)]">{{ c.status.label }}</span>
                     <span v-if="c.consent_given_at" class="text-xs font-bold text-ink-success flex items-center gap-1">
-                      <Icon name="shield_check" :size="14" /> ให้ความยินยอมแล้ว
+                      <Icon name="shield_check" :size="14" /> {{ td('client.consented') }}
                     </span>
-                    <span v-else class="text-xs font-bold text-ink-warning">ยังไม่ยินยอม</span>
+                    <span v-else class="text-xs font-bold text-ink-warning">{{ td('client.not_consented') }}</span>
                   </div>
                 </AppCard>
               </TransitionGroup>
@@ -1731,14 +1734,14 @@ watch(isListMode, (listMode) => {
             <p v-if="selectedClient.occupation"><Icon name="building" :size="14" class="inline mr-1" />อาชีพ: {{ selectedClient.occupation }}</p>
             <p v-if="selectedClient.address"><Icon name="home" :size="14" class="inline mr-1" />ที่อยู่: {{ selectedClient.address }}</p>
             <p v-if="selectedClient.health_notes" class="mt-3 p-3 rounded-lg bg-surface-chip border border-line-card">
-              <span class="font-bold text-ink-card block mb-1 text-xs">บันทึกสุขภาพ (PDPA)</span>
+              <span class="font-bold text-ink-card block mb-1 text-xs">{{ td('client.health_note') }}</span>
               {{ selectedClient.health_notes }}
             </p>
           </div>
 
           <div class="mt-3 grid grid-cols-2 gap-2">
             <div>
-              <label class="text-xs font-bold text-ink-card-muted">สถานะลูกค้า</label>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('client.status') }}</label>
               <!-- `:disabled` while the PUT is in flight is preserved
                    verbatim: it is what stops a second status write racing
                    the first. -->
@@ -1746,20 +1749,20 @@ watch(isListMode, (listMode) => {
                 :model-value="selectedClient.status.key"
                 :options="statusSelectOptions"
                 :disabled="updatingStatus"
-                title="สถานะลูกค้า"
-                aria-label="สถานะลูกค้า"
+                :title="td('client.status')"
+                :aria-label="td('client.status')"
                 class="mt-1"
                 @update:model-value="updateStatus"
               />
             </div>
             <div>
-              <label class="text-xs font-bold text-ink-card-muted">ประเภทลูกค้า</label>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('client.type') }}</label>
               <AppSelect
                 :model-value="String(selectedClient.client_category_id ?? '')"
                 :options="categorySelectOptions"
                 :disabled="updatingCategory"
-                title="ประเภทลูกค้า"
-                aria-label="ประเภทลูกค้า"
+                :title="td('client.type')"
+                :aria-label="td('client.type')"
                 class="mt-1"
                 @update:model-value="updateCategory"
               />
@@ -1767,7 +1770,7 @@ watch(isListMode, (listMode) => {
           </div>
 
           <h3 class="mt-5 mb-2 text-sm font-bold text-ink-card flex items-center gap-2">
-            <Icon name="cart" :size="16" /> สินค้าที่สนใจ
+            <Icon name="cart" :size="16" /> {{ td('client.interests') }}
           </h3>
           <!-- TASK-141's chips are decoration on an otherwise working
                drawer, so this failure is a warning, not the page's danger
@@ -1795,16 +1798,16 @@ watch(isListMode, (listMode) => {
             class="flex items-center gap-3 flex-wrap px-4 py-3 rounded-xl border border-dashed border-line-card"
           >
             <Icon name="cart" :size="20" class="text-ink-card-subtle shrink-0" />
-            <p class="flex-1 min-w-0 text-xs text-ink-card-muted">ยังไม่มีสินค้าที่สนใจ</p>
+            <p class="flex-1 min-w-0 text-xs text-ink-card-muted">{{ td('client.interests_empty') }}</p>
             <button
               v-if="hasPassedBasic"
               type="button"
               class="shrink-0 min-h-[44px] px-3 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition-transform"
               @click="showReferralForm = true"
             >
-              + เลือกสินค้า
+              {{ td('product.select_plus') }}
             </button>
-            <span v-else class="shrink-0 text-xs text-ink-warning">ต้องผ่านใบรับรอง Basic ก่อน (BR-1)</span>
+            <span v-else class="shrink-0 text-xs text-ink-warning">{{ td('cert.needs_basic_short') }}</span>
           </div>
           <!-- TASK-169 Phase 2 — ReferralsView's deal row, verbatim.
                `hide-client` because the drawer is already titled with the
@@ -1867,7 +1870,7 @@ watch(isListMode, (listMode) => {
                 <div v-if="r.product && expandedProductId === r.product.id" class="mt-2 pt-2 border-t border-line-card-subtle space-y-3">
                   <!-- Product media gallery (ADR-007) -->
                   <div>
-                    <p v-if="loadingMediaFor === r.product.id" class="text-xs text-ink-card-subtle">กำลังโหลดรูป/วิดีโอ...</p>
+                    <p v-if="loadingMediaFor === r.product.id" class="text-xs text-ink-card-subtle">{{ td('media.loading') }}</p>
                     <div v-else-if="mediaByProduct[r.product.id]?.length" class="grid grid-cols-4 gap-1.5">
                       <div v-for="m in mediaByProduct[r.product.id]" :key="m.id" class="relative rounded-lg overflow-hidden border border-line-card">
                         <AuthenticatedMedia
@@ -1897,33 +1900,33 @@ watch(isListMode, (listMode) => {
   
                   <!-- Sales materials + external share link -->
                   <div>
-                    <p v-if="loadingMaterialsFor === r.product.id" class="text-xs text-ink-card-subtle">กำลังโหลดสื่อการขาย...</p>
-                    <p v-else-if="!materialsByProduct[r.product.id]?.length" class="text-xs text-ink-card-subtle">ยังไม่มีสื่อการขายสำหรับสินค้านี้</p>
+                    <p v-if="loadingMaterialsFor === r.product.id" class="text-xs text-ink-card-subtle">{{ td('media.loading_sales') }}</p>
+                    <p v-else-if="!materialsByProduct[r.product.id]?.length" class="text-xs text-ink-card-subtle">{{ td('media.none_for_product') }}</p>
                     <div v-else class="space-y-1.5">
                       <div v-for="m in materialsByProduct[r.product.id]" :key="m.id" class="rounded-lg border border-line-card-subtle">
                         <div class="flex items-center justify-between gap-2 p-1.5">
                           <span v-if="m.source_type === 'embed'" class="truncate text-xs text-ink-brand">{{ m.embed_url }}</span>
                           <span v-else class="truncate text-xs">{{ m.original_filename }}</span>
                           <div class="flex items-center gap-2 shrink-0">
-                            <button v-if="m.source_type !== 'embed'" class="text-ink-brand hover:text-ink-brand" title="ดาวน์โหลด" @click="downloadMaterial(m)">
+                            <button v-if="m.source_type !== 'embed'" class="text-ink-brand hover:text-ink-brand" :title="td('common.download')" @click="downloadMaterial(m)">
                               <Icon name="download" :size="14" />
                             </button>
-                            <button class="text-ink-card-subtle hover:text-ink-brand" title="สร้างลิงก์แชร์ให้ลูกค้า" @click="toggleShareLinks(m.id)">
+                            <button class="text-ink-card-subtle hover:text-ink-brand" :title="td('link.create_for_client')" @click="toggleShareLinks(m.id)">
                               <Icon name="share" :size="14" />
                             </button>
                           </div>
                         </div>
                         <div v-if="expandedShareLinksMaterialId === m.id" class="px-1.5 pb-1.5 border-t border-line-card-subtle pt-1.5">
-                          <p v-if="loadingShareLinksFor === m.id" class="text-xs text-ink-card-subtle">กำลังโหลด...</p>
+                          <p v-if="loadingShareLinksFor === m.id" class="text-xs text-ink-card-subtle">{{ td('common.loading2') }}</p>
                           <template v-else>
                             <div v-if="shareLinksByMaterial[m.id]?.length" class="space-y-1 mb-1.5">
                               <div v-for="link in shareLinksByMaterial[m.id]" :key="link.id" class="flex items-center justify-between gap-2 text-[11px]">
                                 <span :class="isLinkUsable(link) ? 'text-ink-card-muted' : 'text-ink-card-subtle line-through'" class="truncate">{{ link.share_url }}</span>
                                 <div class="flex items-center gap-1 shrink-0">
-                                  <button v-if="isLinkUsable(link)" class="text-ink-brand" title="คัดลอกลิงก์" @click="copyShareLink(link)">
+                                  <button v-if="isLinkUsable(link)" class="text-ink-brand" :title="td('link.copy')" @click="copyShareLink(link)">
                                     <Icon :name="copiedShareLinkId === link.id ? 'check' : 'copy'" :size="12" />
                                   </button>
-                                  <button v-if="isLinkUsable(link)" class="text-ink-danger" title="ยกเลิกลิงก์" @click="askRevokeShareLink(m.id, link.id)">
+                                  <button v-if="isLinkUsable(link)" class="text-ink-danger" :title="td('link.revoke')" @click="askRevokeShareLink(m.id, link.id)">
                                     <Icon name="x" :size="12" />
                                   </button>
                                 </div>
@@ -1932,13 +1935,13 @@ watch(isListMode, (listMode) => {
                           </template>
                           <div class="flex items-center gap-1">
                             <input v-model.number="shareLinkExpiryDays" type="number" min="1" max="90" class="bg-surface-input text-ink-input w-12 px-1 py-0.5 rounded border border-line-input text-[11px]" />
-                            <span class="text-[11px] text-ink-card-subtle">วัน</span>
+                            <span class="text-[11px] text-ink-card-subtle">{{ td('date.day') }}</span>
                             <button
                               class="px-2 py-0.5 rounded bg-brand-600 text-ink-primary text-[11px] font-bold disabled:opacity-50"
                               :disabled="creatingShareLinkFor === m.id"
                               @click="createShareLink(m.id)"
                             >
-                              + สร้างลิงก์แชร์
+                              {{ td('link.create_share') }}
                             </button>
                           </div>
                         </div>
@@ -1956,9 +1959,9 @@ watch(isListMode, (listMode) => {
             class="mt-2 min-h-[44px] inline-flex items-center text-xs font-bold text-ink-brand hover:text-ink-brand active:scale-95 transition-transform"
             @click="showReferralForm = !showReferralForm"
           >
-            + เพิ่มสินค้าที่สนใจ
+            {{ td('client.add_interest') }}
           </button>
-          <p v-else class="mt-2 text-xs text-ink-warning">ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้ (BR-1)</p>
+          <p v-else class="mt-2 text-xs text-ink-warning">{{ td('cert.needs_basic_interest') }}</p>
 
           <div v-if="showReferralForm" class="mt-2 p-3 rounded-lg border border-dashed border-line-card space-y-2">
             <!-- An empty picker used to be indistinguishable from a broken
@@ -1967,7 +1970,7 @@ watch(isListMode, (listMode) => {
               {{ drawerOptionsError }} — ลองรีเฟรชหน้า
             </p>
             <p v-else-if="!productSelectOptions.length" class="text-xs text-ink-warning">
-              ยังไม่มีสินค้าให้เลือก — ตรวจสอบที่ Admin ว่าสินค้าถูกเปิดใช้งานแล้วหรือยัง
+              {{ td('product.none_available') }}
             </p>
             <!-- TASK-211 — mark what is required and what is not BEFORE the
                  agent fills the form, not after they press a button that
@@ -1975,28 +1978,28 @@ watch(isListMode, (listMode) => {
                  (2026-08-19); StoreReferralRequest was relaxed to match, so
                  the two sides cannot disagree. -->
             <div>
-              <p class="mb-1 text-xs font-bold text-ink-card-muted">สินค้า <span class="text-ink-danger">*</span></p>
+              <p class="mb-1 text-xs font-bold text-ink-card-muted">{{ td('nav.products2') }} <span class="text-ink-danger">*</span></p>
               <AppSelect
                 v-model="referralForm.product_id"
                 :options="productSelectOptions"
-                placeholder="เลือกสินค้า"
-                title="เลือกสินค้า"
-                aria-label="เลือกสินค้า"
+                :placeholder="td('product.select')"
+                :title="td('product.select')"
+                :aria-label="td('product.select')"
               />
             </div>
             <div>
               <label for="referral-branch" class="mb-1 block text-xs font-bold text-ink-card-muted">
-                สาขา <span class="font-normal">(ไม่บังคับ)</span>
+                {{ td('field.branch') }} <span class="font-normal">{{ td('common.optional') }}</span>
               </label>
               <input
                 id="referral-branch"
                 v-model="referralForm.branch"
-                placeholder="เช่น สาขาสีลม"
+                :placeholder="td('ph.branch')"
                 class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm"
               />
             </div>
             <div>
-              <p class="mb-1 text-xs font-bold text-ink-card-muted">เวลาที่สะดวกนัด <span class="font-normal">(ไม่บังคับ)</span></p>
+              <p class="mb-1 text-xs font-bold text-ink-card-muted">{{ td('client.preferred_time') }} <span class="font-normal">{{ td('common.optional') }}</span></p>
               <BuddhistDateInput v-model="referralForm.preferred_time" type="datetime-local" />
             </div>
             <p v-if="referralFormError" class="text-xs font-bold text-ink-danger" role="alert">
@@ -2013,16 +2016,16 @@ watch(isListMode, (listMode) => {
               >
                 {{ creatingReferral ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
-              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showReferralForm = false; referralFormError = ''">ยกเลิก</button>
+              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showReferralForm = false; referralFormError = ''">{{ td('common.cancel2') }}</button>
             </div>
           </div>
 
           <!-- TASK-015: Client Activity/Communication Log -->
           <h3 class="mt-5 mb-2 text-sm font-bold text-ink-card flex items-center gap-2">
-            <Icon name="chat" :size="16" /> ประวัติการติดต่อ
+            <Icon name="chat" :size="16" /> {{ td('contact.history') }}
           </h3>
-          <p v-if="loadingActivities" class="text-xs text-ink-card-subtle">กำลังโหลด...</p>
-          <EmptyState v-else-if="!activities.length" icon="chat" title="ยังไม่มีประวัติการติดต่อ" />
+          <p v-if="loadingActivities" class="text-xs text-ink-card-subtle">{{ td('common.loading2') }}</p>
+          <EmptyState v-else-if="!activities.length" icon="chat" :title="td('contact.empty')" />
           <div v-else class="space-y-2">
             <div v-for="a in activities" :key="a.id" class="p-3 rounded-lg border border-line-card text-sm">
               <div class="flex items-start justify-between gap-2">
@@ -2031,10 +2034,10 @@ watch(isListMode, (listMode) => {
                   <span class="text-xs text-ink-card-subtle ml-2">{{ formatDateTime(a.occurred_at) }} · {{ a.logged_by_name }}</span>
                 </div>
                 <div v-if="a.can_edit || a.can_delete" class="flex items-center gap-2 shrink-0">
-                  <button v-if="a.can_edit && editingActivityId !== a.id" class="text-ink-card-subtle hover:text-ink-brand" title="แก้ไข" @click="startEditActivity(a)">
+                  <button v-if="a.can_edit && editingActivityId !== a.id" class="text-ink-card-subtle hover:text-ink-brand" :title="td('common.edit')" @click="startEditActivity(a)">
                     <Icon name="pencil" :size="14" />
                   </button>
-                  <button v-if="a.can_delete" class="text-ink-card-subtle hover:text-ink-danger" title="ลบ" @click="askDeleteActivity(a.id)">
+                  <button v-if="a.can_delete" class="text-ink-card-subtle hover:text-ink-danger" :title="td('common.delete')" @click="askDeleteActivity(a.id)">
                     <Icon name="trash" :size="14" />
                   </button>
                 </div>
@@ -2049,7 +2052,7 @@ watch(isListMode, (listMode) => {
                   >
                     {{ savingActivityEdit ? 'กำลังบันทึก...' : 'บันทึก' }}
                   </button>
-                  <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="cancelEditActivity">ยกเลิก</button>
+                  <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="cancelEditActivity">{{ td('common.cancel2') }}</button>
                 </div>
               </div>
               <p v-else class="mt-1 text-ink-card">{{ a.summary }}</p>
@@ -2062,19 +2065,19 @@ watch(isListMode, (listMode) => {
             class="mt-2 min-h-[44px] inline-flex items-center text-xs font-bold text-ink-brand hover:text-ink-brand active:scale-95 transition-transform"
             @click="showActivityForm = !showActivityForm"
           >
-            + บันทึกการติดต่อ
+            {{ td('contact.add') }}
           </button>
 
           <div v-if="showActivityForm" class="mt-2 p-3 rounded-lg border border-dashed border-line-card space-y-2">
             <AppSelect
               v-model="activityForm.type"
               :options="activityTypeOptions"
-              title="ประเภทการติดต่อ"
-              aria-label="ประเภทการติดต่อ"
+              :title="td('contact.type')"
+              :aria-label="td('contact.type')"
             />
-            <textarea v-model="activityForm.summary" placeholder="สรุปการติดต่อ" rows="2" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm" />
+            <textarea v-model="activityForm.summary" :placeholder="td('contact.summary')" rows="2" class="bg-surface-input text-ink-input placeholder:text-ink-input-placeholder w-full px-3 py-2 rounded-lg border border-line-input text-sm" />
             <div>
-              <label class="text-xs font-bold text-ink-card-muted block mb-1">นัดติดตามอีกครั้ง (ถ้ามี)</label>
+              <label class="text-xs font-bold text-ink-card-muted block mb-1">{{ td('contact.follow_up') }}</label>
               <BuddhistDateInput v-model="activityForm.follow_up_at" type="datetime-local" />
             </div>
             <div class="flex gap-2">
@@ -2085,22 +2088,22 @@ watch(isListMode, (listMode) => {
               >
                 {{ creatingActivity ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
-              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showActivityForm = false">ยกเลิก</button>
+              <button class="min-h-[44px] px-3 py-1.5 rounded-lg text-ink-card-muted text-xs font-bold active:scale-95 transition-transform inline-flex items-center justify-center" @click="showActivityForm = false">{{ td('common.cancel2') }}</button>
             </div>
           </div>
 
           <h3 class="mt-5 mb-2 text-sm font-bold text-ink-card flex items-center gap-2">
-            <Icon name="document" :size="16" /> เอกสารแนบ
+            <Icon name="document" :size="16" /> {{ td('common.attachments') }}
           </h3>
 
-          <EmptyState v-if="!loadingDocuments && !documents.length" icon="document" title="ยังไม่มีเอกสาร" />
+          <EmptyState v-if="!loadingDocuments && !documents.length" icon="document" :title="td('common.no_documents')" />
           <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
             <div v-for="d in documents" :key="d.id" class="flex items-center justify-between p-2 rounded-lg border border-line-card text-sm">
               <div class="truncate">
                 <p class="font-bold text-ink-card truncate">{{ d.original_filename }}</p>
                 <p class="text-xs text-ink-card-subtle">{{ formatSize(d.size_bytes) }}</p>
               </div>
-              <button class="text-ink-brand hover:text-ink-brand shrink-0 ml-2" title="ดาวน์โหลด" @click="downloadDocument(d)">
+              <button class="text-ink-brand hover:text-ink-brand shrink-0 ml-2" :title="td('common.download')" @click="downloadDocument(d)">
                 <Icon name="download" :size="16" />
               </button>
             </div>
@@ -2122,16 +2125,16 @@ watch(isListMode, (listMode) => {
          across 8 views — see AnnouncementsView.vue). -->
     <ConfirmDialog
       v-model:show="showDeleteActivityConfirm"
-      title="ยืนยันการลบประวัติการติดต่อ"
-      body="รายการนี้จะถูกลบถาวร และกู้คืนไม่ได้"
+      :title="td('contact.confirm_delete')"
+      :body="td('common.delete_permanent')"
       variant="danger"
       :busy="deletingActivity"
       @confirm="confirmDeleteActivity"
     />
     <ConfirmDialog
       v-model:show="showRevokeLinkConfirm"
-      title="ยืนยันการยกเลิกลิงก์แชร์"
-      body="ลูกค้าที่ได้รับลิงก์นี้ไปแล้วจะเปิดดูไม่ได้อีก"
+      :title="td('link.confirm_revoke_share')"
+      :body="td('link.revoke_share_body')"
       variant="danger"
       :busy="revokingLink"
       @confirm="confirmRevokeShareLink"
@@ -2155,7 +2158,7 @@ watch(isListMode, (listMode) => {
     <!-- TASK-085 — category filter, moved out of the header row. -->
     <FilterSheet
       v-model:open="filterSheetOpen"
-      title="หมวดหมู่ลูกค้า"
+      :title="td('client.category')"
       :options="categoryFilterOptions"
       :selected="selectedCategoryId"
       @select="onCategoryFilterSelect"

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * MyLinksView — "ลิงก์ของฉัน" (TASK-234).
  *
@@ -159,9 +162,9 @@ onMounted(load)
 <template>
   <main class="px-4 py-6 max-w-3xl mx-auto">
     <header class="mb-4">
-      <h1 class="text-lg font-bold text-ink-card">ลิงก์ของฉัน</h1>
+      <h1 class="text-lg font-bold text-ink-card">{{ td('links.mine') }}</h1>
       <p class="text-xs text-ink-card-subtle mt-1">
-        ลิงก์ทุกอันที่คุณสร้างไว้ รวมอยู่ที่เดียว พร้อมจำนวนคนที่เปิดจริง
+        {{ td('links.mine_sub') }}
       </p>
     </header>
 
@@ -171,20 +174,20 @@ onMounted(load)
 
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
       <div class="bg-surface-card border border-line-card rounded-xl px-3 py-2.5">
-        <p class="text-[10px] font-bold text-ink-card-subtle">ลิงก์ที่ใช้งานได้</p>
+        <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('links.active') }}</p>
         <p class="text-xl font-extrabold text-ink-card mt-0.5">{{ totals.active }}</p>
       </div>
       <div class="bg-surface-card border border-line-card rounded-xl px-3 py-2.5">
-        <p class="text-[10px] font-bold text-ink-card-subtle">คนไม่ซ้ำ</p>
+        <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.unique_people') }}</p>
         <p class="text-xl font-extrabold text-ink-card mt-0.5">{{ totals.unique }}</p>
         <p class="text-[10px] text-ink-card-subtle">เปิดรวม {{ totals.clicks }} ครั้ง</p>
       </div>
       <div class="bg-surface-card border border-line-card rounded-xl px-3 py-2.5">
-        <p class="text-[10px] font-bold text-ink-card-subtle">เกิดผลลัพธ์</p>
+        <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.conversions2') }}</p>
         <p class="text-xl font-extrabold text-ink-card mt-0.5">{{ totals.conversions }}</p>
       </div>
       <div class="bg-surface-card border border-line-card rounded-xl px-3 py-2.5">
-        <p class="text-[10px] font-bold text-ink-card-subtle">อัตราแปลงรวม</p>
+        <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.overall_rate') }}</p>
         <p class="text-xl font-extrabold text-ink-card mt-0.5">
           {{ totals.unique > 0 ? `${Math.round((totals.conversions / totals.unique) * 1000) / 10}%` : '—' }}
         </p>
@@ -210,8 +213,8 @@ onMounted(load)
     <EmptyState
       v-else-if="!visible.length"
       icon="link"
-      title="ยังไม่มีลิงก์ในหมวดนี้"
-      description="ลิงก์จะมาอยู่ที่นี่เองเมื่อคุณกดแชร์สินค้า สร้างคำสั่งซื้อ หรือสร้างลิงก์ชวนเข้าทีม"
+      :title="td('links.none_in_group')"
+      :description="td('links.empty_help')"
     />
     <div v-else class="space-y-2">
       <div
@@ -227,7 +230,7 @@ onMounted(load)
                 {{ link.group_label }}
               </span>
               <span v-if="!link.is_usable" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">
-                ปิดแล้ว
+                {{ td('common.closed') }}
               </span>
             </div>
 
@@ -235,13 +238,13 @@ onMounted(load)
               <input
                 v-model="labelDraft"
                 type="text"
-                placeholder="เช่น โพสต์กลุ่ม LINE 20 ส.ค."
+                :placeholder="td('links.label_ph')"
                 class="flex-1 px-2 py-1 rounded-lg border border-line-card text-xs bg-surface-card text-ink-card"
               />
               <button class="text-xs font-bold text-ink-brand" :disabled="savingLabel" @click="saveLabel(link)">
-                บันทึก
+                {{ td('common.save2') }}
               </button>
-              <button class="text-xs text-ink-card-subtle" @click="editingId = null">ยกเลิก</button>
+              <button class="text-xs text-ink-card-subtle" @click="editingId = null">{{ td('common.cancel2') }}</button>
             </div>
             <button
               v-else
@@ -268,15 +271,15 @@ onMounted(load)
           <div class="flex gap-3 shrink-0 text-right">
             <div>
               <p class="text-base font-extrabold text-ink-card">{{ link.unique_click_count }}</p>
-              <p class="text-[10px] font-bold text-ink-card-subtle">คน</p>
+              <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.people') }}</p>
             </div>
             <div>
               <p class="text-base font-extrabold text-ink-card">{{ link.conversion_count }}</p>
-              <p class="text-[10px] font-bold text-ink-card-subtle">สำเร็จ</p>
+              <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.success') }}</p>
             </div>
             <div>
               <p class="text-base font-extrabold text-ink-card">{{ rateLabel(link) }}</p>
-              <p class="text-[10px] font-bold text-ink-card-subtle">อัตรา</p>
+              <p class="text-[10px] font-bold text-ink-card-subtle">{{ td('stat.rate') }}</p>
             </div>
           </div>
         </div>

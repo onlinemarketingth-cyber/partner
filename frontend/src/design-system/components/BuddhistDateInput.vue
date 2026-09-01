@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * BuddhistDateInput — date/datetime entry that displays and accepts the
  * YEAR in Thai Buddhist Era (พ.ศ. = ค.ศ. + 543), per human request:
@@ -178,7 +181,7 @@ function onTimeChange(e: Event): void {
       class="bg-surface-input text-ink-input px-2 py-2 rounded-lg border border-line-input text-sm min-w-[4.25rem]"
       @change="onDayChange"
     >
-      <option value="" disabled>วัน</option>
+      <option value="" disabled>{{ td('date.day') }}</option>
       <option v-for="d in dayOptions" :key="d" :value="d">{{ d }}</option>
     </select>
     <select
@@ -187,7 +190,7 @@ function onTimeChange(e: Event): void {
       class="bg-surface-input text-ink-input px-2 py-2 rounded-lg border border-line-input text-sm min-w-[7rem]"
       @change="onMonthChange"
     >
-      <option value="" disabled>เดือน</option>
+      <option value="" disabled>{{ td('date.month') }}</option>
       <option v-for="(m, i) in THAI_MONTHS" :key="i" :value="i + 1">{{ m }}</option>
     </select>
     <select
@@ -196,7 +199,7 @@ function onTimeChange(e: Event): void {
       class="bg-surface-input text-ink-input px-2 py-2 rounded-lg border border-line-input text-sm min-w-[6rem]"
       @change="onYearChange"
     >
-      <option value="" disabled>ปี (พ.ศ.)</option>
+      <option value="" disabled>{{ td('date.year_be') }}</option>
       <option v-for="y in yearOptionsBE" :key="y" :value="y">{{ y }}</option>
     </select>
     <input

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * LessonVideoPlayer — TASK-147 / ADR-028 §2.5.
  *
@@ -174,7 +177,7 @@ defineExpose({ flush: () => emit('flush') })
       class="mb-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-chip border border-line-card"
     >
       <Icon name="play" :size="14" class="text-ink-card-subtle shrink-0" />
-      <p class="text-xs text-ink-card-muted flex-1 min-w-0">คุณดูค้างไว้</p>
+      <p class="text-xs text-ink-card-muted flex-1 min-w-0">{{ td('media.resume') }}</p>
       <button
         type="button"
         class="shrink-0 min-h-[44px] px-3 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition"
@@ -183,7 +186,7 @@ defineExpose({ flush: () => emit('flush') })
         {{ resumeLabel }}
       </button>
       <button type="button" class="shrink-0 min-h-[44px] px-2 text-xs font-bold text-ink-card-subtle" @click="dismissResume">
-        เริ่มใหม่
+        {{ td('common.restart') }}
       </button>
     </div>
 
@@ -193,14 +196,14 @@ defineExpose({ flush: () => emit('flush') })
       class="w-full max-w-md rounded-lg border border-line-card bg-surface-chip px-4 py-6 flex flex-col items-center gap-3 text-center"
     >
       <Icon name="alert" :size="22" class="text-ink-danger" />
-      <p class="text-sm font-bold text-ink-danger">เล่นวิดีโอไม่สำเร็จ</p>
+      <p class="text-sm font-bold text-ink-danger">{{ td('media.video_failed') }}</p>
       <button
         type="button"
         class="min-h-[44px] px-4 rounded-lg bg-brand-600 text-ink-primary text-xs font-bold hover:bg-brand-700 active:scale-95 transition inline-flex items-center gap-1.5"
         @click="retry"
       >
         <Icon name="refresh" :size="14" />
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 

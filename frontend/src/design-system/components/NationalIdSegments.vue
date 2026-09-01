@@ -38,7 +38,9 @@
  * leading zeros, offers spinners, and accepts "e" and "-".
  */
 import { computed, nextTick, ref, watch } from 'vue'
+import { useI18n } from '@/composables/useI18n'
 
+const { td } = useI18n()
 const props = defineProps<{
   /** The whole number, bare digits. '' when nothing has been typed. */
   modelValue: string
@@ -225,7 +227,7 @@ defineExpose({
   <div
     class="flex items-center gap-1.5"
     role="group"
-    :aria-label="ariaLabel ?? 'เลขบัตรประชาชน 13 หลัก'"
+    :aria-label="ariaLabel ?? td('ui.national_id_aria')"
   >
     <template v-for="(group, index) in GROUPS" :key="index">
       <!-- The printed separator, drawn between groups. Decorative only:
@@ -248,7 +250,7 @@ defineExpose({
         autocomplete="off"
         spellcheck="false"
         :maxlength="group.size"
-        :aria-label="`เลขบัตรประชาชน กลุ่มที่ ${index + 1} จาก ${GROUPS.length}`"
+        :aria-label="`${td('ui.national_id_group_aria')} ${index + 1}/${GROUPS.length}`"
         :aria-invalid="invalid ? 'true' : undefined"
         class="bg-surface-input min-h-[44px] rounded-xl border px-1 py-2.5 text-center text-sm text-ink-input focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500 transition-colors"
         :class="[

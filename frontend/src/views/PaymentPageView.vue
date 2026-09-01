@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * PaymentPageView — PUBLIC, unauthenticated payment page (ADR-017 / TASK-054).
  * Route: /pay/:token (meta.public — App.vue renders it full-bleed with no app
@@ -568,14 +571,14 @@ async function payByCard() {
          rendering it before the theme resolves is exactly the flash of
          platform default this task exists to remove. A beat of a bare
          loading line is the cheaper trade. -->
-    <p v-if="pageState === 'loading'" class="text-sm text-ink-app-muted">กำลังโหลด...</p>
+    <p v-if="pageState === 'loading'" class="text-sm text-ink-app-muted">{{ td('common.loading2') }}</p>
 
     <div v-else class="w-full max-w-md rounded-[28px] bg-surface-card shadow-xl border border-line-card/80 overflow-hidden p-6 sm:p-8">
       <div class="flex items-center justify-between">
         <AppLogo mode="wordmark" :height="28" />
         <span class="inline-flex items-center gap-1 text-xs font-bold text-ink-card-subtle">
           <Icon name="money" :size="14" />
-          ชำระเงิน
+          {{ td('pay.title') }}
         </span>
       </div>
 
@@ -584,15 +587,15 @@ async function payByCard() {
         <div class="mx-auto w-14 h-14 rounded-full border border-rose-100 flex items-center justify-center">
           <Icon name="alert" :size="24" class="text-ink-danger" />
         </div>
-        <h2 class="mt-4 text-lg font-bold text-ink-card">ลิงก์นี้ไม่ถูกต้องหรือหมดอายุ</h2>
-        <p class="mt-2 text-sm text-ink-card-muted">กรุณาติดต่อตัวแทนของคุณเพื่อขอลิงก์ใหม่</p>
+        <h2 class="mt-4 text-lg font-bold text-ink-card">{{ td('pay.link_invalid') }}</h2>
+        <p class="mt-2 text-sm text-ink-card-muted">{{ td('public.ask_member_new_link') }}</p>
       </div>
 
       <!-- Network / server error -->
       <div v-else-if="pageState === 'error'" class="mt-10 py-6 text-center">
-        <p class="text-sm text-ink-danger">เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง</p>
+        <p class="text-sm text-ink-danger">{{ td('common.error_network2') }}</p>
         <button type="button" class="mt-3 text-sm font-bold text-ink-brand hover:underline" @click="loadOrder">
-          ลองอีกครั้ง
+          {{ td('common.try_again') }}
         </button>
       </div>
 
@@ -600,9 +603,9 @@ async function payByCard() {
       <div v-else-if="order" class="mt-6 space-y-5">
         <!-- Amount summary -->
         <div class="text-center">
-          <p class="text-sm text-ink-card-muted">{{ order.product_name ?? 'ชำระเงิน' }}</p>
+          <p class="text-sm text-ink-card-muted">{{ order.product_name ?? td('pay.title') }}</p>
           <p class="mt-1 text-3xl font-bold text-ink-card">{{ formatBaht(order.amount_baht) }}</p>
-          <p class="mt-1 text-xs text-ink-card-subtle">เลขที่คำสั่งซื้อ {{ order.order_number }}</p>
+          <p class="mt-1 text-xs text-ink-card-subtle">{{ td('order.number', '', { number: order.order_number }) }}</p>
         </div>
 
         <!-- Paid state -->
@@ -610,8 +613,8 @@ async function payByCard() {
           <div class="mx-auto w-14 h-14 rounded-full border border-emerald-100 flex items-center justify-center">
             <Icon name="check" :size="24" class="text-ink-success" />
           </div>
-          <h2 class="mt-4 text-lg font-bold text-ink-card">ชำระเงินเรียบร้อยแล้ว</h2>
-          <p class="mt-1 text-sm text-ink-card-muted">ขอบคุณสำหรับการชำระเงิน</p>
+          <h2 class="mt-4 text-lg font-bold text-ink-card">{{ td('pay.done') }}</h2>
+          <p class="mt-1 text-sm text-ink-card-muted">{{ td('pay.thanks') }}</p>
 
           <!-- ADR-033 (TASK-189) §2.4/E1 — service-access voucher, rendered
                once paid AND a voucher was actually issued (older/legacy
@@ -629,9 +632,9 @@ async function payByCard() {
                isPaid / isCancelled / v-else chain. -->
           <div v-if="order.voucher" class="mt-4 rounded-2xl border border-line-card p-4 flex flex-col items-center gap-3 text-center">
             <p class="text-sm font-bold text-ink-card flex items-center gap-1.5">
-              <Icon name="qr_code" :size="16" class="text-ink-brand" /> บัตรกำนัลใช้บริการ
+              <Icon name="qr_code" :size="16" class="text-ink-brand" /> {{ td('pay.voucher') }}
             </p>
-            <img v-if="voucherQrDataUrl" :src="voucherQrDataUrl" alt="รหัสบัตรกำนัล" class="w-48 h-48" />
+            <img v-if="voucherQrDataUrl" :src="voucherQrDataUrl" :alt="td('pay.voucher_code')" class="w-48 h-48" />
             <!-- 2026-08-17 bugfix: the redemption code is a 40-char random
                  string (Str::random(40), OrderVoucherService::generateCode())
                  — at text-lg + tracking-widest on one line it overflows the
@@ -641,18 +644,18 @@ async function payByCard() {
             <p class="w-full text-sm font-bold font-mono tracking-wide text-ink-card break-all">{{ order.voucher.code }}</p>
             <div class="w-full grid grid-cols-2 gap-2 text-xs">
               <div class="rounded-xl bg-surface-chip p-2">
-                <p class="text-ink-card-subtle">สิทธิ์การใช้งาน</p>
+                <p class="text-ink-card-subtle">{{ td('pay.entitlement') }}</p>
                 <p class="mt-0.5 font-bold text-ink-card">{{ formatVoucherQuota(order.voucher) }}</p>
               </div>
               <div class="rounded-xl bg-surface-chip p-2">
-                <p class="text-ink-card-subtle">วันหมดอายุ</p>
+                <p class="text-ink-card-subtle">{{ td('common.expiry_date') }}</p>
                 <p class="mt-0.5 font-bold text-ink-card">{{ formatVoucherExpiry(order.voucher) }}</p>
               </div>
             </div>
             <p v-if="order.voucher.status !== 'active'" class="text-xs font-bold text-ink-danger">
               {{ order.voucher.status_label }}
             </p>
-            <p class="text-xs text-ink-card-subtle">แสดงบัตรกำนัลนี้ (หรือแจ้งรหัส) กับเจ้าหน้าที่ที่สาขาเพื่อใช้บริการ</p>
+            <p class="text-xs text-ink-card-subtle">{{ td('pay.voucher_help') }}</p>
             <!-- TASK-192 — downloadable branded PNG card (code + QR +
                  validity together), separate from the 3 TASK-191 share
                  buttons (which live elsewhere, out of scope here). -->
@@ -663,7 +666,7 @@ async function payByCard() {
               @click="downloadVoucherCard"
             >
               <Icon name="download" :size="16" />
-              {{ voucherCardGenerating ? 'กำลังสร้างบัตร...' : 'ดาวน์โหลดบัตรกำนัล' }}
+              {{ voucherCardGenerating ? td('pay.voucher_generating') : td('pay.voucher_download') }}
             </button>
           </div>
         </div>
@@ -673,8 +676,8 @@ async function payByCard() {
           <div class="mx-auto w-14 h-14 rounded-full border border-line-card flex items-center justify-center">
             <Icon name="x" :size="24" class="text-ink-card-subtle" />
           </div>
-          <h2 class="mt-4 text-lg font-bold text-ink-card">คำสั่งซื้อนี้ถูกยกเลิกแล้ว</h2>
-          <p class="mt-1 text-sm text-ink-card-muted">กรุณาติดต่อตัวแทนของคุณ</p>
+          <h2 class="mt-4 text-lg font-bold text-ink-card">{{ td('pay.order_cancelled') }}</h2>
+          <p class="mt-1 text-sm text-ink-card-muted">{{ td('public.ask_member') }}</p>
         </div>
 
         <template v-else>
@@ -688,11 +691,11 @@ async function payByCard() {
           <div v-if="redirectIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="credit_card" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">ชำระด้วยบัตรเครดิต / เดบิต หรือ PromptPay</p>
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.card_or_promptpay') }}</p>
             </div>
 
             <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
-              โหมดทดสอบ — รายการนี้จะไม่มีการเรียกเก็บเงินจริง
+              {{ td('pay.test_mode') }}
             </p>
 
             <button
@@ -701,24 +704,24 @@ async function payByCard() {
               class="w-full py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
               @click="payByRedirect"
             >
-              {{ charging ? 'กำลังพาไปหน้าชำระเงิน...' : `ชำระ ${formatBaht(order.amount_baht)}` }}
+              {{ charging ? td('pay.redirecting') : td('pay.pay_amount', '', { amount: formatBaht(order.amount_baht) }) }}
             </button>
 
             <p class="text-xs text-ink-card-subtle text-center">
-              ระบบจะพาคุณไปยังหน้าชำระเงินที่ปลอดภัยของผู้ให้บริการ แล้วกลับมาที่หน้านี้อัตโนมัติ
+              {{ td('pay.redirect_note') }}
             </p>
           </div>
 
           <div v-if="cardIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="credit_card" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">ชำระด้วยบัตรเครดิต / เดบิต</p>
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.card') }}</p>
             </div>
 
             <!-- A test-mode charge is not a purchase, and the person about to
                  type a card number is entitled to know which one this is. -->
             <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
-              โหมดทดสอบ — รายการนี้จะไม่มีการเรียกเก็บเงินจริง
+              {{ td('pay.test_mode') }}
             </p>
 
             <div v-if="cardError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
@@ -732,14 +735,14 @@ async function payByCard() {
               class="w-full py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
               @click="payByCard"
             >
-              {{ charging ? 'กำลังดำเนินการ...' : `ชำระ ${formatBaht(order.amount_baht)} ด้วยบัตร` }}
+              {{ charging ? td('pay.processing') : td('pay.pay_amount_card', '', { amount: formatBaht(order.amount_baht) }) }}
             </button>
 
             <!-- Said plainly, because it is the reason this form is an
                  iframe belonging to Omise rather than inputs belonging to
                  us, and a customer typing a card number deserves to know. -->
             <p class="text-xs text-ink-card-subtle text-center">
-              กรอกเลขบัตรในหน้าต่างที่ปลอดภัยของ Omise — ระบบของเราไม่เห็นและไม่เก็บเลขบัตรของคุณ
+              {{ td('pay.omise_note') }}
             </p>
           </div>
 
@@ -752,16 +755,16 @@ async function payByCard() {
           >
             <Icon name="check" :size="20" class="text-ink-brand shrink-0" />
             <div>
-              <p class="text-sm font-bold text-ink-brand">ได้รับการชำระเงินของคุณแล้ว</p>
+              <p class="text-sm font-bold text-ink-brand">{{ td('pay.received') }}</p>
               <p class="text-xs text-ink-card-muted">
-                กรุณาอย่าชำระซ้ำ — ระบบกำลังยืนยันคำสั่งซื้อ หากสถานะยังไม่เปลี่ยนภายใน 15 นาที กรุณาติดต่อผู้ขาย
+                {{ td('pay.received_help') }}
               </p>
             </div>
           </div>
 
           <!-- PromptPay QR -->
           <div v-if="order.payment_method === 'promptpay' && qrDataUrl" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
-            <p class="text-sm font-bold text-ink-card">สแกนเพื่อชำระผ่าน PromptPay</p>
+            <p class="text-sm font-bold text-ink-card">{{ td('pay.scan_promptpay') }}</p>
             <img :src="qrDataUrl" alt="PromptPay QR" class="w-52 h-52" />
             <p v-if="order.company_payment.promptpay_id" class="text-xs text-ink-card-subtle">
               PromptPay: {{ order.company_payment.promptpay_id }}
@@ -772,19 +775,19 @@ async function payByCard() {
           <div class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="money" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">โอนเงินผ่านธนาคาร</p>
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.bank_transfer') }}</p>
             </div>
             <div class="space-y-2 text-sm">
               <div class="flex justify-between gap-3">
-                <span class="text-ink-card-muted">ธนาคาร</span>
+                <span class="text-ink-card-muted">{{ td('bank.name') }}</span>
                 <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_name ?? '—' }}</span>
               </div>
               <div class="flex justify-between gap-3">
-                <span class="text-ink-card-muted">ชื่อบัญชี</span>
+                <span class="text-ink-card-muted">{{ td('bank.account_name') }}</span>
                 <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_account_name ?? '—' }}</span>
               </div>
               <div class="flex items-center justify-between gap-3">
-                <span class="text-ink-card-muted">เลขที่บัญชี</span>
+                <span class="text-ink-card-muted">{{ td('bank.account_number') }}</span>
                 <span class="inline-flex items-center gap-2">
                   <span class="font-bold text-ink-card">{{ order.company_payment.bank_account_number ?? '—' }}</span>
                   <button
@@ -805,8 +808,8 @@ async function payByCard() {
           <div v-if="awaitingVerification" class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-center gap-3">
             <Icon name="clock" :size="20" class="text-ink-brand shrink-0" />
             <div>
-              <p class="text-sm font-bold text-ink-brand">ได้รับสลิปแล้ว รอการยืนยัน</p>
-              <p class="text-xs text-ink-card-muted">ทีมงานจะตรวจสอบและยืนยันการชำระเงินโดยเร็ว</p>
+              <p class="text-sm font-bold text-ink-brand">{{ td('pay.slip_received') }}</p>
+              <p class="text-xs text-ink-card-muted">{{ td('pay.slip_help') }}</p>
             </div>
           </div>
 
@@ -819,10 +822,10 @@ async function payByCard() {
           <div v-if="showUploadForm && order.requires_shipping" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="map_pin" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">ที่อยู่จัดส่งสินค้า</p>
+              <p class="text-sm font-bold text-ink-card">{{ td('ship.title') }}</p>
             </div>
             <div>
-              <label class="text-xs font-bold text-ink-card-muted">ชื่อผู้รับ</label>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient') }}</label>
               <input
                 v-model="shippingRecipientName"
                 type="text"
@@ -831,7 +834,7 @@ async function payByCard() {
               />
             </div>
             <div>
-              <label class="text-xs font-bold text-ink-card-muted">เบอร์โทรศัพท์ผู้รับ</label>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient_phone') }}</label>
               <input
                 v-model="shippingPhone"
                 type="tel"
@@ -840,7 +843,7 @@ async function payByCard() {
               />
             </div>
             <div>
-              <label class="text-xs font-bold text-ink-card-muted">ที่อยู่จัดส่ง</label>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.address') }}</label>
               <textarea
                 v-model="shippingAddress"
                 required
@@ -854,7 +857,7 @@ async function payByCard() {
           <div v-if="showUploadForm" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="upload" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">อัปโหลดสลิปการโอนเงิน</p>
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.upload_slip') }}</p>
             </div>
 
             <div v-if="uploadError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
@@ -878,10 +881,10 @@ async function payByCard() {
               {{ selectedFile ? 'เปลี่ยนรูปสลิป' : 'เลือกรูปสลิป' }}
             </button>
 
-            <img v-if="previewUrl" :src="previewUrl" alt="สลิป" class="w-full rounded-xl border border-line-card object-contain max-h-72" />
+            <img v-if="previewUrl" :src="previewUrl" :alt="td('order.slip')" class="w-full rounded-xl border border-line-card object-contain max-h-72" />
 
             <p v-if="order.requires_shipping && !shippingValid" class="text-xs text-ink-danger">
-              กรุณากรอกที่อยู่จัดส่งให้ครบก่อนส่งสลิป
+              {{ td('ship.required_first') }}
             </p>
 
             <button

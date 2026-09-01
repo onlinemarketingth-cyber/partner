@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useI18n } from '@/composables/useI18n'
+const { td } = useI18n()
+
 /**
  * ProductDetailView — what an agent sees when they tap a product.
  *
@@ -178,7 +181,7 @@ onMounted(load)
       @click="goBack"
     >
       <Icon name="arrow_left" :size="14" />
-      สินค้า
+      {{ td('nav.products2') }}
     </button>
 
     <LoadingSkeleton v-if="loading" type="list" :rows="4" />
@@ -186,8 +189,8 @@ onMounted(load)
     <EmptyState
       v-else-if="notFound"
       icon="box"
-      title="ไม่พบสินค้านี้"
-      message="สินค้านี้อาจถูกปิดการใช้งานหรือถูกลบไปแล้ว"
+      :title="td('product.not_found')"
+      :message="td('product.not_found_help')"
     />
 
     <div v-else-if="errorMessage" class="px-4 py-3 rounded-xl bg-surface-danger border border-line-card text-sm text-ink-danger flex items-center justify-between gap-3">
@@ -197,7 +200,7 @@ onMounted(load)
         class="shrink-0 min-h-[44px] px-3 py-2 rounded-lg text-xs font-bold text-ink-danger bg-rose-100 hover:bg-rose-200 active:scale-95 transition"
         @click="load"
       >
-        ลองใหม่
+        {{ td('common.retry') }}
       </button>
     </div>
 
@@ -240,12 +243,12 @@ onMounted(load)
           <!-- whitespace-pre-line: an admin types these in a textarea, so the
                line breaks they put in are content, not incidental. -->
           <div v-if="product.description" class="mt-4">
-            <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">รายละเอียด</p>
+            <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">{{ td('common.details') }}</p>
             <p class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">{{ product.description }}</p>
           </div>
 
           <div v-if="product.spec_description" class="mt-4">
-            <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">ข้อมูลจำเพาะ</p>
+            <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">{{ td('product.specs') }}</p>
             <p class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">{{ product.spec_description }}</p>
           </div>
         </div>
@@ -259,7 +262,7 @@ onMounted(load)
            attribute: this page has no amber banner above it the way the grid
            does, and a tooltip does not exist on a touchscreen. -->
       <p v-if="!hasPassedBasic" class="mt-4 px-4 py-3 rounded-xl bg-surface-chip text-xs text-ink-chip leading-relaxed">
-        ต้องผ่านการรับรอง Basic ก่อนจึงจะแชร์สินค้าได้ (BR-1) — ทำแบบทดสอบได้ที่หน้า Academy
+        {{ td('cert.needs_basic_share2') }}
       </p>
 
       <button
