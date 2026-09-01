@@ -29,13 +29,34 @@ return new class extends Migration
     {
         Schema::create('commission_withdrawal_items', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('commission_withdrawal_request_id')
-                ->constrained('commission_withdrawal_requests')
+            /*
+             * EXPLICIT, SHORT CONSTRAINT NAMES — not decoration.
+             *
+             * Laravel names a foreign key `{table}_{column}_foreign`, which
+             * here would be
+             * `commission_withdrawal_items_commission_withdrawal_request_id_foreign`
+             * — 68 characters against MySQL's hard 64-character limit for an
+             * identifier. The failure mode is nasty: CREATE TABLE succeeds and
+             * the ALTER that adds the key dies, so the migration aborts with
+             * the table already on disk and no row in `migrations`. Every
+             * subsequent deploy then reports "table already exists" and never
+             * mentions the real cause. (Hit on production, 2026-09-22.)
+             *
+             * Naming them here keeps both keys well under the limit and makes
+             * the constraint findable by a human reading SHOW CREATE TABLE.
+             */
+            $table->unsignedBigInteger('commission_withdrawal_request_id');
+            $table->foreign('commission_withdrawal_request_id', 'cwi_request_fk')
+                ->references('id')
+                ->on('commission_withdrawal_requests')
                 ->cascadeOnDelete();
+
             // restrictOnDelete: a ledger row that some payout was built from
             // must not be deletable out from under the payout's own record.
-            $table->foreignId('commission_ledger_id')
-                ->constrained('commission_ledger')
+            $table->unsignedBigInteger('commission_ledger_id');
+            $table->foreign('commission_ledger_id', 'cwi_ledger_fk')
+                ->references('id')
+                ->on('commission_ledger')
                 ->restrictOnDelete();
 
             // SIGNED, like commission_ledger.amount_satang itself since the
