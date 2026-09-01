@@ -10,11 +10,23 @@ const router = createRouter({
       component: () => import('../views/LoginView.vue'),
       meta: { public: true },
     },
+    /*
+     * 2026-09-01 (human request) — the landing page used to be
+     * AdminHomeView.vue: a 9-card grid that re-listed what the top nav
+     * already lists, so every session opened on a screen whose only
+     * purpose was to be clicked through. The agent dashboard is what an
+     * admin actually wants first, so it IS the landing page now, and
+     * the "จัดการตัวแทน" pillar goes straight to the roster.
+     *
+     * /agents keeps its name and redirects here, so existing bookmarks
+     * and every router.push({ name: 'agent-management' }) still land on
+     * the same screen they always did.
+     */
     {
       path: '/',
       name: 'home',
-      component: () => import('../views/AdminHomeView.vue'),
-      meta: { navLabel: 'Admin' },
+      component: () => import('../views/AgentManagementView.vue'),
+      meta: { navLabel: 'ภาพรวมตัวแทน' },
     },
     {
       path: '/product-catalog',
@@ -71,8 +83,7 @@ const router = createRouter({
     {
       path: '/agents',
       name: 'agent-management',
-      component: () => import('../views/AgentManagementView.vue'),
-      meta: { navLabel: 'ภาพรวมตัวแทน' },
+      redirect: { name: 'home' },
     },
     {
       path: '/agents/roster',

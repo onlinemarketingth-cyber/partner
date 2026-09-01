@@ -20,6 +20,9 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { useI18n } from '@/composables/useI18n'
+
+const { td } = useI18n()
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -70,7 +73,7 @@ async function loadRewardItems() {
     const res = await api.get<{ data: RewardItem[] }>(activeCompany.scopedPath('/reward-items'))
     rewardItems.value = res.data
   } catch (e) {
-    itemsError.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
+    itemsError.value = apiErrorMessage(e, td('common.load_failed'))
   } finally {
     loadingItems.value = false
     itemsLoadedOnce.value = true
@@ -122,11 +125,11 @@ function closeItemForm() {
 }
 async function submitItemForm() {
   if (!itemForm.value.name.trim()) {
-    itemFormError.value = 'กรุณาระบุชื่อของรางวัล'
+    itemFormError.value = td('reward.name_required')
     return
   }
   if (itemForm.value.cost_points === '' || Number(itemForm.value.cost_points) < 1) {
-    itemFormError.value = 'กรุณาระบุแต้มที่ใช้แลก (อย่างน้อย 1 แต้ม)'
+    itemFormError.value = td('reward.points_required')
     return
   }
   savingItem.value = true
@@ -149,7 +152,7 @@ async function submitItemForm() {
     closeItemForm()
     await loadRewardItems()
   } catch (e) {
-    itemFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+    itemFormError.value = apiErrorMessage(e, td('common.save_failed'))
   } finally {
     savingItem.value = false
   }
@@ -167,16 +170,18 @@ async function confirmDeleteItem() {
     await api.delete(`/reward-items/${item.id}`)
     rewardItems.value = rewardItems.value.filter((x) => x.id !== item.id)
   } catch (e) {
-    itemsError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
+    itemsError.value = apiErrorMessage(e, td('common.delete_failed'))
   } finally {
     pendingDeleteItem.value = null
   }
 }
 function stockLabel(item: RewardItem): string {
-  return item.stock_quantity === null ? 'ไม่จำกัดจำนวน' : `คงเหลือ ${item.stock_quantity.toLocaleString('th-TH')} ชิ้น`
+  return item.stock_quantity === null
+    ? td('reward.stock_unlimited')
+    : td('reward.stock_left', '', { count: item.stock_quantity.toLocaleString() })
 }
 function rewardTypeLabel(type: RewardType): string {
-  return type === 'physical' ? 'ของจริง (จัดส่ง)' : 'ดิจิทัล'
+  return type === 'physical' ? td('reward.type_physical') : td('reward.type_digital')
 }
 
 // ══════════════════════════ Tab B: Reward Redemptions queue ══════════════════════════
@@ -229,7 +234,7 @@ async function loadRedemptions() {
   try {
     redemptions.value = await fetchAllPages<RedemptionItem>('/reward-redemptions')
   } catch (e) {
-    redemptionsError.value = apiErrorMessage(e, 'โหลดคิวคำขอไม่สำเร็จ')
+    redemptionsError.value = apiErrorMessage(e, td('reward.load_queue_failed'))
   } finally {
     loadingRedemptions.value = false
     redemptionsLoadedOnce.value = true
@@ -262,7 +267,7 @@ async function submitDecision(item: RedemptionItem) {
     cancelDecision()
     await loadRedemptions()
   } catch (e) {
-    redemptionsError.value = apiErrorMessage(e, 'บันทึกการตัดสินใจไม่สำเร็จ')
+    redemptionsError.value = apiErrorMessage(e, td('reward.decision_failed'))
   } finally {
     deciding.value = false
   }
@@ -271,7 +276,12 @@ function redemptionStatusBadgeClass(status: RedemptionStatus): string {
   return { pending: 'bg-amber-50 text-amber-700', approved: 'bg-sky-50 text-sky-700', rejected: 'bg-rose-50 text-rose-700', fulfilled: 'bg-emerald-50 text-emerald-700' }[status]
 }
 function redemptionStatusLabel(status: RedemptionStatus): string {
-  return { pending: 'รออนุมัติ', approved: 'อนุมัติแล้ว', rejected: 'ปฏิเสธแล้ว', fulfilled: 'ส่งมอบแล้ว' }[status]
+  return {
+    pending: td('reward.status_pending'),
+    approved: td('reward.status_approved'),
+    rejected: td('reward.status_rejected'),
+    fulfilled: td('reward.status_fulfilled'),
+  }[status]
 }
 
 // Tracking number — Admin-editable any time after Approved/Fulfilled (TASK-042 §2).
@@ -298,7 +308,7 @@ async function saveTracking(item: RedemptionItem) {
     item.tracking_number = res.data.tracking_number
     cancelTrackingEdit()
   } catch (e) {
-    redemptionsError.value = apiErrorMessage(e, 'บันทึกเลขพัสดุไม่สำเร็จ')
+    redemptionsError.value = apiErrorMessage(e, td('reward.tracking_failed'))
   } finally {
     savingTracking.value = false
   }
@@ -316,14 +326,20 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
 
 <template>
   <main class="min-h-screen px-4 py-6 lg:px-8">
-    <HeroHeader icon="trophy" title="ศูนย์รางวัล" subtitle="ของรางวัลแลกแต้ม + คิวคำขอแลกแต้มของ Agent" accent-color="brand" storage-key="reward-center">
+    <HeroHeader
+      icon="trophy"
+      :title="td('reward.title')"
+      :subtitle="td('reward.subtitle')"
+      accent-color="brand"
+      storage-key="reward-center"
+    >
       <template #actions>
         <button
           v-if="viewMode === 'items'"
           class="btn-primary"
           @click="openCreateItemForm"
         >
-          + เพิ่มของรางวัล
+          {{ td('reward.add_item') }}
         </button>
       </template>
       <template #tabs>
@@ -335,8 +351,8 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
           >
             <Icon name="trophy" :size="16" />
 
-    <CompanyScopeNotice action="จัดการของรางวัล" />
-            รางวัล
+    <CompanyScopeNotice :action="td('reward.scope_action')" />
+            {{ td('reward.tab_items') }}
           </button>
           <button
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors"
@@ -344,7 +360,7 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
             @click="viewMode = 'requests'"
           >
             <Icon name="list" :size="16" />
-            คำขอแลกแต้ม
+            {{ td('reward.tab_redemptions') }}
             <span v-if="redemptions.filter((r) => r.status === 'pending').length" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
               {{ redemptions.filter((r) => r.status === 'pending').length }}
             </span>
@@ -361,9 +377,9 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
         <EmptyState
           v-if="!rewardItems.length"
           icon="trophy"
-          title="ยังไม่มีของรางวัล"
-          message="เพิ่มของรางวัลให้ Agent แลกด้วยแต้มสะสม"
-          cta-label="+ เพิ่มของรางวัลแรก"
+          :title="td('reward.empty_title')"
+          :message="td('reward.empty_message')"
+          :cta-label="td('reward.empty_cta')"
           :cta-disabled="false"
           class="mt-4"
           @cta="openCreateItemForm"
@@ -377,25 +393,25 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
                   <p class="text-sm font-bold text-slate-900 truncate flex items-center gap-2 flex-wrap">
                     {{ item.name }}
                     <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="item.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'">
-                      {{ item.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}
+                      {{ item.is_active ? td('common.active') : td('common.inactive') }}
                     </span>
                     <span v-if="isSuperAdmin && item.company_id === null" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">
-                      ทั้งแพลตฟอร์ม
+                      {{ td('common.whole_platform') }}
                     </span>
                     <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="item.reward_type === 'physical' ? 'bg-sky-50 text-sky-700' : 'bg-violet-50 text-violet-700'">
                       {{ rewardTypeLabel(item.reward_type) }}
                     </span>
                   </p>
                   <p v-if="item.description" class="text-xs text-slate-400 truncate mt-0.5">{{ item.description }}</p>
-                  <p class="text-xs text-slate-500 mt-1">{{ item.cost_points.toLocaleString('th-TH') }} แต้ม · {{ stockLabel(item) }}</p>
+                  <p class="text-xs text-slate-500 mt-1">{{ item.cost_points.toLocaleString() }} {{ td('reward.points_suffix') }} · {{ stockLabel(item) }}</p>
                 </div>
               </div>
               <div class="flex gap-1 shrink-0">
                 <button class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 flex items-center gap-1" @click="openEditItemForm(item)">
-                  <Icon name="edit" :size="14" /> แก้ไข
+                  <Icon name="edit" :size="14" /> {{ td('common.edit') }}
                 </button>
                 <button class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 flex items-center gap-1" @click="deleteItem(item)">
-                  <Icon name="trash" :size="14" /> ลบ
+                  <Icon name="trash" :size="14" /> {{ td('common.delete') }}
                 </button>
               </div>
             </div>
@@ -409,7 +425,7 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
       <div v-if="redemptionsError" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">{{ redemptionsError }}</div>
       <LoadingSkeleton v-if="loadingRedemptions && !redemptionsLoadedOnce" type="list" :rows="4" class="mt-4" />
       <template v-else>
-        <EmptyState v-if="!redemptions.length" icon="list" title="ยังไม่มีคำขอแลกแต้ม" class="mt-4" />
+        <EmptyState v-if="!redemptions.length" icon="list" :title="td('reward.redemptions_empty')" class="mt-4" />
         <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
           <div v-for="r in redemptions" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
             <div class="flex items-start justify-between gap-3">
@@ -423,19 +439,21 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
                       {{ rewardTypeLabel(r.reward_item_reward_type) }}
                     </span>
                   </p>
-                  <p class="text-xs text-slate-500 mt-1">แลก {{ r.reward_item_name }} · {{ r.points_spent.toLocaleString('th-TH') }} แต้ม</p>
-                  <p class="text-xs text-slate-400 mt-1">ขอเมื่อ {{ formatDate(r.requested_at) }}</p>
+                  <p class="text-xs text-slate-500 mt-1">
+                    {{ td('reward.redeemed_line', '', { name: r.reward_item_name, points: r.points_spent.toLocaleString() }) }}
+                  </p>
+                  <p class="text-xs text-slate-400 mt-1">{{ td('reward.requested_at', '', { date: formatDate(r.requested_at) }) }}</p>
                   <p v-if="r.decided_at" class="text-xs text-slate-400 mt-1">
-                    ตัดสินใจโดย {{ r.decided_by_name ?? '-' }} เมื่อ {{ formatDate(r.decided_at) }}
+                    {{ td('reward.decided_by', '', { name: r.decided_by_name ?? '-', date: formatDate(r.decided_at) }) }}
                     <span v-if="r.decision_note"> — {{ r.decision_note }}</span>
                   </p>
 
                   <!-- Shipping info — only for physical rewards, captured by the agent at request time -->
                   <div v-if="r.reward_item_reward_type === 'physical'" class="mt-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 text-xs text-slate-600 space-y-0.5">
-                    <p class="font-bold text-slate-500">ข้อมูลจัดส่ง</p>
-                    <p>ผู้รับ: {{ r.shipping_recipient_name ?? '-' }}</p>
-                    <p>เบอร์โทร: {{ r.shipping_phone ?? '-' }}</p>
-                    <p>ที่อยู่: {{ r.shipping_address ?? '-' }}</p>
+                    <p class="font-bold text-slate-500">{{ td('reward.shipping_heading') }}</p>
+                    <p>{{ td('reward.shipping_recipient') }}: {{ r.shipping_recipient_name ?? '-' }}</p>
+                    <p>{{ td('reward.shipping_phone') }}: {{ r.shipping_phone ?? '-' }}</p>
+                    <p>{{ td('reward.shipping_address') }}: {{ r.shipping_address ?? '-' }}</p>
                   </div>
 
                   <!-- Tracking number — Admin-editable any time after Approved/Fulfilled -->
@@ -444,41 +462,43 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
                       <input
                         v-model="trackingInput"
                         type="text"
-                        placeholder="เลขพัสดุ"
+                        :placeholder="td('reward.tracking_placeholder')"
                         class="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm"
                       />
-                      <button class="btn-secondary" @click="cancelTrackingEdit">ยกเลิก</button>
+                      <button class="btn-secondary" @click="cancelTrackingEdit">{{ td('common.cancel') }}</button>
                       <button :disabled="savingTracking" class="btn-primary" @click="saveTracking(r)">
-                        {{ savingTracking ? 'กำลังบันทึก...' : 'บันทึก' }}
+                        {{ savingTracking ? td('common.saving') : td('common.save') }}
                       </button>
                     </template>
                     <template v-else>
-                      <p class="text-xs text-slate-500">เลขพัสดุ: {{ r.tracking_number ?? 'ยังไม่ระบุ' }}</p>
+                      <p class="text-xs text-slate-500">
+                        {{ td('reward.tracking_label') }}: {{ r.tracking_number ?? td('reward.tracking_none') }}
+                      </p>
                       <button class="text-xs font-bold text-brand-600 hover:text-brand-700 px-2 py-1 flex items-center gap-1" @click="openTrackingEdit(r)">
-                        <Icon name="edit" :size="12" /> แก้ไข
+                        <Icon name="edit" :size="12" /> {{ td('common.edit') }}
                       </button>
                     </template>
                   </div>
                 </div>
               </div>
               <div v-if="r.status === 'pending'" class="flex gap-1 shrink-0">
-                <button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-2 py-1" @click="openDecision(r, 'approved')">อนุมัติ</button>
-                <button class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1" @click="openDecision(r, 'rejected')">ปฏิเสธ</button>
+                <button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-2 py-1" @click="openDecision(r, 'approved')">{{ td('common.approve') }}</button>
+                <button class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1" @click="openDecision(r, 'rejected')">{{ td('common.reject') }}</button>
               </div>
               <div v-else-if="r.status === 'approved'" class="flex gap-1 shrink-0">
-                <button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-2 py-1" @click="openDecision(r, 'fulfilled')">ส่งมอบแล้ว</button>
+                <button class="text-xs font-bold text-emerald-600 hover:text-emerald-700 px-2 py-1" @click="openDecision(r, 'fulfilled')">{{ td('reward.mark_fulfilled') }}</button>
               </div>
             </div>
             <div v-if="decidingId === r.id" class="mt-3 pt-3 border-t border-slate-100 flex gap-2 items-center">
               <input
                 v-model="decisionNote"
                 type="text"
-                placeholder="หมายเหตุ (ไม่บังคับ)"
+                :placeholder="td('reward.decision_note_placeholder')"
                 class="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm"
               />
-              <button class="btn-secondary" @click="cancelDecision">ยกเลิก</button>
+              <button class="btn-secondary" @click="cancelDecision">{{ td('common.cancel') }}</button>
               <button :disabled="deciding" class="btn-primary" @click="submitDecision(r)">
-                {{ deciding ? 'กำลังบันทึก...' : 'ยืนยัน' }}
+                {{ deciding ? td('common.saving') : td('common.confirm') }}
               </button>
             </div>
           </div>
@@ -492,59 +512,59 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
            the viewport, same pattern as AnnouncementsView. -->
       <div class="w-[60vw] min-w-[320px] max-w-[60vw] bg-white rounded-2xl shadow-lg p-5 max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
-          <p class="text-sm font-bold text-slate-900">{{ editingItemId ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัลใหม่' }}</p>
+          <p class="text-sm font-bold text-slate-900">{{ editingItemId ? td('reward.form_edit_title') : td('reward.form_add_title') }}</p>
           <button class="text-slate-400 hover:text-slate-600" @click="closeItemForm">
             <Icon name="x" :size="18" />
           </button>
         </div>
         <form class="space-y-3" @submit.prevent="submitItemForm">
           <div v-if="isSuperAdmin">
-            <label class="text-sm font-bold text-slate-500">บริษัท (Super Admin — เว้นว่าง = ทั้งแพลตฟอร์ม)</label>
+            <label class="text-sm font-bold text-slate-500">{{ td('reward.field_company') }}</label>
             <select v-model="itemForm.company_id" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="">— ทั้งแพลตฟอร์ม —</option>
+              <option value="">{{ td('reward.field_company_all') }}</option>
               <option v-for="c in companies" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
           </div>
           <div>
-            <label class="text-sm font-bold text-slate-500">ชื่อของรางวัล</label>
+            <label class="text-sm font-bold text-slate-500">{{ td('reward.field_name') }}</label>
             <input v-model="itemForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
           <div>
-            <label class="text-sm font-bold text-slate-500">รายละเอียด (ไม่บังคับ)</label>
+            <label class="text-sm font-bold text-slate-500">{{ td('reward.field_description') }}</label>
             <textarea v-model="itemForm.description" rows="2" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="text-sm font-bold text-slate-500">แต้มที่ใช้แลก</label>
+              <label class="text-sm font-bold text-slate-500">{{ td('reward.field_points') }}</label>
               <input v-model="itemForm.cost_points" type="number" min="1" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
             </div>
             <div>
-              <label class="text-sm font-bold text-slate-500">จำนวนคงเหลือ (ว่าง = ไม่จำกัด)</label>
+              <label class="text-sm font-bold text-slate-500">{{ td('reward.field_stock') }}</label>
               <input v-model="itemForm.stock_quantity" type="number" min="0" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
             </div>
           </div>
           <div>
-            <label class="text-sm font-bold text-slate-500">ประเภทของรางวัล</label>
+            <label class="text-sm font-bold text-slate-500">{{ td('reward.field_type') }}</label>
             <div class="mt-1 flex gap-4">
               <label class="flex items-center gap-1.5 text-sm text-slate-700">
                 <input v-model="itemForm.reward_type" type="radio" value="physical" name="reward_type" />
-                ของจริง (ต้องจัดส่ง)
+                {{ td('reward.type_physical_long') }}
               </label>
               <label class="flex items-center gap-1.5 text-sm text-slate-700">
                 <input v-model="itemForm.reward_type" type="radio" value="digital" name="reward_type" />
-                ดิจิทัล
+                {{ td('reward.type_digital') }}
               </label>
             </div>
           </div>
           <label class="flex items-center gap-2 text-sm font-bold text-slate-500">
             <input v-model="itemForm.is_active" type="checkbox" />
-            เปิดใช้งาน
+            {{ td('common.active') }}
           </label>
           <div v-if="itemFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ itemFormError }}</div>
           <div class="flex justify-end gap-2 pt-2">
-            <button type="button" class="btn-secondary" @click="closeItemForm">ยกเลิก</button>
+            <button type="button" class="btn-secondary" @click="closeItemForm">{{ td('common.cancel') }}</button>
             <button type="submit" :disabled="savingItem" class="btn-primary">
-              {{ savingItem ? 'กำลังบันทึก...' : 'บันทึก' }}
+              {{ savingItem ? td('common.saving') : td('common.save') }}
             </button>
           </div>
         </form>
@@ -560,7 +580,7 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
     <ConfirmDialog
       :show="pendingDeleteItem !== null"
       variant="danger"
-      :body='pendingDeleteItem ? `ยืนยันลบของรางวัล "${pendingDeleteItem.name}"?` : ""'
+      :body="pendingDeleteItem ? td('reward.delete_confirm', '', { name: pendingDeleteItem.name }) : ''"
       @confirm="confirmDeleteItem"
       @update:show="(v) => { if (!v) pendingDeleteItem = null }"
     />

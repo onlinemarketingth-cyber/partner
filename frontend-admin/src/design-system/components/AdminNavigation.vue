@@ -119,8 +119,12 @@ const navItems: NavItem[] = [
     ],
   },
   { name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' }, subMenus: [{ name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' } }] },
+  // 2026-09-01 (human request) — the pillar itself now lands on the
+  // ROSTER, not the dashboard. The dashboard moved to '/' (see
+  // router/index.ts), so pointing the pillar at it would have made
+  // "จัดการตัวแทน" a second link to the page the logo already goes to.
   {
-    name: 'agent-management',
+    name: 'agent-roster',
     icon: 'users',
     label: { th: 'จัดการตัวแทน', en: 'Agents' },
     // TASK-043 §2 — sub-items in this exact order.
@@ -131,7 +135,10 @@ const navItems: NavItem[] = [
     // ปิดใช้งาน merge into "รายชื่อตัวแทน" (ag-lead ruling — one roster
     // fetch, filtered client-side, not two routes each re-fetching it).
     subMenus: [
-      { name: 'agent-management', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } },
+      // Points at 'home', not 'agent-management': the dashboard IS the
+      // landing page now. Keeping it in this submenu is what makes row 2
+      // render (and this pillar highlight) while you are standing on it.
+      { name: 'home', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } },
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
       // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
@@ -248,6 +255,11 @@ const navItems: NavItem[] = [
       // holds the credentials each tenant's customer payments are taken
       // with, and its READ is gated server-side too.
       { name: 'payment-gateways', icon: 'credit_card', label: { th: 'ช่องทางรับชำระเงิน', en: 'Payment Gateways' }, superAdminOnly: true },
+      // 2026-09-01 — TASK-041's Audit Log / PDPA / config-health screen
+      // used to be reachable ONLY from AdminHomeView's card grid, which
+      // no longer exists. Without an entry here the route would still
+      // resolve but nothing in the UI would lead to it.
+      { name: 'policy-report', icon: 'shield', label: { th: 'นโยบายและรายงาน', en: 'Policy & Reports' } },
     ],
   },
   // ADR-033 (TASK-189) §2.1/F2 — voucher redemption lookup. Its own

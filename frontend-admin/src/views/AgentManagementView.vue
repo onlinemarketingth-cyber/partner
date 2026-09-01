@@ -24,15 +24,18 @@
  * it is a bare root <div>, meant to be embedded).
  */
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
+import { useI18n } from '@/composables/useI18n'
 import AgentDashboardOverview from './AgentDashboardOverview.vue'
+
+const { td } = useI18n()
 </script>
 
 <template>
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="dashboard"
-      title="ภาพรวมตัวแทน"
-      subtitle="สรุปยอดขาย ค่าคอมมิชชั่น และผลงานตัวแทนทั้งบริษัท"
+      :title="td('dash.title')"
+      :subtitle="td('dash.subtitle')"
       accent-color="brand"
       storage-key="agent-management"
     />

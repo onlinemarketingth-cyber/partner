@@ -56,6 +56,9 @@ import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { stageCounts } from '@/utils/pipelineStages'
+import { useI18n } from '@/composables/useI18n'
+
+const { lang, td } = useI18n()
 
 // ── Backend contract (GET /agent-dashboard-metrics → { data }) ──
 interface Totals {
@@ -160,7 +163,8 @@ async function load() {
     const res = await api.get<{ data: DashboardMetrics }>('/agent-dashboard-metrics')
     metrics.value = res.data
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    errorMessage.value =
+      e instanceof ApiError ? `${td('common.load_failed')} (${e.status})` : td('common.load_failed')
   } finally {
     loading.value = false
     loadedOnce.value = true
@@ -175,7 +179,9 @@ async function load() {
     pendingAgents.value = []
     pendingTotal.value = 0
     pendingError.value =
-      e instanceof ApiError ? `โหลดคิวรออนุมัติไม่สำเร็จ (${e.status})` : 'โหลดคิวรออนุมัติไม่สำเร็จ'
+      e instanceof ApiError
+        ? `${td('dash.load_pending_failed')} (${e.status})`
+        : td('dash.load_pending_failed')
   } finally {
     pendingLoaded.value = true
   }
@@ -189,10 +195,16 @@ function baht(satang: number): string {
 function bahtInt(satang: number): number {
   return Math.round(satang / 100)
 }
-const TH_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.']
+// Month abbreviations are DATA, not copy — they are never mixed into a
+// sentence, so a plain per-language array is clearer here than 24 dictionary
+// keys. Buddhist-era years are not shown on this axis, so no era conversion.
+const MONTHS = {
+  th: ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'],
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+}
 function monthLabel(ym: string): string {
   const idx = Number((ym.split('-')[1] ?? '')) - 1
-  return TH_MONTHS[idx] ?? ym
+  return (MONTHS[lang.value === 'en' ? 'en' : 'th'])[idx] ?? ym
 }
 function initial(name: string): string {
   return (name.trim()[0] ?? '?').toUpperCase()
@@ -244,57 +256,62 @@ const kpiCards = computed<Kpi[]>(() => {
     {
       // §3.5 (F-8) — ACTIVE agents; the deactivated ones are a separate
       // field, so "ทั้งหมด" would have named a set this number excludes.
-      label: 'ตัวแทนที่ใช้งานอยู่',
+      label: td('dash.kpi_active_agents'),
       value: t.agents_total.toLocaleString('th-TH'),
       // §3.4 (F-7) — "ผู้ใช้", not "ตัวแทน": the pending count is every
       // role, including a Company Admin waiting for approval.
-      sub: `ปิดใช้งาน ${t.agents_inactive} · ผู้ใช้ที่รออนุมัติ ${t.agents_pending}`,
+      sub: td('dash.kpi_active_agents_sub', '', { inactive: t.agents_inactive, pending: t.agents_pending }),
       icon: 'users',
     },
     {
       // D1/D2 — customer money from paid orders. "(จ่ายแล้ว)" is gone: on a
       // commission-heavy screen it read as "commission we have paid out".
-      label: 'ยอดขาย — เงินที่ลูกค้าชำระแล้ว',
+      label: td('dash.kpi_sales'),
       value: `฿${baht(t.sales_paid_satang)}`,
-      sub: 'รวมจากคำสั่งซื้อที่ชำระเงินแล้วเท่านั้น',
+      sub: td('dash.kpi_sales_sub'),
       icon: 'cart',
       // §4.2 — say nothing when it is 0. A caveat that is always there is
       // a caveat nobody reads.
       note:
         t.closed_deals_without_order > 0
-          ? `อีก ${t.closed_deals_without_order.toLocaleString('th-TH')} ดีลปิดแล้วแต่ยังไม่มีคำสั่งซื้อ ยอดนี้จึงยังไม่รวม`
+          ? td('dash.kpi_sales_unbooked', '', { count: t.closed_deals_without_order.toLocaleString() })
           : undefined,
     },
     {
-      label: 'ค่าคอมที่จ่ายให้ตัวแทนแล้ว',
+      label: td('dash.kpi_commission_paid'),
       value: `฿${baht(t.commission_paid_satang)}`,
-      sub: `ค้างจ่าย ฿${baht(t.commission_pending_satang)}`,
+      sub: td('dash.kpi_commission_paid_sub', '', { amount: baht(t.commission_pending_satang) }),
       icon: 'money',
     },
     {
-      label: 'ลูกค้ารวม',
+      label: td('dash.kpi_clients'),
       value: t.clients_total.toLocaleString('th-TH'),
-      sub: 'ลูกค้าทั้งหมดในระบบของบริษัทนี้',
+      sub: td('dash.kpi_clients_sub'),
       icon: 'contact',
     },
     {
       // D4 — "ปิด" means REACHED Complete Payment (post-sale stages
       // included), not "is sitting exactly on one of two stages".
-      label: 'ดีลที่ปิดการขายแล้ว',
+      label: td('dash.kpi_closed_deals'),
       value: `${t.deals_closed.toLocaleString('th-TH')}`,
       // §4.4 — with no deals there is no rate to state, so none is stated.
       sub: hasDeals.value
-        ? `จากดีลทั้งหมด ${t.deals_total.toLocaleString('th-TH')} · อัตราปิด ${t.conversion}%`
-        : 'ยังไม่มีดีลในระบบ',
+        ? td('dash.kpi_closed_deals_sub', '', {
+            total: t.deals_total.toLocaleString(),
+            rate: t.conversion,
+          })
+        : td('dash.kpi_closed_deals_none'),
       icon: 'deal',
     },
   ]
 })
 
 // KPI sparkline (monthly sales, baht) — reused across sales/commission cards.
-const salesSparkSeries = computed(() => [{ name: 'ยอดขาย', data: monthly.value.map((m) => bahtInt(m.sales_satang)) }])
+const salesSparkSeries = computed(() => [
+  { name: td('dash.series_sales'), data: monthly.value.map((m) => bahtInt(m.sales_satang)) },
+])
 const commissionSparkSeries = computed(() => [
-  { name: 'ค่าคอม', data: monthly.value.map((m) => bahtInt(m.commission_satang)) },
+  { name: td('dash.series_commission'), data: monthly.value.map((m) => bahtInt(m.commission_satang)) },
 ])
 function sparkOptions(color: string): ApexOptions {
   return {
@@ -310,8 +327,8 @@ const commissionSparkOptions = sparkOptions(BRAND_LIGHT)
 
 // ── Area chart: monthly ยอดขาย + ค่าคอม ──
 const areaSeries = computed(() => [
-  { name: 'ยอดขาย', data: monthly.value.map((m) => bahtInt(m.sales_satang)) },
-  { name: 'ค่าคอม', data: monthly.value.map((m) => bahtInt(m.commission_satang)) },
+  { name: td('dash.series_sales'), data: monthly.value.map((m) => bahtInt(m.sales_satang)) },
+  { name: td('dash.series_commission'), data: monthly.value.map((m) => bahtInt(m.commission_satang)) },
 ])
 const areaOptions = computed<ApexOptions>(() => ({
   chart: { type: 'area', toolbar: { show: false }, fontFamily: 'Kanit, sans-serif', zoom: { enabled: false } },
@@ -340,7 +357,9 @@ const areaOptions = computed<ApexOptions>(() => ({
 }))
 
 // ── Bar chart: ตัวแทนใหม่ต่อเดือน ──
-const newAgentsSeries = computed(() => [{ name: 'ตัวแทนใหม่', data: monthly.value.map((m) => m.new_agents) }])
+const newAgentsSeries = computed(() => [
+  { name: td('dash.series_new_agents'), data: monthly.value.map((m) => m.new_agents) },
+])
 const newAgentsOptions = computed<ApexOptions>(() => ({
   chart: { type: 'bar', toolbar: { show: false }, fontFamily: 'Kanit, sans-serif' },
   colors: [BRAND],
@@ -354,12 +373,15 @@ const newAgentsOptions = computed<ApexOptions>(() => ({
   },
   yaxis: { labels: { style: { colors: '#94a3b8', fontFamily: 'Kanit, sans-serif' } } },
   grid: { borderColor: '#f1f5f9', strokeDashArray: 4 },
-  tooltip: { y: { formatter: (v: number) => `${v} คน` } },
+  tooltip: { y: { formatter: (v: number) => `${v} ${td('common.people_unit')}` } },
 }))
 
 // ── Radial gauge: อัตราปิดการขาย ──
 const conversionSeries = computed(() => [totals.value?.conversion ?? 0])
-const conversionOptions: ApexOptions = {
+// computed, not a plain const: td() reads a dictionary that arrives by
+// fetch AFTER setup runs, and the reader can switch language at any time.
+// A one-shot const would freeze whatever td() returned on the first tick.
+const conversionOptions = computed<ApexOptions>(() => ({
   chart: { type: 'radialBar', fontFamily: 'Kanit, sans-serif' },
   colors: [BRAND],
   plotOptions: {
@@ -372,8 +394,8 @@ const conversionOptions: ApexOptions = {
       },
     },
   },
-  labels: ['อัตราปิดการขาย'],
-}
+  labels: [td('dash.chart_conversion_title')],
+}))
 
 /**
  * ── Donut: สัดส่วนใบรับรองของตัวแทน ──
@@ -390,13 +412,13 @@ const conversionOptions: ApexOptions = {
  * kept when everybody is certified: "ยังไม่มีใบรับรอง 0%" is information.
  */
 const certTiers = computed<CertTierSlice[]>(() => metrics.value?.cert_tier_distribution ?? [])
-const UNCERTIFIED_LABEL = 'ยังไม่มีใบรับรอง'
+
 // §4.4 — no agents ⇒ no distribution was measured; do not draw an empty ring.
 const hasCert = computed(() => hasAgents.value)
 const certSeries = computed(() => [...certTiers.value.map((c) => c.count), totals.value?.cert_pending ?? 0])
 const certOptions = computed<ApexOptions>(() => ({
   chart: { type: 'donut', fontFamily: 'Kanit, sans-serif' },
-  labels: [...certTiers.value.map((c) => c.name), UNCERTIFIED_LABEL],
+  labels: [...certTiers.value.map((c) => c.name), td('dash.cert_none')],
   colors: BRAND_SHADES,
   stroke: { width: 0 },
   legend: { position: 'bottom', fontFamily: 'Kanit, sans-serif' },
@@ -418,7 +440,7 @@ const certOptions = computed<ApexOptions>(() => ({
  * reintroduces F-4.
  */
 const stages = computed(() => stageCounts(metrics.value?.deals_by_stage ?? {}))
-const stageSeries = computed(() => [{ name: 'ดีล', data: stages.value.map((s) => s.count) }])
+const stageSeries = computed(() => [{ name: td('dash.series_deals'), data: stages.value.map((s) => s.count) }])
 const stageOptions = computed<ApexOptions>(() => ({
   chart: { type: 'bar', toolbar: { show: false }, fontFamily: 'Kanit, sans-serif' },
   colors: BRAND_SHADES,
@@ -433,7 +455,7 @@ const stageOptions = computed<ApexOptions>(() => ({
   },
   yaxis: { labels: { style: { colors: '#475569', fontFamily: 'Kanit, sans-serif' } } },
   grid: { borderColor: '#f1f5f9', strokeDashArray: 4 },
-  tooltip: { y: { formatter: (v: number) => `${v} ดีล` } },
+  tooltip: { y: { formatter: (v: number) => `${v} ${td('common.deal_unit')}` } },
 }))
 
 // ── Lead source distribution (segmented progress bars) ──
@@ -459,7 +481,12 @@ function topBarWidth(satang: number): string {
       {{ errorMessage }}
     </div>
 
-    <EmptyState v-else-if="!metrics" icon="chart" title="ยังไม่มีข้อมูลภาพรวม" message="ยังไม่มีข้อมูลสำหรับแสดงผลในขณะนี้" />
+    <EmptyState
+      v-else-if="!metrics"
+      icon="chart"
+      :title="td('dash.empty_title')"
+      :message="td('dash.empty_message')"
+    />
 
     <div v-else class="mt-4 space-y-4">
       <!-- ═══ KPI stat cards ═══ -->
@@ -506,12 +533,12 @@ function topBarWidth(satang: number): string {
       <!-- ═══ Area chart (wide) + Radial gauge ═══ -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div class="lg:col-span-2 bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5">
-          <p class="text-sm font-bold text-slate-900 mb-1">ยอดขาย และ ค่าคอมมิชชั่น (6 เดือนล่าสุด)</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_sales_title') }}</p>
           <!-- D3 — the two series are now on the SAME time axis: ยอดขาย is
                bucketed on the date the CUSTOMER paid, ค่าคอม on the date the
                company disbursed. They answer different questions. -->
           <p class="text-xs text-slate-400 mb-2">
-            หน่วยบาท — ยอดขายนับตามวันที่ลูกค้าชำระเงิน · ค่าคอมนับตามวันที่จ่ายให้ตัวแทน
+            {{ td('dash.chart_sales_help') }}
           </p>
           <VueApexCharts
             v-if="hasMoneyHistory"
@@ -523,15 +550,20 @@ function topBarWidth(satang: number): string {
           />
           <!-- §4.4 (F-13) — a flat 6-month line on a brand-new company reads
                as "we measured, and it was zero". Nothing was measured. -->
-          <EmptyState v-else icon="chart" title="ยังไม่มีข้อมูล" message="ยังไม่มีคำสั่งซื้อหรือค่าคอมมิชชั่นให้แสดงในกราฟนี้" />
+          <EmptyState
+            v-else
+            icon="chart"
+            :title="td('common.no_data')"
+            :message="td('dash.chart_sales_empty')"
+          />
         </div>
         <div class="bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5 flex flex-col">
-          <p class="text-sm font-bold text-slate-900 mb-1">อัตราปิดการขาย</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_conversion_title') }}</p>
           <!-- D4 — "ปิด" = ดีลที่ไปถึงขั้นชำระเงินแล้ว รวมขั้นหลังการขายทุกขั้น
                (จัดส่ง / นัดใช้บริการ / ติดตามผล). Advancing a paid deal must
                never reduce this rate — that was F-3. -->
           <p class="text-xs text-slate-400 leading-snug">
-            ดีลที่ไปถึงขั้น “ชำระเงินสำเร็จ” แล้ว (รวมขั้นหลังการขาย) ÷ ดีลทั้งหมด
+            {{ td('dash.chart_conversion_help') }}
           </p>
           <div class="flex-1 flex items-center justify-center">
             <VueApexCharts
@@ -544,7 +576,13 @@ function topBarWidth(satang: number): string {
             />
             <!-- §4.4 — with no deals there is no denominator, and a 0% gauge
                  is a confident statement about a division nobody performed. -->
-            <EmptyState v-else icon="deal" title="ยังไม่มีข้อมูล" message="ยังไม่มีดีลให้คำนวณอัตราปิดการขาย" class="w-full" />
+            <EmptyState
+              v-else
+              icon="deal"
+              :title="td('common.no_data')"
+              :message="td('dash.chart_conversion_empty')"
+              class="w-full"
+            />
           </div>
         </div>
       </div>
@@ -552,8 +590,8 @@ function topBarWidth(satang: number): string {
       <!-- ═══ New-agents bar (wide) + Cert donut ═══ -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div class="lg:col-span-2 bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5">
-          <p class="text-sm font-bold text-slate-900 mb-1">ตัวแทนใหม่ต่อเดือน</p>
-          <p class="text-xs text-slate-400 mb-2">จำนวนตัวแทนที่เข้าใหม่ในแต่ละเดือน</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_new_agents_title') }}</p>
+          <p class="text-xs text-slate-400 mb-2">{{ td('dash.chart_new_agents_help') }}</p>
           <VueApexCharts
             v-if="hasAgents"
             data-chart="new-agents"
@@ -565,14 +603,14 @@ function topBarWidth(satang: number): string {
           <!-- §4.4 — no agents at all ⇒ "how many joined each month" was
                never measured. (An empty month for a company that HAS agents
                is a real zero and still renders.) -->
-          <EmptyState v-else icon="users" title="ยังไม่มีข้อมูล" message="ยังไม่มีตัวแทนในบริษัทนี้" />
+          <EmptyState v-else icon="users" :title="td('common.no_data')" :message="td('dash.chart_agents_empty')" />
         </div>
         <div class="bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5 flex flex-col">
-          <p class="text-sm font-bold text-slate-900 mb-1">สัดส่วนใบรับรองของตัวแทน</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_cert_title') }}</p>
           <!-- §3.8 — the denominator, stated. One agent counts once, under
                their HIGHEST passed tier; the rest sit in ยังไม่มีใบรับรอง. -->
           <p class="text-xs text-slate-400 mb-2 leading-snug">
-            นับตัวแทนที่ใช้งานอยู่ {{ totals?.agents_total ?? 0 }} คน — คนละ 1 ระดับ (ระดับสูงสุดที่ผ่าน)
+            {{ td('dash.chart_cert_help', '', { count: totals?.agents_total ?? 0 }) }}
           </p>
           <div class="flex-1 flex items-center justify-center">
             <VueApexCharts
@@ -583,7 +621,13 @@ function topBarWidth(satang: number): string {
               :options="certOptions"
               :series="certSeries"
             />
-            <EmptyState v-else icon="shield_check" title="ยังไม่มีข้อมูล" message="ยังไม่มีตัวแทนในบริษัทนี้" class="w-full" />
+            <EmptyState
+              v-else
+              icon="shield_check"
+              :title="td('common.no_data')"
+              :message="td('dash.chart_agents_empty')"
+              class="w-full"
+            />
           </div>
         </div>
       </div>
@@ -591,11 +635,11 @@ function topBarWidth(satang: number): string {
       <!-- ═══ Pipeline funnel (wide) + Lead source ═══ -->
       <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div class="lg:col-span-2 bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5">
-          <p class="text-sm font-bold text-slate-900 mb-1">ดีลแยกตามขั้น Pipeline</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_stage_title') }}</p>
           <!-- §4.1 — every stage the server knows about (ADR-026's full
                vocabulary), so these bars add up to ดีลทั้งหมด. -->
           <p class="text-xs text-slate-400 mb-2">
-            จำนวนดีลในแต่ละขั้นของ Pipeline — รวมทุกขั้นแล้วเท่ากับ “ดีลทั้งหมด” ({{ totals?.deals_total ?? 0 }})
+            {{ td('dash.chart_stage_help', '', { total: totals?.deals_total ?? 0 }) }}
           </p>
           <VueApexCharts
             v-if="hasDeals"
@@ -605,11 +649,11 @@ function topBarWidth(satang: number): string {
             :options="stageOptions"
             :series="stageSeries"
           />
-          <EmptyState v-else icon="pipeline" title="ยังไม่มีข้อมูล" message="ยังไม่มีดีลในระบบของบริษัทนี้" />
+          <EmptyState v-else icon="pipeline" :title="td('common.no_data')" :message="td('dash.chart_stage_empty')" />
         </div>
         <div class="bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5">
-          <p class="text-sm font-bold text-slate-900 mb-1">สัดส่วนช่องทางลูกค้า</p>
-          <p class="text-xs text-slate-400 mb-3">แหล่งที่มาของ Lead</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.chart_source_title') }}</p>
+          <p class="text-xs text-slate-400 mb-3">{{ td('dash.chart_source_help') }}</p>
           <div v-if="leadSources.length" class="space-y-3">
             <div v-for="(s, idx) in leadSources" :key="s.source">
               <div class="flex items-center justify-between text-xs mb-1">
@@ -624,7 +668,7 @@ function topBarWidth(satang: number): string {
               </div>
             </div>
           </div>
-          <EmptyState v-else icon="pie_chart" title="ยังไม่มีข้อมูลช่องทางลูกค้า" />
+          <EmptyState v-else icon="pie_chart" :title="td('dash.chart_source_empty')" />
         </div>
       </div>
 
@@ -634,8 +678,8 @@ function topBarWidth(satang: number): string {
           <!-- §4.2 — this ranks PAID commission only (commission_ledger rows
                with payment_status = paid). Pending commission is not in it,
                so the label has to say which of the two it is. -->
-          <p class="text-sm font-bold text-slate-900 mb-1">Top ตัวแทน — ค่าคอมมิชชั่นที่จ่ายแล้วสูงสุด</p>
-          <p class="text-xs text-slate-400 mb-3">นับเฉพาะค่าคอมที่จ่ายให้ตัวแทนแล้ว ไม่รวมยอดค้างจ่าย</p>
+          <p class="text-sm font-bold text-slate-900 mb-1">{{ td('dash.top_agents_title') }}</p>
+          <p class="text-xs text-slate-400 mb-3">{{ td('dash.top_agents_help') }}</p>
           <div v-if="topAgents.length" class="space-y-3">
             <div v-for="(a, i) in topAgents" :key="a.agent_id" class="flex items-center gap-3">
               <span class="text-xs font-bold text-slate-400 w-4 shrink-0 text-center">{{ i + 1 }}</span>
@@ -655,13 +699,13 @@ function topBarWidth(satang: number): string {
               </div>
             </div>
           </div>
-          <EmptyState v-else icon="trophy" title="ยังไม่มีข้อมูลค่าคอมมิชชั่น" />
+          <EmptyState v-else icon="trophy" :title="td('dash.top_agents_empty')" />
         </div>
 
         <div class="bg-white/95 border border-slate-200 rounded-2xl p-4 lg:p-5">
           <div class="flex items-center justify-between mb-3">
             <!-- §3.4 (F-7) — the queue holds every role, not just agents. -->
-            <p class="text-sm font-bold text-slate-900">ผู้ใช้ที่รออนุมัติ</p>
+            <p class="text-sm font-bold text-slate-900">{{ td('dash.pending_title') }}</p>
             <!-- The badge is the SERVER's total, not this page's row count:
                  the endpoint paginates at 15 and the list below shows one
                  page, so `pendingAgents.length` capped the badge at 15 while
@@ -678,7 +722,7 @@ function topBarWidth(satang: number): string {
             class="flex items-start gap-2 px-3 py-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700"
           >
             <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-            <span>{{ pendingError }} — ไม่ทราบว่ามีผู้ใช้รออนุมัติหรือไม่</span>
+            <span>{{ td('dash.pending_unknown', '', { error: pendingError ?? '' }) }}</span>
           </div>
           <div v-else-if="pendingAgents.length" class="space-y-2">
             <div
@@ -693,14 +737,14 @@ function topBarWidth(satang: number): string {
               </div>
             </div>
             <p v-if="pendingTotal > pendingAgents.length" class="text-[11px] text-slate-400 pt-1">
-              แสดง {{ pendingAgents.length }} จาก {{ pendingTotal }} รายการ
+              {{ td('dash.pending_showing', '', { shown: pendingAgents.length, total: pendingTotal }) }}
             </p>
           </div>
           <div v-else-if="pendingLoaded" class="flex items-center gap-2 text-xs text-slate-400 py-4">
             <Icon name="check_circle" :size="16" class="text-emerald-500" />
-            ไม่มีผู้ใช้รออนุมัติ
+            {{ td('dash.pending_none') }}
           </div>
-          <div v-else class="text-xs text-slate-400 py-4">กำลังโหลดคิวรออนุมัติ...</div>
+          <div v-else class="text-xs text-slate-400 py-4">{{ td('dash.pending_loading') }}</div>
         </div>
       </div>
     </div>
