@@ -46,7 +46,11 @@ class VerifyRegistrationEmailNotification extends Notification
         return (new MailMessage)
             ->subject('ยืนยันอีเมลของคุณ - Sync Vision Agent')
             ->greeting('สวัสดีคุณ '.trim("{$this->user->first_name} {$this->user->last_name}"))
-            ->line('กรุณายืนยันอีเมลของคุณเพื่อดำเนินการสมัครสมาชิก Agent ต่อ')
+            // 2026-09-02 — "สมัครสมาชิก Agent" said the role twice, once in
+            // each language, and "Agent" is the word the agent portal stopped
+            // using when ตัวแทน became สมาชิก. A recruit reading this has not
+            // met the word yet and does not need it: they are signing up.
+            ->line('กรุณายืนยันอีเมลของคุณเพื่อดำเนินการสมัครสมาชิกต่อ')
             ->action('ยืนยันอีเมล', $this->verificationUrl())
             ->line('ลิงก์นี้จะหมดอายุใน 60 นาที');
     }
