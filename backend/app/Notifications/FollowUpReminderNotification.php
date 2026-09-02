@@ -46,6 +46,9 @@ class FollowUpReminderNotification extends Notification implements ShouldQueue
             ->line('ถึงเวลาติดตามลูกค้า '.$this->activity->client->name.' แล้ว')
             ->line('บันทึกล่าสุด: '.$this->activity->summary)
             ->action('ไปที่หน้าลูกค้า', $frontendUrl.'/clients')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ Sync Vision Agent');
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
+            // in English, at the bottom of a Thai email. Set explicitly.
+            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
     }
 }

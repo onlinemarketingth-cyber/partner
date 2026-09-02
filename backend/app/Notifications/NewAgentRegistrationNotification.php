@@ -53,6 +53,9 @@ class NewAgentRegistrationNotification extends Notification
             ->line($this->registrant->name.' ('.$this->registrant->email.') ได้สมัครเข้าร่วมบริษัทของคุณผ่านระบบสมัครสมาชิกด้วยตนเอง')
             ->line('กรุณาตรวจสอบและอนุมัติ/ปฏิเสธคำขอนี้ก่อนที่ตัวแทนจะสามารถเข้าใช้งานได้')
             ->action('ไปที่หน้าอนุมัติตัวแทน', $adminUrl.'/agents')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ Sync Vision Agent');
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
+            // in English, at the bottom of a Thai email. Set explicitly.
+            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
     }
 }

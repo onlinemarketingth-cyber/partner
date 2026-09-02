@@ -44,13 +44,13 @@ class SmtpTestMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'ทดสอบการตั้งค่า SMTP - Sync Vision Agent',
+            subject: 'ทดสอบการตั้งค่า SMTP - '.config('app.name'),
         );
     }
 
     public function content(): Content
     {
-        $html = '<p>นี่คืออีเมลทดสอบจากระบบ Sync Vision Agent</p>'
+        $html = '<p>นี่คืออีเมลทดสอบจากระบบ '.e(config('app.name')).'</p>'
             .'<p>หากคุณได้รับอีเมลฉบับนี้ แสดงว่าการตั้งค่า SMTP ของระบบใช้งานได้ถูกต้อง</p>'
             .'<p>ส่งจาก: <strong>'.e($this->fromName ?? '-').'</strong> &lt;'.e($this->fromAddress ?? '-').'&gt;</p>';
 

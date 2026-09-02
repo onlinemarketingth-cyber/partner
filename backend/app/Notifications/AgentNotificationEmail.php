@@ -71,6 +71,9 @@ class AgentNotificationEmail extends Notification
 
         return $mail
             ->line('คุณสามารถปิดการแจ้งเตือนทางอีเมลได้ที่หน้าโปรไฟล์ของคุณ')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ Sync Vision Agent');
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
+            // in English, at the bottom of a Thai email. Set explicitly.
+            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
     }
 }

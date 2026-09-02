@@ -44,7 +44,11 @@ class VerifyRegistrationEmailNotification extends Notification
     public function toMail(object $notifiable): MailMessage
     {
         return (new MailMessage)
-            ->subject('ยืนยันอีเมลของคุณ - Sync Vision Agent')
+            // config('app.name'), not a literal: the mail template's own header
+            // already renders it, and a subject naming a DIFFERENT product than
+            // the header is how a recruit learns the mail is not from the
+            // company they just signed up with.
+            ->subject('ยืนยันอีเมลของคุณ - '.config('app.name'))
             ->greeting('สวัสดีคุณ '.trim("{$this->user->first_name} {$this->user->last_name}"))
             // 2026-09-02 — "สมัครสมาชิก Agent" said the role twice, once in
             // each language, and "Agent" is the word the agent portal stopped
@@ -52,7 +56,10 @@ class VerifyRegistrationEmailNotification extends Notification
             // met the word yet and does not need it: they are signing up.
             ->line('กรุณายืนยันอีเมลของคุณเพื่อดำเนินการสมัครสมาชิกต่อ')
             ->action('ยืนยันอีเมล', $this->verificationUrl())
-            ->line('ลิงก์นี้จะหมดอายุใน 60 นาที');
+            ->line('ลิงก์นี้จะหมดอายุใน 60 นาที')
+            // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
+            // in English, at the bottom of a Thai email. Set explicitly.
+            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
     }
 
     private function verificationUrl(): string

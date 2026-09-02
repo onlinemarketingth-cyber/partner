@@ -45,7 +45,10 @@ class CertificatePdfService
 
     private function buildHtml(UserCertification $certification): string
     {
-        $companyName = e($certification->company?->name ?? 'Sync Vision Agent');
+        // The heredoc below is NOT escaped by the template engine, so every
+        // interpolated value is e()d here at the source.
+        $platformName = e(config('app.name'));
+        $companyName = e($certification->company?->name ?? '') ?: $platformName;
         $agentName = e($certification->user?->name ?? '-');
         $tierName = e($certification->certTier?->name ?? '-');
         $passedAt = $certification->passed_at;
@@ -77,7 +80,7 @@ class CertificatePdfService
                     <div class="name">{$agentName}</div>
                     <div class="tier">has successfully passed the certification: {$tierName}</div>
                     <div class="date">{$thaiDate}</div>
-                    <div class="footer">Issued automatically by Sync Vision Agent</div>
+                    <div class="footer">Issued automatically by {$platformName}</div>
                 </div>
             </body>
             </html>
