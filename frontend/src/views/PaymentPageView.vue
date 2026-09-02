@@ -632,7 +632,7 @@ async function payByCard() {
                isPaid / isCancelled / v-else chain. -->
           <div v-if="order.voucher" class="mt-4 rounded-2xl border border-line-card p-4 flex flex-col items-center gap-3 text-center">
             <p class="text-sm font-bold text-ink-card flex items-center gap-1.5">
-              <Icon name="qr_code" :size="16" class="text-ink-brand" /> {{ td('pay.voucher') }}
+              <Icon name="qr_code" :size="20" class="text-ink-brand" /> {{ td('pay.voucher') }}
             </p>
             <img v-if="voucherQrDataUrl" :src="voucherQrDataUrl" :alt="td('pay.voucher_code')" class="w-48 h-48" />
             <!-- 2026-08-17 bugfix: the redemption code is a 40-char random

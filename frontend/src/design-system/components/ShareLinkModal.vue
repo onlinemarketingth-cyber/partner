@@ -344,7 +344,10 @@ watch(() => props.show, (val) => {
                     <button @click="tab = 'qr'"
                             class="flex-1 min-h-[44px] py-2 rounded-lg text-sm font-bold transition-all active:scale-95 flex items-center justify-center gap-1.5"
                             :class="tab === 'qr' ? 'bg-brand-600 text-ink-primary shadow-sm' : 'text-ink-chip'">
-                        <Icon name="qr_code" :size="16" />
+                        <!-- 2026-09-02 — 20, not the admin table's 28: this is a
+                             44px tab with its own label beside it, and a 28px
+                             glyph would crowd the text off the button. -->
+                        <Icon name="qr_code" :size="20" />
                         QR Code
                     </button>
                 </div>
