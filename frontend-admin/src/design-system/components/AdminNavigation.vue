@@ -135,10 +135,12 @@ const navItems: NavItem[] = [
     // ปิดใช้งาน merge into "รายชื่อตัวแทน" (ag-lead ruling — one roster
     // fetch, filtered client-side, not two routes each re-fetching it).
     subMenus: [
-      // Points at 'home', not 'agent-management': the dashboard IS the
-      // landing page now. Keeping it in this submenu is what makes row 2
-      // render (and this pillar highlight) while you are standing on it.
-      { name: 'home', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } },
+      // 2026-09-01 (human request) — NO "ภาพรวม/Dashboard" entry here. The
+      // dashboard is the landing page ('/'), reached by the logo, and this
+      // menu is for the agent WORK screens. Listing it here made the same
+      // page reachable two ways and pushed the roster — the thing an admin
+      // actually came for — into second place. Consequence, accepted: row 2
+      // does not render while you stand on '/', because no sub-route matches.
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
       // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
