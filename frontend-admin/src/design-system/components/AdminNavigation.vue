@@ -104,25 +104,20 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
+  // 2026-09-01 (human request) — the dashboard gets its OWN pillar, first in
+  // the bar, instead of hiding behind the logo. It points at 'home' and
+  // carries 'home' as its only sub-item, which is what makes row 2 render
+  // (and this pillar highlight) while you stand on '/'.
   {
-    name: 'product-catalog',
-    icon: 'cube',
-    label: { th: 'สินค้า', en: 'Product catalog' },
-    subMenus: [
-      { name: 'product-catalog', icon: 'cube', label: { th: 'สินค้า', en: 'Product catalog' } },
-      // ADR-036 (TASK-214) — shared cross-company catalog. Same
-      // per-sub-item `superAdminOnly` pattern as "ตั้งค่า Email SMTP"
-      // under theme-settings below (see SubMenuItem's own docblock): the
-      // pillar itself stays open to Company Admin (their own "สินค้า"
-      // list), only this one sub-item is Super-Admin-only.
-      { name: 'catalog-management', icon: 'globe', label: { th: 'แคตตาล็อกกลาง', en: 'Global Catalog' }, superAdminOnly: true },
-    ],
+    name: 'home',
+    icon: 'dashboard',
+    label: { th: 'ภาพรวม', en: 'Dashboard' },
+    subMenus: [{ name: 'home', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } }],
   },
-  { name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' }, subMenus: [{ name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' } }] },
-  // 2026-09-01 (human request) — the pillar itself now lands on the
-  // ROSTER, not the dashboard. The dashboard moved to '/' (see
-  // router/index.ts), so pointing the pillar at it would have made
-  // "จัดการตัวแทน" a second link to the page the logo already goes to.
+  // 2026-09-01 (human request) — this pillar lands on the ROSTER, and sits
+  // second, right after Dashboard and BEFORE "สินค้า": agents are what this
+  // console is opened for. The dashboard is the pillar above, so pointing
+  // this one at it would have been a second link to the same page.
   {
     name: 'agent-roster',
     icon: 'users',
@@ -135,12 +130,10 @@ const navItems: NavItem[] = [
     // ปิดใช้งาน merge into "รายชื่อตัวแทน" (ag-lead ruling — one roster
     // fetch, filtered client-side, not two routes each re-fetching it).
     subMenus: [
-      // 2026-09-01 (human request) — NO "ภาพรวม/Dashboard" entry here. The
-      // dashboard is the landing page ('/'), reached by the logo, and this
-      // menu is for the agent WORK screens. Listing it here made the same
-      // page reachable two ways and pushed the roster — the thing an admin
-      // actually came for — into second place. Consequence, accepted: row 2
-      // does not render while you stand on '/', because no sub-route matches.
+      // 2026-09-01 (human request) — NO "ภาพรวม/Dashboard" entry here: it has
+      // its own pillar now. This menu is for the agent WORK screens, and
+      // listing the dashboard here pushed the roster — the thing an admin
+      // actually came for — into second place.
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
       // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
@@ -159,6 +152,21 @@ const navItems: NavItem[] = [
       { name: 'reward-center', icon: 'trophy', label: { th: 'ศูนย์รางวัล', en: 'Reward Center' } },
     ],
   },
+  {
+    name: 'product-catalog',
+    icon: 'cube',
+    label: { th: 'สินค้า', en: 'Product catalog' },
+    subMenus: [
+      { name: 'product-catalog', icon: 'cube', label: { th: 'สินค้า', en: 'Product catalog' } },
+      // ADR-036 (TASK-214) — shared cross-company catalog. Same
+      // per-sub-item `superAdminOnly` pattern as "ตั้งค่า Email SMTP"
+      // under theme-settings below (see SubMenuItem's own docblock): the
+      // pillar itself stays open to Company Admin (their own "สินค้า"
+      // list), only this one sub-item is Super-Admin-only.
+      { name: 'catalog-management', icon: 'globe', label: { th: 'แคตตาล็อกกลาง', en: 'Global Catalog' }, superAdminOnly: true },
+    ],
+  },
+  { name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' }, subMenus: [{ name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' } }] },
   { name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' }, subMenus: [{ name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' } }] },
   // TASK-048 / ADR-012 — Client (Contact) + Referral/Pipeline (Deal) are
   // one sales workflow, so they live under a single "การขาย" pillar with
