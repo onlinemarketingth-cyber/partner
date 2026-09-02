@@ -181,18 +181,53 @@ const PATHS: Record<string, string> = {
 
     // TASK-240 — QR code icon (viewfinder corners + a few module dots),
     // for the per-link QR generation added to the admin Links screens.
-    qr_code:   'M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M9 9h2.5v2.5H9zM12.5 9h2.5v2.5h-2.5zM9 12.5h2.5V15H9zM13.5 14h1v1h-1z',
+    // 2026-09-02 (human choice, option C) — SOLID BLOCKS, not an outline.
+    //
+    // What was here before was not a QR code at all: four corner brackets and
+    // four centre dots, i.e. a camera "scan frame". At 18px the dots were
+    // narrower than the 1.75 stroke and smeared into each other, leaving an
+    // empty rectangle. Nobody could tell what the button did.
+    //
+    // Three finder squares (hollowed by an opposite-wound inner subpath, so
+    // fill-rule evenodd cuts the hole) plus four data blocks — the silhouette
+    // a person actually recognises. Rendered filled, which is why it is in
+    // FILLED below; the rest of this set is a thin outline, and this icon is
+    // deliberately the exception.
+    qr_code:   'M3 3h8v8H3V3zm2 2v4h4V5H5zM13 3h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zM13 13h3v3h-3zM18 13h3v3h-3zM13 18h3v3h-3zM18 18h3v3h-3z',
 }
 
 // Sprint UI-STD-1 — Normalize: accept both "arrow-left" and "arrow_left" forms
 const normalizedName = (props.name || '').replace(/-/g, '_')
+/**
+ * Icons drawn as SOLID SHAPES rather than the set's usual thin outline.
+ *
+ * A per-icon set, not a prop: whether a glyph is an outline or a solid is a
+ * property of the drawing, not of the call site. Making it a prop would mean
+ * every <Icon name="qr_code"> in the codebase has to remember to pass it, and
+ * the one that forgets renders an invisible icon (a fill-rule path stroked as
+ * an outline is a tangle of overlapping squares).
+ */
+const FILLED = new Set(['qr_code'])
+
 const path = PATHS[normalizedName] || PATHS[props.name] || PATHS.alert
+const isFilled = FILLED.has(normalizedName) || FILLED.has(props.name)
 const px = `${props.size}px`
 </script>
 
 <template>
-    <svg :width="px" :height="px" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         :stroke-width="stroke" stroke-linecap="round" stroke-linejoin="round" class="inline-block shrink-0">
-        <path :d="path"/>
+    <svg
+        :width="px"
+        :height="px"
+        viewBox="0 0 24 24"
+        :fill="isFilled ? 'currentColor' : 'none'"
+        :stroke="isFilled ? 'none' : 'currentColor'"
+        :stroke-width="isFilled ? undefined : stroke"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        class="inline-block shrink-0"
+    >
+        <!-- evenodd is what turns the finder squares' inner subpath into a
+             hole instead of filling it solid. Harmless on outline icons. -->
+        <path :d="path" fill-rule="evenodd" />
     </svg>
 </template>

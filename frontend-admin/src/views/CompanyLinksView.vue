@@ -288,7 +288,7 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 text-[11px] text-slate-500">
-            <th class="px-3 py-2 font-bold w-10"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
+            <th class="px-3 py-2 font-bold w-24"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
             <th class="text-left px-4 py-2 font-bold">{{ td('hub.col_links') }}</th>
             <th class="text-left px-4 py-2 font-bold">{{ td('links.col_creator') }}</th>
             <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_people') }}</th>
@@ -309,12 +309,15 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
               <button
                 type="button"
                 data-test="toggle-qr"
-                class="w-8 h-8 rounded-lg text-slate-500 hover:text-brand-600 hover:bg-brand-50 inline-flex items-center justify-center transition"
+                class="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition"
                 :title="td('links.qr_open')"
-                :aria-label="td('links.qr_open')"
                 @click="qrLink = link"
               >
-                <Icon name="qr_code" :size="18" />
+                <!-- The word carries the meaning; the glyph only has to be
+                     recognisable. An icon-only button here was a square
+                     nobody could read (human feedback, 2026-09-02). -->
+                <Icon name="qr_code" :size="28" />
+                <span class="text-[11px] font-bold">QR</span>
               </button>
             </td>
             <td class="px-4 py-2 min-w-0">
