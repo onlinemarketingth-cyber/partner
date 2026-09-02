@@ -5,6 +5,7 @@ namespace App\Notifications;
 use App\Models\ClientActivity;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use App\Support\MailBrand;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
@@ -40,15 +41,21 @@ class FollowUpReminderNotification extends Notification implements ShouldQueue
         // agent knows who to look for.
         $frontendUrl = rtrim(config('services.agent_portal.frontend_url'), '/');
 
+        $brand = MailBrand::forUser($notifiable);
+
         return (new MailMessage)
+            ->markdown('notifications::email', [
+                'brand' => $brand,
+                'brandUrl' => $frontendUrl,
+            ])
             ->subject('ครบกำหนดติดตามลูกค้า: '.$this->activity->client->name)
             ->greeting('ถึงคุณ '.trim("{$notifiable->first_name} {$notifiable->last_name}"))
             ->line('ถึงเวลาติดตามลูกค้า '.$this->activity->client->name.' แล้ว')
             ->line('บันทึกล่าสุด: '.$this->activity->summary)
             ->action('ไปที่หน้าลูกค้า', $frontendUrl.'/clients')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.$brand)
             // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
             // in English, at the bottom of a Thai email. Set explicitly.
-            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
+            ->salutation('ขอแสดงความนับถือ '.$brand);
     }
 }

@@ -4,6 +4,7 @@ namespace App\Notifications;
 
 use App\Models\User;
 use Illuminate\Bus\Queueable;
+use App\Support\MailBrand;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Facades\URL;
@@ -43,12 +44,17 @@ class VerifyRegistrationEmailNotification extends Notification
 
     public function toMail(object $notifiable): MailMessage
     {
+        // The COMPANY the recruit just signed up with — not the platform.
+        // Its name is in the header, the subject, the footer and the sign-off,
+        // and the four must agree or the mail reads as an impersonation.
+        $brand = MailBrand::forUser($this->user);
+
         return (new MailMessage)
-            // config('app.name'), not a literal: the mail template's own header
-            // already renders it, and a subject naming a DIFFERENT product than
-            // the header is how a recruit learns the mail is not from the
-            // company they just signed up with.
-            ->subject('ยืนยันอีเมลของคุณ - '.config('app.name'))
+            ->markdown('notifications::email', [
+                'brand' => $brand,
+                'brandUrl' => MailBrand::agentPortalUrl(),
+            ])
+            ->subject('ยืนยันอีเมลของคุณ - '.$brand)
             ->greeting('สวัสดีคุณ '.trim("{$this->user->first_name} {$this->user->last_name}"))
             // 2026-09-02 — "สมัครสมาชิก Agent" said the role twice, once in
             // each language, and "Agent" is the word the agent portal stopped
@@ -59,7 +65,7 @@ class VerifyRegistrationEmailNotification extends Notification
             ->line('ลิงก์นี้จะหมดอายุใน 60 นาที')
             // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
             // in English, at the bottom of a Thai email. Set explicitly.
-            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
+            ->salutation('ขอแสดงความนับถือ '.$brand);
     }
 
     private function verificationUrl(): string

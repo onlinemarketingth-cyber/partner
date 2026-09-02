@@ -4,6 +4,7 @@ namespace App\Notifications;
 
 use App\Models\User;
 use Illuminate\Bus\Queueable;
+use App\Support\MailBrand;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
@@ -47,15 +48,24 @@ class NewAgentRegistrationNotification extends Notification
         // Admin, who never has an Agent Portal session.
         $adminUrl = rtrim(config('services.company_admin_portal.frontend_url'), '/');
 
+        // The notifiable's company, not the registrant's: they are the same
+        // company here, but the mail is addressed to the admin and it is the
+        // admin's own brand that has to be at the top of it.
+        $brand = MailBrand::forUser($notifiable);
+
         return (new MailMessage)
+            ->markdown('notifications::email', [
+                'brand' => $brand,
+                'brandUrl' => MailBrand::adminPortalUrl(),
+            ])
             ->subject('มีตัวแทนใหม่รออนุมัติ: '.$this->registrant->name)
             ->greeting('ถึงคุณ '.trim("{$notifiable->first_name} {$notifiable->last_name}"))
             ->line($this->registrant->name.' ('.$this->registrant->email.') ได้สมัครเข้าร่วมบริษัทของคุณผ่านระบบสมัครสมาชิกด้วยตนเอง')
             ->line('กรุณาตรวจสอบและอนุมัติ/ปฏิเสธคำขอนี้ก่อนที่ตัวแทนจะสามารถเข้าใช้งานได้')
             ->action('ไปที่หน้าอนุมัติตัวแทน', $adminUrl.'/agents')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.$brand)
             // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
             // in English, at the bottom of a Thai email. Set explicitly.
-            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
+            ->salutation('ขอแสดงความนับถือ '.$brand);
     }
 }

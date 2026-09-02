@@ -5,6 +5,7 @@ namespace App\Notifications;
 use App\Models\Notification as NotificationRow;
 use App\Support\NotificationLink;
 use Illuminate\Bus\Queueable;
+use App\Support\MailBrand;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
@@ -49,7 +50,13 @@ class AgentNotificationEmail extends Notification
         $frontendUrl = rtrim((string) config('services.agent_portal.frontend_url'), '/');
         $path = NotificationLink::for($this->row);
 
+        $brand = MailBrand::forUser($notifiable);
+
         $mail = (new MailMessage)
+            ->markdown('notifications::email', [
+                'brand' => $brand,
+                'brandUrl' => $frontendUrl,
+            ])
             ->subject($this->row->title)
             ->greeting('ถึงคุณ '.trim("{$notifiable->first_name} {$notifiable->last_name}"))
             ->line($this->row->title);
@@ -71,9 +78,9 @@ class AgentNotificationEmail extends Notification
 
         return $mail
             ->line('คุณสามารถปิดการแจ้งเตือนทางอีเมลได้ที่หน้าโปรไฟล์ของคุณ')
-            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.config('app.name'))
+            ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.$brand)
             // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
             // in English, at the bottom of a Thai email. Set explicitly.
-            ->salutation('ขอแสดงความนับถือ '.config('app.name'));
+            ->salutation('ขอแสดงความนับถือ '.$brand);
     }
 }
