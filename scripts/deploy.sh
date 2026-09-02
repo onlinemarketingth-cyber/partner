@@ -113,7 +113,19 @@ if [[ -n "${SSH_KEY_PATH:-}" ]]; then
   SSH_OPTS+=(-i "$SSH_KEY_PATH")
   RSYNC_SSH="ssh -p $SSH_PORT -i $SSH_KEY_PATH"
 fi
-ssh_run() { ssh "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "$@"; }
+# -n is not optional here.
+#
+# 2026-09-02 — a deploy aborted the instant the "Proceed?" prompt appeared,
+# before the human could type anything. Cause: the migration preview below
+# runs ssh inside a command substitution, and ssh WITHOUT -n attaches the
+# script's stdin — the terminal — to the remote command and drains it. By the
+# time `read` ran there was nothing left to read, so `reply` came back empty
+# and the empty answer means "no".
+#
+# It looked like the script ignored a "y". It never saw one. -n redirects
+# ssh's stdin from /dev/null so the terminal stays where it belongs; no
+# caller pipes anything into ssh_run, so nothing else is affected.
+ssh_run() { ssh -n "${SSH_OPTS[@]}" "$SSH_USER@$SSH_HOST" "$@"; }
 rsync_to() {
   local src="$1" dst="$2"
   shift 2
@@ -268,7 +280,11 @@ CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 # because a failure to LIST migrations must never be a reason not to deploy.
 PENDING_MIGRATIONS=""
 if [[ "$SKIP_BACKEND" != true ]] && ! $DRY_RUN; then
-  PENDING_MIGRATIONS="$(ssh_run "cd '$BACKEND_REMOTE_PATH' && $PHP_BIN artisan migrate:status --pending 2>/dev/null | grep -Ei 'pending' || true" 2>/dev/null || true)"
+  # The second grep is what stops "INFO  No pending migrations." — which
+  # contains the word "pending" — from being reported AS a pending migration.
+  # It printed that warning on every clean deploy, which is exactly how a
+  # warning stops being read.
+  PENDING_MIGRATIONS="$(ssh_run "cd '$BACKEND_REMOTE_PATH' && $PHP_BIN artisan migrate:status --pending 2>/dev/null | grep -Ei 'pending' | grep -viE 'no pending migrations' || true" 2>/dev/null || true)"
 fi
 
 COMMIT_SHA="$(git rev-parse --short HEAD)"
@@ -287,7 +303,10 @@ if [[ -n "$PENDING_MIGRATIONS" ]]; then
 fi
 echo
 if ! $ASSUME_YES; then
-  read -r -p "Proceed? [y/N] " reply
+  # Say WHICH kind of "no" this was. An empty answer and a typed "n" both
+  # abort, but only one of them is the human's decision — see ssh_run's -n.
+  [[ -t 0 ]] || fail "Cannot ask for confirmation: stdin is not a terminal. Run this from a terminal, or pass --yes."
+  read -r -p "Proceed? [y/N] " reply || fail "Confirmation prompt got no input (stdin closed). Nothing was deployed."
   [[ "$reply" =~ ^[Yy]$ ]] || fail "Aborted."
 fi
 
