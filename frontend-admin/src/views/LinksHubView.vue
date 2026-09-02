@@ -44,6 +44,7 @@
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from '@/composables/useI18n'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -53,39 +54,63 @@ import AgentInviteLinksView from './AgentInviteLinksView.vue'
 
 type Tab = 'overview' | 'signup' | 'team'
 
+/*
+ * KEYS + Thai fallback, never a resolved string — 2026-09-01.
+ *
+ * This is a module-level const, so calling td() here would run ONCE, before
+ * the dictionary fetch resolves, and freeze that value for the life of the
+ * page (and never react to the language toggle). The table holds dot-keys;
+ * the template resolves them on every render.
+ */
+type TabCopy = { key: string; th: string }
+const c = (key: string, th: string): TabCopy => ({ key, th })
+
+/*
+ * The Thai text is kept HERE as td()'s fallback, not only in th.json.
+ *
+ * Two reasons, both real: the dictionary arrives by fetch, so the first paint
+ * happens before it exists and a fallback-less td() would flash raw dot keys;
+ * and jsdom in the unit tests never resolves that fetch at all, so the tab
+ * buttons LinksHubView.spec.ts finds by Thai text would stop existing.
+ */
 const TABS: Array<{
   key: Tab
-  label: string
+  label: TabCopy
   icon: string
-  title: string
-  subtitle: string
-  scopeAction: string
+  title: TabCopy
+  subtitle: TabCopy
+  scopeAction: TabCopy
 }> = [
   {
     key: 'overview',
-    label: 'ภาพรวม',
+    label: c('links.tab_overview', 'ภาพรวม'),
     icon: 'chart',
-    title: 'ลิงก์ทั้งบริษัท',
-    subtitle: 'ลิงก์ทุกกลุ่มที่บริษัทนี้ปล่อยออกไป พร้อมจำนวนคนที่เปิดจริงและผลลัพธ์',
-    scopeAction: 'ดูสถิติลิงก์',
+    title: c('hub.title', 'ลิงก์ทั้งบริษัท'),
+    subtitle: c('hub.subtitle', 'ลิงก์ทุกกลุ่มที่บริษัทนี้ปล่อยออกไป พร้อมจำนวนคนที่เปิดจริงและผลลัพธ์'),
+    scopeAction: c('hub.scope_action', 'ดูสถิติลิงก์'),
   },
   {
     key: 'signup',
-    label: 'ลิงก์สมัครตัวแทน',
+    label: c('links.tab_signup', 'ลิงก์สมัครตัวแทน'),
     icon: 'link',
-    title: 'ลิงก์สมัครตัวแทน',
-    subtitle: 'ลิงก์เปิดรับสมัครตัวแทนของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ',
-    scopeAction: 'จัดการลิงก์สมัครตัวแทน',
+    title: c('signup.title', 'ลิงก์สมัครตัวแทน'),
+    subtitle: c(
+      'signup.subtitle',
+      'ลิงก์เปิดรับสมัครตัวแทนของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ',
+    ),
+    scopeAction: c('signup.scope_action', 'จัดการลิงก์สมัครตัวแทน'),
   },
   {
     key: 'team',
-    label: 'ลิงก์ชวนทีม',
+    label: c('links.tab_team', 'ลิงก์ชวนทีม'),
     icon: 'users',
-    title: 'ลิงก์ชวนทีม',
-    subtitle: 'ลิงก์ชวนเข้าทีมทั้งหมดที่หัวหน้าทีมสร้างไว้ (ADR-025 §7)',
-    scopeAction: 'จัดการลิงก์ชวนทีม',
+    title: c('team.title', 'ลิงก์ชวนทีม'),
+    subtitle: c('team.subtitle', 'ลิงก์ชวนเข้าทีมทั้งหมดที่หัวหน้าทีมสร้างไว้ (ADR-025 §7)'),
+    scopeAction: c('team.scope_action', 'จัดการลิงก์ชวนทีม'),
   },
 ]
+
+const { td } = useI18n()
 
 const route = useRoute()
 const router = useRouter()
@@ -186,13 +211,13 @@ function onManage(tab: 'signup' | 'team'): void {
          title, the subtitle and the scope notice's verb. -->
     <HeroHeader
       icon="link"
-      :title="active.title"
-      :subtitle="active.subtitle"
+      :title="td(active.title.key, active.title.th)"
+      :subtitle="td(active.subtitle.key, active.subtitle.th)"
       accent-color="brand"
       storage-key="links-hub"
     />
 
-    <CompanyScopeNotice :action="active.scopeAction" />
+    <CompanyScopeNotice :action="td(active.scopeAction.key, active.scopeAction.th)" />
 
     <div class="mt-4 flex gap-1 overflow-x-auto border-b border-slate-200 pb-px">
       <button
@@ -206,7 +231,7 @@ function onManage(tab: 'signup' | 'team'): void {
         @click="selectTab(tab.key)"
       >
         <Icon :name="tab.icon" :size="15" />
-        {{ tab.label }}
+        {{ td(tab.label.key, tab.label.th) }}
       </button>
     </div>
 

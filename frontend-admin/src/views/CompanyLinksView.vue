@@ -25,6 +25,11 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import LinkQrModal from '@/design-system/components/LinkQrModal.vue'
+import { useI18n } from '@/composables/useI18n'
+
+const { lang, td } = useI18n()
+
 
 interface TrackedLink {
   id: number
@@ -58,6 +63,13 @@ interface GroupSummary {
 
 const activeCompany = useActiveCompanyStore()
 
+/**
+ * QR (2026-09-01) — this tab never had one. It lists links from six
+ * different token tables, and `short_url` is the shareable form of every one
+ * of them, so the same dialog the other two tabs use works here unchanged.
+ */
+const qrLink = ref<TrackedLink | null>(null)
+
 const links = ref<TrackedLink[]>([])
 const summary = ref<GroupSummary[]>([])
 const loading = ref(false)
@@ -65,7 +77,7 @@ const errorMessage = ref('')
 const groupFilter = ref('all')
 
 const groupOptions = computed(() => [
-  { value: 'all', label: 'ทุกกลุ่ม' },
+  { value: 'all', label: td('hub.all_groups') },
   ...summary.value.map((row) => ({ value: row.group, label: row.label })),
 ])
 
@@ -94,7 +106,7 @@ const topAgents = computed(() => {
   for (const link of links.value) {
     const key = String(link.created_by_user_id ?? 'unknown')
     const row = byAgent.get(key) ?? {
-      name: link.created_by_name ?? 'ไม่ทราบผู้สร้าง',
+      name: link.created_by_name ?? td('hub.unknown_creator'),
       conversions: 0,
       unique: 0,
     }
@@ -139,7 +151,8 @@ async function load() {
     links.value = list.data
     summary.value = roll.data
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    errorMessage.value =
+      e instanceof ApiError ? `${td('common.load_failed')} (${e.status})` : td('common.load_failed')
   } finally {
     loading.value = false
   }
@@ -150,7 +163,9 @@ function rateLabel(link: TrackedLink): string {
 }
 
 function formatDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short' }) : 'ยังไม่มีคนเปิด'
+  return iso
+    ? new Date(iso).toLocaleDateString(lang.value === 'EN' ? 'en-GB' : 'th-TH', { day: 'numeric', month: 'short' })
+    : td('hub.never_opened')
 }
 
 onMounted(load)
@@ -195,13 +210,13 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
     <HeroHeader
       v-if="!embedded"
       icon="link"
-      title="ลิงก์ทั้งบริษัท"
-      subtitle="ลิงก์ทุกกลุ่มที่บริษัทนี้ปล่อยออกไป พร้อมจำนวนคนที่เปิดจริงและผลลัพธ์"
+      :title="td('hub.title')"
+      :subtitle="td('hub.subtitle')"
       accent-color="brand"
       storage-key="company-links"
     />
 
-    <CompanyScopeNotice v-if="!embedded" action="ดูสถิติลิงก์" />
+    <CompanyScopeNotice v-if="!embedded" :action="td('hub.scope_action')" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -209,20 +224,20 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
 
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
       <div class="bg-white/95 border border-slate-200 rounded-xl px-4 py-3">
-        <p class="text-[11px] font-bold text-slate-500">ลิงก์ทั้งหมด</p>
+        <p class="text-[11px] font-bold text-slate-500">{{ td('hub.kpi_links') }}</p>
         <p class="text-2xl font-extrabold text-slate-900 mt-0.5">{{ totals.links }}</p>
       </div>
       <div class="bg-white/95 border border-slate-200 rounded-xl px-4 py-3">
-        <p class="text-[11px] font-bold text-slate-500">คนไม่ซ้ำ</p>
+        <p class="text-[11px] font-bold text-slate-500">{{ td('hub.kpi_unique') }}</p>
         <p class="text-2xl font-extrabold text-slate-900 mt-0.5">{{ totals.unique }}</p>
-        <p class="text-[11px] text-slate-400">เปิดรวม {{ totals.clicks }} ครั้ง</p>
+        <p class="text-[11px] text-slate-400">{{ td('hub.kpi_clicks', '', { count: totals.clicks }) }}</p>
       </div>
       <div class="bg-white/95 border border-slate-200 rounded-xl px-4 py-3">
-        <p class="text-[11px] font-bold text-slate-500">ผลลัพธ์</p>
+        <p class="text-[11px] font-bold text-slate-500">{{ td('hub.kpi_conversions') }}</p>
         <p class="text-2xl font-extrabold text-emerald-600 mt-0.5">{{ totals.conversions }}</p>
       </div>
       <div class="bg-white/95 border border-slate-200 rounded-xl px-4 py-3">
-        <p class="text-[11px] font-bold text-slate-500">อัตราแปลงรวม</p>
+        <p class="text-[11px] font-bold text-slate-500">{{ td('hub.kpi_rate') }}</p>
         <p class="text-2xl font-extrabold text-slate-900 mt-0.5">
           {{ totals.unique > 0 ? `${Math.round((totals.conversions / totals.unique) * 1000) / 10}%` : '—' }}
         </p>
@@ -234,11 +249,11 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 text-[11px] text-slate-500">
-            <th class="text-left px-4 py-2 font-bold">กลุ่มลิงก์</th>
-            <th class="text-right px-4 py-2 font-bold">ลิงก์</th>
-            <th class="text-right px-4 py-2 font-bold">เปิด</th>
-            <th class="text-right px-4 py-2 font-bold">คนไม่ซ้ำ</th>
-            <th class="text-right px-4 py-2 font-bold">ผลลัพธ์</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('hub.col_group') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_links') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_opens') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_unique') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_conversions') }}</th>
           </tr>
         </thead>
         <tbody>
@@ -254,7 +269,7 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
     </div>
 
     <div class="mt-4 flex items-center gap-2">
-      <label for="group_filter" class="text-xs font-bold text-slate-600">กรองตามกลุ่ม</label>
+      <label for="group_filter" class="text-xs font-bold text-slate-600">{{ td('hub.filter_group') }}</label>
       <select
         id="group_filter"
         v-model="groupFilter"
@@ -263,23 +278,24 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
         <option v-for="o in groupOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
       </select>
       <button class="btn-secondary ml-auto" :disabled="loading" @click="load">
-        {{ loading ? 'กำลังโหลด...' : 'รีเฟรช' }}
+        {{ loading ? td('common.loading') : td('common.refresh') }}
       </button>
     </div>
 
     <LoadingSkeleton v-if="loading && !links.length" type="list" :rows="4" class="mt-4" />
-    <EmptyState v-else-if="!visible.length" icon="link" title="ยังไม่มีลิงก์ในกลุ่มนี้" class="mt-4" />
+    <EmptyState v-else-if="!visible.length" icon="link" :title="td('hub.empty_group')" class="mt-4" />
     <div v-else class="mt-3 bg-white/95 border border-slate-200 rounded-xl overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 text-[11px] text-slate-500">
-            <th class="text-left px-4 py-2 font-bold">ลิงก์</th>
-            <th class="text-left px-4 py-2 font-bold">ผู้สร้าง</th>
-            <th class="text-right px-4 py-2 font-bold">คน</th>
-            <th class="text-right px-4 py-2 font-bold">ผลลัพธ์</th>
-            <th class="text-right px-4 py-2 font-bold">อัตรา</th>
-            <th class="text-right px-4 py-2 font-bold">เปิดล่าสุด</th>
-            <th class="text-right px-4 py-2 font-bold"><span class="sr-only">จัดการ</span></th>
+            <th class="px-3 py-2 font-bold w-10"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('hub.col_links') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_creator') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_people') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_conversions') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_rate') }}</th>
+            <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_last_open') }}</th>
+            <th class="text-right px-4 py-2 font-bold"><span class="sr-only">{{ td('common.manage') }}</span></th>
           </tr>
         </thead>
         <tbody>
@@ -289,11 +305,23 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
             class="border-t border-slate-100"
             :class="link.is_usable ? '' : 'opacity-50'"
           >
+            <td class="px-3 py-2">
+              <button
+                type="button"
+                data-test="toggle-qr"
+                class="w-8 h-8 rounded-lg text-slate-500 hover:text-brand-600 hover:bg-brand-50 inline-flex items-center justify-center transition"
+                :title="td('links.qr_open')"
+                :aria-label="td('links.qr_open')"
+                @click="qrLink = link"
+              >
+                <Icon name="qr_code" :size="18" />
+              </button>
+            </td>
             <td class="px-4 py-2 min-w-0">
               <p class="font-bold text-slate-800 truncate max-w-xs">{{ link.label || link.group_label }}</p>
               <p class="text-[11px] text-brand-700 truncate max-w-xs">{{ link.short_url }}</p>
             </td>
-            <td class="px-4 py-2 text-slate-600">{{ link.created_by_name || '—' }}</td>
+            <td class="px-4 py-2 text-slate-600">{{ link.created_by_name || td('common.dash') }}</td>
             <td class="px-4 py-2 text-right text-slate-700">{{ link.unique_click_count }}</td>
             <td class="px-4 py-2 text-right font-bold text-emerald-600">{{ link.conversion_count }}</td>
             <td class="px-4 py-2 text-right text-slate-700">{{ rateLabel(link) }}</td>
@@ -305,7 +333,7 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
                 class="min-h-[32px] px-2.5 rounded-lg text-[12px] font-bold text-brand-700 hover:bg-brand-50 transition whitespace-nowrap"
                 @click="emit('manage', manageTabFor(link.group)!)"
               >
-                จัดการ
+                {{ td('common.manage') }}
               </button>
             </td>
           </tr>
@@ -315,31 +343,38 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
       <div class="bg-white/95 border border-slate-200 rounded-xl p-4">
-        <p class="text-sm font-bold text-slate-900">ตัวแทนที่ลิงก์ได้ผลมากที่สุด</p>
-        <p class="text-[11px] text-slate-400 mt-0.5">เรียงตามผลลัพธ์ ไม่ใช่จำนวนคลิก — คนที่แชร์บ่อยที่สุดกับคนที่ได้ผลที่สุดมักไม่ใช่คนเดียวกัน</p>
-        <EmptyState v-if="!topAgents.length" icon="trophy" title="ยังไม่มีผลลัพธ์จากลิงก์" class="mt-3" />
+        <p class="text-sm font-bold text-slate-900">{{ td('hub.top_agents_title') }}</p>
+        <p class="text-[11px] text-slate-400 mt-0.5">{{ td('hub.top_agents_help') }}</p>
+        <EmptyState v-if="!topAgents.length" icon="trophy" :title="td('hub.top_agents_empty')" class="mt-3" />
         <ol v-else class="mt-3 space-y-1.5">
           <li v-for="(agent, i) in topAgents" :key="agent.name" class="flex items-center gap-2 text-sm">
             <span class="w-5 text-xs font-bold text-slate-400">{{ i + 1 }}</span>
             <span class="flex-1 truncate text-slate-700">{{ agent.name }}</span>
             <span class="font-bold text-emerald-600">{{ agent.conversions }}</span>
-            <span class="text-[11px] text-slate-400">จาก {{ agent.unique }} คน</span>
+            <span class="text-[11px] text-slate-400">{{ td('hub.top_agents_from', '', { count: agent.unique }) }}</span>
           </li>
         </ol>
       </div>
 
       <div class="bg-white/95 border border-slate-200 rounded-xl p-4">
-        <p class="text-sm font-bold text-slate-900">ลิงก์ที่ยังไม่มีใครเปิด</p>
-        <p class="text-[11px] text-slate-400 mt-0.5">สร้างไว้เกิน {{ DEAD_LINK_DAYS }} วันแล้วยังไม่มีคนเปิดเลย</p>
-        <EmptyState v-if="!deadLinks.length" icon="check" title="ไม่มีลิงก์ที่ถูกทิ้งไว้" class="mt-3" />
+        <p class="text-sm font-bold text-slate-900">{{ td('hub.dead_title') }}</p>
+        <p class="text-[11px] text-slate-400 mt-0.5">{{ td('hub.dead_help', '', { days: DEAD_LINK_DAYS }) }}</p>
+        <EmptyState v-if="!deadLinks.length" icon="check" :title="td('hub.dead_empty')" class="mt-3" />
         <ul v-else class="mt-3 space-y-1.5">
           <li v-for="link in deadLinks" :key="link.id" class="flex items-center gap-2 text-sm">
             <Icon name="link" :size="13" class="text-slate-300 shrink-0" />
             <span class="flex-1 truncate text-slate-600">{{ link.label || link.group_label }}</span>
-            <span class="text-[11px] text-slate-400 shrink-0">{{ link.created_by_name || '—' }}</span>
+            <span class="text-[11px] text-slate-400 shrink-0">{{ link.created_by_name || td('common.dash') }}</span>
           </li>
         </ul>
       </div>
     </div>
+
+    <LinkQrModal
+      :url="qrLink?.short_url ?? null"
+      :filename="qrLink ? `link-qr-${qrLink.code}` : 'link-qr'"
+      :caption="td('links.caption_tracked')"
+      @close="qrLink = null"
+    />
   </main>
 </template>

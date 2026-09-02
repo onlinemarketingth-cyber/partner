@@ -32,7 +32,10 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { useAuthStore } from '@/stores/auth'
-import { generateQrDataUrl } from '@/utils/qrCode'
+import LinkQrModal from '@/design-system/components/LinkQrModal.vue'
+import { useI18n } from '@/composables/useI18n'
+
+const { lang, td } = useI18n()
 
 /** CompanyInviteCodeResource, field for field. */
 interface SignupLink {
@@ -94,12 +97,12 @@ async function submitForm() {
   formError.value = ''
 
   if (form.value.hasExpiry && !form.value.expiresAt) {
-    formError.value = 'เลือก "หมดอายุ" ไว้แล้ว กรุณาระบุวันหมดอายุ'
+    formError.value = td('signup.err_expiry_required')
 
     return
   }
   if (form.value.hasLimit && !form.value.maxUses) {
-    formError.value = 'เลือก "จำกัดจำนวน" ไว้แล้ว กรุณาระบุจำนวนคน'
+    formError.value = td('signup.err_limit_required')
 
     return
   }
@@ -120,7 +123,7 @@ async function submitForm() {
     resetForm()
     await load()
   } catch (e) {
-    formError.value = e instanceof ApiError ? e.message : 'สร้างลิงก์ไม่สำเร็จ'
+    formError.value = e instanceof ApiError ? e.message : td('signup.err_create_failed')
   } finally {
     saving.value = false
   }
@@ -134,7 +137,8 @@ async function load() {
     const res = await api.get<{ data: SignupLink[] }>(activeCompany.scopedPath('/company-invite-codes'))
     links.value = res.data
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `โหลดรายการไม่สำเร็จ (${e.status})` : 'โหลดรายการไม่สำเร็จ'
+    errorMessage.value =
+      e instanceof ApiError ? `${td('links.load_failed')} (${e.status})` : td('links.load_failed')
   } finally {
     loading.value = false
   }
@@ -154,44 +158,15 @@ async function copy(link: SignupLink) {
   }
 }
 
-// ── QR code (TASK-240) ─────────────────────────────────────────────────
+// ── QR (TASK-240, reworked 2026-09-01) ─────────────────────────────────
 /**
- * Generated on demand, one row at a time — not for every link the moment
- * the list loads. A company with dozens of signup links printed over the
- * years would otherwise mean dozens of canvas renders nobody asked to see,
- * for links most admins came here to copy, not to scan.
- *
- * Cached by link id in a Map so re-opening the same row's QR is instant
- * and a background `load()` refresh (e.g. after revoking a link) never
- * throws away a QR the admin already has open.
+ * One dialog for the whole table (LinkQrModal), instead of a per-row inline
+ * panel with its own cache, "generating" flag and open-row id. The row shows
+ * an icon; the QR is generated once, on click, inside the modal — so a
+ * company with fifty printed signup links still renders zero QR codes on
+ * load, which is what the old per-row laziness was protecting.
  */
-const qrDataUrl = ref<Map<number, string>>(new Map())
-const openQrId = ref<number | null>(null)
-const qrGenerating = ref<number | null>(null)
-
-async function toggleQr(link: SignupLink) {
-  if (openQrId.value === link.id) {
-    openQrId.value = null
-
-    return
-  }
-  openQrId.value = link.id
-  if (qrDataUrl.value.has(link.id)) return
-
-  qrGenerating.value = link.id
-  const dataUrl = await generateQrDataUrl(link.signup_url, 220)
-  qrDataUrl.value.set(link.id, dataUrl)
-  if (qrGenerating.value === link.id) qrGenerating.value = null
-}
-
-function downloadQr(link: SignupLink): void {
-  const dataUrl = qrDataUrl.value.get(link.id)
-  if (!dataUrl) return
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = `signup-qr-${link.code}.png`
-  a.click()
-}
+const qrLink = ref<SignupLink | null>(null)
 
 // ── Revoke ──────────────────────────────────────────────────────────────
 const pendingRevoke = ref<SignupLink | null>(null)
@@ -206,7 +181,8 @@ async function confirmRevoke() {
     await load()
     pendingRevoke.value = null
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `ปิดลิงก์ไม่สำเร็จ (${e.status})` : 'ปิดลิงก์ไม่สำเร็จ'
+    errorMessage.value =
+      e instanceof ApiError ? `${td('links.revoke_failed')} (${e.status})` : td('links.revoke_failed')
   } finally {
     revoking.value = false
   }
@@ -214,25 +190,40 @@ async function confirmRevoke() {
 
 // ── Labels ──────────────────────────────────────────────────────────────
 function formatDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+  if (!iso) return ''
+
+  // Buddhist-era, Thai month names in TH; plain Gregorian in EN. Locale is
+  // the ONLY difference — the same Date, never a re-parsed string.
+  return new Date(iso).toLocaleDateString(lang.value === 'EN' ? 'en-GB' : 'th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
 }
 
-/** NULL is "ไม่จำกัด", never "0" — the two mean opposite things. */
+/** NULL is "unlimited", never "0" — the two mean opposite things. */
 function usageLabel(link: SignupLink): string {
   return link.max_uses === null
-    ? `สมัครแล้ว ${link.used_count} คน · ไม่จำกัดจำนวน`
-    : `สมัครแล้ว ${link.used_count} / ${link.max_uses} คน`
+    ? String(link.used_count)
+    : td('links.used_of', '', { used: link.used_count, max: link.max_uses })
+}
+
+/** 0-100, or null when there is no ceiling to fill. */
+function usagePercent(link: SignupLink): number | null {
+  if (link.max_uses === null || link.max_uses === 0) return null
+
+  return Math.min(100, Math.round((link.used_count / link.max_uses) * 100))
 }
 
 function expiryLabel(link: SignupLink): string {
-  return link.expires_at === null ? 'ไม่มีวันหมดอายุ' : `หมดอายุ ${formatDate(link.expires_at)}`
+  return link.expires_at === null ? td('links.no_expiry') : formatDate(link.expires_at)
 }
 
 function status(link: SignupLink): { label: string; ok: boolean } {
-  if (link.revoked_at) return { label: 'ปิดแล้ว', ok: false }
-  if (!link.is_valid) return { label: 'ใช้ไม่ได้แล้ว', ok: false }
+  if (link.revoked_at) return { label: td('links.status_revoked'), ok: false }
+  if (!link.is_valid) return { label: td('links.status_unusable'), ok: false }
 
-  return { label: 'ใช้งานได้', ok: true }
+  return { label: td('links.status_active'), ok: true }
 }
 
 onMounted(load)
@@ -257,13 +248,13 @@ defineProps<{ embedded?: boolean }>()
     <HeroHeader
       v-if="!embedded"
       icon="link"
-      title="ลิงก์สมัครตัวแทน"
-      subtitle="ลิงก์เปิดรับสมัครตัวแทนของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ"
+      :title="td('signup.title')"
+      :subtitle="td('signup.subtitle')"
       accent-color="brand"
       storage-key="company-signup-links"
     />
 
-    <CompanyScopeNotice v-if="!embedded" action="จัดการลิงก์สมัครตัวแทน" />
+    <CompanyScopeNotice v-if="!embedded" :action="td('signup.scope_action')" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -272,14 +263,13 @@ defineProps<{ embedded?: boolean }>()
     <div class="mt-4 bg-white/95 border border-slate-200 rounded-xl p-4">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <p class="text-sm font-bold text-slate-900">ลิงก์สมัครของบริษัทนี้</p>
+          <p class="text-sm font-bold text-slate-900">{{ td('signup.card_title') }}</p>
           <p class="text-xs text-slate-500 mt-1">
-            ต่างจาก "ลิงก์ชวนทีม" ตรงที่ลิงก์นี้เป็นของบริษัท ไม่ผูกกับหัวหน้าทีมคนไหน
-            — คนที่สมัครเข้ามาจะไม่ถูกนับเป็นลูกทีมของใคร
+            {{ td('signup.card_help') }}
           </p>
         </div>
         <button class="btn-primary shrink-0" data-test="new-signup-link" @click="showForm = !showForm">
-          {{ showForm ? 'ยกเลิก' : '+ สร้างลิงก์ใหม่' }}
+          {{ showForm ? td('common.cancel') : td('signup.btn_new') }}
         </button>
       </div>
     </div>
@@ -288,7 +278,8 @@ defineProps<{ embedded?: boolean }>()
     <div v-if="showForm" class="mt-3 bg-white/95 border border-brand-200 rounded-xl p-4 space-y-3">
       <div>
         <label for="signup_code" class="block text-xs font-bold text-slate-600 mb-1">
-          รหัสในลิงก์ <span class="font-normal text-slate-400">(เว้นว่าง = สุ่มให้)</span>
+          {{ td('signup.field_code') }}
+          <span class="font-normal text-slate-400">{{ td('signup.field_code_hint') }}</span>
         </label>
         <div class="flex items-center gap-1 text-sm">
           <span class="text-slate-400 shrink-0">.../c/</span>
@@ -302,20 +293,21 @@ defineProps<{ embedded?: boolean }>()
           />
         </div>
         <p class="text-[11px] text-slate-400 mt-1">
-          ใช้ได้เฉพาะ a-z, 0-9 และ - · <b>ตั้งแล้วเปลี่ยนไม่ได้</b> เพราะลิงก์อาจถูกพิมพ์แจกไปแล้ว
-          หากต้องการรหัสใหม่ให้ปิดลิงก์นี้แล้วสร้างใหม่
+          {{ td('signup.code_help_charset') }} · <b>{{ td('signup.code_help_immutable') }}</b>
+          {{ td('signup.code_help_tail') }}
         </p>
       </div>
 
       <div>
         <label for="signup_label" class="block text-xs font-bold text-slate-600 mb-1">
-          ชื่อเรียก <span class="font-normal text-slate-400">(ไม่บังคับ)</span>
+          {{ td('signup.field_label') }}
+          <span class="font-normal text-slate-400">{{ td('signup.field_label_hint') }}</span>
         </label>
         <input
           id="signup_label"
           v-model="form.label"
           type="text"
-          placeholder="ใบปลิวสาขาสีลม"
+          :placeholder="td('signup.label_placeholder')"
           class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
         />
       </div>
@@ -324,7 +316,7 @@ defineProps<{ embedded?: boolean }>()
         <div>
           <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
             <input v-model="form.hasExpiry" data-test="has-expiry" type="checkbox" class="rounded" />
-            กำหนดวันหมดอายุ
+            {{ td('signup.opt_expiry') }}
           </label>
           <input
             v-if="form.hasExpiry"
@@ -332,12 +324,12 @@ defineProps<{ embedded?: boolean }>()
             type="datetime-local"
             class="mt-1.5 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
           />
-          <p v-else class="text-[11px] text-slate-400 mt-1.5">ไม่หมดอายุ — เหมาะกับลิงก์ที่พิมพ์ลงใบปลิวหรือป้าย</p>
+          <p v-else class="text-[11px] text-slate-400 mt-1.5">{{ td('signup.opt_expiry_none') }}</p>
         </div>
         <div>
           <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
             <input v-model="form.hasLimit" data-test="has-limit" type="checkbox" class="rounded" />
-            จำกัดจำนวนคน
+            {{ td('signup.opt_limit') }}
           </label>
           <input
             v-if="form.hasLimit"
@@ -346,16 +338,16 @@ defineProps<{ embedded?: boolean }>()
             min="1"
             class="mt-1.5 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
           />
-          <p v-else class="text-[11px] text-slate-400 mt-1.5">ไม่จำกัดจำนวนคนที่สมัครผ่านลิงก์นี้</p>
+          <p v-else class="text-[11px] text-slate-400 mt-1.5">{{ td('signup.opt_limit_none') }}</p>
         </div>
       </div>
 
       <p v-if="formError" class="text-xs font-bold text-rose-600">{{ formError }}</p>
 
       <div class="flex justify-end gap-2">
-        <button class="btn-secondary" @click="showForm = false; resetForm()">ยกเลิก</button>
+        <button class="btn-secondary" @click="showForm = false; resetForm()">{{ td('common.cancel') }}</button>
         <button class="btn-primary" data-test="save-signup-link" :disabled="saving" @click="submitForm">
-          {{ saving ? 'กำลังสร้าง...' : 'สร้างลิงก์' }}
+          {{ saving ? td('signup.btn_creating') : td('signup.btn_create') }}
         </button>
       </div>
     </div>
@@ -364,104 +356,137 @@ defineProps<{ embedded?: boolean }>()
     <EmptyState
       v-else-if="!links.length"
       icon="link"
-      title="ยังไม่มีลิงก์สมัครตัวแทน"
-      description="สร้างลิงก์แรกเพื่อให้คนใหม่สมัครเข้าบริษัทได้โดยไม่ต้องกรอกรหัสเชิญ"
+      :title="td('links.empty_signup_title')"
+      :description="td('links.empty_signup_message')"
       class="mt-4"
     />
-    <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
-      <div
-        v-for="link in links"
-        :key="link.id"
-        class="bg-white/95 border border-slate-200 rounded-xl p-4"
-        :class="link.revoked_at ? 'opacity-60' : ''"
-      >
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-start gap-3 min-w-0">
-            <Icon name="link" :size="18" class="text-brand-600 mt-0.5 shrink-0" />
-            <div class="min-w-0">
-              <p class="text-sm font-bold text-slate-900 truncate">
-                {{ link.label || 'ลิงก์ไม่มีชื่อ' }}
-                <span v-if="isSuperAdmin && link.company_name" class="text-xs font-normal text-slate-400">
-                  · {{ link.company_name }}
-                </span>
-              </p>
+    <!--
+      2026-09-01 (human decision) — a TABLE, not one card per link. A card
+      spent a full row's height on four label/value pairs that a header can
+      name once, and the fields an admin scans for (how many signed up, is it
+      still open) sat at different x positions on every card.
+
+      overflow-x-auto on the wrapper, not the page: the last two columns may
+      push past a narrow window, and the page body must never scroll sideways.
+    -->
+    <div v-else class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="bg-slate-50 text-[11px] text-slate-500">
+            <th class="px-3 py-2 font-bold w-10"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_name') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_link') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_signups') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_expires') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_status') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_created') }}</th>
+            <th class="text-right px-4 py-2 font-bold"><span class="sr-only">{{ td('links.col_actions') }}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="link in links"
+            :key="link.id"
+            class="border-t border-slate-100 align-middle"
+            :class="link.revoked_at ? 'opacity-60' : ''"
+          >
+            <td class="px-3 py-2">
               <button
-                class="mt-1 flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-full"
+                type="button"
+                data-test="toggle-qr"
+                class="w-8 h-8 rounded-lg text-slate-500 hover:text-brand-600 hover:bg-brand-50 inline-flex items-center justify-center transition"
+                :title="td('links.qr_open')"
+                :aria-label="td('links.qr_open')"
+                @click="qrLink = link"
+              >
+                <Icon name="qr_code" :size="18" />
+              </button>
+            </td>
+            <td class="px-4 py-2 min-w-0">
+              <p class="font-bold text-slate-800 truncate max-w-[220px]">{{ link.label || td('links.untitled') }}</p>
+              <p class="text-[11px] text-slate-400 truncate max-w-[220px]">
+                /c/{{ link.code }}
+                <template v-if="isSuperAdmin && link.company_name"> · {{ link.company_name }}</template>
+              </p>
+            </td>
+            <td class="px-4 py-2">
+              <button
+                class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-[260px]"
                 :title="link.signup_url"
                 @click="copy(link)"
               >
                 <span class="truncate">{{ link.signup_url }}</span>
                 <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
                 <span class="shrink-0 font-normal text-slate-400">
-                  {{ copiedId === link.id ? 'คัดลอกแล้ว' : 'คัดลอก' }}
+                  {{ copiedId === link.id ? td('common.copied') : td('common.copy') }}
                 </span>
               </button>
-              <p class="text-xs text-slate-500 mt-1">{{ usageLabel(link) }} · {{ expiryLabel(link) }}</p>
-              <p class="text-xs text-slate-400">
-                สร้างเมื่อ {{ formatDate(link.created_at) }}
-                <template v-if="link.created_by_name"> · โดย {{ link.created_by_name }}</template>
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col items-end gap-1.5 shrink-0">
-            <span
-              class="text-[11px] font-bold px-2 py-0.5 rounded-lg"
-              :class="status(link).ok ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
-            >
-              {{ status(link).label }}
-            </span>
-            <button
-              type="button"
-              data-test="toggle-qr"
-              class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 inline-flex items-center gap-1"
-              @click="toggleQr(link)"
-            >
-              <Icon name="qr_code" :size="13" />
-              {{ openQrId === link.id ? 'ซ่อน QR' : 'QR' }}
-            </button>
-            <button
-              v-if="!link.revoked_at"
-              data-test="revoke-signup-link"
-              class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1"
-              @click="pendingRevoke = link"
-            >
-              ปิดลิงก์
-            </button>
-          </div>
-        </div>
-
-        <!-- TASK-240 — QR for this link, generated on demand (see toggleQr). -->
-        <div v-if="openQrId === link.id" class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-3">
-          <p v-if="qrGenerating === link.id" class="text-xs text-slate-400">กำลังสร้าง QR...</p>
-          <template v-else-if="qrDataUrl.get(link.id)">
-            <img
-              :src="qrDataUrl.get(link.id)"
-              alt="QR โค้ดลิงก์สมัครตัวแทน"
-              class="w-24 h-24 rounded-lg border border-slate-200 shrink-0 bg-white"
-            />
-            <div class="min-w-0">
-              <p class="text-xs text-slate-500">สแกนเพื่อเปิดลิงก์สมัครนี้โดยตรง</p>
-              <button
-                type="button"
-                data-test="download-qr"
-                class="mt-1 text-xs font-bold text-brand-600 hover:text-brand-700"
-                @click="downloadQr(link)"
+            </td>
+            <td class="px-4 py-2 whitespace-nowrap">
+              <span class="text-slate-700 tabular-nums">{{ usageLabel(link) }}</span>
+              <span v-if="link.max_uses === null" class="text-[11px] text-slate-400">
+                · {{ td('links.unlimited') }}
+              </span>
+              <!-- A dashed track when there is no ceiling: a full solid bar
+                   under an unlimited link would read as "quota used up". -->
+              <div
+                class="mt-1 h-1 w-20 rounded-full overflow-hidden"
+                :class="usagePercent(link) === null ? 'bg-slate-100' : 'bg-slate-200'"
               >
-                ดาวน์โหลด QR
+                <div
+                  v-if="usagePercent(link) !== null"
+                  class="h-full bg-brand-500 rounded-full"
+                  :style="{ width: usagePercent(link) + '%' }"
+                />
+              </div>
+            </td>
+            <td class="px-4 py-2 text-xs whitespace-nowrap" :class="link.expires_at ? 'text-slate-600' : 'text-slate-400'">
+              {{ expiryLabel(link) }}
+            </td>
+            <td class="px-4 py-2">
+              <span
+                class="text-[11px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap"
+                :class="status(link).ok ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+              >
+                {{ status(link).label }}
+              </span>
+            </td>
+            <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">
+              {{ formatDate(link.created_at) }}
+              <template v-if="link.created_by_name">
+                <br />
+                <span class="text-slate-400">{{ td('links.by_name', '', { name: link.created_by_name }) }}</span>
+              </template>
+            </td>
+            <td class="px-4 py-2 text-right">
+              <button
+                v-if="!link.revoked_at"
+                data-test="revoke-signup-link"
+                class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 whitespace-nowrap"
+                @click="pendingRevoke = link"
+              >
+                {{ td('links.revoke_signup') }}
               </button>
-            </div>
-          </template>
-        </div>
-      </div>
-    </TransitionGroup>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <LinkQrModal
+      :url="qrLink?.signup_url ?? null"
+      :filename="qrLink ? `signup-qr-${qrLink.code}` : 'signup-qr'"
+      :caption="td('links.caption_signup')"
+      @close="qrLink = null"
+    />
 
     <ConfirmDialog
       :show="pendingRevoke !== null"
       variant="danger"
-      title="ปิดลิงก์สมัครตัวแทน"
+      :title="td('signup.revoke_title')"
       :body="
         pendingRevoke
-          ? `ปิดลิงก์ ${pendingRevoke.signup_url} — คนที่กดลิงก์นี้จะสมัครไม่ได้อีก (คนที่สมัครไปแล้ว ${pendingRevoke.used_count} คนยังอยู่ตามเดิม) ถ้าลิงก์นี้ถูกพิมพ์แจกไปแล้ว ลิงก์บนกระดาษจะใช้ไม่ได้ทันที และย้อนกลับไม่ได้`
+          ? td('signup.revoke_body', '', { url: pendingRevoke.signup_url, count: pendingRevoke.used_count })
           : ''
       "
       :busy="revoking"

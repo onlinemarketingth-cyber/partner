@@ -33,7 +33,10 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { type AgentItem, fetchAllPages } from './agentEdit'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
-import { generateQrDataUrl } from '@/utils/qrCode'
+import LinkQrModal from '@/design-system/components/LinkQrModal.vue'
+import { useI18n } from '@/composables/useI18n'
+
+const { lang, td } = useI18n()
 
 /**
  * TASK-113 — AgentInviteLinkResource, field for field.
@@ -88,7 +91,7 @@ async function loadInviteLinks() {
     agents.value = roster
   } catch (e) {
     errorMessage.value =
-      e instanceof ApiError ? `โหลดลิงก์ชวนเข้าทีมไม่สำเร็จ (${e.status})` : 'โหลดลิงก์ชวนเข้าทีมไม่สำเร็จ'
+      e instanceof ApiError ? `${td('team.load_failed')} (${e.status})` : td('team.load_failed')
   } finally {
     linksLoading.value = false
   }
@@ -100,7 +103,7 @@ function linksForAgent(agentId: number): AgentInviteLink[] {
 
 const agentNameById = computed(() => new Map(agents.value.map((a) => [a.id, a.name])))
 function linkOwnerName(link: AgentInviteLink): string {
-  return agentNameById.value.get(link.agent_id) ?? `ตัวแทน #${link.agent_id}`
+  return agentNameById.value.get(link.agent_id) ?? td('team.agent_hash', '', { id: link.agent_id })
 }
 
 // Company-wide list, optionally narrowed to one agent (?agent=<id> deep link
@@ -112,20 +115,31 @@ const visibleLinks = computed(() =>
 
 function formatDate(iso: string | null): string {
   if (!iso) return '-'
-  return new Date(iso).toLocaleDateString('th-TH', { dateStyle: 'medium' })
+
+  // Buddhist-era Thai months in TH, plain Gregorian in EN — same Date, only
+  // the locale differs.
+  return new Date(iso).toLocaleDateString(lang.value === 'EN' ? 'en-GB' : 'th-TH', { dateStyle: 'medium' })
 }
+/** NULL max_uses is "unlimited", never "0" — the two mean opposite things. */
 function linkUsageLabel(link: AgentInviteLink): string {
   return link.max_uses === null
-    ? `ใช้ไปแล้ว ${link.used_count} คน · ไม่จำกัดจำนวน`
-    : `ใช้ไปแล้ว ${link.used_count} / ${link.max_uses} คน`
+    ? String(link.used_count)
+    : td('links.used_of', '', { used: link.used_count, max: link.max_uses })
+}
+/** 0-100, or null when there is no ceiling to fill. */
+function linkUsagePercent(link: AgentInviteLink): number | null {
+  if (link.max_uses === null || link.max_uses === 0) return null
+
+  return Math.min(100, Math.round((link.used_count / link.max_uses) * 100))
 }
 function linkExpiryLabel(link: AgentInviteLink): string {
-  return link.expires_at ? `หมดอายุ ${formatDate(link.expires_at)}` : 'ไม่จำกัดวันหมดอายุ'
+  return link.expires_at ? formatDate(link.expires_at) : td('links.no_expiry')
 }
 function linkStatus(link: AgentInviteLink): { label: string; usable: boolean } {
-  if (link.is_usable) return { label: 'ใช้งานได้', usable: true }
-  if (link.revoked_at) return { label: 'ยกเลิกแล้ว', usable: false }
-  return { label: 'หมดอายุ / ครบจำนวนแล้ว', usable: false }
+  if (link.is_usable) return { label: td('team.status_active'), usable: true }
+  if (link.revoked_at) return { label: td('team.status_revoked'), usable: false }
+
+  return { label: td('team.status_exhausted'), usable: false }
 }
 /**
  * True when the row's green "ใช้งานได้" pill would mislead — see the
@@ -160,36 +174,13 @@ async function copyInviteLink(link: AgentInviteLink) {
 }
 
 /**
- * Generated on demand, one row at a time — see the same note on
- * CompanySignupLinksView.vue's identical cache, which this mirrors.
+ * QR (TASK-240, reworked 2026-09-01) — one dialog for the whole table, not a
+ * per-row inline panel. See LinkQrModal.vue for why the row shows only an
+ * icon: a QR sized to a table row would be smaller than the panel it
+ * replaced, and a thumbnail in every row would generate QR codes nobody
+ * asked to see, which is exactly what the old per-row cache existed to avoid.
  */
-const qrDataUrl = ref<Map<number, string>>(new Map())
-const openQrId = ref<number | null>(null)
-const qrGenerating = ref<number | null>(null)
-
-async function toggleQr(link: AgentInviteLink) {
-  if (openQrId.value === link.id) {
-    openQrId.value = null
-
-    return
-  }
-  openQrId.value = link.id
-  if (qrDataUrl.value.has(link.id)) return
-
-  qrGenerating.value = link.id
-  const dataUrl = await generateQrDataUrl(link.public_url, 220)
-  qrDataUrl.value.set(link.id, dataUrl)
-  if (qrGenerating.value === link.id) qrGenerating.value = null
-}
-
-function downloadQr(link: AgentInviteLink): void {
-  const dataUrl = qrDataUrl.value.get(link.id)
-  if (!dataUrl) return
-  const a = document.createElement('a')
-  a.href = dataUrl
-  a.download = `invite-qr-${link.id}.png`
-  a.click()
-}
+const qrLink = ref<AgentInviteLink | null>(null)
 
 // Admin revoke — soft (revoked_at), confirmed rather than one-click: there is
 // no un-revoke endpoint from this screen.
@@ -214,7 +205,8 @@ async function confirmRevokeLink() {
     // no body and is_usable is the server's verdict, not ours.
     await loadInviteLinks()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `ยกเลิกลิงก์ไม่สำเร็จ (${e.status})` : 'ยกเลิกลิงก์ไม่สำเร็จ'
+    errorMessage.value =
+      e instanceof ApiError ? `${td('team.revoke_failed')} (${e.status})` : td('team.revoke_failed')
   } finally {
     revokingLink.value = false
     pendingLinkRevoke.value = null
@@ -250,13 +242,13 @@ defineProps<{ embedded?: boolean }>()
     <HeroHeader
       v-if="!embedded"
       icon="link"
-      title="ลิงก์ชวนทีม"
-      subtitle="ลิงก์ชวนเข้าทีมทั้งหมดที่หัวหน้าทีมสร้างไว้ (ADR-025 §7)"
+      :title="td('team.title')"
+      :subtitle="td('team.subtitle')"
       accent-color="brand"
       storage-key="agent-invite-links"
     />
 
-    <CompanyScopeNotice v-if="!embedded" action="จัดการลิงก์ชวนทีม" />
+    <CompanyScopeNotice v-if="!embedded" :action="td('team.scope_action')" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -265,112 +257,151 @@ defineProps<{ embedded?: boolean }>()
     <div class="mt-4 bg-white/95 border border-slate-200 rounded-xl p-4">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <p class="text-sm font-bold text-slate-900">ลิงก์ชวนเข้าทีมทั้งหมดในบริษัท</p>
+          <p class="text-sm font-bold text-slate-900">{{ td('team.card_title') }}</p>
           <p class="text-xs text-slate-500 mt-1">
-            หัวหน้าทีมสร้างลิงก์เหล่านี้เพื่อให้คนใหม่สมัครเข้ามาอยู่ใต้ตัวเอง — ผู้ดูแลดูได้อย่างเดียว
-            และยกเลิกได้ แต่สร้างแทนไม่ได้
+            {{ td('team.card_help') }}
           </p>
         </div>
         <button class="btn-secondary shrink-0" :disabled="linksLoading" @click="loadInviteLinks">
-          {{ linksLoading ? 'กำลังโหลด...' : 'รีเฟรช' }}
+          {{ linksLoading ? td('common.loading') : td('common.refresh') }}
         </button>
       </div>
       <div v-if="linkFilterAgentId !== null" class="mt-3 flex items-center gap-2">
         <span class="text-xs font-bold text-brand-700 bg-brand-50 px-2 py-1 rounded-lg">
-          แสดงเฉพาะลิงก์ของ {{ agentNameById.get(linkFilterAgentId) ?? `ตัวแทน #${linkFilterAgentId}` }}
+          {{
+            td('team.filter_showing', '', {
+              name: agentNameById.get(linkFilterAgentId) ?? td('team.agent_hash', '', { id: linkFilterAgentId }),
+            })
+          }}
         </span>
         <button class="text-xs font-bold text-slate-500 hover:text-slate-700" @click="linkFilterAgentId = null">
-          ล้างตัวกรอง
+          {{ td('team.filter_clear') }}
         </button>
       </div>
     </div>
 
     <LoadingSkeleton v-if="linksLoading && !inviteLinks.length" type="list" :rows="3" class="mt-4" />
-    <EmptyState v-else-if="!visibleLinks.length" icon="link" title="ยังไม่มีลิงก์ชวนเข้าทีมในบริษัทนี้" class="mt-4" />
-    <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
-      <div v-for="link in visibleLinks" :key="link.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-start gap-3 min-w-0">
-            <Icon name="link" :size="18" class="text-brand-600 mt-0.5 shrink-0" />
-            <div class="min-w-0">
-              <p class="text-sm font-bold text-slate-900 truncate">
-                {{ link.label || 'ลิงก์ไม่มีชื่อ' }}
-                <span class="text-xs font-normal text-slate-400">· เจ้าของ: {{ linkOwnerName(link) }}</span>
-              </p>
-              <button
-                class="mt-1 flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-full"
-                :title="link.public_url"
-                @click="copyInviteLink(link)"
-              >
-                <span class="truncate">{{ link.public_url }}</span>
-                <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
-                <span class="shrink-0 font-normal text-slate-400">
-                  {{ copiedId === link.id ? 'คัดลอกแล้ว' : 'คัดลอก' }}
+    <EmptyState v-else-if="!visibleLinks.length" icon="link" :title="td('links.empty_team')" class="mt-4" />
+    <!--
+      2026-09-01 (human decision) — a TABLE, matching ลิงก์สมัครตัวแทน. The
+      orphan warning stays a full-width row UNDER its link rather than a
+      column: it applies to a minority of rows, and a column that is empty
+      nine times out of ten spends horizontal space to say nothing.
+    -->
+    <div v-else class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="bg-slate-50 text-[11px] text-slate-500">
+            <th class="px-3 py-2 font-bold w-10"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_name') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_owner') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_link') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_used') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_expires') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_status') }}</th>
+            <th class="text-left px-4 py-2 font-bold">{{ td('links.col_created') }}</th>
+            <th class="text-right px-4 py-2 font-bold"><span class="sr-only">{{ td('links.col_actions') }}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="link in visibleLinks" :key="link.id">
+            <tr class="border-t border-slate-100 align-middle" :class="link.revoked_at ? 'opacity-60' : ''">
+              <td class="px-3 py-2">
+                <button
+                  type="button"
+                  data-test="toggle-qr"
+                  class="w-8 h-8 rounded-lg text-slate-500 hover:text-brand-600 hover:bg-brand-50 inline-flex items-center justify-center transition"
+                  :title="td('links.qr_open')"
+                  :aria-label="td('links.qr_open')"
+                  @click="qrLink = link"
+                >
+                  <Icon name="qr_code" :size="18" />
+                </button>
+              </td>
+              <td class="px-4 py-2 min-w-0">
+                <p class="font-bold text-slate-800 truncate max-w-[200px]">{{ link.label || td('links.untitled') }}</p>
+              </td>
+              <td class="px-4 py-2 text-slate-600 truncate max-w-[160px]">{{ linkOwnerName(link) }}</td>
+              <td class="px-4 py-2">
+                <button
+                  class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-[240px]"
+                  :title="link.public_url"
+                  @click="copyInviteLink(link)"
+                >
+                  <span class="truncate">{{ link.public_url }}</span>
+                  <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
+                  <span class="shrink-0 font-normal text-slate-400">
+                    {{ copiedId === link.id ? td('common.copied') : td('common.copy') }}
+                  </span>
+                </button>
+              </td>
+              <td class="px-4 py-2 whitespace-nowrap">
+                <span class="text-slate-700 tabular-nums">{{ linkUsageLabel(link) }}</span>
+                <span v-if="link.max_uses === null" class="text-[11px] text-slate-400">
+                  · {{ td('links.unlimited') }}
                 </span>
-              </button>
-              <p class="text-xs text-slate-500 mt-1">{{ linkUsageLabel(link) }} · {{ linkExpiryLabel(link) }}</p>
-              <p class="text-xs text-slate-400">สร้างเมื่อ {{ formatDate(link.created_at) }}</p>
-              <p v-if="isOrphanedByFlag(link)" class="text-xs text-amber-600 mt-1">
-                เจ้าของลิงก์ไม่มีสิทธิ์หัวหน้าทีมแล้ว — ลิงก์นี้จะสมัครไม่ผ่านจริง แม้สถานะจะขึ้นว่าใช้งานได้
-              </p>
-            </div>
-          </div>
-          <div class="flex flex-col items-end gap-1.5 shrink-0">
-            <span
-              class="text-[11px] font-bold px-2 py-0.5 rounded-lg"
-              :class="linkStatus(link).usable ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
-            >
-              {{ linkStatus(link).label }}
-            </span>
-            <button
-              type="button"
-              class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 inline-flex items-center gap-1"
-              @click="toggleQr(link)"
-            >
-              <Icon name="qr_code" :size="13" />
-              {{ openQrId === link.id ? 'ซ่อน QR' : 'QR' }}
-            </button>
-            <button
-              v-if="!link.revoked_at"
-              class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1"
-              @click="askRevokeLink(link)"
-            >
-              ยกเลิกลิงก์
-            </button>
-          </div>
-        </div>
-
-        <!-- TASK-240 — QR for this link, generated on demand (see toggleQr). -->
-        <div v-if="openQrId === link.id" class="mt-3 pt-3 border-t border-slate-100 flex items-center gap-3">
-          <p v-if="qrGenerating === link.id" class="text-xs text-slate-400">กำลังสร้าง QR...</p>
-          <template v-else-if="qrDataUrl.get(link.id)">
-            <img
-              :src="qrDataUrl.get(link.id)"
-              alt="QR โค้ดลิงก์ชวนทีม"
-              class="w-24 h-24 rounded-lg border border-slate-200 shrink-0 bg-white"
-            />
-            <div class="min-w-0">
-              <p class="text-xs text-slate-500">สแกนเพื่อเปิดลิงก์ชวนทีมนี้โดยตรง</p>
-              <button
-                type="button"
-                class="mt-1 text-xs font-bold text-brand-600 hover:text-brand-700"
-                @click="downloadQr(link)"
+                <div
+                  class="mt-1 h-1 w-20 rounded-full overflow-hidden"
+                  :class="linkUsagePercent(link) === null ? 'bg-slate-100' : 'bg-slate-200'"
+                >
+                  <div
+                    v-if="linkUsagePercent(link) !== null"
+                    class="h-full bg-brand-500 rounded-full"
+                    :style="{ width: linkUsagePercent(link) + '%' }"
+                  />
+                </div>
+              </td>
+              <td
+                class="px-4 py-2 text-xs whitespace-nowrap"
+                :class="link.expires_at ? 'text-slate-600' : 'text-slate-400'"
               >
-                ดาวน์โหลด QR
-              </button>
-            </div>
+                {{ linkExpiryLabel(link) }}
+              </td>
+              <td class="px-4 py-2">
+                <span
+                  class="text-[11px] font-bold px-2 py-0.5 rounded-lg whitespace-nowrap"
+                  :class="linkStatus(link).usable ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                >
+                  {{ linkStatus(link).label }}
+                </span>
+              </td>
+              <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{{ formatDate(link.created_at) }}</td>
+              <td class="px-4 py-2 text-right">
+                <button
+                  v-if="!link.revoked_at"
+                  class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 whitespace-nowrap"
+                  @click="askRevokeLink(link)"
+                >
+                  {{ td('links.revoke_team') }}
+                </button>
+              </td>
+            </tr>
+            <tr v-if="isOrphanedByFlag(link)" class="border-t border-amber-100 bg-amber-50/60">
+              <td></td>
+              <td colspan="8" class="px-4 py-1.5 text-xs text-amber-700">{{ td('links.orphan_warning') }}</td>
+            </tr>
           </template>
-        </div>
-      </div>
-    </TransitionGroup>
+        </tbody>
+      </table>
+    </div>
+
+    <LinkQrModal
+      :url="qrLink?.public_url ?? null"
+      :filename="qrLink ? `invite-qr-${qrLink.id}` : 'invite-qr'"
+      :caption="td('links.caption_team')"
+      @close="qrLink = null"
+    />
 
     <ConfirmDialog
       v-model:show="showLinkRevokeConfirm"
       variant="danger"
-      title="ยกเลิกลิงก์ชวนเข้าทีม"
+      :title="td('team.revoke_title')"
       :body="
         pendingLinkRevoke
-          ? `ยกเลิกลิงก์ ${pendingLinkRevoke.label || 'ลิงก์ไม่มีชื่อ'} ของ${linkOwnerName(pendingLinkRevoke)} — คนที่กดลิงก์นี้จะสมัครไม่ได้อีก (คนที่สมัครไปแล้วยังอยู่ในทีมตามเดิม) และย้อนกลับไม่ได้`
+          ? td('team.revoke_body', '', {
+              label: pendingLinkRevoke.label || td('links.untitled'),
+              owner: linkOwnerName(pendingLinkRevoke),
+            })
           : ''
       "
       :busy="revokingLink"
