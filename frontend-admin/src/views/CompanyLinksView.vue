@@ -288,7 +288,6 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 text-[11px] text-slate-500">
-            <th class="px-3 py-2 font-bold w-24"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
             <th class="text-left px-4 py-2 font-bold">{{ td('hub.col_links') }}</th>
             <th class="text-left px-4 py-2 font-bold">{{ td('links.col_creator') }}</th>
             <th class="text-right px-4 py-2 font-bold">{{ td('hub.col_people') }}</th>
@@ -305,24 +304,26 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
             class="border-t border-slate-100"
             :class="link.is_usable ? '' : 'opacity-50'"
           >
-            <td class="px-3 py-2">
-              <button
-                type="button"
-                data-test="toggle-qr"
-                class="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition"
-                :title="td('links.qr_open')"
-                @click="qrLink = link"
-              >
-                <!-- The word carries the meaning; the glyph only has to be
-                     recognisable. An icon-only button here was a square
-                     nobody could read (human feedback, 2026-09-02). -->
-                <Icon name="qr_code" :size="28" />
-                <span class="text-[11px] font-bold">QR</span>
-              </button>
-            </td>
+            <!-- QR belongs to the URL it encodes, so it sits in this cell
+                 rather than in a column of its own at the far left of the
+                 row (human request, 2026-09-02). -->
             <td class="px-4 py-2 min-w-0">
-              <p class="font-bold text-slate-800 truncate max-w-xs">{{ link.label || link.group_label }}</p>
-              <p class="text-[11px] text-brand-700 truncate max-w-xs">{{ link.short_url }}</p>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-test="toggle-qr"
+                  class="shrink-0 inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition"
+                  :title="td('links.qr_open')"
+                  @click="qrLink = link"
+                >
+                  <Icon name="qr_code" :size="28" />
+                  <span class="text-[11px] font-bold">QR</span>
+                </button>
+                <div class="min-w-0">
+                  <p class="font-bold text-slate-800 truncate max-w-xs">{{ link.label || link.group_label }}</p>
+                  <p class="text-[11px] text-brand-700 truncate max-w-xs">{{ link.short_url }}</p>
+                </div>
+              </div>
             </td>
             <td class="px-4 py-2 text-slate-600">{{ link.created_by_name || td('common.dash') }}</td>
             <td class="px-4 py-2 text-right text-slate-700">{{ link.unique_click_count }}</td>

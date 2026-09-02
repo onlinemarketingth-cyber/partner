@@ -292,7 +292,6 @@ defineProps<{ embedded?: boolean }>()
       <table class="w-full text-sm">
         <thead>
           <tr class="bg-slate-50 text-[11px] text-slate-500">
-            <th class="px-3 py-2 font-bold w-24"><span class="sr-only">{{ td('links.col_qr') }}</span></th>
             <th class="text-left px-4 py-2 font-bold">{{ td('links.col_name') }}</th>
             <th class="text-left px-4 py-2 font-bold">{{ td('links.col_owner') }}</th>
             <th class="text-left px-4 py-2 font-bold">{{ td('links.col_link') }}</th>
@@ -306,37 +305,36 @@ defineProps<{ embedded?: boolean }>()
         <tbody>
           <template v-for="link in visibleLinks" :key="link.id">
             <tr class="border-t border-slate-100 align-middle" :class="link.revoked_at ? 'opacity-60' : ''">
-              <td class="px-3 py-2">
-                <button
-                  type="button"
-                  data-test="toggle-qr"
-                  class="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition"
-                  :title="td('links.qr_open')"
-                  @click="qrLink = link"
-                >
-                  <!-- The word carries the meaning; the glyph only has to be
-                       recognisable. An icon-only button here was a square
-                       nobody could read (human feedback, 2026-09-02). -->
-                  <Icon name="qr_code" :size="28" />
-                  <span class="text-[11px] font-bold">QR</span>
-                </button>
-              </td>
               <td class="px-4 py-2 min-w-0">
                 <p class="font-bold text-slate-800 truncate max-w-[200px]">{{ link.label || td('links.untitled') }}</p>
               </td>
               <td class="px-4 py-2 text-slate-600 truncate max-w-[160px]">{{ linkOwnerName(link) }}</td>
+              <!-- QR lives in the ลิงก์ column beside copy — same reasoning as
+                   CompanySignupLinksView: both buttons act on this one URL. -->
               <td class="px-4 py-2">
-                <button
-                  class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-[240px]"
-                  :title="link.public_url"
-                  @click="copyInviteLink(link)"
-                >
-                  <span class="truncate">{{ link.public_url }}</span>
-                  <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
-                  <span class="shrink-0 font-normal text-slate-400">
-                    {{ copiedId === link.id ? td('common.copied') : td('common.copy') }}
-                  </span>
-                </button>
+                <div class="flex items-center gap-2">
+                  <button
+                    class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-700 hover:text-brand-800 max-w-[240px]"
+                    :title="link.public_url"
+                    @click="copyInviteLink(link)"
+                  >
+                    <span class="truncate">{{ link.public_url }}</span>
+                    <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
+                    <span class="shrink-0 font-normal text-slate-400">
+                      {{ copiedId === link.id ? td('common.copied') : td('common.copy') }}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    data-test="toggle-qr"
+                    class="shrink-0 inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 hover:bg-brand-50 transition"
+                    :title="td('links.qr_open')"
+                    @click="qrLink = link"
+                  >
+                    <Icon name="qr_code" :size="28" />
+                    <span class="text-[11px] font-bold">QR</span>
+                  </button>
+                </div>
               </td>
               <td class="px-4 py-2 whitespace-nowrap">
                 <span class="text-slate-700 tabular-nums">{{ linkUsageLabel(link) }}</span>
@@ -380,7 +378,6 @@ defineProps<{ embedded?: boolean }>()
               </td>
             </tr>
             <tr v-if="isOrphanedByFlag(link)" class="border-t border-amber-100 bg-amber-50/60">
-              <td></td>
               <td colspan="8" class="px-4 py-1.5 text-xs text-amber-700">{{ td('links.orphan_warning') }}</td>
             </tr>
           </template>
