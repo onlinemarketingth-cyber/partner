@@ -45,6 +45,23 @@ return [
             NotificationType::ApprovalStatus->value => true,
             NotificationType::CommissionPaid->value => true,
             NotificationType::OrderPaymentConfirmed->value => true,
+            /*
+             * 2026-09-03. Both ENABLED, by the same test as the rest: would
+             * the agent be worse off finding out next time they opened the
+             * app?
+             *
+             * order_payment_failed — yes. A customer whose card was declined
+             * is waiting for somebody to help them, and the agent is the only
+             * person who will call. A day's delay is a lost sale. (Producer
+             * side sends at most one per order per day, so a customer
+             * fumbling a card three times is still one mail.)
+             *
+             * order_refund_reported — yes, and more so: their commission may
+             * be reversed. Learning that from a balance that changed without
+             * explanation is the worst possible version of this.
+             */
+            NotificationType::OrderPaymentFailed->value => true,
+            NotificationType::OrderRefundReported->value => true,
             NotificationType::Announcement->value => true,
 
             NotificationType::ExamPassed->value => false,

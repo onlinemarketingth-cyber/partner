@@ -2,12 +2,15 @@
 
 namespace App\Services\Payment;
 
+use App\Enums\NotificationType;
 use App\Enums\OrderStatus;
 use App\Enums\UserRole;
 use App\Models\AuditLog;
+use App\Models\Notification as InAppNotification;
 use App\Models\Order;
 use App\Models\User;
 use App\Notifications\GatewayRefundReportedNotification;
+use App\Services\Notification\NotificationService;
 use App\Services\Order\OrderService;
 use App\Services\Payment\Gateways\GatewayException;
 use App\Services\Payment\Gateways\WebhookOutcome;
@@ -53,6 +56,7 @@ class GatewayPaymentService
         private readonly OrderService $orders,
         private readonly CompanyPaymentGatewayService $gateways,
         private readonly PaymentGatewayRegistry $registry,
+        private readonly NotificationService $notifications,
     ) {}
 
     /**
@@ -271,6 +275,14 @@ class GatewayPaymentService
             'charge_id' => $outcome->chargeId,
             'reason' => $outcome->failureMessage,
         ]);
+
+        $this->tellTheAgent(
+            $order,
+            NotificationType::OrderPaymentFailed,
+            'ลูกค้าชำระเงินไม่สำเร็จ',
+            "คำสั่งซื้อ {$order->order_number}: ".($outcome->failureMessage ?? 'ชำระเงินไม่สำเร็จ')
+                .' — ลิงก์ชำระเงินเดิมยังใช้ได้ ลูกค้าลองใหม่ได้เลย',
+        );
     }
 
     /**
@@ -295,6 +307,14 @@ class GatewayPaymentService
             'order_id' => $order->id,
             'charge_id' => $outcome->chargeId,
         ]);
+
+        $this->tellTheAgent(
+            $order,
+            NotificationType::OrderPaymentFailed,
+            'ลูกค้ายังไม่ได้ชำระเงิน',
+            "คำสั่งซื้อ {$order->order_number}: ลูกค้าเปิดหน้าชำระเงินแล้วแต่ไม่ได้จ่ายจนหมดเวลา"
+                .' — ลิงก์ชำระเงินเดิมยังใช้ได้ ลองติดต่อกลับได้เลย',
+        );
     }
 
     /**
@@ -345,6 +365,99 @@ class GatewayPaymentService
         ]);
 
         $this->tellTheAdmins($order, $outcome->amountSatang);
+
+        $this->tellTheAgent(
+            $order,
+            NotificationType::OrderRefundReported,
+            'ผู้ให้บริการแจ้งการคืนเงิน',
+            "คำสั่งซื้อ {$order->order_number} ถูกแจ้งคืนเงิน — ค่าคอมมิชชั่นของคุณยังไม่ถูกกลับรายการ"
+                .' ผู้ดูแลกำลังตรวจสอบและจะเป็นผู้ตัดสินใจ',
+            // Refunds are rare and each one matters to this agent's money, so
+            // unlike a retried card this is NOT collapsed to one a day.
+            once: false,
+        );
+    }
+
+    /**
+     * Tell the agent who owns this order.
+     *
+     * ── WHY THE AGENT, NOT ONLY THE ADMIN ──
+     *
+     * A declined card, an abandoned checkout and a refund are all things
+     * somebody has to ACT on, and the person who can act is the one who sold
+     * to that customer. Admins were being told about the money; the agent
+     * was the one person the payment path never spoke to, while being the
+     * only one who would pick up the phone.
+     *
+     * NotificationService is the right vehicle here (unlike for admins, who
+     * get a mail): it writes the in-app row the agent portal reads AND
+     * emails, honouring the agent's own email preference, which an admin
+     * alert does not have to.
+     *
+     * ── $once ──
+     *
+     * A customer fumbling a card produces one webhook per attempt. Three
+     * mails saying the same thing in five minutes is how an agent learns to
+     * delete mail from this system unread, so a failure collapses to one per
+     * order per day. A refund does not: it is rare, and each one is about
+     * this agent's own money.
+     *
+     * ── IT CANNOT THROW ──
+     *
+     * Same rule as tellTheAdmins(): this runs inside the provider's webhook
+     * request, the fact is already recorded, and a notification failure must
+     * not turn a delivered webhook into a retry storm.
+     */
+    private function tellTheAgent(
+        Order $order,
+        NotificationType $type,
+        string $title,
+        string $body,
+        bool $once = true,
+    ): void {
+        try {
+            $agent = $order->agent;
+
+            if ($agent === null) {
+                return;
+            }
+
+            if ($once && $this->alreadyToldToday($agent->id, $type, $order->id)) {
+                return;
+            }
+
+            $this->notifications->notify(
+                $agent,
+                $type,
+                $title,
+                $body,
+                '/orders',
+                ['order_id' => $order->id],
+            );
+        } catch (Throwable $e) {
+            Log::error('Gateway outcome recorded but the agent notification failed', [
+                'order_id' => $order->id,
+                'type' => $type->value,
+                'reason' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Has this agent already been told about this order today?
+     *
+     * Keyed on the ORDER, from the notification's own `data` payload, so two
+     * different orders failing on the same day are two notifications — it is
+     * repetition about one order that is noise, not volume in general.
+     */
+    private function alreadyToldToday(int $agentId, NotificationType $type, int $orderId): bool
+    {
+        return InAppNotification::withoutGlobalScopes()
+            ->where('user_id', $agentId)
+            ->where('type', $type->value)
+            ->where('data->order_id', $orderId)
+            ->where('created_at', '>=', now()->subDay())
+            ->exists();
     }
 
     /**
