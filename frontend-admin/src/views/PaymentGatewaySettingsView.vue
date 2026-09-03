@@ -363,12 +363,29 @@ function formatVerifiedAt(value: string | null): string {
         {{ loadError }}
       </div>
 
-      <div v-else class="mt-4 space-y-4 max-w-3xl">
+      <!--
+        2026-09-03 (human request) — Omise and Stripe side by side. They are
+        alternatives to each other and both are short, so a single column left
+        two thirds of a wide screen empty and pushed the second one below the
+        fold.
+
+        One v-for still, with col-span-2 on the manual card rather than two
+        separate loops: the card body is ~150 lines and splitting the list
+        would mean maintaining two copies of it.
+
+        items-start — each card keeps its own height. Stretching them to match
+        would pad whichever gateway has fewer credential fields with dead
+        space to line up with the other.
+      -->
+      <div v-else class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4 items-start max-w-6xl">
         <div
           v-for="gateway in gateways"
           :key="gateway.provider"
           class="bg-white/95 border rounded-2xl p-5"
-          :class="gateway.is_active ? 'border-brand-300 ring-1 ring-brand-100' : 'border-slate-200'"
+          :class="[
+            gateway.is_active ? 'border-brand-300 ring-1 ring-brand-100' : 'border-slate-200',
+            gateway.requires_human_verification ? 'xl:col-span-2' : '',
+          ]"
         >
           <div class="flex items-start justify-between gap-3">
             <div>

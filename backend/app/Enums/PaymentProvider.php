@@ -41,7 +41,11 @@ enum PaymentProvider: string
         return match ($this) {
             self::Manual => 'โอนเงิน / PromptPay (ตรวจสลิปเอง)',
             self::Omise => 'Omise (Opn Payments)',
-            self::Stripe => 'Stripe (บัตรเครดิต / PromptPay)',
+            // 2026-09-03 (human decision) — PromptPay is collected through OUR
+            // own flow only, never through Stripe. Naming it here would
+            // advertise a method this gateway no longer offers; see
+            // StripeGateway's payment_method_types.
+            self::Stripe => 'Stripe (บัตรเครดิต / เดบิต)',
         };
     }
 

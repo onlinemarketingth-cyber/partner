@@ -208,7 +208,25 @@ class StripeGateway implements PaymentGateway
                     'success_url' => $payUrl.'?stripe=success',
                     'cancel_url' => $payUrl.'?stripe=cancelled',
                     'client_reference_id' => $order->public_token,
-                    'payment_method_types' => ['card', 'promptpay'],
+                    /*
+                     * CARD ONLY — 2026-09-03, human decision.
+                     *
+                     * PromptPay is collected through ManualGateway, where the
+                     * QR is built from the company's own proxy and the money
+                     * lands in the company's own account with no fee and no
+                     * intermediary. Offering it through Stripe as well would
+                     * put the same method on the pay page twice, settling into
+                     * two different places depending on which button the
+                     * customer happened to press.
+                     *
+                     * Listing it explicitly was also a latent failure: Stripe
+                     * rejects the whole Checkout Session when the account
+                     * cannot do promptpay (a non-Thai account, or one that has
+                     * not enabled it), so a company with perfectly good card
+                     * keys would have had customers unable to pay by card
+                     * either.
+                     */
+                    'payment_method_types' => ['card'],
                     'line_items' => [
                         [
                             'quantity' => 1,
