@@ -173,11 +173,6 @@ const savingPayout = ref(false)
 const payoutError = ref('')
 const payoutNotice = ref('')
 
-/** Has this company got anywhere for the money to go at all? */
-const payoutIsEmpty = computed(
-  () => !payout.value.payment_promptpay_id.trim() && !payout.value.payment_bank_account_number.trim(),
-)
-
 async function loadPayout(): Promise<void> {
   payoutError.value = ''
   payoutNotice.value = ''
@@ -423,16 +418,6 @@ function formatVerifiedAt(value: string | null): string {
             nothing is duplicated into the gateway credentials table.
           -->
           <div v-if="gateway.requires_human_verification" class="mt-4 space-y-3">
-            <div
-              v-if="payoutIsEmpty"
-              class="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2"
-            >
-              <Icon name="alert" :size="14" class="mt-0.5 shrink-0" />
-              <span>
-                ยังไม่ได้ตั้งพร้อมเพย์หรือเลขบัญชี — ช่องทางนี้เปิดใช้งานอยู่ แต่ลูกค้าที่เปิดลิงก์จ่ายเงินจะไม่มีปลายทางให้โอน
-              </span>
-            </div>
-
             <div>
               <label class="text-xs font-bold text-slate-500 block mb-1">พร้อมเพย์ (เบอร์โทร หรือ เลขประจำตัวผู้เสียภาษี)</label>
               <input
@@ -443,7 +428,6 @@ function formatVerifiedAt(value: string | null): string {
                 placeholder="0812345678"
                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
               />
-              <p class="text-[11px] text-slate-400 mt-1">ค่านี้คือปลายทางที่ QR บนหน้าจ่ายเงินสร้างขึ้นมา</p>
             </div>
 
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
