@@ -39,6 +39,13 @@ vi.mock('@/api/client', () => ({
   },
   ApiError: class extends Error {},
   ensureCsrfCookie: vi.fn().mockResolvedValue(undefined),
+  // The auth store calls these directly (token mode, X-Auth-Mode: token). A
+  // module mock replaces the WHOLE module, so anything the store imports and
+  // this object omits throws the moment it is called — which is how logout()
+  // started failing here without logout itself changing.
+  getToken: vi.fn(() => null),
+  setToken: vi.fn(),
+  setUnauthorizedHandler: vi.fn(),
 }))
 
 import router from '../index'

@@ -1,24 +1,14 @@
 /**
- * The signup form's two identity fields — what reaches the wire, and what
- * the person is told before they get there.
+ * What the signup form tells a recruit about their email address.
  *
- * ── THE NATIONAL ID ──
+ * ── WHERE THE NATIONAL ID WENT (2026-08-28, commit 632e1fd) ──
  *
- * Reported 2026-08-21 from /j/aN3tDZqGjR. Two separate things came out of
- * it, and only one was a bug:
- *
- *   The number that was rejected, 1234567890123, is genuinely invalid — its
- *   mod-11 check digit is 1, not 3. App\Rules\ThaiNationalId was right.
- *
- *   The real defect was that the card's printed format could not be typed.
- *   maxlength="13" with no normalisation meant four separators ate four of
- *   the thirteen slots, so the server said "must be 13 digits" to somebody
- *   who had typed thirteen. It is now five boxes matching the card's own
- *   groups (NationalIdSegments.vue, which owns its own behaviour tests).
- *
- * What is asserted HERE is only what the two must agree on: that the right
- * control appears for the right document type, and that thirteen bare
- * digits are what leave the form.
+ * This file used to test the ID field as well. That field is no longer on
+ * the signup form: collecting a national ID before somebody even has an
+ * account was moved to ProfileSettingsView, where they are asked for it once
+ * there is a payout to make. The tests came out with the field, and their
+ * contract went with it — see ProfileSettingsView.spec.ts for the document
+ * type switch, and NationalIdSegments.spec.ts for the typing behaviour.
  *
  * ── THE EMAIL ──
  *
@@ -93,18 +83,6 @@ async function mountOnTheForm() {
 
 type Wrapper = Awaited<ReturnType<typeof mountOnTheForm>>
 
-/** The boxes belonging to the Thai ID field, in order. */
-function idBoxes(wrapper: Wrapper) {
-  return wrapper.findAll('[role="group"] input')
-}
-
-async function switchToPassport(wrapper: Wrapper) {
-  const button = wrapper.findAll('button').find((b) => b.text().includes('หนังสือเดินทาง'))
-  expect(button).toBeTruthy()
-  await button!.trigger('click')
-  await flushPromises()
-}
-
 /**
  * Fill everything the form checks before it will POST /register.
  *
@@ -117,6 +95,10 @@ async function fillTheRestOfTheForm(wrapper: Wrapper) {
   await wrapper.find('#first_name').setValue('สมหญิง')
   await wrapper.find('#last_name').setValue('ทดสอบ')
   await wrapper.find('#email').setValue('somying@example.com')
+  // Required since 2026-08-27, and validateForm() refuses before the POST
+  // without it — a missing phone here would make this suite pass or fail on
+  // the wrong rule.
+  await wrapper.find('#phone').setValue('0812345678')
   await wrapper.find('#password').setValue('correct horse 8')
   await wrapper.find('#password_confirmation').setValue('correct horse 8')
 }
@@ -134,59 +116,6 @@ beforeEach(() => {
   post.mockReset()
   get.mockReset()
   get.mockResolvedValue({ data: {} })
-})
-
-describe('RegisterView — the Thai national ID field', () => {
-  it('shows the card\'s five printed groups, not one long box', async () => {
-    const wrapper = await mountOnTheForm()
-
-    expect(idBoxes(wrapper).map((b) => Number(b.attributes('maxlength')))).toEqual([1, 4, 5, 2, 1])
-  })
-
-  it('sends thirteen bare digits when the number is typed with the card\'s dashes', async () => {
-    const wrapper = await mountOnTheForm()
-    await fillTheRestOfTheForm(wrapper)
-
-    // Straight into the first box, separators and all — what somebody
-    // holding the card actually does.
-    await idBoxes(wrapper)[0]!.setValue('1-1017-00230-70-8')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(registerPayload()?.national_id).toBe('1101700230708')
-  })
-
-  it('gives a passport ONE field, because a passport has no printed groups', async () => {
-    const wrapper = await mountOnTheForm()
-    await switchToPassport(wrapper)
-
-    expect(wrapper.find('[role="group"]').exists()).toBe(false)
-    expect(wrapper.find('#national_id').exists()).toBe(true)
-  })
-
-  it('does not strip anything from a passport number', async () => {
-    const wrapper = await mountOnTheForm()
-    await switchToPassport(wrapper)
-
-    await wrapper.find('#national_id').setValue('AB1234567')
-
-    expect((wrapper.find('#national_id').element as HTMLInputElement).value).toBe('AB1234567')
-  })
-
-  it('does not judge the checksum in the browser — that is the server\'s one job here', async () => {
-    // 1101700230700 fails mod-11. It must still be typeable AND submittable:
-    // if this ever fails, a checksum has been copied into Vue and the two
-    // implementations have started drifting.
-    const wrapper = await mountOnTheForm()
-    await fillTheRestOfTheForm(wrapper)
-
-    await idBoxes(wrapper)[0]!.setValue('1101700230700')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(registerPayload()?.national_id).toBe('1101700230700')
-    expect(wrapper.text()).not.toContain('เลขตรวจสอบ')
-  })
 })
 
 describe('RegisterView — telling the recruit their email is taken', () => {
@@ -339,7 +268,6 @@ describe('RegisterView — telling the recruit their email is taken', () => {
     })
     await fillTheRestOfTheForm(wrapper)
     await enterEmail(wrapper, 'somchai@example.com')
-    await idBoxes(wrapper)[0]!.setValue('1101700230708')
 
     await wrapper.find('form').trigger('submit')
     await flushPromises()
@@ -354,7 +282,6 @@ describe('RegisterView — telling the recruit their email is taken', () => {
     emailIs(false)
     await fillTheRestOfTheForm(wrapper)
     await enterEmail(wrapper, 'somchai@example.com')
-    await idBoxes(wrapper)[0]!.setValue('1101700230708')
 
     await wrapper.find('form').trigger('submit')
     await flushPromises()
