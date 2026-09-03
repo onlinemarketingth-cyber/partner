@@ -55,6 +55,15 @@ interface Gateway {
   provider: string
   label: string
   requires_human_verification: boolean
+  /**
+   * Always on, and therefore not a choice.
+   *
+   * 2026-09-03 — bank transfer / PromptPay is available in every company and
+   * always was; turning Stripe on never should have turned it off. It is
+   * listed here as a channel that EXISTS, while is_active below answers a
+   * different question: which ONLINE gateway sits beside it.
+   */
+  always_available: boolean
   is_active: boolean
   is_live: boolean
   is_configured: boolean
@@ -178,6 +187,39 @@ function storedValueLabel(field: GatewayField): string {
   if (!field.secret) return field.value || '—'
 
   return field.is_set ? '••••••••••••  (เก็บเข้ารหัสไว้)' : 'ยังไม่ได้ตั้งค่า'
+}
+
+/** The transfer/PromptPay channel — shown, never selected. */
+const alwaysOnGateway = computed(() => gateways.value.find((g) => g.always_available) ?? null)
+
+/** The ones an admin actually picks between. */
+const onlineGateways = computed(() => gateways.value.filter((g) => !g.always_available))
+
+const hasOnlineGateway = computed(() => onlineGateways.value.some((g) => g.is_active))
+
+const deactivating = ref(false)
+
+/**
+ * Choose "no online gateway".
+ *
+ * A real setting, not the absence of one: a company can deliberately take
+ * transfers only, and the screen has to let them say so rather than leaving
+ * whichever gateway was picked last switched on forever.
+ */
+async function useNoOnlineGateway(): Promise<void> {
+  if (activeCompany.companyId === null) return
+  deactivating.value = true
+  try {
+    const res = await api.post<{ data: { active_provider: string | null; gateways: Gateway[] } }>(
+      `${basePath.value}/deactivate`,
+      {},
+    )
+    applyOverview(res.data)
+  } catch (e) {
+    loadError.value = messageFrom(e, 'ปิดช่องทางออนไลน์ไม่สำเร็จ')
+  } finally {
+    deactivating.value = false
+  }
 }
 
 function applyOverview(data: { active_provider: string | null; gateways: Gateway[] }): void {
@@ -486,24 +528,71 @@ function formatVerifiedAt(value: string | null): string {
         would pad whichever gateway has fewer credential fields with dead
         space to line up with the other.
       -->
-      <div v-else class="mt-4 grid grid-cols-1 xl:grid-cols-2 gap-4 items-start max-w-6xl">
-        <div
-          v-for="gateway in gateways"
-          :key="gateway.provider"
-          class="bg-white/95 border rounded-2xl p-5"
-          :class="[
-            gateway.is_active ? 'border-brand-300 ring-1 ring-brand-100' : 'border-slate-200',
-            gateway.requires_human_verification ? 'xl:col-span-2' : '',
-          ]"
-        >
+      <!--
+        2026-09-03 (human decision) — TWO SECTIONS, because there are two
+        different questions on this screen and they were being asked as one.
+
+        Bank transfer / PromptPay is always available: a customer picks their
+        method when they pay, and no Thai seller wants turning Stripe on to
+        turn transfers off. It is presented as a fact, with no control.
+
+        Below it, the only decision an admin actually makes — WHICH online
+        gateway sits beside the transfer option, or none — is drawn as what it
+        is: a single-choice list. Three equal cards with matching badges could
+        not say "pick one", so nobody read it that way.
+      -->
+      <div v-else class="mt-4 max-w-4xl space-y-5">
+        <template v-for="gateway in gateways" :key="gateway.provider">
+          <!--
+            The section heading sits INSIDE the loop, before the first online
+            gateway, so there is still one v-for and one copy of the ~200-line
+            card body. Two loops would mean two copies to keep in step.
+          -->
+          <p
+            v-if="!gateway.always_available && gateway.provider === onlineGateways[0]?.provider"
+            class="pt-1 text-xs font-bold text-slate-500"
+          >
+            ช่องทางชำระเงินออนไลน์ — เลือกใช้ได้ทีละเจ้า
+          </p>
+
+          <div
+            class="bg-white/95 border rounded-2xl p-5"
+            :class="gateway.always_available
+              ? 'border-brand-200 ring-1 ring-brand-50'
+              : (gateway.is_active ? 'border-brand-300 ring-1 ring-brand-100' : 'border-slate-200')"
+          >
+          <div class="flex items-start gap-3">
+            <!--
+              The radio is the selection control, and it exists only for the
+              gateways that ARE a selection. A filled circle beside two empty
+              ones says "one of these" without a sentence explaining it —
+              which is what three equally-styled cards could never do.
+            -->
+            <button
+              v-if="!gateway.always_available"
+              type="button"
+              class="mt-0.5 w-[18px] h-[18px] shrink-0 rounded-full border-2 flex items-center justify-center transition"
+              :class="gateway.is_active ? 'border-brand-600' : 'border-slate-300 hover:border-brand-400'"
+              :disabled="activatingProvider === gateway.provider || !gateway.is_verified"
+              :title="gateway.is_verified ? 'เลือกใช้ช่องทางนี้' : 'ต้องตั้งค่าและตรวจสอบการเชื่อมต่อให้ผ่านก่อน'"
+              @click="activateGateway(gateway)"
+            >
+              <span v-if="gateway.is_active" class="w-2.5 h-2.5 rounded-full bg-brand-600"></span>
+            </button>
+
+            <div class="min-w-0 flex-1">
           <div class="flex items-start justify-between gap-3">
             <div>
               <h2 class="text-sm font-bold text-slate-900 flex items-center gap-2">
                 {{ gateway.label }}
                 <span
-                  v-if="gateway.is_active"
+                  v-if="gateway.always_available"
                   class="px-2 py-0.5 rounded-full bg-brand-600 text-white text-[11px] font-bold"
-                >ใช้งานอยู่</span>
+                >เปิดใช้เสมอ</span>
+                <span
+                  v-else-if="gateway.is_active"
+                  class="px-2 py-0.5 rounded-full bg-brand-600 text-white text-[11px] font-bold"
+                >รับเงินอยู่</span>
                 <!-- A live/test badge, because a company collecting real
                      money through test keys looks identical everywhere else
                      in this product. -->
@@ -535,15 +624,10 @@ function formatVerifiedAt(value: string | null): string {
               </p>
             </div>
 
-            <button
-              v-if="!gateway.is_active"
-              type="button"
-              class="btn-secondary shrink-0"
-              :disabled="activatingProvider === gateway.provider"
-              @click="activateGateway(gateway)"
-            >
-              {{ activatingProvider === gateway.provider ? 'กำลังเปิด...' : 'เปิดใช้งานช่องทางนี้' }}
-            </button>
+            <!-- No activate button here any more. The manual card cannot be
+                 activated (it is never off) and an online gateway is chosen
+                 by its radio row below, where the mutual exclusivity is
+                 visible. -->
           </div>
 
           <p v-if="gateway.is_verified" class="mt-3 text-xs text-emerald-700 flex items-start gap-1.5">
@@ -748,7 +832,40 @@ function formatVerifiedAt(value: string | null): string {
           <p v-if="noticeFor[gateway.provider]" class="mt-2 text-xs font-bold text-emerald-600">
             {{ noticeFor[gateway.provider] }}
           </p>
-        </div>
+            </div><!-- /min-w-0 flex-1 -->
+          </div><!-- /flex items-start gap-3 -->
+          </div><!-- /card -->
+        </template>
+
+        <!--
+          "No online gateway" is a real setting, not the absence of one: a
+          company can deliberately take transfers only, and without this row
+          whichever gateway was picked last stays on forever with no way to
+          say otherwise. It is the same radio, so it reads as one more option
+          rather than a destructive action.
+        -->
+        <button
+          type="button"
+          class="w-full text-left bg-white/95 border rounded-2xl p-4 flex items-start gap-3 transition"
+          :class="hasOnlineGateway ? 'border-slate-200 hover:border-brand-300' : 'border-brand-300 ring-1 ring-brand-100'"
+          :disabled="deactivating"
+          @click="useNoOnlineGateway"
+        >
+          <span
+            class="mt-0.5 w-[18px] h-[18px] shrink-0 rounded-full border-2 flex items-center justify-center"
+            :class="hasOnlineGateway ? 'border-slate-300' : 'border-brand-600'"
+          >
+            <span v-if="!hasOnlineGateway" class="w-2.5 h-2.5 rounded-full bg-brand-600"></span>
+          </span>
+          <span class="min-w-0">
+            <span class="block text-sm font-bold text-slate-900">
+              {{ deactivating ? 'กำลังปิด...' : 'ไม่ใช้ช่องทางออนไลน์' }}
+            </span>
+            <span class="block mt-1 text-xs text-slate-400">
+              รับเฉพาะโอนเงิน / พร้อมเพย์ — คีย์ที่ตั้งไว้ยังอยู่ครบ กลับมาเลือกใหม่ได้ทุกเมื่อ
+            </span>
+          </span>
+        </button>
       </div>
     </template>
   </main>

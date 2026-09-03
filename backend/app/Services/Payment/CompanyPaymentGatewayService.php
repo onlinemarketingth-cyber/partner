@@ -60,7 +60,17 @@ class CompanyPaymentGatewayService
                 'provider' => $provider->value,
                 'label' => $provider->label(),
                 'requires_human_verification' => $provider->requiresHumanVerification(),
-                'is_active' => $company->payment_provider === $provider->value,
+                /*
+                 * 2026-09-03 — the manual flow is ALWAYS available and is not
+                 * a choice. Reporting it as is_active/inactive would put it
+                 * back in a race it is not running: a company does not switch
+                 * bank transfer off by switching Stripe on, and never did
+                 * want to. `payment_provider` now answers only "which online
+                 * gateway", so the manual row answers a different question.
+                 */
+                'always_available' => $provider->requiresHumanVerification(),
+                'is_active' => ! $provider->requiresHumanVerification()
+                    && $company->payment_provider === $provider->value,
                 'is_live' => (bool) ($row?->is_live ?? false),
                 'is_configured' => $row !== null,
                 'is_verified' => (bool) $row?->isVerified(),
@@ -176,6 +186,18 @@ class CompanyPaymentGatewayService
      */
     public function activate(Company $company, PaymentProvider $provider): Company
     {
+        /*
+         * 2026-09-03 — the manual flow cannot be "activated" because it is
+         * never off. Allowing it here would write 'manual' back into a column
+         * that now means "which ONLINE gateway", and the next reader would
+         * take that to mean the company has an online gateway called manual.
+         */
+        if ($provider->requiresHumanVerification()) {
+            throw ValidationException::withMessages([
+                'provider' => 'ช่องทางโอนเงิน/พร้อมเพย์เปิดใช้งานอยู่เสมอ ไม่ต้องเลือก',
+            ]);
+        }
+
         $row = CompanyPaymentGatewaySetting::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->where('provider', $provider->value)
@@ -194,6 +216,23 @@ class CompanyPaymentGatewayService
          * This method is the only writer.
          */
         $company->forceFill(['payment_provider' => $provider->value])->save();
+
+        return $company->refresh();
+    }
+
+    /**
+     * Stop offering any online gateway. Bank transfer is unaffected.
+     *
+     * NULL, not 'manual': since 2026-09-03 this column answers "which online
+     * gateway", and the honest answer to "none" is nothing rather than the
+     * name of a flow that lives elsewhere.
+     *
+     * forceFill for the same reason activate() uses it — this method and that
+     * one are the only writers of a column that decides where money goes.
+     */
+    public function deactivateOnlineGateway(Company $company): Company
+    {
+        $company->forceFill(['payment_provider' => null])->save();
 
         return $company->refresh();
     }

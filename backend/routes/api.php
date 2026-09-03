@@ -1064,6 +1064,9 @@ Route::prefix('v1')->group(function () {
         Route::get('/companies/{company}/payment-gateways', [CompanyPaymentGatewayController::class, 'index']);
         Route::put('/companies/{company}/payment-gateways/{provider}', [CompanyPaymentGatewayController::class, 'update']);
         Route::post('/companies/{company}/payment-gateways/activate', [CompanyPaymentGatewayController::class, 'activate']);
+        // 2026-09-03 — "no online gateway" is a real setting, not the absence
+        // of one, and bank transfer keeps working either way.
+        Route::post('/companies/{company}/payment-gateways/deactivate', [CompanyPaymentGatewayController::class, 'deactivate']);
 
         Route::get('/platform/mail-settings', [PlatformMailSettingController::class, 'show']);
         Route::put('/platform/mail-settings', [PlatformMailSettingController::class, 'update']);

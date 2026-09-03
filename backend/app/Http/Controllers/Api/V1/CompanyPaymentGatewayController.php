@@ -83,6 +83,28 @@ class CompanyPaymentGatewayController extends Controller
     }
 
     /**
+     * Turn the online gateway off. Bank transfer keeps working.
+     *
+     * Its own endpoint rather than activate(null): the request body for
+     * activate is a required provider, and loosening that to "sometimes a
+     * provider, sometimes nothing" would make the one call that redirects a
+     * tenant's money ambiguous about what it was asked to do.
+     */
+    public function deactivate(Request $request, Company $company): JsonResponse
+    {
+        $this->authorizeGateway($request);
+
+        $company = $this->service->deactivateOnlineGateway($company);
+
+        return response()->json([
+            'data' => [
+                'active_provider' => $company->payment_provider,
+                'gateways' => $this->service->overview($company),
+            ],
+        ]);
+    }
+
+    /**
      * 404 for an unknown provider, never a fallback.
      *
      * Defaulting to Manual here would let a typo in a URL quietly reconfigure
