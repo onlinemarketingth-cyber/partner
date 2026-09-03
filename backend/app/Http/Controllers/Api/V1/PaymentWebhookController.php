@@ -123,25 +123,22 @@ class PaymentWebhookController extends Controller
             return response()->json(['message' => 'unmatched']);
         }
 
+        /*
+         * 2026-09-03 — every outcome now lands somewhere a human can see.
+         *
+         * Three of these four used to end in a log line and nothing else, so
+         * the product could not tell an admin that a customer's card had been
+         * declined, that a checkout had timed out, or that the gateway had
+         * refunded a sale. Each handler writes the fact onto the order and
+         * into the audit trail; see GatewayPaymentService for what each one
+         * deliberately does NOT do (none of them changes the order's status,
+         * and a refund never touches the commission ledger).
+         */
         match ($outcome->result) {
             WebhookResult::Paid => $payments->applyPaid($order, $outcome),
             WebhookResult::Failed => $payments->applyFailed($order, $outcome),
-            /*
-             * A refund is RECORDED AND NOT ACTED ON, deliberately.
-             *
-             * Reversing a sale means reversing an agent's commission, and
-             * BR-4 rows are immutable — the reversal is its own ledger entry
-             * with its own rules (CommissionReversalService). Letting a
-             * webhook trigger that would mean money is clawed back from an
-             * agent's balance by an event nobody in this company reviewed.
-             * It stays a human decision; this line makes sure the human
-             * knows there is one to make.
-             */
-            WebhookResult::Refunded => Log::warning('Refund reported by gateway — needs a human decision', [
-                'order_id' => $order->id,
-                'order_number' => $order->order_number,
-                'charge_id' => $outcome->chargeId,
-            ]),
+            WebhookResult::Expired => $payments->applyExpired($order, $outcome),
+            WebhookResult::Refunded => $payments->applyRefunded($order, $outcome),
             default => null,
         };
 

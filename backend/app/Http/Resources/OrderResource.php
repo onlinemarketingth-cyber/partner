@@ -104,6 +104,29 @@ class OrderResource extends JsonResource
              * in every list payload.
              */
             'gateway_payment_received' => $this->hasGatewayPayment(),
+            /*
+             * 2026-09-03 — the attempts that did NOT succeed.
+             *
+             * These are the only signal a screen has that a customer TRIED.
+             * Without them an order a customer has been unable to pay three
+             * times looks exactly like one nobody has opened, and the two
+             * call for opposite actions from an admin.
+             *
+             * The message is already Thai and already human-readable when it
+             * is written, so it is passed through rather than re-derived from
+             * a code the client would have to keep a table of.
+             */
+            'last_payment_error' => $this->last_payment_error,
+            'last_payment_error_at' => $this->last_payment_error_at,
+            /*
+             * The GATEWAY's claim that it refunded, which is not the same
+             * fact as `refunded_at` below it — that one is this company's own
+             * reversal, made by a person, and it carries the commission
+             * ledger with it. This is a claim from outside awaiting that
+             * decision, and it must stay visibly separate from it.
+             */
+            'refund_reported_at' => $this->refund_reported_at,
+            'refund_reported_satang' => $this->refund_reported_satang,
             'paid_at' => $this->paid_at,
             // TASK-176 §1.3 — WHO confirmed this payment. Already recorded in
             // orders.verified_by_user_id since ADR-017; it was simply never

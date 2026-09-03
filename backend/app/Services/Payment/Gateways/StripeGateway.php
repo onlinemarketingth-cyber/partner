@@ -427,6 +427,16 @@ class StripeGateway implements PaymentGateway
             );
         }
 
+        if ($type === 'checkout.session.expired') {
+            return new WebhookOutcome(
+                result: WebhookResult::Expired,
+                chargeId: $this->chargeIdFrom($object),
+                amountSatang: isset($object['amount_total']) ? (int) $object['amount_total'] : null,
+                orderToken: $orderToken,
+                failureMessage: 'ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด',
+            );
+        }
+
         if ($type === 'checkout.session.async_payment_failed') {
             return new WebhookOutcome(
                 result: WebhookResult::Failed,

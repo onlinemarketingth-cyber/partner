@@ -71,6 +71,15 @@ class Order extends Model
         // asks for because an admin flipped a setting afterwards.
         'payment_provider',
         'gateway_mode',
+        /*
+         * 2026-09-03 — written ONLY by GatewayPaymentService from a
+         * signature-verified webhook. Listed here so that service can use
+         * update(); no request payload reaches this model directly.
+         */
+        'last_payment_error',
+        'last_payment_error_at',
+        'refund_reported_at',
+        'refund_reported_satang',
     ];
 
     /*
@@ -105,6 +114,9 @@ class Order extends Model
             'amount_satang' => 'integer',
             'paid_at' => 'datetime',
             'refunded_at' => 'datetime',
+            'last_payment_error_at' => 'datetime',
+            'refund_reported_at' => 'datetime',
+            'refund_reported_satang' => 'integer',
         ];
     }
 

@@ -3,6 +3,7 @@
 namespace App\Services\Payment;
 
 use App\Enums\OrderStatus;
+use App\Models\AuditLog;
 use App\Models\Order;
 use App\Models\User;
 use App\Services\Order\OrderService;
@@ -207,6 +208,18 @@ class GatewayPaymentService
          * money arrived and the system could not finish, and it is a list a
          * human must work through.
          */
+        /*
+         * A successful payment clears the last failed attempt.
+         *
+         * Retrying a declined card is ordinary. Leaving "บัตรถูกปฏิเสธ" on an
+         * order that has since been paid would have an admin chasing a
+         * customer who already paid — a worse outcome than never having
+         * recorded the failure at all.
+         */
+        if ($order->last_payment_error !== null) {
+            $order->update(['last_payment_error' => null, 'last_payment_error_at' => null]);
+        }
+
         try {
             return DB::transaction(fn () => $this->orders->confirmPayment($order, $this->actorFor($order)));
         } catch (Throwable $e) {
@@ -229,12 +242,133 @@ class GatewayPaymentService
      * likely try another card in the next thirty seconds, and an order
      * cancelled underneath them turns a retry into a dead link.
      */
+    /**
+     * A payment attempt the gateway says did not succeed.
+     *
+     * Recorded ON THE ORDER, not only in a log file. Until 2026-09-03 this
+     * method called Log::info() and returned, so an admin looking at an order
+     * a customer swore they had tried to pay saw an untouched row and could
+     * not tell "never opened the link" from "card declined three times".
+     *
+     * The STATUS is deliberately untouched: a declined card can be retried on
+     * the same /pay link, and moving the order to a terminal state here would
+     * cancel sales that were about to complete.
+     */
     public function applyFailed(Order $order, WebhookOutcome $outcome): void
     {
+        $this->recordAttempt(
+            $order,
+            $outcome,
+            $outcome->failureMessage ?? 'ชำระเงินไม่สำเร็จ',
+            'order.gateway_payment_failed',
+        );
+
         Log::info('Gateway payment failed', [
             'order_id' => $order->id,
             'charge_id' => $outcome->chargeId,
             'reason' => $outcome->failureMessage,
+        ]);
+    }
+
+    /**
+     * The customer never paid and the provider closed the attempt.
+     *
+     * Same treatment as a failure and for the same reason — the order stays
+     * open, because opening the same /pay link creates a new session — but
+     * with its own wording. "หมดเวลา" and "ชำระเงินไม่สำเร็จ" are different
+     * facts about a customer, and an admin deciding whether to chase them
+     * needs to know which one happened.
+     */
+    public function applyExpired(Order $order, WebhookOutcome $outcome): void
+    {
+        $this->recordAttempt(
+            $order,
+            $outcome,
+            $outcome->failureMessage ?? 'ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด',
+            'order.gateway_checkout_expired',
+        );
+
+        Log::info('Gateway checkout session expired', [
+            'order_id' => $order->id,
+            'charge_id' => $outcome->chargeId,
+        ]);
+    }
+
+    /**
+     * The gateway says money went back to the customer.
+     *
+     * ── WHAT THIS DOES NOT DO ──
+     *
+     * It does not set `refunded_at`, `refund_reason` or the order's status,
+     * and it does not touch the commission ledger. Reversing a sale reverses
+     * an agent's commission, BR-4 ledger rows are immutable, and the reversal
+     * is its own entry with its own rules (CommissionReversalService). Letting
+     * a webhook start that would claw money out of an agent's balance on an
+     * event nobody in the company reviewed.
+     *
+     * ── WHAT IT DOES INSTEAD ──
+     *
+     * It writes the claim where a human will see it: on the order, and in the
+     * audit trail at warning level. Before this, the only record was a line
+     * in laravel.log that nobody reads unless they already suspect something.
+     */
+    public function applyRefunded(Order $order, WebhookOutcome $outcome): void
+    {
+        $order->update([
+            'refund_reported_at' => now(),
+            'refund_reported_satang' => $outcome->amountSatang,
+        ]);
+
+        AuditLog::create([
+            'company_id' => $order->company_id,
+            // NULL: no person did this. Inventing a system user would put a
+            // fake actor in a trail whose whole value is naming real ones.
+            'actor_user_id' => null,
+            'action' => 'order.gateway_refund_reported',
+            'auditable_type' => Order::class,
+            'auditable_id' => $order->id,
+            'new_values' => [
+                'charge_id' => $outcome->chargeId,
+                'amount_satang' => $outcome->amountSatang,
+                'provider' => $order->payment_provider?->value,
+            ],
+        ]);
+
+        Log::warning('Refund reported by gateway — needs a human decision', [
+            'order_id' => $order->id,
+            'order_number' => $order->order_number,
+            'charge_id' => $outcome->chargeId,
+            'amount_satang' => $outcome->amountSatang,
+        ]);
+    }
+
+    /**
+     * The shared write behind applyFailed() and applyExpired().
+     *
+     * `last_payment_error` holds the LATEST attempt only; the full history is
+     * the audit trail, which is append-only and already the place this
+     * codebase keeps money-adjacent events (§6). Two homes for the same fact
+     * would drift; one summary plus one history does not.
+     */
+    private function recordAttempt(Order $order, WebhookOutcome $outcome, string $message, string $action): void
+    {
+        $order->update([
+            'last_payment_error' => $message,
+            'last_payment_error_at' => now(),
+        ]);
+
+        AuditLog::create([
+            'company_id' => $order->company_id,
+            'actor_user_id' => null,
+            'action' => $action,
+            'auditable_type' => Order::class,
+            'auditable_id' => $order->id,
+            'new_values' => [
+                'charge_id' => $outcome->chargeId,
+                'amount_satang' => $outcome->amountSatang,
+                'message' => $message,
+                'provider' => $order->payment_provider?->value,
+            ],
         ]);
     }
 

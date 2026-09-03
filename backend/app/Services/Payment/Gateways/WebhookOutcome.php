@@ -15,6 +15,16 @@ enum WebhookResult: string
     case Paid = 'paid';
     case Failed = 'failed';
     case Refunded = 'refunded';
+    /*
+     * The customer never paid and the provider closed the attempt.
+     *
+     * Distinct from Failed: nothing was declined and nothing went wrong —
+     * a Checkout Session simply timed out. The order stays open (opening the
+     * same /pay link makes a new session), so this exists to be RECORDED,
+     * which is exactly what separates "never opened the link" from "opened
+     * it and walked away" when an admin looks at a stale order.
+     */
+    case Expired = 'expired';
     case Ignore = 'ignore';
 }
 

@@ -66,6 +66,23 @@ interface OrderRow {
    * case where somebody has been charged and the sale is not closed.
    */
   gateway_payment_received: boolean
+  /**
+   * The attempts that did NOT succeed.
+   *
+   * Without these an order a customer has failed to pay three times looks
+   * identical to one nobody has opened — and those two call for opposite
+   * actions from whoever is reading this screen.
+   */
+  last_payment_error: string | null
+  last_payment_error_at: string | null
+  /**
+   * The GATEWAY says it refunded. NOT this company's own reversal — that one
+   * is made by a person and carries the commission ledger with it. This is a
+   * claim from outside that a person still has to act on, and the two must
+   * not look the same on screen.
+   */
+  refund_reported_at: string | null
+  refund_reported_satang: number | null
   paid_at: string | null
   verified_by?: { id: number; name: string } | null
   created_at: string
@@ -383,6 +400,44 @@ function badgeClasses(tone: string): string {
           class="mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700"
         >
           ลูกค้าชำระเงินเรียบร้อยแล้ว แต่ระบบปิดการขายอัตโนมัติไม่สำเร็จ — กรุณาตรวจสอบขั้นตอนของรายการอ้างอิงนี้แล้วยืนยันด้วยตนเอง
+        </p>
+
+        <!--
+          2026-09-03 — the gateway said money went back.
+
+          Rose, above the amber failure line, and worded as a claim awaiting a
+          decision rather than a fact about this company's books: the order is
+          NOT marked refunded and no commission has moved. Doing either from a
+          webhook would take money out of an agent's balance on an event
+          nobody here reviewed.
+        -->
+        <p
+          v-if="order.refund_reported_at"
+          class="mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700"
+        >
+          ผู้ให้บริการแจ้งว่ามีการคืนเงิน
+          <template v-if="order.refund_reported_satang">
+            ฿{{ formatMoney(order.refund_reported_satang) }}
+          </template>
+          เมื่อ {{ formatDateTime(order.refund_reported_at) }} — ระบบยังไม่ได้กลับรายการขายหรือค่าคอมมิชชั่นให้
+          กรุณาตรวจสอบและตัดสินใจด้วยตนเอง
+        </p>
+
+        <!--
+          A failed or expired attempt. Amber, not rose: nothing is broken and
+          nobody has lost money — the order is still open and the customer can
+          pay on the same link. It is here so that "ยังไม่จ่าย" stops being one
+          undifferentiated state.
+        -->
+        <p
+          v-if="order.last_payment_error"
+          class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800"
+        >
+          {{ order.last_payment_error }}
+          <template v-if="order.last_payment_error_at">
+            · ล่าสุดเมื่อ {{ formatDateTime(order.last_payment_error_at) }}
+          </template>
+          <span class="font-bold"> — ลิงก์ชำระเงินเดิมยังใช้ได้ ลูกค้าลองใหม่ได้เลย</span>
         </p>
 
         <p v-if="order.paid_at" class="mt-2 text-xs text-emerald-700">
