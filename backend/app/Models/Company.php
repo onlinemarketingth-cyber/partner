@@ -47,19 +47,20 @@ class Company extends Model
         'default_pipeline_template_id',
     ];
 
-    /**
-     * ADR-027 — the column defaults to 'manual' in the database, but a
-     * DB-level default is not hydrated back onto the model that INSERTed the
-     * row. Without this a freshly created Company reads null here, and
-     * anything asking "how does this company take money" gets no answer
-     * during the request that created it. Same fix, same reason, as
-     * User::$attributes['email_notifications_enabled'].
+    /*
+     * 2026-09-03 — the 'manual' default is GONE, deliberately.
      *
-     * @var array<string, mixed>
+     * `companies.payment_provider` no longer answers "how does this company
+     * take money"; bank transfer / PromptPay is always available and is not
+     * a setting. The column now answers only "which ONLINE gateway is
+     * switched on", and the honest answer for a company that has not turned
+     * one on is NULL — which is also the column's own default since
+     * 2026_09_03_100000.
+     *
+     * Re-adding a default here would hand every new company a fake active
+     * gateway, and activeConfig() would then offer a card form backed by the
+     * manual driver.
      */
-    protected $attributes = [
-        'payment_provider' => 'manual',
-    ];
 
     protected function casts(): array
     {

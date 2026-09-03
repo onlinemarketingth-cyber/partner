@@ -4,6 +4,7 @@ namespace App\Services\Payment;
 
 use App\Enums\NotificationType;
 use App\Enums\OrderStatus;
+use App\Enums\PaymentProvider;
 use App\Enums\UserRole;
 use App\Models\AuditLog;
 use App\Models\Notification as InAppNotification;
@@ -13,6 +14,7 @@ use App\Notifications\GatewayRefundReportedNotification;
 use App\Services\Notification\NotificationService;
 use App\Services\Order\OrderService;
 use App\Services\Payment\Gateways\GatewayException;
+use App\Services\Payment\Gateways\PaymentIntent;
 use App\Services\Payment\Gateways\WebhookOutcome;
 use App\Services\Payment\Gateways\WebhookResult;
 use Illuminate\Database\QueryException;
@@ -84,30 +86,34 @@ class GatewayPaymentService
         }
 
         /*
-         * The order's OWN provider — and only while it is still the
-         * company's active one.
+         * THE COMPANY'S CURRENT GATEWAY DECIDES — not the order's stamp.
          *
-         * The order carries the provider it was created for, because the
-         * /pay link is already in a customer's hand with instructions they
-         * have read. But a company that has switched gateways has decided to
-         * stop collecting money that way, and honouring an old link past
-         * that decision would take money through a route the company closed.
+         * 2026-09-03: this used to compare the order's stamped provider with
+         * the company's active one and refuse if they differed. That made
+         * sense while an order was BORN belonging to one gateway. It no
+         * longer is: every order starts on the transfer flow and the customer
+         * chooses a card at pay time, so the stamp is now a RECORD of how
+         * money arrived, written here, rather than a rule about how it may.
          *
-         * So this fails CLOSED and the customer is told to contact the
-         * seller, rather than being charged either way round.
+         * Still fails CLOSED when the company has no online gateway switched
+         * on — a card form must never charge through a route nobody chose —
+         * and the customer keeps the transfer instructions either way.
          */
-        $provider = $order->payment_provider;
-        $active = $this->gateways->activeConfig($order->company);
-
-        if ($provider === null || $active === null || $active['provider'] !== $provider) {
-            throw new GatewayException('ช่องทางชำระเงินของคำสั่งซื้อนี้ไม่พร้อมใช้งาน กรุณาติดต่อผู้ขาย');
-        }
-
-        $config = $this->gateways->configFor($order->company, $provider);
+        $config = $this->gateways->activeConfig($order->company);
 
         if ($config === null) {
-            throw new GatewayException('บริษัทนี้ยังไม่ได้ตั้งค่าช่องทางชำระเงินนี้');
+            throw new GatewayException('ขณะนี้ร้านค้ายังไม่เปิดรับชำระด้วยบัตร กรุณาโอนเงินตามรายละเอียดในหน้านี้');
         }
+
+        $provider = $config['provider'];
+
+        /*
+         * Stamped BEFORE the charge, so an order whose charge times out
+         * mid-request still says which gateway is holding the customer's
+         * money. A stamp written only on success would leave exactly the
+         * orders somebody has to investigate looking like transfer orders.
+         */
+        $order = $this->stampProvider($order, $provider, $config['is_live']);
 
         $outcome = $this->registry
             ->driver($provider)
@@ -118,6 +124,81 @@ class GatewayPaymentService
         }
 
         return $this->applyPaid($order, $outcome) ?? $order->fresh();
+    }
+
+    /**
+     * The customer chose to pay online — start it, and record the choice.
+     *
+     * ── WHY THIS IS A DELIBERATE ACT AND NOT PART OF LOADING THE PAY PAGE ──
+     *
+     * A redirect gateway creates a real, chargeable checkout session the
+     * moment startPayment() is called. Doing that while merely RENDERING the
+     * page would open one session per page view — for every customer,
+     * including the great majority who then transfer instead — and each of
+     * those sessions later expires and announces itself by webhook. The
+     * result would be a stream of "ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด"
+     * warnings about orders that were paid by slip hours earlier.
+     *
+     * So the session is created when the customer PRESSES the card button,
+     * which is also the moment the order stops being a transfer order.
+     *
+     * @return array{0: Order, 1: PaymentIntent}
+     *
+     * @throws GatewayException
+     */
+    public function beginOnlinePayment(Order $order): array
+    {
+        // Same two refusals as chargeWithToken, in the same order and for the
+        // same reasons — a page that offers to start a payment on a paid
+        // order is a page that takes a second one.
+        if ($order->hasGatewayPayment()) {
+            throw new GatewayException('คำสั่งซื้อนี้ได้รับการชำระเงินแล้ว');
+        }
+
+        if (! $order->isPayable()) {
+            throw new GatewayException('คำสั่งซื้อนี้ไม่อยู่ในสถานะที่ชำระเงินได้');
+        }
+
+        $config = $this->gateways->activeConfig($order->company);
+
+        if ($config === null) {
+            throw new GatewayException('ขณะนี้ร้านค้ายังไม่เปิดรับชำระด้วยบัตร กรุณาโอนเงินตามรายละเอียดในหน้านี้');
+        }
+
+        $provider = $config['provider'];
+        $order = $this->stampProvider($order, $provider, $config['is_live']);
+
+        $intent = $this->registry
+            ->driver($provider)
+            ->startPayment($order, $config['credentials'], $config['is_live']);
+
+        return [$order, $intent];
+    }
+
+    /**
+     * Record which gateway is taking this order's money, and in which mode.
+     *
+     * `gateway_mode` matters as much as the provider: a charge made with a
+     * test key is not revenue, and without this an order paid in test mode is
+     * indistinguishable from a real sale in every report the system produces.
+     *
+     * A no-op when nothing changed, so a customer who opens the card form
+     * three times does not write the same row three times.
+     */
+    private function stampProvider(Order $order, PaymentProvider $provider, bool $isLive): Order
+    {
+        $mode = $isLive ? 'live' : 'test';
+
+        if ($order->payment_provider === $provider && $order->gateway_mode === $mode) {
+            return $order;
+        }
+
+        $order->update([
+            'payment_provider' => $provider->value,
+            'gateway_mode' => $mode,
+        ]);
+
+        return $order;
     }
 
     /**
@@ -263,6 +344,10 @@ class GatewayPaymentService
      */
     public function applyFailed(Order $order, WebhookOutcome $outcome): void
     {
+        if ($this->attemptNoLongerMatters($order, 'failed', $outcome)) {
+            return;
+        }
+
         $this->recordAttempt(
             $order,
             $outcome,
@@ -296,6 +381,10 @@ class GatewayPaymentService
      */
     public function applyExpired(Order $order, WebhookOutcome $outcome): void
     {
+        if ($this->attemptNoLongerMatters($order, 'expired', $outcome)) {
+            return;
+        }
+
         $this->recordAttempt(
             $order,
             $outcome,
@@ -514,6 +603,41 @@ class GatewayPaymentService
                 'reason' => $e->getMessage(),
             ]);
         }
+    }
+
+    /**
+     * Is this bad-news event about an order that has already moved on?
+     *
+     * ── WHY THIS EXISTS (2026-09-03) ──
+     *
+     * Since the customer now chooses their method on the pay page, an
+     * abandoned card checkout on an order that was then PAID BY BANK
+     * TRANSFER is completely normal traffic. Its expiry webhook arrives
+     * hours later, and without this guard it would stamp
+     * "ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด" onto a paid order and tell the
+     * agent to chase a customer who has already paid.
+     *
+     * The same is true of a decline that arrives after a second card
+     * succeeded, or of any attempt on an order somebody has since cancelled.
+     *
+     * Info, not warning: this is expected, and an alarm that fires on
+     * expected traffic teaches people to ignore alarms.
+     */
+    private function attemptNoLongerMatters(Order $order, string $kind, WebhookOutcome $outcome): bool
+    {
+        if (! $order->hasGatewayPayment() && $order->isPayable()) {
+            return false;
+        }
+
+        Log::info('Ignored a late gateway attempt on an order that has moved on', [
+            'order_id' => $order->id,
+            'kind' => $kind,
+            'status' => $order->status->value,
+            'has_gateway_payment' => $order->hasGatewayPayment(),
+            'charge_id' => $outcome->chargeId,
+        ]);
+
+        return true;
     }
 
     /**

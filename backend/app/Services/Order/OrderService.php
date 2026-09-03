@@ -8,14 +8,12 @@ use App\Enums\PaymentMethod;
 use App\Enums\PaymentProvider;
 use App\Enums\PipelineStage;
 use App\Enums\TrackedLinkGroup;
-use App\Models\Company;
 use App\Models\Order;
 use App\Models\Referral;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Notification\NotificationService;
-use App\Services\Payment\CompanyPaymentGatewayService;
 use App\Services\Referral\PipelineService;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
@@ -59,17 +57,12 @@ class OrderService
         // every order has one from the moment it exists rather than the
         // first time somebody opens the share modal.
         private TrackedLinkService $trackedLinks,
-        // ADR-027 / TASK-139 — read ONCE per order, at creation, to stamp
-        // which gateway this order belongs to. See gatewayStampFor().
-        private CompanyPaymentGatewayService $paymentGateways,
     ) {}
 
     /**
      * Which gateway, and in which mode, this order is being created for.
      *
-     * Manual whenever the company has no ACTIVE, VERIFIED gateway — failing
-     * closed onto the flow that cannot take money by mistake, rather than
-     * onto a card form backed by credentials nobody proved.
+     * Always the manual flow — see the body.
      *
      * `gateway_mode` is recorded per order rather than read from the settings
      * row later, for the same reason as the provider: settings change and
@@ -80,17 +73,24 @@ class OrderService
      */
     private function gatewayStampFor(int $companyId): array
     {
-        $company = Company::withoutGlobalScopes()->find($companyId);
-        $config = $company ? $this->paymentGateways->activeConfig($company) : null;
-
-        if ($config === null) {
-            return ['payment_provider' => PaymentProvider::Manual->value, 'gateway_mode' => 'live'];
-        }
-
-        return [
-            'payment_provider' => $config['provider']->value,
-            'gateway_mode' => $config['is_live'] ? 'live' : 'test',
-        ];
+        /*
+         * ── 2026-09-03: EVERY new order starts as a transfer order ──
+         *
+         * This used to stamp whichever gateway the company had active, which
+         * decided the customer's payment method for them at the moment the
+         * agent pressed save — days before the customer opened the link.
+         *
+         * Bank transfer is now always available, and the CUSTOMER chooses
+         * between it and the card gateway on the pay page. So the order is
+         * born as the method that needs no configuration and cannot fail,
+         * and GatewayPaymentService re-stamps it at the moment the customer
+         * actually chooses to pay by card.
+         *
+         * $companyId is no longer read. Kept in the signature because every
+         * call site passes it and the next change here will want it again;
+         * removing it now would be churn in three files to delete one word.
+         */
+        return ['payment_provider' => PaymentProvider::Manual->value, 'gateway_mode' => 'live'];
     }
 
     /**

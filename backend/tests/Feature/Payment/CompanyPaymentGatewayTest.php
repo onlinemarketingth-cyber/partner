@@ -221,15 +221,24 @@ class CompanyPaymentGatewayTest extends TestCase
 
     // ── Exactly one active gateway ───────────────────────────────────────
 
-    public function test_a_company_starts_on_the_manual_flow(): void
+    public function test_a_company_starts_with_no_online_gateway_but_can_still_take_money(): void
     {
-        // Not "unconfigured". Every company today takes money by PromptPay QR
-        // and a slip somebody checks; that is a provider whose worker is a
-        // person, and saying so is what makes "how does this company get
-        // paid" one question with one answer.
+        /*
+         * 2026-09-03 — THE COLUMN CHANGED MEANING, SO THIS TEST DID TOO.
+         *
+         * `payment_provider` used to answer "how does this company get paid",
+         * and 'manual' was the honest answer. It now answers only "which
+         * ONLINE gateway is switched on", because bank transfer / PromptPay
+         * is always available and is not a setting anyone chooses. The honest
+         * answer for a company that has switched none on is NULL.
+         *
+         * The second assertion is the one that matters to a customer: no
+         * online gateway does not mean no way to pay.
+         */
         [$company] = $this->companyAndSuperAdmin();
 
-        $this->assertSame(PaymentProvider::Manual->value, $company->payment_provider);
+        $this->assertNull($company->payment_provider);
+        $this->assertTrue(PaymentProvider::Manual->requiresHumanVerification());
     }
 
     public function test_activating_a_gateway_replaces_the_previous_one(): void
@@ -267,7 +276,9 @@ class CompanyPaymentGatewayTest extends TestCase
             ->postJson(sprintf(self::OMISE_PATH, $company->id).'/activate', ['provider' => 'omise'])
             ->assertStatus(422);
 
-        $this->assertSame('manual', $company->refresh()->payment_provider);
+        // Nothing was switched on, so nothing is active — see
+        // test_a_company_starts_with_no_online_gateway_but_can_still_take_money.
+        $this->assertNull($company->refresh()->payment_provider);
     }
 
     public function test_a_gateway_that_was_never_configured_cannot_be_activated(): void
@@ -313,7 +324,8 @@ class CompanyPaymentGatewayTest extends TestCase
         $bodyB = $this->actingAs($superAdmin)->getJson(sprintf(self::OMISE_PATH, $companyB->id))->assertOk();
 
         $this->assertStringNotContainsString('pkey_test_AAA', $bodyB->getContent());
-        $this->assertSame('manual', $bodyB->json('data.active_provider'));
+        // null, not 'manual': company B switched no online gateway on.
+        $this->assertNull($bodyB->json('data.active_provider'));
     }
 
     public function test_the_verification_note_names_the_account_that_answered(): void

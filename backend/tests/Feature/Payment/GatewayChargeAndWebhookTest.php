@@ -294,26 +294,42 @@ class GatewayChargeAndWebhookTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_an_order_stamped_for_another_provider_cannot_be_charged_here(): void
+    public function test_a_transfer_order_can_be_paid_by_card_and_is_stamped_when_it_is(): void
     {
-        // The order carries the provider it was CREATED for, because its /pay
-        // link is already in a customer's hand with instructions they read.
+        /*
+         * 2026-09-03 — THIS TEST USED TO ASSERT THE OPPOSITE.
+         *
+         * Every order is now born on the transfer flow, and the CUSTOMER
+         * chooses on the pay page. Refusing a card because the order was
+         * stamped 'manual' at creation would mean refusing every order.
+         *
+         * The stamp is written HERE, at the moment the money moves, so it
+         * records how the customer actually paid instead of predicting it.
+         */
         $company = $this->omiseCompany();
         $order = $this->payableOrder($company, PaymentProvider::Manual);
-        Http::fake();
+        $this->fakeChargeSuccess();
 
         $this->postJson("/api/v1/pay/{$order->public_token}/charge", ['payment_token' => 'tokn_test_abc'])
-            ->assertStatus(422);
+            ->assertOk();
 
-        Http::assertNothingSent();
-        $this->assertNull($order->refresh()->gateway_charge_id);
+        $order->refresh();
+        $this->assertSame(PaymentProvider::Omise, $order->payment_provider);
+        // The MODE comes from the settings row, not from the order's old
+        // stamp: a test-key charge must never be counted as revenue.
+        $this->assertSame('test', $order->gateway_mode);
+        $this->assertSame(OrderStatus::Paid, $order->status);
     }
 
-    public function test_a_company_that_switched_gateways_away_cannot_be_charged_on_an_old_link(): void
+    public function test_a_company_with_no_online_gateway_cannot_be_charged_on_an_old_link(): void
     {
-        // Fails CLOSED. A company that switched has decided to stop
-        // collecting money that way; honouring the old link past that
-        // decision would take money through a route the company closed.
+        // Fails CLOSED, and now for the only reason left that matters: the
+        // company has switched its online gateway OFF. There is no card route
+        // to take money through, so the customer is refused here rather than
+        // charged through some other company's provider.
+        //
+        // 'manual' in this column reads as "no online gateway" — bank
+        // transfer is always available and is not a gateway (2026-09-03).
         $company = $this->omiseCompany();
         $order = $this->payableOrder($company);
         $company->forceFill(['payment_provider' => PaymentProvider::Manual->value])->save();
@@ -337,12 +353,36 @@ class GatewayChargeAndWebhookTest extends TestCase
 
     // ── The pay page's own view of all this ──────────────────────────────
 
-    public function test_the_pay_page_gets_the_public_key_and_never_the_secret(): void
+    public function test_the_pay_page_names_the_card_gateway_without_starting_one(): void
+    {
+        /*
+         * THE POINT OF THE SPLIT (2026-09-03).
+         *
+         * Loading the page must NOT open a payment at the provider: a
+         * redirect gateway creates a real checkout session the moment
+         * startPayment() is called, and one per page view would later produce
+         * a stream of expiry webhooks about customers who paid by transfer.
+         *
+         * So the page learns the gateway's NAME, and nothing is started until
+         * the customer presses the button.
+         */
+        $company = $this->omiseCompany();
+        $order = $this->payableOrder($company, PaymentProvider::Manual);
+
+        $this->getJson("/api/v1/pay/{$order->public_token}")
+            ->assertOk()
+            ->assertJsonPath('data.gateway.online.provider', 'omise')
+            ->assertJsonPath('data.gateway.online.mode', 'test')
+            ->assertJsonPath('data.gateway.transfer_available', true)
+            ->assertJsonPath('data.gateway.intent', null);
+    }
+
+    public function test_choosing_to_pay_online_gets_the_public_key_and_never_the_secret(): void
     {
         $company = $this->omiseCompany();
-        $order = $this->payableOrder($company);
+        $order = $this->payableOrder($company, PaymentProvider::Manual);
 
-        $response = $this->getJson("/api/v1/pay/{$order->public_token}");
+        $response = $this->postJson("/api/v1/pay/{$order->public_token}/intent");
 
         $response->assertOk()
             ->assertJsonPath('data.gateway.provider', 'omise')
@@ -352,6 +392,18 @@ class GatewayChargeAndWebhookTest extends TestCase
         // Not "masked" — absent from the entire payload, in any form.
         $this->assertStringNotContainsString('skey_test_abc', $response->getContent());
         $this->assertStringNotContainsString(self::SECRET, $response->getContent());
+    }
+
+    public function test_choosing_to_pay_online_is_refused_when_the_company_has_no_gateway(): void
+    {
+        // The transfer instructions are still on the customer's screen, so
+        // the refusal costs them nothing but a wrong turn.
+        $company = Company::factory()->create(['payment_promptpay_id' => '0812345678']);
+        $order = $this->payableOrder($company, PaymentProvider::Manual);
+
+        $this->postJson("/api/v1/pay/{$order->public_token}/intent")
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('gateway');
     }
 
     public function test_the_pay_page_reports_test_mode_so_it_is_never_mistaken_for_revenue(): void
@@ -375,7 +427,14 @@ class GatewayChargeAndWebhookTest extends TestCase
 
         $this->getJson("/api/v1/pay/{$order->public_token}")
             ->assertJsonPath('data.gateway.payment_received', true)
+            ->assertJsonPath('data.gateway.online', null)
+            ->assertJsonPath('data.gateway.transfer_available', false)
             ->assertJsonPath('data.gateway.intent', null);
+
+        // And the button, if somebody reaches it anyway, refuses too — the
+        // page is not the guard, the server is.
+        $this->postJson("/api/v1/pay/{$order->public_token}/intent")
+            ->assertStatus(422);
     }
 
     public function test_a_manual_order_still_gets_its_promptpay_payload_and_no_card_intent(): void
@@ -392,6 +451,8 @@ class GatewayChargeAndWebhookTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.gateway.provider', 'manual')
             ->assertJsonPath('data.gateway.intent', null)
+            // No card button either: this company has no online gateway.
+            ->assertJsonPath('data.gateway.online', null)
             ->assertJsonPath('data.company_payment.promptpay_id', '0812345678');
 
         $this->assertNotSame('', $this->getJson("/api/v1/pay/{$order->public_token}")->json('data.promptpay_payload'));
@@ -785,8 +846,18 @@ class GatewayChargeAndWebhookTest extends TestCase
 
     // ── The stamp on the order ───────────────────────────────────────────
 
-    public function test_an_order_is_stamped_with_the_companys_gateway_at_creation(): void
+    public function test_an_order_is_born_on_the_transfer_flow_even_when_a_gateway_is_active(): void
     {
+        /*
+         * 2026-09-03 — INVERTED ON PURPOSE.
+         *
+         * This used to assert the order was stamped with the company's
+         * gateway at creation, which decided the customer's payment method
+         * for them when the AGENT pressed save — days before the customer
+         * opened the link. The customer now chooses on the pay page, so an
+         * order starts as the method that needs no configuration and cannot
+         * fail, and is re-stamped when they choose a card.
+         */
         $company = $this->omiseCompany(isLive: false);
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
         $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
@@ -806,32 +877,37 @@ class GatewayChargeAndWebhookTest extends TestCase
         $order = app(OrderService::class)
             ->createForReferral($referral, PaymentMethod::BankTransfer);
 
-        $this->assertSame(PaymentProvider::Omise, $order->payment_provider);
-        // Recorded per ORDER: a charge made with a test key must not look
-        // like revenue in any report.
-        $this->assertSame('test', $order->gateway_mode);
+        $this->assertSame(PaymentProvider::Manual, $order->payment_provider);
+        // 'live' because a bank transfer is real money by definition. The
+        // test/live distinction belongs to the card gateway, and is written
+        // by GatewayPaymentService at the moment the customer picks one.
+        $this->assertSame('live', $order->gateway_mode);
     }
 
-    public function test_a_company_that_never_opened_the_settings_screen_still_reads_back_as_manual(): void
+    public function test_the_manual_flow_is_configured_but_is_never_the_active_online_gateway(): void
     {
         /*
-         * Every company on this platform is in exactly this state right now:
-         * `payment_provider` at its 'manual' default and no settings row,
-         * because the screen that writes one did not exist until this work.
+         * TWO DIFFERENT QUESTIONS, AND THE ANSWERS DIVERGED ON 2026-09-03.
          *
-         * "No configuration" would be a false statement about a company that
-         * takes money by bank transfer every day. Nothing acts on that answer
-         * incorrectly TODAY — mutation testing proved that much — so this
-         * pins the answer rather than the branch producing it, for the next
-         * caller that does.
+         * configFor(Manual) still answers "yes, this company can take money
+         * by transfer" — true of every company on this platform, none of
+         * which has a settings row, and the reason the live pay page keeps
+         * working.
+         *
+         * activeConfig() answers a narrower question: WHICH ONLINE GATEWAY
+         * may charge a card. Bank transfer is not one. It used to answer
+         * 'manual' here, which would now put ManualGateway in front of a
+         * customer pressing "pay by card".
          */
         $company = Company::factory()->create();
+        $service = app(CompanyPaymentGatewayService::class);
 
-        $config = app(CompanyPaymentGatewayService::class)->activeConfig($company);
+        $manual = $service->configFor($company, PaymentProvider::Manual);
+        $this->assertNotNull($manual);
+        $this->assertSame(PaymentProvider::Manual, $manual['provider']);
+        $this->assertSame([], $manual['credentials']);
 
-        $this->assertNotNull($config);
-        $this->assertSame(PaymentProvider::Manual, $config['provider']);
-        $this->assertSame([], $config['credentials']);
+        $this->assertNull($service->activeConfig($company));
     }
 
     public function test_an_order_for_a_company_with_no_gateway_is_stamped_manual(): void

@@ -391,7 +391,14 @@
     "redirecting": "Taking you to the payment page...",
     "processing": "Processing...",
     "pay_amount": "Pay {amount}",
-    "pay_amount_card": "Pay {amount} by card"
+    "pay_amount_card": "Pay {amount} by card",
+    "choose_method": "Choose how to pay",
+    "online_help": "Finishes in one step — your order is confirmed automatically once payment succeeds",
+    "online_starting": "Opening the payment page...",
+    "online_failed": "Could not open card payment. Please try again, or transfer using the details below",
+    "online_or": "or",
+    "transfer_title": "Bank transfer / PromptPay",
+    "transfer_help": "Transfer using the details below, then upload your slip — we will check and confirm it"
   },
   "bank": {
     "name": "Bank",

@@ -3,12 +3,11 @@
 namespace App\Http\Resources;
 
 use App\Enums\OrderStatus;
-use App\Enums\PaymentMethod;
 use App\Http\Resources\Concerns\ResolvesPublicTheme;
 use App\Models\Company;
 use App\Models\Order;
 use App\Services\Payment\CompanyPaymentGatewayService;
-use App\Services\Payment\PaymentGatewayRegistry;
+use App\Services\Payment\Gateways\PaymentIntent;
 use App\Services\Payment\PromptPayService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -28,16 +27,45 @@ class PublicOrderResource extends JsonResource
     use ResolvesPublicTheme;
 
     /**
+     * Set ONLY by PublicPaymentController::intent(), never by show().
+     *
+     * A PaymentIntent is not a property of an order — producing one opens a
+     * chargeable session at the provider. So this resource never creates one;
+     * it renders the one it was handed, and renders `intent: null` the rest
+     * of the time. See GatewayPaymentService::beginOnlinePayment().
+     */
+    private ?PaymentIntent $onlineIntent = null;
+
+    public function withIntent(?PaymentIntent $intent): static
+    {
+        $this->onlineIntent = $intent;
+
+        return $this;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function toArray(Request $request): array
     {
         $company = $this->company;
 
-        // PromptPay payload only when the customer chose PromptPay AND the
-        // company actually configured a proxy id — otherwise empty string.
+        /*
+         * 2026-09-03 — THE QR NO LONGER DEPENDS ON WHAT THE AGENT PICKED.
+         *
+         * This used to require the ORDER to say 'promptpay', a choice the
+         * agent made when they created it — days before the customer opened
+         * the link, and on the customer's behalf. Bank transfer and PromptPay
+         * are the same flow settling into the same account; showing both and
+         * letting the customer scan or type is strictly better than guessing
+         * for them, and `company_payment` below already ships both anyway.
+         *
+         * Still empty when the company configured no proxy id: there is no
+         * payload to build, and a QR that resolves to nothing is worse than
+         * no QR.
+         */
         $promptpayPayload = '';
-        if ($this->payment_method === PaymentMethod::PromptPay && $company?->payment_promptpay_id) {
+        if ($company?->payment_promptpay_id) {
             $promptpayPayload = app(PromptPayService::class)->payload(
                 $company->payment_promptpay_id,
                 $this->amount_satang,
@@ -107,19 +135,31 @@ class PublicOrderResource extends JsonResource
      * to decide whether to offer a card form, because an order that is
      * `pending` with money already taken must never invite a second payment.
      *
-     * ── THE MANUAL FLOW GETS NO INTENT, ON PURPOSE ──
+     * ── 2026-09-03: THE CUSTOMER CHOOSES, SO THIS DESCRIBES A MENU ──
      *
-     * Everything a slip-and-transfer customer needs is already in
-     * `company_payment` and `promptpay_payload` above, where ADR-017 put it
-     * and where the live pay page reads it today. Emitting a second
-     * description of the same thing would create two places that must agree
-     * about how a customer pays, and one of them would eventually be wrong.
+     * An order used to be born belonging to one gateway, and this block said
+     * which. Now bank transfer is always available and the company may also
+     * have ONE online gateway switched on, so this block says which of those
+     * two the customer may still use:
      *
-     * ── null intent MEANS "CANNOT PAY BY CARD RIGHT NOW" ──
+     *   `transfer_available` — the slip / PromptPay flow is open. What the
+     *                          customer needs for it is already in
+     *                          `company_payment` + `promptpay_payload` above,
+     *                          where ADR-017 put it; describing it twice
+     *                          would create two places that must agree.
+     *   `online`             — the gateway they may pay a card with, by name,
+     *                          or null. Naming it without starting it is the
+     *                          whole point: starting it opens a chargeable
+     *                          session (see beginOnlinePayment), which must
+     *                          not happen just because a page was loaded.
+     *   `intent`             — present only on the response to a customer who
+     *                          actually pressed the card button.
      *
-     * Rendering a card form backed by a gateway the company has switched off
-     * would collect card details for a charge certain to be refused. Better
-     * to say so.
+     * ── FAILS CLOSED ──
+     *
+     * `online` is null unless the company has a verified, switched-on gateway
+     * AND this order can still take money. Offering a card form the charge
+     * endpoint would refuse only wastes a customer's card details.
      *
      * @return array<string, mixed>
      */
@@ -127,43 +167,59 @@ class PublicOrderResource extends JsonResource
     {
         /** @var Order $order */
         $order = $this->resource;
-        $provider = $order->payment_provider;
+
+        $open = $company !== null && $order->isPayable() && ! $order->hasGatewayPayment();
 
         $block = [
-            'provider' => $provider?->value,
+            // The gateway this order's money is going through, once one has
+            // been chosen. Historical record, not a rule: it stays 'manual'
+            // until the customer presses the card button.
+            'provider' => $order->payment_provider?->value,
             // A charge made with a test key is not revenue, and the customer
             // is entitled to know which one they are about to make.
             'mode' => $order->gateway_mode,
             'payment_received' => $order->hasGatewayPayment(),
-            'intent' => null,
+            'transfer_available' => $open,
+            'online' => null,
+            'intent' => $this->intentBlock(),
         ];
 
-        if ($company === null || $provider === null || $provider->requiresHumanVerification()) {
+        if (! $open) {
             return $block;
         }
 
-        $gateways = app(CompanyPaymentGatewayService::class);
-        $active = $gateways->activeConfig($company);
+        // activeConfig() never answers with the manual flow (2026-09-03), so
+        // this is the ONLINE gateway or nothing.
+        $active = app(CompanyPaymentGatewayService::class)->activeConfig($company);
 
-        // Fails closed: only the company's CURRENT provider may be offered,
-        // matching exactly what GatewayPaymentService::chargeWithToken() will
-        // accept. A page that offers what the charge endpoint refuses is a
-        // page that wastes a customer's card details.
-        if ($active === null || $active['provider'] !== $provider || ! $order->isPayable() || $order->hasGatewayPayment()) {
+        if ($active === null) {
             return $block;
         }
 
-        $config = $gateways->configFor($company, $provider);
+        $block['online'] = [
+            'provider' => $active['provider']->value,
+            'label' => $active['provider']->label(),
+            // Shown next to the card button, not only after the redirect: a
+            // customer typing a real card into a test-mode checkout is a
+            // problem worth preventing one screen earlier.
+            'mode' => $active['is_live'] ? 'live' : 'test',
+        ];
 
-        if ($config === null) {
-            return $block;
+        return $block;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function intentBlock(): ?array
+    {
+        $intent = $this->onlineIntent;
+
+        if ($intent === null) {
+            return null;
         }
 
-        $intent = app(PaymentGatewayRegistry::class)
-            ->driver($provider)
-            ->startPayment($order, $config['credentials'], $config['is_live']);
-
-        $block['intent'] = [
+        return [
             'kind' => $intent->kind,
             'amount_satang' => $intent->amountSatang,
             // The PUBLIC key only. The secret never leaves the server, and
@@ -173,7 +229,5 @@ class PublicOrderResource extends JsonResource
             'redirect_url' => $intent->redirectUrl,
             'extra' => $intent->extra,
         ];
-
-        return $block;
     }
 }

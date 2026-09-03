@@ -69,12 +69,13 @@ interface PublicVoucher {
 /**
  * ADR-027 (TASK-139) — how this order is being paid, from the server.
  *
- * `intent` is null whenever a card must NOT be offered: the order is on the
- * manual bank-transfer flow, the company has switched its gateway off, the
- * order is no longer payable, or money has already been taken. The page never
- * decides that for itself — the same rule has to hold at the charge endpoint,
- * and two copies of it would eventually disagree and show a form that cannot
- * work.
+ * `intent` arrives ONLY on the response to POST /pay/{token}/intent — that
+ * is, only after the customer has chosen to pay online. Whether they may
+ * choose it at all is `gateway.online`, which the server decides: the company
+ * has a verified gateway switched on, the order is still payable, and no
+ * money has arrived yet. The page never decides that for itself — the same
+ * rule has to hold at the charge endpoint, and two copies of it would
+ * eventually disagree and show a form that cannot work.
  */
 interface PaymentIntent {
   kind: 'tokenize' | 'redirect' | 'qr'
@@ -83,10 +84,27 @@ interface PaymentIntent {
   redirect_url: string | null
   extra: Record<string, unknown>
 }
+/**
+ * 2026-09-03 — the ONLINE gateway this company has switched on, by name.
+ *
+ * Named without being started. Starting it opens a chargeable session at the
+ * provider, which must not happen just because somebody loaded the page —
+ * see POST /pay/{token}/intent.
+ */
+interface OnlineGateway {
+  provider: string
+  label: string
+  /** 'test' | 'live' — of the GATEWAY, known before any charge is stamped. */
+  mode: string
+}
 interface PublicGateway {
   provider: string | null
   /** 'test' | 'live' — shown to the customer, because a test charge is not a purchase. */
   mode: string | null
+  /** The slip / PromptPay flow is open. Always true while an order is payable. */
+  transfer_available: boolean
+  /** null = this company takes no card payments right now. */
+  online: OnlineGateway | null
   /**
    * Money has arrived through the gateway.
    *
@@ -164,8 +182,11 @@ async function loadOrder() {
 onMounted(loadOrder)
 
 async function renderQr() {
+  // The payload's presence IS the condition — the server builds one whenever
+  // the company has a PromptPay id, and no longer asks what the agent picked
+  // when the order was created.
   const payload = order.value?.promptpay_payload
-  if (order.value?.payment_method !== 'promptpay' || !payload) {
+  if (!payload) {
     qrDataUrl.value = ''
     return
   }
@@ -509,7 +530,74 @@ function payByRedirect() {
   window.location.href = intent.redirect_url
 }
 
-const isTestMode = computed(() => order.value?.gateway.mode === 'test')
+/**
+ * The gateway the customer MAY pay with — or null.
+ *
+ * Not a decision this page makes: the server weighs the company's settings,
+ * the order's status and whether money has already arrived, and answers with
+ * a name or with nothing.
+ */
+const onlineGateway = computed(() => order.value?.gateway.online ?? null)
+
+/** Neither the card form nor the redirect has been opened yet. */
+const showMethodChooser = computed(
+  () => !!onlineGateway.value && !cardIntent.value && !redirectIntent.value && !paymentReceived.value,
+)
+
+/**
+ * Test mode, read from the GATEWAY before a charge exists.
+ *
+ * `gateway.mode` describes the order's own stamp, which says 'live' until the
+ * customer picks a card — so relying on it alone would hide the test-mode
+ * warning on the one screen where the customer is deciding whether to type a
+ * real card number.
+ */
+const isTestMode = computed(
+  () => (onlineGateway.value?.mode ?? order.value?.gateway.mode) === 'test',
+)
+
+const startingOnline = ref(false)
+
+/**
+ * The customer chose to pay online.
+ *
+ * This is the request that opens the payment at the provider and stamps the
+ * order with the gateway now taking its money — which is why it is a POST
+ * made on a press, and not part of loading this page. Doing it on load would
+ * open a checkout session for every visitor, including the majority who
+ * transfer instead, and every one of those would later expire and report the
+ * customer as not having paid.
+ *
+ * A redirect gateway leaves immediately; a tokenising one reveals its card
+ * form, which the customer then submits with payByCard().
+ */
+async function startOnlinePayment() {
+  if (startingOnline.value || charging.value) return
+
+  cardError.value = ''
+  startingOnline.value = true
+  try {
+    const res = await api.post<{ data: PublicOrder }>(`/pay/${token}/intent`, {})
+    order.value = res.data
+
+    // Leave straight away. The button the customer already pressed IS the
+    // consent to go; making them press a second one on the next screen loses
+    // sales for no gain.
+    if (redirectIntent.value) payByRedirect()
+  } catch (e) {
+    if (e instanceof ApiError && e.body && typeof e.body === 'object') {
+      const body = e.body as { message?: string; errors?: Record<string, string[]> }
+      // The server's own reason — "ร้านค้ายังไม่เปิดรับชำระด้วยบัตร" — because
+      // it tells the customer what to do instead, and the transfer details
+      // are already on the same screen.
+      cardError.value = body.errors?.gateway?.[0] ?? body.message ?? td('pay.online_failed')
+    } else {
+      cardError.value = td('pay.online_failed')
+    }
+  } finally {
+    startingOnline.value = false
+  }
+}
 
 async function payByCard() {
   const intent = cardIntent.value
@@ -681,13 +769,59 @@ async function payByCard() {
         </div>
 
         <template v-else>
+          <!-- 2026-09-03 — THE CUSTOMER CHOOSES, ON THIS SCREEN.
+               Only shown when the company actually has a card gateway
+               switched on; otherwise the page is exactly the transfer page it
+               has always been, with no dead button on it. The transfer
+               details below are never hidden or collapsed — they are the
+               method that works for everyone, and burying them behind a
+               choice would cost sales from customers with no card. -->
+          <div v-if="showMethodChooser" class="rounded-2xl border border-line-card p-4 space-y-3">
+            <p class="text-sm font-bold text-ink-card">{{ td('pay.choose_method') }}</p>
+
+            <!-- A test-mode charge is not a purchase, and the person about to
+                 type a card number is entitled to know which one this is. -->
+            <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
+              {{ td('pay.test_mode') }}
+            </p>
+
+            <div v-if="cardError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
+              <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+              <span>{{ cardError }}</span>
+            </div>
+
+            <button
+              type="button"
+              :disabled="startingOnline"
+              class="w-full min-h-[44px] py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
+              @click="startOnlinePayment"
+            >
+              <Icon name="credit_card" :size="16" />
+              {{ startingOnline ? td('pay.online_starting') : td('pay.card') }}
+            </button>
+            <p class="text-xs text-ink-card-subtle text-center">{{ td('pay.online_help') }}</p>
+
+            <div class="flex items-center gap-3">
+              <span class="h-px flex-1 bg-line-card"></span>
+              <span class="text-xs text-ink-card-subtle">{{ td('pay.online_or') }}</span>
+              <span class="h-px flex-1 bg-line-card"></span>
+            </div>
+
+            <!-- Not a button: the transfer flow IS the rest of this page, so
+                 this line points down to it rather than opening anything. -->
+            <div class="rounded-xl border border-line-card px-3 py-2.5">
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.transfer_title') }}</p>
+              <p class="mt-0.5 text-xs text-ink-card-muted">{{ td('pay.transfer_help') }}</p>
+            </div>
+          </div>
+
           <!-- ADR-027 (TASK-139) — CARD PAYMENT.
-               First, because it is the method that finishes in one step; the
-               bank-transfer instructions below are untouched and remain the
-               fallback for a customer with no card or a declined one. -->
-          <!-- Provider-hosted checkout (Stripe). Same position on the page
-               as the card form: the one-step method first, bank transfer
-               below as the fallback that always works. -->
+               Both blocks below render only AFTER the customer pressed the
+               card button above and the server answered with an intent. -->
+          <!-- Provider-hosted checkout (Stripe). Normally on screen for a
+               heartbeat only — startOnlinePayment() navigates as soon as the
+               redirect arrives — so this is also the fallback for a browser
+               that blocked that navigation. -->
           <div v-if="redirectIntent" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="credit_card" :size="16" class="text-ink-brand" />
@@ -762,8 +896,11 @@ async function payByCard() {
             </div>
           </div>
 
-          <!-- PromptPay QR -->
-          <div v-if="order.payment_method === 'promptpay' && qrDataUrl" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
+          <!-- PromptPay QR — shown whenever the company HAS a PromptPay id,
+               no longer only when the agent happened to tick "promptpay" when
+               they created the order. Both settle into the same account, and
+               the customer is the one holding the phone. -->
+          <div v-if="qrDataUrl" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
             <p class="text-sm font-bold text-ink-card">{{ td('pay.scan_promptpay') }}</p>
             <img :src="qrDataUrl" alt="PromptPay QR" class="w-52 h-52" />
             <p v-if="order.company_payment.promptpay_id" class="text-xs text-ink-card-subtle">

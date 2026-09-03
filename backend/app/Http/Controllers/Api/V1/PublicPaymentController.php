@@ -58,6 +58,38 @@ class PublicPaymentController extends Controller
     }
 
     /**
+     * The customer pressed "pay by card" — open the payment with the gateway.
+     *
+     * ── WHY THIS IS A POST, AND WHY IT IS NOT PART OF show() ──
+     *
+     * It CHANGES THINGS. A redirect gateway creates a real checkout session
+     * here, and the order is stamped with the gateway that is now taking its
+     * money. Doing either while merely rendering the pay page would open a
+     * session for every visitor — including everyone who then pays by bank
+     * transfer — and each one later expires and reports itself, producing
+     * "the customer never paid" warnings about orders that were paid by slip.
+     *
+     * The response is the whole order again, with `gateway.intent` filled in,
+     * so the page has one shape to render whichever button was pressed.
+     *
+     * A GatewayException becomes a 422 against `gateway`, carrying the
+     * customer-facing reason ("ร้านค้ายังไม่เปิดรับชำระด้วยบัตร") — the
+     * transfer instructions are still on their screen either way.
+     */
+    public function intent(string $token, GatewayPaymentService $payments): PublicOrderResource
+    {
+        $order = $this->resolve($token);
+
+        try {
+            [$order, $intent] = $payments->beginOnlinePayment($order);
+        } catch (GatewayException $e) {
+            throw ValidationException::withMessages(['gateway' => $e->getMessage()]);
+        }
+
+        return (new PublicOrderResource($order->load(self::RELATIONS)))->withIntent($intent);
+    }
+
+    /**
      * ADR-027 / TASK-139 — turn a browser-side payment token into a charge.
      *
      * PUBLIC and unauthenticated like its slip sibling, and throttled harder

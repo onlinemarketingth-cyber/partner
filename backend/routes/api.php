@@ -236,6 +236,19 @@ Route::prefix('v1')->group(function () {
         ->name('public-payment.slip');
 
     /*
+     * 2026-09-03 — the customer chose to pay by card.
+     *
+     * Separate from the GET above because it is not a read: it opens a
+     * session with the gateway and stamps the order with the provider now
+     * taking its money. 10/min matches the slip route — a customer switching
+     * between the two buttons while they decide is normal, and each request
+     * here still moves no money on its own.
+     */
+    Route::post('/pay/{token}/intent', [PublicPaymentController::class, 'intent'])
+        ->middleware('throttle:10,1')
+        ->name('public-payment.intent');
+
+    /*
      * ADR-027 / TASK-139 — the CARD half of the same public pay page.
      *
      * Throttled to 5/min rather than the slip's 10: each request here is a

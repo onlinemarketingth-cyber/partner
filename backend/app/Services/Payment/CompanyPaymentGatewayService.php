@@ -251,7 +251,18 @@ class CompanyPaymentGatewayService
     {
         $provider = PaymentProvider::tryFrom((string) $company->payment_provider);
 
-        if ($provider === null) {
+        /*
+         * 2026-09-03 — THE MANUAL FLOW IS NEVER AN ANSWER HERE.
+         *
+         * Every caller of this method is about to take a card payment: it
+         * asks "which online gateway may charge this order". Bank transfer is
+         * not one, it is always available on its own, and returning it would
+         * make the pay page ask ManualGateway to start a card payment.
+         *
+         * Rows written before 2026_09_03_100000 cleared them, and any code
+         * path that still writes 'manual', both land here.
+         */
+        if ($provider === null || $provider->requiresHumanVerification()) {
             return null;
         }
 
