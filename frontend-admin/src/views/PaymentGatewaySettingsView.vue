@@ -297,9 +297,14 @@ function formatVerifiedAt(value: string | null): string {
                   class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-bold"
                 >โหมดทดสอบ</span>
               </h2>
-              <p v-if="gateway.requires_human_verification" class="mt-1 text-xs text-slate-400">
-                ลูกค้าโอนเงินและแนบสลิป แล้วให้ทีมงานกดยืนยัน — ตั้งค่าพร้อมเพย์/บัญชีธนาคารที่หน้าข้อมูลบริษัท
-              </p>
+              <!--
+                2026-09-03 (human request) — the caption that used to sit here
+                said "ตั้งค่าพร้อมเพย์/บัญชีธนาคารที่หน้าข้อมูลบริษัท". There is no such
+                page: the admin console has no field for payment_promptpay_id
+                or the bank columns anywhere, even though the API accepts them
+                and the public pay page reads them. Directions to a screen
+                that does not exist are worse than no directions.
+              -->
             </div>
 
             <button
