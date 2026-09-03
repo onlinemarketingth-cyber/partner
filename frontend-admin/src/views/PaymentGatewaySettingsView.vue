@@ -133,11 +133,105 @@ async function loadGateways(): Promise<void> {
   }
 }
 
-onMounted(loadGateways)
+/*
+ * ── Where the manual flow's money actually lands (2026-09-03) ──
+ *
+ * ManualGateway declares NO credential fields on purpose: a PromptPay proxy
+ * and a bank account are a DESTINATION, not an API key, and they already
+ * live on the company record (ADR-017 / TASK-054), which the public pay page
+ * reads to build the customer's QR. Copying them into
+ * company_payment_gateway_settings would give one value two homes, and the
+ * copy that stopped being updated would send customers' money to an old
+ * account.
+ *
+ * So the storage stays on companies.* and this screen edits it in place. Up
+ * to today the card carried a sentence pointing at a page where an admin
+ * could do that, and no such page had ever been built — the columns were
+ * reachable only by the API or the database. A gateway that is switched ON
+ * by default, whose destination cannot be set anywhere in the product, is a
+ * pay page that renders a QR to nowhere.
+ *
+ * Same authorisation as the rest of this screen: PUT /companies/{id} is
+ * Super-Admin-only (CompanyPolicy::update), and so is this whole view.
+ */
+interface CompanyPayout {
+  payment_promptpay_id: string
+  payment_bank_name: string
+  payment_bank_account_number: string
+  payment_bank_account_name: string
+}
+
+const EMPTY_PAYOUT: CompanyPayout = {
+  payment_promptpay_id: '',
+  payment_bank_name: '',
+  payment_bank_account_number: '',
+  payment_bank_account_name: '',
+}
+
+const payout = ref<CompanyPayout>({ ...EMPTY_PAYOUT })
+const savingPayout = ref(false)
+const payoutError = ref('')
+const payoutNotice = ref('')
+
+/** Has this company got anywhere for the money to go at all? */
+const payoutIsEmpty = computed(
+  () => !payout.value.payment_promptpay_id.trim() && !payout.value.payment_bank_account_number.trim(),
+)
+
+async function loadPayout(): Promise<void> {
+  payoutError.value = ''
+  payoutNotice.value = ''
+  if (activeCompany.companyId === null) {
+    payout.value = { ...EMPTY_PAYOUT }
+
+    return
+  }
+  try {
+    const res = await api.get<{ data: Partial<CompanyPayout> }>(`/companies/${activeCompany.companyId}`)
+    // ?? '', never ||: a column is null when unset, and an input bound to
+    // null renders "null" as its value in some browsers.
+    payout.value = {
+      payment_promptpay_id: res.data.payment_promptpay_id ?? '',
+      payment_bank_name: res.data.payment_bank_name ?? '',
+      payment_bank_account_number: res.data.payment_bank_account_number ?? '',
+      payment_bank_account_name: res.data.payment_bank_account_name ?? '',
+    }
+  } catch (e) {
+    payoutError.value = messageFrom(e, 'โหลดข้อมูลบัญชีรับเงินไม่สำเร็จ')
+  }
+}
+
+async function savePayout(): Promise<void> {
+  if (activeCompany.companyId === null) return
+  savingPayout.value = true
+  payoutError.value = ''
+  payoutNotice.value = ''
+  try {
+    // Blank is sent as null, not "": the column means "not configured", and
+    // an empty string would be a configured destination of nothing.
+    await api.put(`/companies/${activeCompany.companyId}`, {
+      payment_promptpay_id: payout.value.payment_promptpay_id.trim() || null,
+      payment_bank_name: payout.value.payment_bank_name.trim() || null,
+      payment_bank_account_number: payout.value.payment_bank_account_number.trim() || null,
+      payment_bank_account_name: payout.value.payment_bank_account_name.trim() || null,
+    })
+    payoutNotice.value = 'บันทึกบัญชีรับเงินแล้ว'
+  } catch (e) {
+    payoutError.value = messageFrom(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingPayout.value = false
+  }
+}
+
+async function loadAll(): Promise<void> {
+  await Promise.all([loadGateways(), loadPayout()])
+}
+
+onMounted(loadAll)
 // Re-load on a company switch. Without this the screen would keep showing
 // the previous company's configuration under the new company's name — on a
 // screen about where money goes, that is the worst possible stale render.
-watch(() => activeCompany.companyId, loadGateways)
+watch(() => activeCompany.companyId, loadAll)
 
 function messageFrom(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -297,14 +391,9 @@ function formatVerifiedAt(value: string | null): string {
                   class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-bold"
                 >โหมดทดสอบ</span>
               </h2>
-              <!--
-                2026-09-03 (human request) — the caption that used to sit here
-                said "ตั้งค่าพร้อมเพย์/บัญชีธนาคารที่หน้าข้อมูลบริษัท". There is no such
-                page: the admin console has no field for payment_promptpay_id
-                or the bank columns anywhere, even though the API accepts them
-                and the public pay page reads them. Directions to a screen
-                that does not exist are worse than no directions.
-              -->
+              <p v-if="gateway.requires_human_verification" class="mt-1 text-xs text-slate-400">
+                ลูกค้าโอนเงินและแนบสลิป แล้วให้ทีมงานกดยืนยัน
+              </p>
             </div>
 
             <button
@@ -322,6 +411,87 @@ function formatVerifiedAt(value: string | null): string {
             <Icon name="check" :size="14" class="mt-0.5 shrink-0" />
             <span>{{ gateway.verified_note }} ({{ formatVerifiedAt(gateway.verified_at) }})</span>
           </p>
+
+          <!--
+            2026-09-03 — the manual flow's configuration, edited here.
+
+            ManualGateway::credentialFields() is empty by design (a PromptPay
+            proxy is a destination, not an API key), so this card used to be
+            the only one with nothing to fill in — while being the gateway
+            switched on by default. The fields below write companies.*, the
+            same columns the public pay page builds the customer's QR from;
+            nothing is duplicated into the gateway credentials table.
+          -->
+          <div v-if="gateway.requires_human_verification" class="mt-4 space-y-3">
+            <div
+              v-if="payoutIsEmpty"
+              class="px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2"
+            >
+              <Icon name="alert" :size="14" class="mt-0.5 shrink-0" />
+              <span>
+                ยังไม่ได้ตั้งพร้อมเพย์หรือเลขบัญชี — ช่องทางนี้เปิดใช้งานอยู่ แต่ลูกค้าที่เปิดลิงก์จ่ายเงินจะไม่มีปลายทางให้โอน
+              </span>
+            </div>
+
+            <div>
+              <label class="text-xs font-bold text-slate-500 block mb-1">พร้อมเพย์ (เบอร์โทร หรือ เลขประจำตัวผู้เสียภาษี)</label>
+              <input
+                v-model="payout.payment_promptpay_id"
+                data-test="promptpay-id"
+                type="text"
+                inputmode="numeric"
+                placeholder="0812345678"
+                class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+              <p class="text-[11px] text-slate-400 mt-1">ค่านี้คือปลายทางที่ QR บนหน้าจ่ายเงินสร้างขึ้นมา</p>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs font-bold text-slate-500 block mb-1">ธนาคาร</label>
+                <input
+                  v-model="payout.payment_bank_name"
+                  type="text"
+                  placeholder="กสิกรไทย"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+              </div>
+              <div>
+                <label class="text-xs font-bold text-slate-500 block mb-1">เลขที่บัญชี</label>
+                <input
+                  v-model="payout.payment_bank_account_number"
+                  data-test="bank-account-number"
+                  type="text"
+                  inputmode="numeric"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label class="text-xs font-bold text-slate-500 block mb-1">ชื่อบัญชี</label>
+              <input
+                v-model="payout.payment_bank_account_name"
+                type="text"
+                class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+            </div>
+
+            <p v-if="payoutError" class="text-xs font-bold text-rose-600">{{ payoutError }}</p>
+            <p v-if="payoutNotice" class="text-xs font-bold text-emerald-700">{{ payoutNotice }}</p>
+
+            <div class="flex justify-end">
+              <button
+                type="button"
+                class="btn-primary"
+                data-test="save-payout"
+                :disabled="savingPayout"
+                @click="savePayout"
+              >
+                {{ savingPayout ? 'กำลังบันทึก...' : 'บันทึกบัญชีรับเงิน' }}
+              </button>
+            </div>
+          </div>
 
           <!-- Credential form. A provider with no fields (the manual flow)
                renders none, and says where its configuration actually lives
