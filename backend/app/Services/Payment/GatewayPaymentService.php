@@ -3,9 +3,11 @@
 namespace App\Services\Payment;
 
 use App\Enums\OrderStatus;
+use App\Enums\UserRole;
 use App\Models\AuditLog;
 use App\Models\Order;
 use App\Models\User;
+use App\Notifications\GatewayRefundReportedNotification;
 use App\Services\Order\OrderService;
 use App\Services\Payment\Gateways\GatewayException;
 use App\Services\Payment\Gateways\WebhookOutcome;
@@ -13,6 +15,7 @@ use App\Services\Payment\Gateways\WebhookResult;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
 use Throwable;
 
 /**
@@ -340,6 +343,64 @@ class GatewayPaymentService
             'charge_id' => $outcome->chargeId,
             'amount_satang' => $outcome->amountSatang,
         ]);
+
+        $this->tellTheAdmins($order, $outcome->amountSatang);
+    }
+
+    /**
+     * Email every Company Admin that a refund was reported.
+     *
+     * ── WHY THIS EXISTS AT ALL ──
+     *
+     * Writing the fact on the order and in the audit trail only helps
+     * somebody who is already looking. A refund is precisely the event
+     * nobody is looking for: the sale closed, the commission was paid, the
+     * screen was last opened days ago. Without a push, "how would an admin
+     * find out" has no answer — which was the state of this code until
+     * 2026-09-03.
+     *
+     * ── WHY IT CANNOT THROW ──
+     *
+     * This runs inside Stripe's webhook request. An SMTP failure escaping
+     * here becomes a non-2xx, Stripe retries the same event for hours, and
+     * every retry re-runs applyRefunded — mailing again on each one if the
+     * mail server has recovered by then. The refund is already RECORDED by
+     * the time we get here, so a mail that could not be sent must not undo
+     * that or turn a delivered webhook into a failed one.
+     *
+     * withoutGlobalScopes: a system-level "who administers this company"
+     * lookup with the company already fixed from the signed webhook's URL,
+     * the same pattern and the same reasoning as
+     * NotifyCompanyAdminsOfPendingAgent.
+     */
+    private function tellTheAdmins(Order $order, ?int $amountSatang): void
+    {
+        try {
+            $admins = User::withoutGlobalScopes()
+                ->where('company_id', $order->company_id)
+                ->where('role', UserRole::CompanyAdmin->value)
+                ->get();
+
+            if ($admins->isEmpty()) {
+                // Worth a line: a company with no admin cannot be told
+                // anything, and that is a configuration problem somebody
+                // needs to know about rather than silence.
+                Log::warning('Refund reported but this company has no Company Admin to tell', [
+                    'company_id' => $order->company_id,
+                    'order_number' => $order->order_number,
+                ]);
+
+                return;
+            }
+
+            Notification::send($admins, new GatewayRefundReportedNotification($order, $amountSatang));
+        } catch (Throwable $e) {
+            Log::error('Refund recorded but the admin notification failed to send', [
+                'order_id' => $order->id,
+                'order_number' => $order->order_number,
+                'reason' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
