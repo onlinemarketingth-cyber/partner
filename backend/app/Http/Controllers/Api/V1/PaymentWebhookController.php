@@ -126,6 +126,13 @@ class PaymentWebhookController extends Controller
                 'event_type' => $outcome->eventType,
             ]);
 
+            $this->auditOncePerDay(
+                $tenant,
+                'webhook.unhandled_event_type',
+                (string) ($outcome->eventType ?? 'unknown'),
+                ['provider' => $paymentProvider->value, 'event_type' => $outcome->eventType],
+            );
+
             return response()->json(['message' => 'ignored']);
         }
 
@@ -204,6 +211,13 @@ class PaymentWebhookController extends Controller
         if (! $isMoney) {
             Log::info('Payment webhook did not match an order', $context);
 
+            $this->auditOncePerDay(
+                $tenant,
+                'webhook.unmatched_non_payment',
+                $outcome->result->value,
+                $context,
+            );
+
             return;
         }
 
@@ -252,6 +266,66 @@ class PaymentWebhookController extends Controller
             Log::error('Unmatched payment recorded but the admin notification failed to send', [
                 'company_id' => $tenant->id,
                 'charge_id' => $outcome->chargeId,
+                'reason' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Put a low-severity webhook fact on a SCREEN, at most once a day.
+     *
+     * ── WHY IT IS ON A SCREEN AT ALL ──
+     *
+     * Log::info alone means storage/logs/laravel.log, which needs SSH to
+     * read and which nobody reads unless they already suspect something.
+     * "Recorded" and "discoverable" are not the same thing, and a fact only
+     * the developer can reach is not a feature of this product.
+     *
+     * audit_logs is already the trail §6 defines for money-adjacent events
+     * and already has a viewer (นโยบายและรายงาน), so these appear there beside
+     * the serious ones rather than needing a screen of their own.
+     *
+     * ── WHY ONCE A DAY ──
+     *
+     * These two cases are the ones that can ARRIVE IN BULK. Anyone who ticks
+     * "select all" in the provider's dashboard subscribes to hundreds of
+     * event types, and an unbounded row per delivery would bury the audit
+     * trail's real entries — a refund, an unmatched payment — under
+     * thousands of routine ones. A log designed to be read must stay
+     * readable, so the first occurrence of each kind each day is recorded
+     * and the repeats are left to laravel.log, where volume costs nothing.
+     *
+     * The dedupe key is the event type (or the outcome), NOT the charge, so
+     * "this keeps happening" collapses into one row a day rather than one
+     * per delivery.
+     */
+    private function auditOncePerDay(Company $tenant, string $action, string $key, array $context): void
+    {
+        try {
+            $alreadyToday = AuditLog::query()
+                ->where('company_id', $tenant->id)
+                ->where('action', $action)
+                ->where('new_values->dedupe_key', $key)
+                ->where('created_at', '>=', now()->subDay())
+                ->exists();
+
+            if ($alreadyToday) {
+                return;
+            }
+
+            AuditLog::create([
+                'company_id' => $tenant->id,
+                'actor_user_id' => null,
+                'action' => $action,
+                'auditable_type' => Company::class,
+                'auditable_id' => $tenant->id,
+                'new_values' => $context + ['dedupe_key' => $key],
+            ]);
+        } catch (Throwable $e) {
+            // Never the reason a webhook fails. This is the least important
+            // thing this request does.
+            Log::warning('Could not write the webhook audit row', [
+                'action' => $action,
                 'reason' => $e->getMessage(),
             ]);
         }

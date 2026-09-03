@@ -97,6 +97,15 @@ const ACTION_LABELS: Record<string, string> = {
   'agent_approval.approved': 'อนุมัติ agent',
   'agent_approval.rejected': 'ปฏิเสธ agent',
   move_to_company: 'ย้ายบริษัท',
+  'settings.commission_withdrawal_minimum_updated': 'แก้ไขยอดขั้นต่ำในการเบิกค่าคอม',
+  // ADR-027 — the payment gateway's own reports. These have no actor: they
+  // are things a provider told us, not things a person did here.
+  'order.gateway_payment_failed': 'ชำระเงินไม่สำเร็จ (ผ่านช่องทางออนไลน์)',
+  'order.gateway_checkout_expired': 'ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด',
+  'order.gateway_refund_reported': 'ผู้ให้บริการแจ้งการคืนเงิน',
+  'order.gateway_payment_unmatched': 'มีการชำระเงินที่จับคู่คำสั่งซื้อไม่ได้',
+  'webhook.unhandled_event_type': 'ได้รับ event ที่ระบบยังไม่มีตัวจัดการ',
+  'webhook.unmatched_non_payment': 'ได้รับ event ที่จับคู่คำสั่งซื้อไม่ได้ (ไม่ใช่การชำระเงิน)',
 }
 function actionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action
@@ -313,8 +322,10 @@ watch(
     <!-- ═══════════ Tab 1: บันทึกการตรวจสอบ (Audit Log) ═══════════ -->
     <section v-if="activeTab === 'audit'" class="mt-4">
       <div class="mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-        บันทึกนี้ยังไม่ครอบคลุมทุก action ตามที่ Section 6 กำหนด (เงิน/คอมมิชชั่น/สถานะ/ใบรับรอง/สิทธิ์) — ปัจจุบันมีการบันทึกเฉพาะ:
-        ย้ายบริษัท, สร้าง/แก้ไขกฎคอมมิชชั่น, อนุมัติ/ปฏิเสธ agent เท่านั้น การขยายให้ครอบคลุมทุก action เป็นงานต่อเนื่อง
+        บันทึกนี้ยังไม่ครอบคลุมทุก action ตามที่ Section 6 กำหนด (เงิน/คอมมิชชั่น/สถานะ/ใบรับรอง/สิทธิ์) — ปัจจุบันบันทึก:
+        ย้ายบริษัท, สร้าง/แก้ไขกฎคอมมิชชั่น, อนุมัติ/ปฏิเสธ agent, แก้ไขยอดขั้นต่ำเบิกค่าคอม
+        และเหตุการณ์จากช่องทางรับชำระเงินออนไลน์ (จ่ายไม่สำเร็จ / หมดเวลา / แจ้งคืนเงิน / จับคู่คำสั่งซื้อไม่ได้)
+        การขยายให้ครอบคลุมทุก action เป็นงานต่อเนื่อง
       </div>
 
       <div class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
