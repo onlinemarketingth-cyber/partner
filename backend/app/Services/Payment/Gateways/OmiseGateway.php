@@ -92,8 +92,8 @@ class OmiseGateway implements PaymentGateway
         $secret = trim($credentials['secret_key'] ?? '');
         $public = trim($credentials['public_key'] ?? '');
 
-        $this->assertKeyMode($secret, 'skey', $isLive);
-        $this->assertKeyMode($public, 'pkey', $isLive);
+        $this->assertKeyMode($secret, 'skey', $isLive, 'secret_key');
+        $this->assertKeyMode($public, 'pkey', $isLive, 'public_key');
 
         try {
             $response = Http::withBasicAuth($secret, '')
@@ -105,7 +105,7 @@ class OmiseGateway implements PaymentGateway
         }
 
         if ($response->status() === 401) {
-            throw new GatewayException('Omise ปฏิเสธ secret key นี้');
+            throw new GatewayException('Omise ปฏิเสธ secret key นี้', 'secret_key');
         }
 
         if (! $response->successful()) {
@@ -125,22 +125,57 @@ class OmiseGateway implements PaymentGateway
      * that never settle; a LIVE key in TEST mode charges real customers real
      * money during testing. The second is worse and neither is acceptable.
      */
-    private function assertKeyMode(string $key, string $prefix, bool $isLive): void
+    private function assertKeyMode(string $key, string $prefix, bool $isLive, string $field): void
     {
         $isTestKey = str_starts_with($key, $prefix.'_test_');
         $isLiveKey = str_starts_with($key, $prefix.'_live_');
 
         if (! $isTestKey && ! $isLiveKey) {
-            throw new GatewayException("รูปแบบ {$prefix} ไม่ถูกต้อง — ต้องขึ้นต้นด้วย {$prefix}_test_ หรือ {$prefix}_live_");
+            throw new GatewayException(
+                "รูปแบบ {$prefix} ไม่ถูกต้อง — ต้องขึ้นต้นด้วย {$prefix}_test_ หรือ {$prefix}_live_".self::looksLikeHint($key),
+                $field,
+            );
         }
 
         if ($isLive && $isTestKey) {
-            throw new GatewayException("ตั้งค่าเป็นโหมด LIVE แต่ใส่ {$prefix} ของ TEST — การชำระเงินจะดูสำเร็จแต่เงินไม่เข้า");
+            throw new GatewayException(
+                "ตั้งค่าเป็นโหมด LIVE แต่ใส่ {$prefix} ของ TEST — การชำระเงินจะดูสำเร็จแต่เงินไม่เข้า",
+                $field,
+            );
         }
 
         if (! $isLive && $isLiveKey) {
-            throw new GatewayException("ตั้งค่าเป็นโหมด TEST แต่ใส่ {$prefix} ของ LIVE — จะเรียกเก็บเงินลูกค้าจริง");
+            throw new GatewayException(
+                "ตั้งค่าเป็นโหมด TEST แต่ใส่ {$prefix} ของ LIVE — จะเรียกเก็บเงินลูกค้าจริง",
+                $field,
+            );
         }
+    }
+
+    /**
+     * Name the credential a wrong-looking value actually is.
+     *
+     * Same reasoning as StripeGateway's copy: two of the three boxes on this
+     * form are password fields showing dots, so a value pasted into the wrong
+     * one is invisible, and "รูปแบบไม่ถูกต้อง" alone leaves an admin comparing
+     * long strings by eye. Only the prefix is ever echoed, never the value.
+     */
+    private static function looksLikeHint(string $value): string
+    {
+        $known = [
+            'pkey_test_' => 'Public key (โหมดทดสอบ)',
+            'pkey_live_' => 'Public key (โหมดใช้งานจริง)',
+            'skey_test_' => 'Secret key (โหมดทดสอบ)',
+            'skey_live_' => 'Secret key (โหมดใช้งานจริง)',
+        ];
+
+        foreach ($known as $prefix => $name) {
+            if (str_starts_with($value, $prefix)) {
+                return " · ค่าที่ใส่มาดูเหมือนเป็น \"{$name}\" — วางผิดช่องหรือเปล่า";
+            }
+        }
+
+        return '';
     }
 
     /**

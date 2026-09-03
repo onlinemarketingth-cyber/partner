@@ -138,7 +138,11 @@ class CompanyPaymentGatewayService
              * screen would see a filled-in form and reasonably believe it
              * works.
              */
-            throw ValidationException::withMessages(['credentials' => $e->getMessage()]);
+            // Keyed on the FIELD when the driver named one, so the admin
+            // screen can put a red border on the box that is wrong. Falls
+            // back to 'credentials' for rejections that are about the
+            // account rather than any one value.
+            throw ValidationException::withMessages([($e->field ?? 'credentials') => $e->getMessage()]);
         }
 
         $row->fill([

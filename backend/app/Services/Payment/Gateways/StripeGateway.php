@@ -108,15 +108,18 @@ class StripeGateway implements PaymentGateway
         $publishable = trim($credentials['publishable_key'] ?? '');
         $webhookSecret = trim($credentials['webhook_secret'] ?? '');
 
-        $this->assertKeyMode($secret, 'sk', $isLive);
-        $this->assertKeyMode($publishable, 'pk', $isLive);
+        $this->assertKeyMode($secret, 'sk', $isLive, 'secret_key');
+        $this->assertKeyMode($publishable, 'pk', $isLive, 'publishable_key');
 
         // Checked here rather than at the first webhook. A wrong signing
         // secret fails silently and asynchronously: payments succeed at
         // Stripe, every webhook is rejected as forged, and the orders simply
         // never turn paid — a failure nobody sees until a customer asks.
         if (! str_starts_with($webhookSecret, 'whsec_')) {
-            throw new GatewayException('Webhook signing secret ต้องขึ้นต้นด้วย whsec_');
+            throw new GatewayException(
+                'Webhook signing secret ต้องขึ้นต้นด้วย whsec_'.self::looksLikeHint($webhookSecret),
+                'webhook_secret',
+            );
         }
 
         try {
@@ -152,22 +155,64 @@ class StripeGateway implements PaymentGateway
      * TEST mode charges real customers real money during testing. The second
      * is worse and neither is acceptable.
      */
-    private function assertKeyMode(string $key, string $prefix, bool $isLive): void
+    private function assertKeyMode(string $key, string $prefix, bool $isLive, string $field): void
     {
         $isTestKey = str_starts_with($key, $prefix.'_test_');
         $isLiveKey = str_starts_with($key, $prefix.'_live_');
 
         if (! $isTestKey && ! $isLiveKey) {
-            throw new GatewayException("รูปแบบ {$prefix} ไม่ถูกต้อง — ต้องขึ้นต้นด้วย {$prefix}_test_ หรือ {$prefix}_live_");
+            throw new GatewayException(
+                "รูปแบบ {$prefix} ไม่ถูกต้อง — ต้องขึ้นต้นด้วย {$prefix}_test_ หรือ {$prefix}_live_".self::looksLikeHint($key),
+                $field,
+            );
         }
 
         if ($isLive && $isTestKey) {
-            throw new GatewayException("ตั้งค่าเป็นโหมด LIVE แต่ใส่ {$prefix} ของ TEST — การชำระเงินจะดูสำเร็จแต่เงินไม่เข้า");
+            throw new GatewayException(
+                "ตั้งค่าเป็นโหมด LIVE แต่ใส่ {$prefix} ของ TEST — การชำระเงินจะดูสำเร็จแต่เงินไม่เข้า",
+                $field,
+            );
         }
 
         if (! $isLive && $isLiveKey) {
-            throw new GatewayException("ตั้งค่าเป็นโหมด TEST แต่ใส่ {$prefix} ของ LIVE — จะเรียกเก็บเงินลูกค้าจริง");
+            throw new GatewayException(
+                "ตั้งค่าเป็นโหมด TEST แต่ใส่ {$prefix} ของ LIVE — จะเรียกเก็บเงินลูกค้าจริง",
+                $field,
+            );
         }
+    }
+
+    /**
+     * "รูปแบบไม่ถูกต้อง" is true but unhelpful when the value is a perfectly
+     * valid key that went into the wrong box.
+     *
+     * Every Stripe credential announces what it is in its own prefix, so when
+     * one of the three lands somewhere it does not belong the system can say
+     * so instead of leaving an admin to compare three long strings by eye.
+     * This is the mistake that actually happens (human, 2026-09-03: whsec_
+     * pasted into the publishable-key field), and it is invisible on screen
+     * because two of the three boxes are password fields showing dots.
+     *
+     * Only the PREFIX is ever echoed back, never the value.
+     */
+    private static function looksLikeHint(string $value): string
+    {
+        $known = [
+            'whsec_' => 'Webhook signing secret',
+            'pk_test_' => 'Publishable key (โหมดทดสอบ)',
+            'pk_live_' => 'Publishable key (โหมดใช้งานจริง)',
+            'sk_test_' => 'Secret key (โหมดทดสอบ)',
+            'sk_live_' => 'Secret key (โหมดใช้งานจริง)',
+            'rk_' => 'Restricted key',
+        ];
+
+        foreach ($known as $prefix => $name) {
+            if (str_starts_with($value, $prefix)) {
+                return " · ค่าที่ใส่มาดูเหมือนเป็น \"{$name}\" — วางผิดช่องหรือเปล่า";
+            }
+        }
+
+        return '';
     }
 
     /**
