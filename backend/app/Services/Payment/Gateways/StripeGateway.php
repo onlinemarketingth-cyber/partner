@@ -84,7 +84,12 @@ class StripeGateway implements PaymentGateway
                 'label' => 'Webhook signing secret (whsec_)',
                 'required' => true,
                 'secret' => true,
-                'help' => 'ได้จาก Stripe Dashboard > Webhooks — ถ้าไม่มี ใครก็ส่ง webhook ปลอมมาสั่งให้ออเดอร์กลายเป็นจ่ายแล้วได้',
+                // Stripe moved webhooks into Workbench, so "Dashboard >
+                // Webhooks" no longer describes anything an admin can find.
+                // The path is spelled out because this is the field people
+                // get stuck on, and the sentence after it is why they cannot
+                // simply be allowed to skip it.
+                'help' => 'Stripe Dashboard → นักพัฒนา (Developers) → Webhook → เลือกปลายทางที่สร้างไว้ → คีย์ลับลงนาม (Signing secret) → กดรูปตาเพื่อเปิดเผย · ถ้าไม่มีค่านี้ ใครก็ส่ง webhook ปลอมมาสั่งให้ออเดอร์กลายเป็นจ่ายแล้วได้',
             ],
         ];
     }

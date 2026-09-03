@@ -97,6 +97,89 @@ function draftFor(provider: string): Record<string, string> {
   return created
 }
 
+/*
+ * ── READ MODE vs EDIT MODE (2026-09-03, human request) ──
+ *
+ * A card that had been saved looked almost exactly like one that had not:
+ * the secret inputs were empty either way (the API never returns a secret),
+ * and the only difference was a line of grey 12px text under each field.
+ *
+ * Worse, a save that FAILED left the typed values in the boxes — deliberate,
+ * so nobody retypes a secret key — which made a rejected form look like a
+ * saved one. That is how this screen told a human that Stripe was connected
+ * when nothing had been written at all.
+ *
+ * So a configured gateway now renders as a read-only summary with one
+ * [แก้ไข] button, and the card says its own state at the top instead of
+ * making the reader assemble it from field hints.
+ */
+const editing = ref<Record<string, boolean>>({})
+
+/**
+ * The last save for this provider was REJECTED.
+ *
+ * Separate from errorFor: the message says what went wrong, this says the
+ * card must not present itself as configured while the rejected values are
+ * still on screen. Cleared the moment a save succeeds or the form is reopened.
+ */
+const saveFailed = ref<Record<string, boolean>>({})
+
+/**
+ * Which FIELD each provider's last error was about.
+ *
+ * CompanyPaymentGatewayService throws ValidationException keyed on the
+ * field's own key ("webhook_secret"), so the offending input can be marked
+ * rather than leaving one message at the bottom of a form with three boxes
+ * in it.
+ */
+const fieldErrorFor = ref<Record<string, string>>({})
+
+type CardState = 'unset' | 'failed' | 'ready'
+
+function cardState(gateway: Gateway): CardState {
+  if (saveFailed.value[gateway.provider]) return 'failed'
+
+  return gateway.is_verified ? 'ready' : 'unset'
+}
+
+function isEditing(gateway: Gateway): boolean {
+  // An unconfigured gateway opens straight into the form: there is no
+  // summary to read, and making somebody click "แก้ไข" to see three empty
+  // boxes is a click that buys nothing.
+  return editing.value[gateway.provider] === true || cardState(gateway) !== 'ready'
+}
+
+function startEditing(gateway: Gateway): void {
+  editing.value[gateway.provider] = true
+  saveFailed.value[gateway.provider] = false
+  errorFor.value[gateway.provider] = ''
+  noticeFor.value[gateway.provider] = ''
+  fieldErrorFor.value[gateway.provider] = ''
+}
+
+function cancelEditing(gateway: Gateway): void {
+  editing.value[gateway.provider] = false
+  saveFailed.value[gateway.provider] = false
+  errorFor.value[gateway.provider] = ''
+  fieldErrorFor.value[gateway.provider] = ''
+  // Throw away what was typed and go back to what is stored — otherwise
+  // "ยกเลิก" would leave an unsaved secret sitting in a box that now claims
+  // to show saved state.
+  const draft: Record<string, string> = {}
+  for (const field of gateway.fields) {
+    draft[field.key] = field.secret ? '' : (field.value ?? '')
+  }
+  drafts.value[gateway.provider] = draft
+  liveMode.value[gateway.provider] = gateway.is_live
+}
+
+/** What a saved field shows in read mode. A secret is never revealed. */
+function storedValueLabel(field: GatewayField): string {
+  if (!field.secret) return field.value || '—'
+
+  return field.is_set ? '••••••••••••  (เก็บเข้ารหัสไว้)' : 'ยังไม่ได้ตั้งค่า'
+}
+
 function applyOverview(data: { active_provider: string | null; gateways: Gateway[] }): void {
   // `active_provider` on the payload is deliberately not stored: each
   // gateway row already carries its own `is_active`, and a second copy of
@@ -113,6 +196,11 @@ function applyOverview(data: { active_provider: string | null; gateways: Gateway
     }
     drafts.value[gateway.provider] = draft
     liveMode.value[gateway.provider] = gateway.is_live
+    // A fresh overview is the authority: whatever was being edited has now
+    // either been saved or been replaced by the stored truth.
+    editing.value[gateway.provider] = false
+    saveFailed.value[gateway.provider] = false
+    fieldErrorFor.value[gateway.provider] = ''
   }
 }
 
@@ -256,9 +344,30 @@ async function saveGateway(gateway: Gateway): Promise<void> {
     noticeFor.value[gateway.provider] = res.message ?? 'บันทึกและตรวจสอบการเชื่อมต่อสำเร็จ'
   } catch (e) {
     errorFor.value[gateway.provider] = messageFrom(e, 'บันทึกไม่สำเร็จ')
+    fieldErrorFor.value[gateway.provider] = failedFieldFrom(e)
+    saveFailed.value[gateway.provider] = true
+    // Stay in the form. Closing it would hide the values that need fixing.
+    editing.value[gateway.provider] = true
   } finally {
     savingProvider.value = null
   }
+}
+
+/**
+ * The field key the server's validation error was about, or ''.
+ *
+ * The key IS the field key — CompanyPaymentGatewayService throws
+ * ValidationException::withMessages([$field['key'] => ...]) — so no mapping
+ * table is needed and none can drift. Anything else (a provider's own
+ * rejection, which arrives under 'credentials') marks no field, and the
+ * message alone stands.
+ */
+function failedFieldFrom(e: unknown): string {
+  if (!(e instanceof ApiError)) return ''
+  const body = e.body as { errors?: Record<string, string[]> } | undefined
+  const keys = Object.keys(body?.errors ?? {})
+
+  return keys.find((k) => k !== 'credentials' && k !== 'is_live') ?? ''
 }
 
 async function activateGateway(gateway: Gateway): Promise<void> {
@@ -402,6 +511,24 @@ function formatVerifiedAt(value: string | null): string {
                   v-if="gateway.is_configured && !gateway.is_live"
                   class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-bold"
                 >โหมดทดสอบ</span>
+                <!--
+                  2026-09-03 — the card says its own state, at the top.
+                  Previously the only difference between "saved" and "rejected"
+                  was a line of grey 12px text under each input, and a rejected
+                  form keeps the typed values, so the two looked the same.
+                -->
+                <span
+                  v-if="gateway.fields.length && cardState(gateway) === 'ready'"
+                  class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-bold"
+                >ตั้งค่าแล้ว</span>
+                <span
+                  v-else-if="gateway.fields.length && cardState(gateway) === 'failed'"
+                  class="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[11px] font-bold"
+                >ยังไม่ได้บันทึก</span>
+                <span
+                  v-else-if="gateway.fields.length"
+                  class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-bold"
+                >ยังไม่ได้ตั้งค่า</span>
               </h2>
               <p v-if="gateway.requires_human_verification" class="mt-1 text-xs text-slate-400">
                 ลูกค้าโอนเงินและแนบสลิป แล้วให้ทีมงานกดยืนยัน
@@ -497,7 +624,48 @@ function formatVerifiedAt(value: string | null): string {
           <!-- Credential form. A provider with no fields (the manual flow)
                renders none, and says where its configuration actually lives
                rather than showing an empty box. -->
-          <form v-if="gateway.fields.length" class="mt-4 space-y-3" @submit.prevent="saveGateway(gateway)">
+          <!--
+            READ MODE. A configured gateway shows what is stored and nothing
+            else: three empty password boxes are not a report of a working
+            connection, which is what they were being read as.
+          -->
+          <div v-if="gateway.fields.length && !isEditing(gateway)" class="mt-4">
+            <dl class="rounded-xl border border-slate-200 divide-y divide-slate-100 text-sm">
+              <div v-for="field in gateway.fields" :key="field.key" class="flex items-start gap-3 px-3 py-2">
+                <dt class="w-48 shrink-0 text-xs font-bold text-slate-500">{{ field.label }}</dt>
+                <dd class="min-w-0 flex-1 text-slate-700 break-all font-mono text-xs">
+                  {{ storedValueLabel(field) }}
+                </dd>
+              </div>
+              <div class="flex items-start gap-3 px-3 py-2">
+                <dt class="w-48 shrink-0 text-xs font-bold text-slate-500">โหมด</dt>
+                <dd class="min-w-0 flex-1 text-slate-700 text-xs font-bold">
+                  {{ gateway.is_live ? 'ใช้งานจริง (Live)' : 'ทดสอบ (Test)' }}
+                </dd>
+              </div>
+            </dl>
+
+            <div class="mt-3 flex justify-end">
+              <button type="button" class="btn-secondary" @click="startEditing(gateway)">แก้ไข</button>
+            </div>
+          </div>
+
+          <form
+            v-if="gateway.fields.length && isEditing(gateway)"
+            class="mt-4 space-y-3"
+            @submit.prevent="saveGateway(gateway)"
+          >
+            <!--
+              Option A (human decision, 2026-09-03) — the signing secret stays
+              REQUIRED, so the order of setup is fixed and has to be said out
+              loud. Without it an admin fills in two keys, is refused for a
+              reason that is about a third thing they have not made yet, and
+              has no idea the webhook comes first.
+            -->
+            <p class="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500">
+              ลำดับการตั้งค่า: สร้าง webhook ในหน้า Dashboard ของผู้ให้บริการก่อน (ใช้ URL ด้านล่าง)
+              แล้วจึงนำคีย์ทั้ง 3 ตัวมากรอกที่นี่พร้อมกัน — ระบบจะบันทึกก็ต่อเมื่อครบและตรวจสอบผ่านทั้งชุด
+            </p>
             <div v-for="field in gateway.fields" :key="field.key">
               <label class="text-xs font-bold text-slate-500 block mb-1">
                 {{ field.label }}
@@ -508,7 +676,10 @@ function formatVerifiedAt(value: string | null): string {
                 :type="field.secret ? 'password' : 'text'"
                 :autocomplete="field.secret ? 'new-password' : 'off'"
                 :placeholder="field.secret && field.is_set ? '••••••••  (เว้นว่างไว้เพื่อไม่เปลี่ยน)' : ''"
-                class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
+                class="w-full px-3 py-2 rounded-xl border text-sm focus:outline-none focus:ring-2"
+                :class="fieldErrorFor[gateway.provider] === field.key
+                  ? 'border-rose-300 ring-1 ring-rose-100 focus:ring-rose-200'
+                  : 'border-slate-200 focus:ring-brand-200'"
               />
               <p v-if="field.help" class="mt-1 text-xs text-slate-400">{{ field.help }}</p>
               <p v-if="field.secret" class="mt-1 text-xs text-slate-400">
@@ -553,7 +724,18 @@ function formatVerifiedAt(value: string | null): string {
               </p>
             </div>
 
-            <div class="flex justify-end pt-1">
+            <div class="flex justify-end gap-2 pt-1">
+              <!-- Only offered once there is something stored to go back TO.
+                   Cancelling an unconfigured gateway would leave a card with
+                   no controls at all. -->
+              <button
+                v-if="gateway.is_verified"
+                type="button"
+                class="btn-secondary"
+                @click="cancelEditing(gateway)"
+              >
+                ยกเลิก
+              </button>
               <button type="submit" :disabled="savingProvider === gateway.provider" class="btn-primary">
                 {{ savingProvider === gateway.provider ? 'กำลังตรวจสอบ...' : 'บันทึกและตรวจสอบการเชื่อมต่อ' }}
               </button>
