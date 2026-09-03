@@ -400,7 +400,7 @@ class StripeGateway implements PaymentGateway
         $object = $payload['data']['object'] ?? [];
 
         if (! is_array($object)) {
-            return WebhookOutcome::ignore();
+            return WebhookOutcome::ignore($type);
         }
 
         $orderToken = $this->orderTokenFrom($object);
@@ -413,7 +413,7 @@ class StripeGateway implements PaymentGateway
             // Reporting it as Failed would cancel an order that is about to
             // succeed.
             if ($status === 'unpaid') {
-                return WebhookOutcome::ignore();
+                return WebhookOutcome::ignore($type.' (payment_status=unpaid)');
             }
 
             return new WebhookOutcome(
@@ -456,7 +456,7 @@ class StripeGateway implements PaymentGateway
             );
         }
 
-        return WebhookOutcome::ignore();
+        return WebhookOutcome::ignore($type);
     }
 
     /**

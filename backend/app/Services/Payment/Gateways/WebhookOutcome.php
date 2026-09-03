@@ -47,10 +47,21 @@ class WebhookOutcome
         public readonly ?int $amountSatang = null,
         public readonly ?string $orderToken = null,
         public readonly ?string $failureMessage = null,
+        /*
+         * The provider's own name for the event, carried so the caller can
+         * SAY what it ignored without knowing any gateway's payload shape.
+         *
+         * 2026-09-03 — an ignored event used to return HTTP 200 and vanish
+         * without a trace of any kind. This system subscribes to five event
+         * types, so a sixth one arriving means somebody edited the endpoint
+         * or the provider changed something, and neither should be
+         * undiscoverable.
+         */
+        public readonly ?string $eventType = null,
     ) {}
 
-    public static function ignore(): self
+    public static function ignore(?string $eventType = null): self
     {
-        return new self(WebhookResult::Ignore);
+        return new self(WebhookResult::Ignore, eventType: $eventType);
     }
 }

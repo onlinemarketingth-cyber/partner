@@ -3,16 +3,23 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\PaymentProvider;
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
+use App\Models\AuditLog;
 use App\Models\Company;
 use App\Models\Order;
+use App\Models\User;
+use App\Notifications\GatewayEventUnmatchedNotification;
 use App\Services\Payment\CompanyPaymentGatewayService;
 use App\Services\Payment\GatewayPaymentService;
+use App\Services\Payment\Gateways\WebhookOutcome;
 use App\Services\Payment\Gateways\WebhookResult;
 use App\Services\Payment\PaymentGatewayRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Notification;
+use Throwable;
 
 /**
  * ADR-027 / TASK-139 — where a payment provider tells us money arrived.
@@ -102,23 +109,30 @@ class PaymentWebhookController extends Controller
         $outcome = $driver->interpret($request->json()->all());
 
         if ($outcome->result === WebhookResult::Ignore) {
+            /*
+             * 2026-09-03 — an ignored event used to return 200 and leave no
+             * trace whatsoever.
+             *
+             * This system subscribes to five event types. A sixth arriving
+             * means the endpoint was edited in the provider's dashboard or
+             * the provider changed something — both of which somebody should
+             * be able to find out, and neither of which is an error worth
+             * failing the delivery over. So: one line, at info, naming the
+             * type, and still a 200.
+             */
+            Log::info('Payment webhook ignored — no handler for this event type', [
+                'provider' => $paymentProvider->value,
+                'company_id' => $tenant->id,
+                'event_type' => $outcome->eventType,
+            ]);
+
             return response()->json(['message' => 'ignored']);
         }
 
         $order = $this->resolveOrder($outcome->orderToken, $tenant);
 
         if ($order === null) {
-            /*
-             * A signed event we cannot place. Most often a charge created
-             * outside this system (a manual charge in the provider's own
-             * dashboard) — normal enough not to alarm, worth recording so
-             * that a pattern of them is findable.
-             */
-            Log::info('Payment webhook did not match an order', [
-                'provider' => $paymentProvider->value,
-                'company_id' => $tenant->id,
-                'charge_id' => $outcome->chargeId,
-            ]);
+            $this->reportUnmatched($outcome, $paymentProvider, $tenant);
 
             return response()->json(['message' => 'unmatched']);
         }
@@ -143,6 +157,104 @@ class PaymentWebhookController extends Controller
         };
 
         return response()->json(['message' => 'ok']);
+    }
+
+    /**
+     * A verified event that names no order we hold.
+     *
+     * ── WHY THE SEVERITY DEPENDS ON THE RESULT ──
+     *
+     * Before 2026-09-03 every one of these wrote the same Log::info() line,
+     * which flattened two very different situations into one.
+     *
+     * A Failed, Expired or unmatched-but-harmless event is exactly what the
+     * old comment described: usually a charge created by hand in the
+     * provider's own dashboard, normal enough not to alarm about, worth a
+     * line so a PATTERN of them is findable.
+     *
+     * A PAID event is not that. The signature passed, so this came from the
+     * company's own gateway account; it says money moved; and the token that
+     * ties a charge to an order is missing or names nothing. A customer has
+     * been charged and no order will ever be marked paid — no commission, no
+     * voucher, no pipeline stage, no receipt — and nothing downstream will
+     * notice, because everything downstream keys off an order that was never
+     * touched. That deserves the loudest channel this system has.
+     *
+     * ── AND IT STILL RETURNS 200 ──
+     *
+     * Failing the delivery would make the provider retry the same
+     * unplaceable event for hours, producing one alert per retry. The event
+     * is recorded here; repeating it is not more information.
+     */
+    private function reportUnmatched(
+        WebhookOutcome $outcome,
+        PaymentProvider $provider,
+        Company $tenant,
+    ): void {
+        $isMoney = $outcome->result === WebhookResult::Paid;
+
+        $context = [
+            'provider' => $provider->value,
+            'company_id' => $tenant->id,
+            'charge_id' => $outcome->chargeId,
+            'amount_satang' => $outcome->amountSatang,
+            'result' => $outcome->result->value,
+        ];
+
+        if (! $isMoney) {
+            Log::info('Payment webhook did not match an order', $context);
+
+            return;
+        }
+
+        Log::critical('Payment received for an order this system cannot find', $context);
+
+        /*
+         * auditable is the COMPANY, not an order — there is no order, and
+         * that absence is the whole event. §6 already treats audit_logs as
+         * the trail for anything money-adjacent, and this is the only
+         * durable record of a payment that never landed anywhere.
+         */
+        AuditLog::create([
+            'company_id' => $tenant->id,
+            'actor_user_id' => null,
+            'action' => 'order.gateway_payment_unmatched',
+            'auditable_type' => Company::class,
+            'auditable_id' => $tenant->id,
+            'new_values' => $context,
+        ]);
+
+        /*
+         * Cannot throw. The event is already recorded above; an SMTP failure
+         * escaping here would turn a delivered webhook into a non-2xx and
+         * have the provider retry an event that can never be placed.
+         */
+        try {
+            $admins = User::withoutGlobalScopes()
+                ->where('company_id', $tenant->id)
+                ->where('role', UserRole::CompanyAdmin->value)
+                ->get();
+
+            if ($admins->isEmpty()) {
+                Log::warning('Unmatched payment, and this company has no Company Admin to tell', [
+                    'company_id' => $tenant->id,
+                ]);
+
+                return;
+            }
+
+            Notification::send($admins, new GatewayEventUnmatchedNotification(
+                $provider->label(),
+                $outcome->chargeId,
+                $outcome->amountSatang,
+            ));
+        } catch (Throwable $e) {
+            Log::error('Unmatched payment recorded but the admin notification failed to send', [
+                'company_id' => $tenant->id,
+                'charge_id' => $outcome->chargeId,
+                'reason' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
