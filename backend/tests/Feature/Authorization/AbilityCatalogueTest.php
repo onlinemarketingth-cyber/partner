@@ -165,8 +165,18 @@ class AbilityCatalogueTest extends TestCase
         $superAdmin = PermissionResolver::abilitiesFor(UserRole::SuperAdmin);
         $companyAdmin = PermissionResolver::abilitiesFor(UserRole::CompanyAdmin);
 
-        $this->assertCount(33, $superAdmin);
-        $this->assertCount(29, $companyAdmin);
+        /*
+         * 35/31 since 2026-08-28 (632e1fd), which added
+         * settings.commission_withdrawal.view and .update — both held by
+         * BOTH roles, because withdrawal settings are per company and a
+         * Company Admin runs their own company's payouts.
+         *
+         * The numbers are the point: they are a tripwire, not a fact. Adding
+         * an ability has to be a deliberate edit somebody justifies here,
+         * which is exactly what did not happen last time.
+         */
+        $this->assertCount(35, $superAdmin);
+        $this->assertCount(31, $companyAdmin);
 
         $this->assertContains(Ability::ReportPlatformView, $superAdmin);
         $this->assertNotContains(Ability::ReportPlatformView, $companyAdmin);

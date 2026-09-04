@@ -30,18 +30,22 @@ use Illuminate\Validation\Rules\Password;
 // even if a client sends them (BR-6 / §5 rule 5). Do not add them "for
 // convenience".
 //
-// TASK-122 — `id_document_type` + `national_id` ARE new rules here, and
-// unlike the four above they are meant to reach the Service: they describe
-// the PERSON, not the tenant they land in, so they belong with
-// first_name/email/phone. Both are REQUIRED, on BOTH self-registration
-// paths (invite code and recruit link).
+// TASK-122 — `id_document_type` + `national_id` ARE rules here, and unlike
+// the four above they are meant to reach the Service: they describe the
+// PERSON, not the tenant they land in, so they belong with
+// first_name/email/phone.
 //
-// WHY BOTH PATHS, when the human only asked about the link: two public
-// registration endpoints that disagree about what identity is required is
-// not a feature, it is a hole — anyone who wanted to skip the document
-// would simply register with an invite code instead, and we would have
-// spent the effort for nothing. If a path is ever meant to be exempt, that
-// has to be a stated business decision (BR-7), not an omission.
+// 2026-08-27 (human decision, BR-7) — BOTH ARE NOW OPTIONAL. The identity
+// document is not asked for at sign-up any more; an agent supplies it from
+// their own profile when there is a payout to make (PUT /me/id-document).
+// This comment said "REQUIRED on both paths" for a week after that stopped
+// being true, which is how a rule ends up being read from the wrong file.
+//
+// WHAT DID NOT CHANGE IS THAT THE TWO PATHS AGREE. Two public registration
+// endpoints that disagree about what identity is required is not a feature,
+// it is a hole — anyone wanting to skip the document would simply use the
+// other one. Optional on the invite code path, optional on the recruit
+// link path, and the required_with pair below applies to both.
 //
 // The DUPLICATE check for the document deliberately does NOT live here —
 // it is per-company (see RegistrationService), and this Request has no idea

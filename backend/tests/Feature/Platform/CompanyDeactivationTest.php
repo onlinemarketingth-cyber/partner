@@ -578,8 +578,11 @@ class CompanyDeactivationTest extends TestCase
             'first_name' => 'Somsak',
             'last_name' => 'Racy',
             'email' => 'somsak@thailife.test',
-            'id_document_type' => 'thai_national_id',
-            'national_id' => '1234567890121',
+            // Required since 2026-08-27. Without it this request is refused
+            // by VALIDATION, the deactivation re-read below never runs, and
+            // the test passes its 422 assertion while proving nothing — the
+            // exact failure $flipped exists to catch.
+            'phone' => '0812345678',
             'password' => 'TempPass123!',
             'password_confirmation' => 'TempPass123!',
         ])->assertStatus(422);

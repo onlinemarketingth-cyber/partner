@@ -182,8 +182,10 @@ class UserRightsAuditTest extends TestCase
             'first_name' => 'Somsri',
             'last_name' => 'Dee',
             'email' => 'somsri@thailife.test',
-            'id_document_type' => 'thai_national_id',
-            'national_id' => '1234567890121',
+            // Required since 2026-08-27. The identity document that used to
+            // sit here is optional now and collected from the agent's own
+            // profile instead (632e1fd), so it is no longer sent.
+            'phone' => '0812345678',
             'password' => 'TempPass123!',
             'password_confirmation' => 'TempPass123!',
         ])->assertCreated();

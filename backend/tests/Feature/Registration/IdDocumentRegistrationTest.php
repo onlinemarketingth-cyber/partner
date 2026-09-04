@@ -403,16 +403,56 @@ class IdDocumentRegistrationTest extends TestCase
             ->assertJsonValidationErrors('national_id');
     }
 
-    public function test_the_document_is_required_on_the_recruit_link_path_too(): void
+    /**
+     * 2026-08-27 (human decision) — OMITTING THE DOCUMENT ENTIRELY IS NOW OK.
+     *
+     * This test used to assert the opposite, and it asserted it for a good
+     * reason: two public registration endpoints that disagree about what
+     * identity is required is a hole, not a feature. That reason still
+     * holds — what changed is the answer on BOTH paths. The document is no
+     * longer asked for at sign-up at all; an agent supplies it from their own
+     * profile when there is a payout to make (see ProfileSettingsView and
+     * PUT /me/id-document).
+     *
+     * So what is pinned here is the new rule and the invariant that survived
+     * it: nothing required, and the two paths still agree.
+     */
+    public function test_a_recruit_can_sign_up_with_no_document_at_all(): void
     {
         [, , $link] = $this->companyWithRecruitLink();
 
         $payload = $this->payload(['ref_token' => $link->token]);
         unset($payload['id_document_type'], $payload['national_id']);
 
+        $this->postJson('/api/v1/register', $payload)->assertCreated();
+
+        $recruit = $this->findByEmail('somsri@example.com');
+        $this->assertNotNull($recruit);
+        // Not stored as an empty string or a placeholder: absent means null,
+        // which is what the profile screen and the duplicate check both read.
+        $this->assertNull($recruit->national_id);
+        $this->assertNull($recruit->id_document_type);
+    }
+
+    /**
+     * The pairing rule is what is left of the old requirement, and it still
+     * applies to BOTH paths — the invite-code half is two tests above.
+     *
+     * Half a document is worse than none: `national_id` alone cannot be
+     * validated (each type has its own shape rule) and cannot be hashed into
+     * the per-company blind index, so it would be stored unvalidated and
+     * never matched against anything.
+     */
+    public function test_half_a_document_is_still_rejected_on_the_recruit_link_path(): void
+    {
+        [, , $link] = $this->companyWithRecruitLink();
+
+        $payload = $this->payload(['ref_token' => $link->token]);
+        unset($payload['id_document_type']);
+
         $this->postJson('/api/v1/register', $payload)
             ->assertUnprocessable()
-            ->assertJsonValidationErrors(['id_document_type', 'national_id']);
+            ->assertJsonValidationErrors('id_document_type');
 
         // Nothing was created and no quota was spent on a rejected attempt.
         $this->assertNull($this->findByEmail('somsri@example.com'));
