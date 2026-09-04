@@ -34,8 +34,13 @@ const filtered = computed(() => {
 
 const label = computed(() => store.companyName ?? 'ทุกบริษัท')
 
-function pick(id: number | null): void {
-  store.setCompany(id)
+async function pick(id: number | null): Promise<void> {
+  // 2026-09-04 — requestCompany, not setCompany: a screen holding unsaved
+  // work gets to ask the human first (see the store's switchGuard). When it
+  // refuses, NOTHING here changes — the dropdown stays open on the company
+  // the page still belongs to, because the value was never written.
+  if (!(await store.requestCompany(id))) return
+
   open.value = false
   search.value = ''
 }

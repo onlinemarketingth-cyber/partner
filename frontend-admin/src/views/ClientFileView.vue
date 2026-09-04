@@ -18,6 +18,7 @@
  */
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useCompanySwitchGuard } from '@/composables/useCompanySwitchGuard'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -55,6 +56,21 @@ import {
 
 const route = useRoute()
 const router = useRouter()
+
+/*
+ * 2026-09-04 — this page is ABOUT one client, and that client belongs to one
+ * company. When the header's company changes, staying here would leave the
+ * app naming one company while showing another's client file.
+ *
+ * No dialog: this screen is read-only (see the docblock above — creating and
+ * editing clients is an Agent Portal action), so there is never anything to
+ * lose by leaving. It goes straight back to the client list, which then
+ * loads for the company now selected.
+ */
+useCompanySwitchGuard({
+  isDirty: () => false,
+  leaveTo: { name: 'client-management' },
+})
 
 const clientId = computed(() => Number(route.params.id))
 

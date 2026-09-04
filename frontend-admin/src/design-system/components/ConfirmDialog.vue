@@ -25,6 +25,17 @@ const props = defineProps({
     body:    { type: String,  default: '' },
     variant: { type: String,  default: 'danger' }, // danger | primary | warning
     busy:    { type: Boolean, default: false },
+    /*
+     * 2026-09-04 — optional button wording.
+     *
+     * Empty keeps today's ยืนยัน / ยกเลิก everywhere it already reads
+     * correctly. A dialog whose two answers are not "yes/no" needs its own
+     * words: "เปลี่ยนบริษัท / แก้ไขต่อ" tells the human what each button
+     * DOES, where "ยืนยัน" would leave them guessing which thing they are
+     * confirming — the change, or the staying.
+     */
+    confirmLabel: { type: String, default: '' },
+    cancelLabel:  { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:show', 'confirm', 'cancel'])
@@ -75,14 +86,14 @@ const confirm = () => emit('confirm')
                     <button @click="close"
                             :disabled="busy"
                             class="flex-1 px-5 py-2.5 rounded-xl text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition disabled:opacity-50">
-                        {{ t('cancel', I18N.cancel.th, I18N.cancel.en) }}
+                        {{ cancelLabel || t('cancel', I18N.cancel.th, I18N.cancel.en) }}
                     </button>
                     <button @click="confirm"
                             :disabled="busy"
                             class="flex-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white shadow transition disabled:opacity-50"
                             :class="variantClass">
                         <span v-if="busy">{{ t('saving', I18N.saving.th, I18N.saving.en) }}</span>
-                        <span v-else>{{ t('confirm', I18N.confirm.th, I18N.confirm.en) }}</span>
+                        <span v-else>{{ confirmLabel || t('confirm', I18N.confirm.th, I18N.confirm.en) }}</span>
                     </button>
                 </div>
             </div>

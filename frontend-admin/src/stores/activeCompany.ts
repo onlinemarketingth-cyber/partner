@@ -116,6 +116,51 @@ export const useActiveCompanyStore = defineStore('activeCompany', () => {
     return `${path}${path.includes('?') ? '&' : '?'}company_id=${companyId.value}`
   }
 
+  /*
+   * ── ASKING BEFORE THE SCOPE MOVES (2026-09-04, human decision) ──
+   *
+   * Some screens are a RECORD, not a list: the product editor, a client's
+   * file. Switching company under one of those changes what the page is
+   * about while somebody is halfway through typing into it, and until now it
+   * happened silently — the header said one company and the form on screen
+   * belonged to another.
+   *
+   * The human's call: switching still wins, but ASK first when there is
+   * unsaved work. "แก้ไขต่อ" must then leave the picker showing the company
+   * the page actually belongs to, which is why the guard runs BEFORE the
+   * value is written rather than as an undo afterwards.
+   *
+   * ONE guard, not a list: only one view is mounted on a record at a time,
+   * and a stack would silently keep a stale entry the day one forgets to
+   * release. Registering twice is a bug, so the second registration
+   * replaces the first and the release only clears its own.
+   */
+  let switchGuard: (() => boolean | Promise<boolean>) | null = null
+
+  function guardSwitch(guard: () => boolean | Promise<boolean>): void {
+    switchGuard = guard
+  }
+
+  function releaseSwitch(guard: () => boolean | Promise<boolean>): void {
+    if (switchGuard === guard) switchGuard = null
+  }
+
+  /**
+   * The only entry point a UI control should use.
+   *
+   * Returns false when the guard refused, so the caller can leave its own
+   * state (an open dropdown, a highlighted row) exactly as it was — nothing
+   * was changed.
+   */
+  async function requestCompany(id: number | null): Promise<boolean> {
+    if (id === companyId.value) return true
+    if (switchGuard && !(await switchGuard())) return false
+
+    setCompany(id)
+
+    return true
+  }
+
   function setCompany(id: number | null): void {
     selectedId.value = id
     persist(id)
@@ -152,6 +197,12 @@ export const useActiveCompanyStore = defineStore('activeCompany', () => {
     companyName,
     requiresCompanyPick,
     setCompany,
+    // 2026-09-04 — every UI control switches through requestCompany();
+    // setCompany stays exported because loadCompanies() calls it to drop a
+    // stale persisted id, which must not be refusable by a view's guard.
+    requestCompany,
+    guardSwitch,
+    releaseSwitch,
     scopedPath,
     loadCompanies,
   }

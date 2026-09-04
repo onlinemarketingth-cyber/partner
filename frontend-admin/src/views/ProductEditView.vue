@@ -45,6 +45,8 @@ import InfoPopover from '@/design-system/components/InfoPopover.vue'
 // own docblock for why the cap fetch is module-scope/shared but each form
 // here gets its own guard instance).
 import { useCommissionRateCapGuard } from '@/composables/useCommissionRateCap'
+import { useCompanySwitchGuard } from '@/composables/useCompanySwitchGuard'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 // ADR-026 — Thai stage wording lives in the UI layer, never in the enum
 // (PipelineStage::label() is English by §7). One map per app.
 import { PAYMENT_STAGE_KEY, stageLabelTh, type PipelineStageRef } from '@/utils/pipelineStages'
@@ -654,6 +656,50 @@ const priceDisplay = computed<string>({
   },
 })
 
+/*
+ * ── IS THERE ANYTHING TO LOSE? (2026-09-04) ──
+ *
+ * Read by the company-switch guard below, and deliberately made of two
+ * different kinds of evidence:
+ *
+ *   1. The basics form DIFFERS from what was loaded. Compared against a
+ *      snapshot rather than tracked by a `dirty` flag on every input: a flag
+ *      set by a watcher also fires on the load itself, and one set by hand
+ *      is one @input away from being forgotten.
+ *   2. A sub-editor is OPEN — description, spec text, a spec row, a sales
+ *      material group, a commission rule. Each of those has its own draft
+ *      that this page cannot diff, and an open editor means the human is
+ *      mid-sentence in it.
+ *
+ * What it does NOT claim to cover: an upload already in flight. That one
+ * survives navigation on its own and is not lost by leaving.
+ */
+const basicsSnapshot = ref('')
+
+const basicsChanged = computed(() => JSON.stringify(basicsForm.value) !== basicsSnapshot.value)
+
+const hasUnsavedWork = computed(
+  () =>
+    basicsChanged.value ||
+    editingDescription.value ||
+    editingSpecDescription.value ||
+    editingSpecId.value !== null ||
+    editingMaterialGroupId.value !== null ||
+    editingRuleId.value !== null,
+)
+
+/**
+ * The human's answer, 2026-09-04: switching company on a record page asks
+ * first when work would be lost, then leaves for the product list either
+ * way — never sits on another company's product under a header naming this
+ * one. See useCompanySwitchGuard for the whole rule.
+ */
+const { asking: askingCompanySwitch, confirmLeave: leaveForNewCompany, stay: keepEditing } =
+  useCompanySwitchGuard({
+    isDirty: () => hasUnsavedWork.value,
+    leaveTo: { name: 'product-catalog' },
+  })
+
 function syncBasicsFormFromProduct(p: Product) {
   basicsForm.value = {
     name: p.name,
@@ -669,6 +715,16 @@ function syncBasicsFormFromProduct(p: Product) {
     voucher_validity_days: p.voucher_validity_days ?? '',
     requires_shipping: p.requires_shipping,
   }
+
+  // The form now matches what the server holds — from a load or from a
+  // successful save, which both land here. Anything after this is the
+  // human's own unsaved typing.
+  stampBasicsSnapshot()
+}
+
+/** Mark the current form values as "nothing to lose". */
+function stampBasicsSnapshot(): void {
+  basicsSnapshot.value = JSON.stringify(basicsForm.value)
 }
 
 async function saveBasics() {
@@ -1804,7 +1860,13 @@ async function loadInitialData() {
   }
 }
 
-onMounted(loadInitialData)
+onMounted(async () => {
+  await loadInitialData()
+  // CREATE mode never calls syncBasicsFormFromProduct (there is no product
+  // to sync from), so without this the blank form reads as "changed" and a
+  // company switch would ask about work nobody has done yet.
+  if (isCreateMode.value) stampBasicsSnapshot()
+})
 
 // ── TASK-195 — 6-tab layout (pure navigation reorg of the 8 stacked
 // cards above; see docs/tasks/TASK-195-product-edit-tabbed-layout.md).
@@ -3523,5 +3585,19 @@ function goToVideoSettings() {
         </div>
       </div>
     </div>
+
+    <!-- 2026-09-04 — the company changed while this product was open. Only
+         shown when leaving would throw work away; with nothing typed the
+         page just follows the switch back to the product list. -->
+    <ConfirmDialog
+      :show="askingCompanySwitch"
+      variant="warning"
+      title="เปลี่ยนบริษัทที่กำลังทำงานอยู่?"
+      body="สินค้าที่เปิดอยู่เป็นของบริษัทเดิม และมีข้อมูลที่ยังไม่ได้บันทึก — ถ้าเปลี่ยนบริษัทตอนนี้ ข้อมูลที่แก้ไว้จะหายไป"
+      confirm-label="เปลี่ยนบริษัท"
+      cancel-label="แก้ไขต่อ"
+      @confirm="leaveForNewCompany"
+      @cancel="keepEditing"
+    />
   </main>
 </template>
