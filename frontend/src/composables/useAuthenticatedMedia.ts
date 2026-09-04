@@ -13,12 +13,27 @@
  * this composable fetches the absolute URL directly rather than going
  * through api.getBlob()'s path-prefixed request().
  *
+ * ── IT STILL HAS TO PROVE WHO IT IS (fixed 2026-09-04) ──
+ *
+ * Fetching the URL by hand does NOT mean fetching it anonymously. This file
+ * was ported from the admin console, which authenticates with a cookie, and
+ * kept sending only the XSRF header after the AGENT PORTAL moved to bearer
+ * tokens. Every one of these URLs is behind auth:sanctum, so each one
+ * answered 401 — and because a 401 is an ANSWER rather than a blip, the
+ * retry logic below correctly refused to retry it. The result was a product
+ * grid of "ลองใหม่" buttons that could never succeed, on a page whose data
+ * had loaded perfectly.
+ *
+ * The headers now come from api/client.ts, which is the one place that
+ * knows how this app proves who it is.
+ *
  * Object URLs are cached by source URL and revoked on unmount to avoid
  * leaking memory. Ported verbatim from
  * frontend-admin/src/composables/useAuthenticatedMedia.ts (Agent Portal
  * needs the same product gallery + Academy video playback).
  */
 import { onUnmounted, ref, watch, type Ref } from 'vue'
+import { authHeaders } from '@/api/client'
 
 function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))
@@ -103,7 +118,9 @@ function fetchAsObjectUrl(sourceUrl: string): Promise<string> {
   if (pending) return pending
 
   const request = (async () => {
-    const headers = new Headers()
+    // Bearer token (portal) — and the XSRF cookie is still sent alongside
+    // it, so this same file keeps working if a host is ever stateful again.
+    const headers = authHeaders(new Headers())
     const xsrfToken = getCookie('XSRF-TOKEN')
     if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 

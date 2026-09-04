@@ -59,6 +59,66 @@ function deferredFetch() {
 const settle = () => vi.advanceTimersByTimeAsync(0)
 const URL_A = 'https://api.test/media/1'
 
+/**
+ * 2026-09-04 — THE REGRESSION THAT REACHED PRODUCTION.
+ *
+ * Every product image on the agent portal rendered as a "ลองใหม่" button.
+ * The files were fine and the product data loaded: this composable was
+ * fetching auth:sanctum URLs with the XSRF cookie header ALONE, because it
+ * was ported from the admin console (a cookie app) and never updated when
+ * the portal moved to bearer tokens. The server answered 401 — correctly —
+ * and the retry logic refused to retry it, also correctly, because a 401 is
+ * an answer rather than a blip.
+ *
+ * Nothing caught it: the tests above stub fetch and assert on caching and
+ * revocation, so they pass whatever headers go out. This one reads the
+ * headers.
+ */
+describe('useAuthenticatedMedia — proving who is asking', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.useFakeTimers()
+    localStorage.setItem('sva_token', 'tok_test_123')
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    localStorage.removeItem('sva_token')
+  })
+
+  /** The headers of the last fetch, as a plain object. */
+  async function headersOfOneFetch() {
+    const use = await freshModule()
+    let seen: Headers | undefined
+    // @ts-expect-error test stub
+    globalThis.fetch = vi.fn((_url: string, init: RequestInit) => {
+      seen = init.headers as Headers
+
+      return Promise.resolve({ ok: true, status: 200, blob: async () => ({}) })
+    })
+
+    use(ref<string | null>(URL_A))
+    await nextTick()
+    await settle()
+
+    return seen
+  }
+
+  it('carries the bearer token, or the server has no way to know it is us', async () => {
+    const headers = await headersOfOneFetch()
+
+    expect(headers?.get('Authorization')).toBe('Bearer tok_test_123')
+  })
+
+  it('asks in token mode, the same as every other request this app makes', async () => {
+    // Without this header the backend treats the caller as a cookie client
+    // and mints nothing — the two apps' auth modes are kept apart by it.
+    const headers = await headersOfOneFetch()
+
+    expect(headers?.get('X-Auth-Mode')).toBe('token')
+  })
+})
+
 describe('useAuthenticatedMedia', () => {
   beforeEach(() => {
     vi.restoreAllMocks()

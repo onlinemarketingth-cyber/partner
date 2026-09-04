@@ -64,6 +64,7 @@ const { td } = useI18n()
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, nextTick } from 'vue'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 import Icon from './Icon.vue'
+import { authHeaders } from '@/api/client'
 
 const props = withDefaults(
   defineProps<{
@@ -198,7 +199,10 @@ async function load() {
     const lib = await loadPdfjs()
     if (token !== renderToken) return
 
-    const headers = new Headers()
+    // Same fix as useAuthenticatedMedia (2026-09-04): this reaches an
+    // auth:sanctum URL by hand, so it has to carry the portal's bearer
+    // token. Without it every spec-sheet PDF answers 401.
+    const headers = authHeaders(new Headers())
     const xsrfToken = getCookie('XSRF-TOKEN')
     if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 

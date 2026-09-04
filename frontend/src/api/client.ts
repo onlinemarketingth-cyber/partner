@@ -112,7 +112,21 @@ export async function ensureCsrfCookie(): Promise<void> {
   // Intentionally empty — see the docblock above.
 }
 
-function authHeaders(headers: Headers): Headers {
+/**
+ * The two headers that identify this app's caller, on ANY request.
+ *
+ * EXPORTED (2026-09-04) because two callers reach protected URLs without
+ * going through request(): useAuthenticatedMedia (product images, Academy
+ * video) and PdfViewerModal, both of which fetch an ABSOLUTE url the API
+ * handed them. Both were written while the portal still authenticated with
+ * a cookie, kept sending only the XSRF header when it moved to tokens, and
+ * so asked auth:sanctum routes for files as an anonymous visitor — every
+ * product image on the portal answered 401 and rendered as "ลองใหม่".
+ *
+ * One exported function rather than a copy in each: the next change to how
+ * this app proves who it is must not have three places to remember.
+ */
+export function authHeaders(headers: Headers): Headers {
   // The server mints a token ONLY for a request that asks for one
   // (AuthController::login / LoginRequest::authenticate). The admin
   // console never sends this, which is exactly how the two apps' auth
