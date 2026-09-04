@@ -41,6 +41,8 @@ vi.mock('@/api/client', () => ({
 }))
 
 import OrderPaymentsView from '../OrderPaymentsView.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { useAuthStore } from '@/stores/auth'
 
 const SUMMARY = [
   { status: 'pending', status_label: 'รอชำระเงิน', count: 12, total_satang: 1200000 },
@@ -93,6 +95,51 @@ async function mountView() {
 
   return wrapper
 }
+
+/**
+ * 2026-09-04 — human-reported: the header's company did not reach this
+ * screen. Both endpoints have honoured company_id since TASK-209
+ * (OrderController::scopedQuery), so a Super Admin was reading every
+ * tenant's orders — and every tenant's money — under a header naming one.
+ *
+ * The summary is asserted alongside the list on purpose: the tab counts
+ * come from one and the rows from the other, and a page showing one
+ * company's totals above another's rows is worse than either mistake alone.
+ */
+describe('OrderPaymentsView — the company scope', () => {
+  beforeEach(() => {
+    get.mockReset()
+    localStorage.clear()
+    mockApi()
+
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+    const store = useActiveCompanyStore()
+    store.companies = [
+      { id: 4, name: 'ไทยประกันชีวิต', slug: 'thailife' },
+      { id: 9, name: 'Genesenn', slug: 'genesenn' },
+    ]
+    store.setCompany(4)
+  })
+
+  it('asks both endpoints for the picked company', async () => {
+    await mountView()
+
+    expect(requestedPaths()).toContain('/orders/summary?company_id=4')
+    expect(requestedPaths().some((p) => p.startsWith('/orders?') && p.includes('company_id=4'))).toBe(true)
+  })
+
+  it('reloads BOTH when the header switches company', async () => {
+    await mountView()
+    get.mockClear()
+
+    useActiveCompanyStore().setCompany(9)
+    await flushPromises()
+
+    expect(requestedPaths()).toContain('/orders/summary?company_id=9')
+    expect(requestedPaths().some((p) => p.startsWith('/orders?') && p.includes('company_id=9'))).toBe(true)
+  })
+})
 
 describe('OrderPaymentsView — the tab actually filters', () => {
   beforeEach(() => {

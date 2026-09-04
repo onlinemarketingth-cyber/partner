@@ -80,6 +80,8 @@ vi.mock('vue3-apexcharts', async () => {
 })
 
 import AgentDashboardOverview from '../AgentDashboardOverview.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { useAuthStore } from '@/stores/auth'
 import { PIPELINE_STAGE_LABELS_TH } from '@/utils/pipelineStages'
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -214,11 +216,81 @@ function chart(wrapper: ReturnType<typeof mount>, id: string) {
 
 beforeEach(() => {
   get.mockReset()
+  localStorage.clear()
+  // Both endpoints answer by default; the scope tests care about the URL
+  // that was asked for, not the payload that came back.
+  get.mockImplementation((path: string) =>
+    Promise.resolve(
+      String(path).startsWith('/agent-approvals')
+        ? { data: [], meta: { total: 0 } }
+        : { data: makeMetrics() },
+    ),
+  )
 })
 
 // ════════════════════════════════════════════════════════════════════════
 // §4.1 (F-4, BR-7) — render whatever stages the server sends, in its order
 // ════════════════════════════════════════════════════════════════════════
+/**
+ * 2026-09-04 — THE COMPANY PICKER, WHICH THIS PAGE USED TO IGNORE.
+ *
+ * Human-reported. This is the landing page, and every figure on it was the
+ * whole platform's while the header named one company: wrong numbers that
+ * look right. The API had accepted company_id since it was written — the
+ * request simply never carried it, and nothing reloaded when the header
+ * changed.
+ *
+ * Both halves are asserted, because each is useless alone: sending the id
+ * once at mount still leaves yesterday's company on screen, and reloading
+ * without the id just re-fetches the platform.
+ */
+describe('the company scope', () => {
+  it('asks for the picked company, not the whole platform', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+    const store = useActiveCompanyStore()
+    store.companies = [{ id: 4, name: 'ไทยประกันชีวิต', slug: 'thailife' }]
+    store.setCompany(4)
+
+    await mountDashboard()
+
+    expect(get).toHaveBeenCalledWith('/agent-dashboard-metrics?company_id=4')
+    // The approval queue underneath is the same company's or it is nobody's.
+    expect(get).toHaveBeenCalledWith('/agent-approvals?status=pending&company_id=4')
+  })
+
+  it('reloads when the header switches company', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+    const store = useActiveCompanyStore()
+    store.companies = [
+      { id: 4, name: 'ไทยประกันชีวิต', slug: 'thailife' },
+      { id: 9, name: 'Genesenn', slug: 'genesenn' },
+    ]
+    store.setCompany(4)
+
+    await mountDashboard()
+    get.mockClear()
+
+    store.setCompany(9)
+    await flushPromises()
+
+    expect(get).toHaveBeenCalledWith('/agent-dashboard-metrics?company_id=9')
+  })
+
+  it('asks for the whole platform on ทุกบริษัท, and says so by sending nothing', async () => {
+    // null is a real, deliberate read-across state (ADR-038) — not "no
+    // company chosen yet". Sending company_id=null would narrow to nothing.
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+    useActiveCompanyStore().setCompany(null)
+
+    await mountDashboard()
+
+    expect(get).toHaveBeenCalledWith('/agent-dashboard-metrics')
+  })
+})
+
 describe('pipeline funnel — the server owns the stage list', () => {
   it('plots ALL eight stages, so the bars sum to the ดีลทั้งหมด KPI', async () => {
     wireApi(makeMetrics())

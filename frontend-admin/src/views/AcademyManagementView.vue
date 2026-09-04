@@ -429,11 +429,20 @@ async function loadAll() {
   loading.value = true
   errorMessage.value = ''
   try {
+    /*
+     * ── SCOPED SINCE 2026-09-04 ──
+     *
+     * These four were the last unscoped reads on this screen: the forms
+     * below already sent company_id when SAVING (see submitModule), so a
+     * Super Admin picked a company, then chose a section from a list that
+     * still held every company's — and saved it into the picked one. The
+     * four endpoints have honoured company_id since TASK-209.
+     */
     const [t, p, m, e] = await Promise.all([
-      api.get<{ data: CertTier[] }>('/cert-tiers'),
-      api.get<{ data: Product[] }>('/products'),
-      fetchAllPages<ModuleItem>('/modules'),
-      api.get<{ data: ExamItem[] }>('/exams'),
+      api.get<{ data: CertTier[] }>(activeCompany.scopedPath('/cert-tiers')),
+      api.get<{ data: Product[] }>(activeCompany.scopedPath('/products')),
+      fetchAllPages<ModuleItem>(activeCompany.scopedPath('/modules')),
+      api.get<{ data: ExamItem[] }>(activeCompany.scopedPath('/exams')),
     ])
     certTiers.value = t.data
     products.value = p.data
@@ -2403,6 +2412,16 @@ watch(activeTab, (tab) => {
   if (tab === 'progress' && !progressLoadedOnce.value) void loadProgressSummary()
 })
 watch(selectedCompanyId, () => {
+  /*
+   * 2026-09-04 — this watcher used to refresh the PROGRESS tab and nothing
+   * else, so switching company left the sections, exams, products and the
+   * completion rule on screen belonging to the company the admin had just
+   * left. The tab-specific reload stays (it also resets paging); everything
+   * the page loads at mount now reloads too.
+   */
+  void loadAll()
+  void loadCompletionSettings()
+
   if (activeTab.value === 'progress') {
     progressPage.value = 1
     void loadProgressSummary()

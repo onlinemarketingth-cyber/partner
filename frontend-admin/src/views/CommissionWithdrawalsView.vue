@@ -16,7 +16,7 @@
  * on screen when they approved it. The number is masked to its last four:
  * enough to recognise the account, never enough to be handed it.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -156,7 +156,16 @@ async function load(): Promise<void> {
   errorMessage.value = ''
   try {
     const query = activeTab.value ? `?status=${activeTab.value}` : ''
-    const res = await api.get<{ data: WithdrawalRequest[] }>(`/commission-withdrawals${query}`)
+    /*
+     * 2026-09-04 — the queue itself was never scoped to the header's
+     * company, on either side: this request sent no company_id, and the
+     * controller applied no filter. A Super Admin therefore reviewed every
+     * tenant's withdrawal requests under a header naming one of them. Both
+     * halves are fixed; this is the half that asks.
+     */
+    const res = await api.get<{ data: WithdrawalRequest[] }>(
+      activeCompany.scopedPath(`/commission-withdrawals${query}`),
+    )
     requests.value = res.data
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? 'โหลดข้อมูลไม่สำเร็จ' : 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'
@@ -224,6 +233,14 @@ function markTransferred(r: WithdrawalRequest): void {
 onMounted(async () => {
   await activeCompany.loadCompanies()
   await Promise.all([load(), loadSetting()])
+})
+
+// The minimum-withdrawal box is per company too, and it sits directly above
+// the queue — leaving one of them on the old company while the other moved
+// would be worse than not following the switch at all.
+watch(() => activeCompany.companyId, () => {
+  void load()
+  void loadSetting()
 })
 </script>
 

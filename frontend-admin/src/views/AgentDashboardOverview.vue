@@ -48,7 +48,7 @@
  *    yet"; the /agent-approvals queue shows its own error state instead of
  *    a green "nothing pending" when the request fails.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import VueApexCharts from 'vue3-apexcharts'
 import type { ApexOptions } from 'apexcharts'
 import { api, ApiError } from '@/api/client'
@@ -57,6 +57,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { stageCounts } from '@/utils/pipelineStages'
 import { useI18n } from '@/composables/useI18n'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 const { lang, td } = useI18n()
 
@@ -156,11 +157,28 @@ const pendingLoaded = ref(false)
  */
 const pendingError = ref('')
 
+/*
+ * ── THIS PAGE IGNORED THE COMPANY PICKER UNTIL 2026-09-04 ──
+ *
+ * Human-reported: "เปลี่ยนบริษัทที่ Admin ... ข้อมูลที่เฉพาะบริษัทไม่เปลี่ยนตาม".
+ * This screen was the worst case of it, and became the worst case twice
+ * over when it was made the LANDING page: every figure on it — sales,
+ * commission, agent counts, the whole set of charts — was the platform's,
+ * rendered under a header naming one company. Wrong numbers that look
+ * right, which is the failure ADR-038's picker exists to prevent.
+ *
+ * The API has accepted `company_id` since it was written
+ * (AgentDashboardMetricsController) — only the request never sent it.
+ */
+const activeCompany = useActiveCompanyStore()
+
 async function load() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const res = await api.get<{ data: DashboardMetrics }>('/agent-dashboard-metrics')
+    const res = await api.get<{ data: DashboardMetrics }>(
+      activeCompany.scopedPath('/agent-dashboard-metrics'),
+    )
     metrics.value = res.data
   } catch (e) {
     errorMessage.value =
@@ -172,7 +190,9 @@ async function load() {
 
   pendingError.value = ''
   try {
-    const res = await api.get<{ data: PendingAgent[]; meta?: { total: number } }>('/agent-approvals?status=pending')
+    const res = await api.get<{ data: PendingAgent[]; meta?: { total: number } }>(
+      activeCompany.scopedPath('/agent-approvals?status=pending'),
+    )
     pendingAgents.value = res.data
     pendingTotal.value = res.meta?.total ?? res.data.length
   } catch (e) {
@@ -186,7 +206,15 @@ async function load() {
     pendingLoaded.value = true
   }
 }
-onMounted(load)
+onMounted(() => {
+  activeCompany.loadCompanies()
+  void load()
+})
+
+// Reloading on the switch is half the fix and the half that is easy to
+// forget: sending company_id once at mount still leaves yesterday's company
+// on screen for as long as the admin stays on this page.
+watch(() => activeCompany.companyId, load)
 
 // ── Helpers ──
 function baht(satang: number): string {

@@ -10,6 +10,7 @@ use App\Http\Requests\Commission\StoreWithdrawalRequestRequest;
 use App\Http\Resources\CommissionWithdrawalRequestResource;
 use App\Models\CommissionWithdrawalRequest;
 use App\Services\Commission\CommissionWithdrawalService;
+use App\Support\CompanyScopeFilter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -42,6 +43,23 @@ class CommissionWithdrawalRequestController extends Controller
         $query = CommissionWithdrawalRequest::query()
             ->with(['agent', 'decidedBy', 'items'])
             ->latest('id');
+
+        /*
+         * TASK-209 / ADR-038 — THE HEADER'S COMPANY SCOPE, MISSING UNTIL
+         * 2026-09-04 (human-reported).
+         *
+         * TenantScope pins a Company Admin already, and deliberately does not
+         * pin a Super Admin — so this queue handed a Super Admin every
+         * company's withdrawal requests no matter which company the header
+         * said they were working in. Real money, attributed to the wrong
+         * tenant on screen, one "อนุมัติ" away.
+         *
+         * NARROWS ONLY (see CompanyScopeFilter): without ?company_id this is
+         * still the deliberate read-across "ทุกบริษัท" view, and for anyone
+         * who is not a Super Admin the parameter is ignored entirely rather
+         * than trusted.
+         */
+        CompanyScopeFilter::apply($query, $request);
 
         if (! $user->isSuperAdmin() && ! $user->isCompanyAdmin()) {
             $query->where('agent_id', $user->id);

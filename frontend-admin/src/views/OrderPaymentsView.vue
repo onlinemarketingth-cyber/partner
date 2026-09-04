@@ -31,7 +31,7 @@
  * one GROUP BY over the same scoped query the list uses (OrderController::
  * scopedQuery), so a tab count is always the number of rows that tab shows.
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -39,6 +39,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ClientDetailModal from '@/design-system/components/ClientDetailModal.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 interface OrderRow {
   id: number
@@ -166,9 +167,25 @@ const activeTab = computed(() => TABS.find((t) => t.status === activeStatus.valu
  * waiting" but hit a list error still knows there is work, which is more
  * useful than an empty screen.
  */
+/*
+ * ── ONE COMPANY'S ORDERS, NOT EVERY COMPANY'S (2026-09-04) ──
+ *
+ * Human-reported. Both endpoints have honoured `company_id` since TASK-209
+ * (OrderController::scopedQuery runs CompanyScopeFilter) — this screen just
+ * never sent it, so a Super Admin read every tenant's orders and every
+ * tenant's money under a header naming one of them.
+ *
+ * A Company Admin is unaffected either way: TenantScope already pins their
+ * queries server-side, and scopedPath() then sends the id they are pinned
+ * to anyway.
+ */
+const activeCompany = useActiveCompanyStore()
+
 async function loadSummary(): Promise<void> {
   try {
-    const res = await api.get<{ data: SummaryRow[]; needs_attention?: number }>('/orders/summary')
+    const res = await api.get<{ data: SummaryRow[]; needs_attention?: number }>(
+      activeCompany.scopedPath('/orders/summary'),
+    )
     summary.value = res.data
     // Optional and defaulted, not required. A frontend deployed ahead of its
     // backend would otherwise render `undefined` into the tab badge — and
@@ -190,7 +207,7 @@ async function loadOrders(): Promise<void> {
     // The attention tab is a query, not a status — see NEEDS_ATTENTION.
     const query =
       activeStatus.value === NEEDS_ATTENTION ? 'needs_attention=1' : `status=${activeStatus.value}`
-    const res = await api.get<{ data: OrderRow[] }>(`/orders?${query}`)
+    const res = await api.get<{ data: OrderRow[] }>(activeCompany.scopedPath(`/orders?${query}`))
     orders.value = res.data
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดคำสั่งซื้อไม่สำเร็จ (${e.status})` : 'โหลดคำสั่งซื้อไม่สำเร็จ'
@@ -207,9 +224,19 @@ async function selectTab(status: TabStatus): Promise<void> {
   await loadOrders()
 }
 
-onMounted(async () => {
+async function loadAll(): Promise<void> {
   await Promise.all([loadSummary(), loadOrders()])
+}
+
+onMounted(() => {
+  activeCompany.loadCompanies()
+  void loadAll()
 })
+
+// Both halves have to follow the switch: the tab counts at the top come
+// from the summary, the rows below from the list, and a screen showing one
+// company's totals over another's rows is worse than either alone.
+watch(() => activeCompany.companyId, loadAll)
 
 const kpis = computed(() => [
   { label: 'รอตรวจสลิป', value: countFor('awaiting_verification') },
