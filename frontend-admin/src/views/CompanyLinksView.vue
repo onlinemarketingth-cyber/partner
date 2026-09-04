@@ -70,6 +70,33 @@ const activeCompany = useActiveCompanyStore()
  */
 const qrLink = ref<TrackedLink | null>(null)
 
+/**
+ * COPY (2026-09-04, human request) — this tab never had it either.
+ *
+ * The URL was on screen and selectable, which is not the same thing: these
+ * rows are read to be PASTED somewhere — a chat message, a poster brief, an
+ * ad — and selecting a truncated link inside a table cell with a mouse is a
+ * job nobody should be given. The other two tabs have had this button since
+ * they were built; this is the same one, not a new idea.
+ */
+const copiedId = ref<number | null>(null)
+
+async function copyLink(link: TrackedLink) {
+  try {
+    await navigator.clipboard.writeText(link.short_url)
+    copiedId.value = link.id
+    // Long enough to be read, short enough that the row is not stuck saying
+    // "copied" while the admin copies the next one.
+    setTimeout(() => {
+      if (copiedId.value === link.id) copiedId.value = null
+    }, 2000)
+  } catch {
+    // Clipboard permission denied, or an insecure context. The URL is on
+    // screen and selectable, so failing quietly beats an error toast about
+    // something the admin can still do by hand.
+  }
+}
+
 const links = ref<TrackedLink[]>([])
 const summary = ref<GroupSummary[]>([])
 const loading = ref(false)
@@ -321,7 +348,22 @@ function manageTabFor(group: string): 'signup' | 'team' | null {
                 </button>
                 <div class="min-w-0">
                   <p class="font-bold text-slate-800 truncate max-w-xs">{{ link.label || link.group_label }}</p>
-                  <p class="text-[11px] text-brand-700 truncate max-w-xs">{{ link.short_url }}</p>
+                  <!-- The URL itself IS the button: it is what the admin
+                       came to this row for, and a separate icon beside a
+                       non-clickable link only adds a thing to aim at. -->
+                  <button
+                    type="button"
+                    data-test="copy-link"
+                    class="inline-flex items-center gap-1.5 max-w-xs text-[11px] text-brand-700 hover:text-brand-800"
+                    :title="link.short_url"
+                    @click="copyLink(link)"
+                  >
+                    <span class="truncate">{{ link.short_url }}</span>
+                    <Icon :name="copiedId === link.id ? 'check' : 'copy'" :size="13" class="shrink-0" />
+                    <span class="shrink-0 text-slate-400">
+                      {{ copiedId === link.id ? td('common.copied') : td('common.copy') }}
+                    </span>
+                  </button>
                 </div>
               </div>
             </td>
