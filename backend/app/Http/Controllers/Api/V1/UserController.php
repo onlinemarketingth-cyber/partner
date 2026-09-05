@@ -9,6 +9,7 @@ use App\Http\Requests\Platform\ResetUserPasswordRequest;
 use App\Http\Requests\Platform\StoreUserRequest;
 use App\Http\Requests\Platform\UpdateUserRequest;
 use App\Http\Resources\UserResource;
+use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\Platform\UserService;
 use App\Support\CompanyScopeFilter;
@@ -38,6 +39,45 @@ class UserController extends Controller
 
         if ($request->boolean('include_inactive')) {
             $query->withTrashed();
+        }
+
+        /*
+         * TASK-259 — "จัดการผู้ใช้ระบบ" needs to ask two questions this
+         * endpoint could not answer.
+         *
+         * ?role= — "who are the admins?" was previously answerable only by
+         * loading every agent and filtering in the browser, which this
+         * endpoint's own pagination makes a lie (page 1 of everybody is not
+         * page 1 of the admins).
+         */
+        if ($request->filled('role')) {
+            // Never 'super_admin': the base query already excludes those rows
+            // and UserPolicy::view() refuses them individually. Passing it
+            // here must return nothing rather than quietly widening the list.
+            $query->where('role', $request->string('role')->toString());
+        }
+
+        /*
+         * ?with_last_login=1 — "is this account still in use?" The answer has
+         * been in audit_logs since 2026-08-21 and nothing read it back.
+         *
+         * A SUBSELECT, not a join or a second query per row: a join against a
+         * table with many rows per user would multiply the result set and
+         * break the pagination this endpoint depends on, and N+1 per row is
+         * what makes an admin screen feel broken at 200 users. TASK-240's
+         * (actor_user_id, created_at) index is exactly what this reads.
+         *
+         * Opt-in, because every other caller of /users (four admin screens
+         * and a dropdown) has no use for it and should not pay for it.
+         */
+        if ($request->boolean('with_last_login')) {
+            $query->select('users.*')->addSelect(['last_login_at' => AuditLog::query()
+                ->select('created_at')
+                ->whereColumn('actor_user_id', 'users.id')
+                ->where('action', 'auth.login')
+                ->orderByDesc('created_at')
+                ->limit(1),
+            ]);
         }
 
         // TASK-060 — search, same pattern as ClientController::index

@@ -323,6 +323,21 @@ const router = createRouter({
      * URL somebody can be sent — the reports page keeps rendering the same
      * component on its audit tab, so no existing link breaks.
      */
+    /*
+     * TASK-259 (human request, 2026-09-05) — "ทำหน้าจัดการ user ระบบ".
+     *
+     * Account administration lived inside จัดการตัวแทน, which is a screen
+     * about SELLING (certs, uplines, commission). "Who can get into this
+     * system and with what rights" is a different question, asked by a
+     * different person, and it belongs in Settings beside the activity log
+     * that answers "and what did they do".
+     */
+    {
+      path: '/users',
+      name: 'user-management',
+      component: () => import('../views/UserManagementView.vue'),
+      meta: { navLabel: 'จัดการผู้ใช้ระบบ' },
+    },
     {
       path: '/activity-log',
       name: 'activity-log',

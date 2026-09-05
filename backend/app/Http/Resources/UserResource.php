@@ -234,6 +234,41 @@ class UserResource extends JsonResource
             'is_active' => $this->deleted_at === null,
             'created_at' => $this->created_at,
             'deleted_at' => $this->deleted_at,
+            /*
+             * TASK-259 — "is this account still in use?", answered from the
+             * audit trail (UserController::index's ?with_last_login=1
+             * subselect). whenHas: absent for every other caller, so no
+             * screen has to explain a field that is always null there.
+             *
+             * NULL is meaningful and the UI must say so in words: it means
+             * "never signed in since login auditing began (2026-08-21)", not
+             * "never signed in".
+             */
+            'last_login_at' => $this->whenHas('last_login_at'),
+            /*
+             * TASK-259 — what THIS viewer may do to THIS row, decided by the
+             * Policy that will actually be consulted when they try.
+             *
+             * The alternative is the screen re-deriving the rules ("super
+             * admin, or same company, and not yourself…"), which is how a
+             * button ends up offered and then refused — or worse, hidden
+             * from somebody who was allowed. There is one rule set; this
+             * asks it rather than copying it.
+             *
+             * Opt-in, because it costs a Gate call per row per key and no
+             * other caller of /users renders per-row actions.
+             */
+            'permissions' => $this->when(
+                $request->boolean('with_permissions'),
+                fn () => [
+                    'update' => (bool) $request->user()?->can('update', $this->resource),
+                    // Also the "reset this person's password" gate — see
+                    // ResetUserPasswordRequest::authorize().
+                    'deactivate' => (bool) $request->user()?->can('delete', $this->resource),
+                    'restore' => (bool) $request->user()?->can('restore', $this->resource),
+                    'move_company' => (bool) $request->user()?->can('move', $this->resource),
+                ],
+            ),
         ];
     }
 }

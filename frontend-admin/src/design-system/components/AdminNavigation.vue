@@ -269,6 +269,11 @@ const navItems: NavItem[] = [
       // used to be reachable ONLY from AdminHomeView's card grid, which
       // no longer exists. Without an entry here the route would still
       // resolve but nothing in the UI would lead to it.
+      // TASK-259 (human request, 2026-09-05) — account administration moved
+      // INTO Settings, next to the log that answers what those accounts did.
+      // จัดการตัวแทน keeps every agent-shaped action it has (certs, uplines,
+      // approvals); nothing was taken out of it.
+      { name: 'user-management', icon: 'users', label: { th: 'จัดการผู้ใช้ระบบ', en: 'System users' } },
       // TASK-258 (human request, 2026-09-05) — the activity log gets its own
       // entry, ABOVE the reports page it used to hide inside. "ใครทำอะไรไป
       // บ้างในระบบ" is a question asked far more often than any of the three
