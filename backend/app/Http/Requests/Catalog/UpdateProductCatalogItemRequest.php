@@ -22,6 +22,18 @@ class UpdateProductCatalogItemRequest extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'spec_description' => ['nullable', 'string'],
+            /*
+             * TASK-251 — editable, and deliberately WITHOUT any effect on
+             * companies that already have this item.
+             *
+             * This value is only ever read at the moment a company's copy is
+             * created (a new company, or a company added later). Changing it
+             * changes what the NEXT company starts from; it does not reach
+             * back and reprice anybody, because by then that price belongs to
+             * that company (ADR-036 §3) and the human's decision was
+             * explicitly "มาแก้ไขแยกบริษัทได้".
+             */
+            'default_price_satang' => ['sometimes', 'required', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
         ];
     }

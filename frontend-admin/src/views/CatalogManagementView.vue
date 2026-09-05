@@ -70,6 +70,9 @@ interface ProductCatalogItem {
   name: string
   description: string | null
   spec_description: string | null
+  // TASK-251 — BR-3 satang. The price each company's copy is CREATED with,
+  // never a price anybody is currently selling at.
+  default_price_satang: number | null
   is_active: boolean
   media: unknown[]
   specs: unknown[]
@@ -288,13 +291,21 @@ const itemForm = ref({
   name: '',
   description: '',
   spec_description: '',
+  /*
+   * TASK-251 — held in BAHT, sent in satang (BR-3).
+   *
+   * The admin types 8900, the API stores 890000. Keeping the conversion at
+   * this one boundary is the same rule the rest of the app follows: satang
+   * everywhere inside, baht only where a human reads or types it.
+   */
+  default_price_baht: '' as number | '',
   is_active: true,
 })
 const itemFormError = ref('')
 const savingItem = ref(false)
 
 function resetItemForm(): void {
-  itemForm.value = { catalog_brand_id: '', catalog_category_id: '', name: '', description: '', spec_description: '', is_active: true }
+  itemForm.value = { catalog_brand_id: '', catalog_category_id: '', name: '', description: '', spec_description: '', default_price_baht: '', is_active: true }
   editingItemId.value = null
   itemFormError.value = ''
 }
@@ -310,6 +321,7 @@ function openEditItemForm(item: ProductCatalogItem): void {
     name: item.name,
     description: item.description ?? '',
     spec_description: item.spec_description ?? '',
+    default_price_baht: item.default_price_satang === null ? '' : item.default_price_satang / 100,
     is_active: item.is_active,
   }
   itemFormError.value = ''
@@ -324,6 +336,16 @@ async function submitItemForm(): Promise<void> {
     itemFormError.value = 'กรุณาเลือกแบรนด์ หมวดหมู่ และตั้งชื่อสินค้าในแคตตาล็อก'
     return
   }
+  /*
+   * TASK-251 — checked here as well as server-side, because saving this form
+   * writes a priced listing into every company. `=== ''` deliberately, not a
+   * falsy test: 0 is a price somebody may genuinely mean, and treating it as
+   * "empty" would refuse the one value the server is happy to accept.
+   */
+  if (itemForm.value.default_price_baht === '') {
+    itemFormError.value = 'กรุณาระบุราคาเริ่มต้น — การบันทึกจะเพิ่มสินค้านี้ให้ทุกบริษัท (ปิดการใช้งานไว้)'
+    return
+  }
   savingItem.value = true
   itemFormError.value = ''
   try {
@@ -333,6 +355,9 @@ async function submitItemForm(): Promise<void> {
       name: itemForm.value.name,
       description: itemForm.value.description || undefined,
       spec_description: itemForm.value.spec_description || undefined,
+      // BR-3 — baht x 100, rounded so a typed 8900.005 cannot become a
+      // fractional satang the database would silently truncate.
+      default_price_satang: Math.round(Number(itemForm.value.default_price_baht) * 100),
       is_active: itemForm.value.is_active,
     }
     if (editingItemId.value) {
@@ -431,6 +456,26 @@ async function confirmDeleteItem(): Promise<void> {
             <label class="text-xs font-bold text-slate-500">ชื่อสินค้าในแคตตาล็อก</label>
             <input v-model="itemForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
+          <!-- TASK-251 — the field that makes the rest of the form reach
+               every company. The note beside it is not decoration: an admin
+               who does not know that saving creates a listing in every
+               tenant will type a price for the wrong audience. -->
+          <div>
+            <label class="text-xs font-bold text-slate-500">ราคาเริ่มต้น (บาท)</label>
+            <input
+              v-model="itemForm.default_price_baht"
+              type="number"
+              min="0"
+              step="1"
+              required
+              data-test="catalog-default-price"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            />
+            <p class="mt-1 text-[11px] text-slate-400">
+              ราคานี้ใช้ตอน<strong>สร้าง</strong>รายการสินค้าให้แต่ละบริษัทเท่านั้น — หลังจากนั้นแต่ละบริษัทแก้ราคาของตัวเองได้
+              และการแก้ตรงนี้ภายหลังจะไม่ไปเปลี่ยนราคาที่บริษัทตั้งไว้แล้ว
+            </p>
+          </div>
           <div>
             <label class="text-xs font-bold text-slate-500">คำอธิบาย (ไม่บังคับ)</label>
             <textarea v-model="itemForm.description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
@@ -442,6 +487,13 @@ async function confirmDeleteItem(): Promise<void> {
           <label class="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
             <input v-model="itemForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน
           </label>
+          <!-- Said BEFORE the click, not after it. A product appearing in
+               every company's catalog is a surprise if it is only explained
+               in a success message. -->
+          <p v-if="!editingItemId" data-test="propagation-notice" class="text-xs text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded-lg px-3 py-2">
+            เมื่อบันทึก ระบบจะเพิ่มสินค้านี้ให้<strong>ทุกบริษัท</strong>โดยอัตโนมัติ และ<strong>ปิดการใช้งานไว้ทั้งหมด</strong>
+            — แต่ละบริษัทเปิดขายเองเมื่อพร้อม และตั้งราคา/ค่าคอมมิชชั่นของตัวเองได้
+          </p>
           <p v-if="itemFormError" class="text-xs font-bold text-rose-600">{{ itemFormError }}</p>
           <div class="flex justify-end gap-2">
             <button type="button" class="btn-secondary" @click="closeItemForm">ยกเลิก</button>
@@ -462,7 +514,12 @@ async function confirmDeleteItem(): Promise<void> {
           >
             <div class="min-w-0">
               <p class="text-sm font-bold text-slate-900 truncate">{{ item.name }}</p>
-              <p class="text-xs text-slate-400">{{ item.catalog_brand.name }} · {{ item.catalog_category.name }}</p>
+              <p class="text-xs text-slate-400">
+                {{ item.catalog_brand.name }} · {{ item.catalog_category.name }}
+                <template v-if="item.default_price_satang !== null">
+                  · ราคาเริ่มต้น {{ (item.default_price_satang / 100).toLocaleString('th-TH') }} บาท
+                </template>
+              </p>
             </div>
             <div class="flex items-center gap-3 shrink-0">
               <span

@@ -35,6 +35,10 @@ class ProductCatalogItem extends Model
         'name',
         'description',
         'spec_description',
+        // TASK-251 — the price every company's copy is CREATED with, not a
+        // price anybody sells at: each company owns its own price_satang
+        // from that moment on (ADR-036 §3 is unchanged).
+        'default_price_satang',
         'is_active',
     ];
 
@@ -42,6 +46,8 @@ class ProductCatalogItem extends Model
     {
         return [
             'is_active' => 'boolean',
+            // BR-3 — integer satang, never a float, all the way to the edge.
+            'default_price_satang' => 'integer',
         ];
     }
 

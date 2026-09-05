@@ -131,3 +131,46 @@ per-company rows (they were only ever a join target, and renaming them would fig
 Admin who edited their own copy). The two names can therefore drift; only the catalog's name is
 ever displayed for a linked product. If that drift becomes a problem, the fix is a re-sync command,
 not a live cascade — that would need its own ADR.
+
+---
+
+## Amendment 2 (2026-09-05, human decision — TASK-251): shared means EVERY company, automatically
+
+The human asked for "สินค้าใช้ร่วมกันทุกบริษัท" and, when asked the four
+follow-up questions, answered: **ตั้งราคาเริ่มต้นเดียวกันหมด แล้วแก้แยกบริษัทได้ ·
+สินค้าใหม่ปิดไว้ก่อน · Super Admin เท่านั้น · สินค้าเดิมย้ายเข้ารูปแบบใหม่ได้ (อยู่ช่วง setup) ·
+ค่าคอมยังแยกรายบริษัทเหมือนเดิม (ไม่มีค่ากลาง)**.
+
+**§6 is amended.** Linking is no longer only a one-company-at-a-time action.
+Creating a catalog item now creates a `products` row in **every** company, and
+creating a company creates one for **every** catalog item — both in the same
+transaction as the thing being created, both idempotent
+(`ProductCatalogPropagationService`). §6's manual link/unlink flow is
+untouched and still the only way to adopt an *existing* standalone product.
+
+**§7 is amended.** "Zero migration of existing rows" was written when linking
+was manual. Existing products may now be adopted — but by a person running
+`php artisan catalog:adopt-products` (with `--dry-run`), never by a migration
+that decides during a deploy. §7's actual rule survives intact and is now
+enforced in code: a product whose name already exists in the catalog is
+**skipped and reported**, because a name match is not proof of identity.
+
+**New column.** `product_catalog_items.default_price_satang` (nullable in the
+schema, required by the Form Request). It is *not* a price anybody sells at —
+it is the value each company's copy is **created** with, once. Editing it later
+changes what the next company starts from and never reprices a company that
+already has the item; §3 (price is per company) is unchanged.
+
+**What propagation deliberately does not decide**
+
+| Thing | Behaviour | Why |
+|---|---|---|
+| `is_active` | always `false` on a propagated row | it reaches companies whose admins have never seen the product; a listing that goes live by itself is a product on sale nobody chose to sell |
+| price | copied once from the default, never rewritten | after creation it belongs to that company (§3); a "refresh" would silently undo a human's decision in every tenant at once |
+| commission | not touched at all | the human declined a central default: commission stays in `commission_rules` per company (BR-2), and a propagated row simply has none until somebody sets one |
+| a deleted listing | never resurrected | removing a listing is a decision too |
+| an item with no default price | reaches nobody | BR-7 — 0 บาท is a number a person reads as a decision, not a blank |
+
+Every propagation writes `catalog_item.propagated` / `company.catalog_provisioned`
+to the audit trail (Section 6): one person saving one form makes a product
+appear in every company, and that is unexplainable afterwards without a row.

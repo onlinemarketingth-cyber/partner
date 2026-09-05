@@ -27,6 +27,9 @@ class ProductCatalogItemResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'spec_description' => $this->spec_description,
+            // TASK-251 — BR-3: satang, divided by 100 for display only, at
+            // the very edge, exactly like every other money field here.
+            'default_price_satang' => $this->default_price_satang,
             'is_active' => $this->is_active,
             'media' => ProductCatalogMediaResource::collection($this->whenLoaded('media')),
             'specs' => ProductCatalogSpecResource::collection($this->whenLoaded('specs')),

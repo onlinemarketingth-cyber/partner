@@ -3,6 +3,7 @@
 namespace App\Services\Platform;
 
 use App\Models\Company;
+use App\Services\Catalog\ProductCatalogPropagationService;
 use App\Services\Pipeline\PipelineTemplateProvisioner;
 use App\Services\Theme\ThemePresetService;
 use Illuminate\Support\Facades\DB;
@@ -39,6 +40,7 @@ class CompanyService
     public function __construct(
         private PipelineTemplateProvisioner $pipelineTemplateProvisioner,
         private ThemePresetService $themePresetService,
+        private ProductCatalogPropagationService $catalogPropagation,
     ) {}
 
     /**
@@ -82,6 +84,20 @@ class CompanyService
             // starter palettes looks healthy until an admin opens the
             // theme screen and finds nothing to start from.
             $this->themePresetService->provisionSystemPresets($company);
+
+            /*
+             * TASK-251 (human decision 2026-09-04) — the shared catalog is
+             * shared with EVERY company, including the ones that did not
+             * exist when an item was added. Third line in this transaction
+             * for the third time for the same reason: a tenant missing what
+             * every other tenant has looks perfectly healthy until somebody
+             * opens its product list and asks where everything is.
+             *
+             * Every listing arrives disabled and priced at the catalog's
+             * default, so a brand-new company gains a catalog to choose from,
+             * never a shop that opened by itself.
+             */
+            $this->catalogPropagation->propagateAllItemsToCompany($company);
 
             return $company;
         });

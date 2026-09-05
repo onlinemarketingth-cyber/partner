@@ -146,10 +146,35 @@ class ProductCatalogTest extends TestCase
                 'catalog_category_id' => $category->id,
                 'name' => 'Shared Product',
                 'description' => 'Sold by multiple companies',
+                // TASK-251 — required since the day saving this form also
+                // creates a listing in every company. This test used to omit
+                // it and was the first thing that failed when the rule landed,
+                // which is the correct place for that change to show up.
+                'default_price_satang' => 890000,
             ])
             ->assertCreated()
             ->assertJsonPath('data.name', 'Shared Product')
             ->assertJsonPath('data.catalog_brand.id', $brand->id);
+    }
+
+    public function test_a_catalog_item_cannot_be_created_without_a_default_price(): void
+    {
+        /*
+         * TASK-251 / BR-7. Creating this item now creates a priced listing in
+         * every company. Allowing the price to be omitted would mean choosing
+         * one on the admin's behalf — and 0 บาท is not "blank", it is a
+         * number a person reads as a decision.
+         */
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($superAdmin)
+            ->postJson('/api/v1/product-catalog-items', [
+                'catalog_brand_id' => CatalogBrand::factory()->create()->id,
+                'catalog_category_id' => CatalogCategory::factory()->create()->id,
+                'name' => 'No Price',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('default_price_satang');
     }
 
     public function test_cannot_delete_a_catalog_brand_with_linked_catalog_items(): void

@@ -27,7 +27,36 @@ class StoreProductCatalogItemRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'description' => ['nullable', 'string'],
             'spec_description' => ['nullable', 'string'],
+            /*
+             * TASK-251 — REQUIRED, unlike the nullable column behind it.
+             *
+             * Saving this form now creates a listing in every company
+             * (disabled, at this price). There is no honest way to do that
+             * without a number: 0 บาท is a claim, not a blank, and BR-7 is
+             * exactly the rule against inventing one. The column stays
+             * nullable for rows that predate this rule; new items must say.
+             *
+             * BR-3 — satang. The screen sends baht x 100.
+             */
+            'default_price_satang' => ['required', 'integer', 'min:0'],
             'is_active' => ['sometimes', 'boolean'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            // The default English message names the column, not the thing —
+            // "The default price satang field is required" is not a sentence
+            // the Super Admin filling this form can act on. It also has to
+            // say WHY the field is suddenly mandatory, because it was not
+            // before TASK-251.
+            'default_price_satang.required' => 'ต้องระบุราคาเริ่มต้น เพราะการบันทึกจะเพิ่มสินค้านี้ให้ทุกบริษัท (ปิดการใช้งานไว้) และแต่ละบริษัทแก้ราคาของตัวเองได้ภายหลัง',
+            'default_price_satang.integer' => 'ราคาเริ่มต้นไม่ถูกต้อง',
+            'default_price_satang.min' => 'ราคาเริ่มต้นต้องไม่ติดลบ',
         ];
     }
 }
