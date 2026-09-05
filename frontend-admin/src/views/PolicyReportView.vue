@@ -24,7 +24,8 @@
  * BR-3: every satang field is divided by 100 only at display via
  * formatSatang(), reused verbatim from ProductPerformanceView.vue.
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 // TASK-208 / ADR-038 — reports follow the header's company scope too; the
 // two local "บริษัท" dropdowns this page used to own are gone.
@@ -35,6 +36,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
+import { fetchAllPages } from './agentEdit'
 // TASK-209 P4 — the platform tab is cross-company by definition.
 import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
@@ -60,6 +62,8 @@ const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 // the choice on navigation). Both now read the global scope: null there means
 // exactly what "ทุกบริษัท" meant here, so no behaviour is lost.
 const activeCompany = useActiveCompanyStore()
+const route = useRoute()
+const router = useRouter()
 
 // ══════════════════════════ Tabs ══════════════════════════
 type Tab = 'audit' | 'platform' | 'compliance' | 'config'
@@ -106,6 +110,31 @@ const ACTION_LABELS: Record<string, string> = {
   'order.gateway_payment_unmatched': 'มีการชำระเงินที่จับคู่คำสั่งซื้อไม่ได้',
   'webhook.unhandled_event_type': 'ได้รับ event ที่ระบบยังไม่มีตัวจัดการ',
   'webhook.unmatched_non_payment': 'ได้รับ event ที่จับคู่คำสั่งซื้อไม่ได้ (ไม่ใช่การชำระเงิน)',
+  // TASK-237/238/240 — the account and session events. An action with no
+  // label here still shows its raw key rather than being hidden, which is
+  // why an unmapped one is a cosmetic gap and never a missing row.
+  'user.created': 'สร้างผู้ใช้',
+  'user.role_changed': 'เปลี่ยนบทบาท',
+  'user.team_leader_changed': 'เปลี่ยนสถานะหัวหน้าทีม',
+  'user.manager_changed': 'เปลี่ยนหัวหน้า',
+  'user.deactivated': 'ปิดบัญชี',
+  'user.restored': 'กู้คืนบัญชี',
+  'user.password_changed': 'เจ้าของเปลี่ยนรหัสผ่านเอง',
+  'user.password_reset_by_admin': 'แอดมินรีเซ็ตรหัสผ่านให้',
+  'user.api_tokens_revoked': 'ถอนสิทธิ์เข้าใช้งานที่ค้างอยู่ (token)',
+  'user.super_admin_created': 'สร้าง Super Admin (จากบรรทัดคำสั่ง)',
+  'user.super_admin_granted': 'เลื่อนเป็น Super Admin (จากบรรทัดคำสั่ง)',
+  'user.bank_account_updated': 'แก้ไขบัญชีธนาคาร',
+  'user.national_id_updated': 'แก้ไขเอกสารยืนยันตัวตน',
+  'user.view_super_admin_record': 'เปิดดูข้อมูลของ Super Admin',
+  'team_client_file.view': 'หัวหน้าทีมเปิดแฟ้มลูกค้าของลูกทีม',
+  'auth.login': 'เข้าสู่ระบบสำเร็จ',
+  'auth.login_failed': 'เข้าสู่ระบบไม่สำเร็จ',
+  'auth.login_blocked': 'รหัสผ่านถูกต้อง แต่บัญชีเข้าใช้งานไม่ได้',
+  'auth.lockout': 'ถูกล็อกชั่วคราวจากการพยายามเข้าสู่ระบบหลายครั้ง',
+  // TASK-242 — the trail records reads of itself. Deliberately worded as an
+  // action somebody took, not as a system event.
+  'audit_log.exported': 'ส่งออกบันทึกการตรวจสอบเป็นไฟล์ CSV',
 }
 function actionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action
@@ -118,20 +147,122 @@ const auditLoadedOnce = ref(false)
 const auditError = ref('')
 const expandedAuditRowId = ref<number | null>(null)
 
+/**
+ * TASK-241 — `?actor=<id>`, read at SETUP TIME.
+ *
+ * This ran in onMounted() first, and the deep link did not work: the
+ * tab-dispatch watch at the bottom of this file is `{ immediate: true }`, so
+ * the first /audit-logs request is fired while setup() is still running —
+ * before any onMounted hook. Arriving from a "ดูกิจกรรมของผู้ใช้นี้" link
+ * therefore fetched the WHOLE platform's trail, then fetched again narrowed:
+ * two requests, and one paint of rows about people the viewer never asked to
+ * read. Found by the test, not by opening the screen — both fetches are fast
+ * and the final picture is correct.
+ *
+ * Anything that is not a positive integer means no filter at all: a truncated
+ * or hand-edited URL must read as "everybody", never as `NaN` in a query
+ * string.
+ */
+function actorFromQuery(): number | '' {
+  const actor = Number(route.query.actor)
+
+  return Number.isInteger(actor) && actor > 0 ? actor : ''
+}
+
 const auditFilters = ref({
   action: '',
   date_from: '',
   date_to: '',
+  /*
+   * TASK-240 — "which user did what", the question this screen could not
+   * answer. `actor_user_id` has been on every row since the table existed
+   * and nothing read it back. '' = everybody, never "nobody".
+   */
+  actor_user_id: actorFromQuery(),
 })
 
-function auditQuery(page: number): string {
+/**
+ * The people who can appear as an actor.
+ *
+ * fetchAllPages is the pattern four other admin screens already use for a
+ * person dropdown — same endpoint, same shape. Note /users excludes Super
+ * Admins by design, so one Super Admin cannot pick another out of this list;
+ * that is the same boundary Ability::UserViewSuperAdminRecord draws
+ * everywhere else, not an omission.
+ *
+ * NO scopedPath() HERE. fetchAllPages applies it internally (see its body),
+ * so wrapping the path a second time sends `company_id` twice — which PHP
+ * resolves to the last one and is therefore invisible until the day the two
+ * differ. `include_inactive=1` on purpose: a deactivated account is exactly
+ * the one somebody comes to this screen to ask about.
+ */
+interface ActorOption { id: number; name: string }
+const actorOptions = ref<ActorOption[]>([])
+
+async function loadActorOptions() {
+  try {
+    actorOptions.value = await fetchAllPages<ActorOption>('/users?include_inactive=1')
+  } catch {
+    // A dropdown that will not load must not take the trail down with it —
+    // the log itself is why anybody opened this page.
+    actorOptions.value = []
+  }
+}
+
+/**
+ * The filters, without the page — shared by the table and the CSV.
+ *
+ * TASK-242: an export is taken away and shown to somebody (an auditor, a
+ * lawyer). A file that quietly answers a slightly WIDER question than the
+ * screen it came from is worse than no export at all, because the difference
+ * is found by the person it was handed to. One builder means the two cannot
+ * drift; the backend shares its filter builder between the same two callers
+ * for the same reason.
+ */
+function auditFilterParams(): URLSearchParams {
   const params = new URLSearchParams()
-  params.set('page', String(page))
   if (isSuperAdmin.value && activeCompany.companyId) params.set('company_id', String(activeCompany.companyId))
+  if (auditFilters.value.actor_user_id !== '') {
+    params.set('actor_user_id', String(auditFilters.value.actor_user_id))
+  }
   if (auditFilters.value.action) params.set('action', auditFilters.value.action)
   if (auditFilters.value.date_from) params.set('date_from', auditFilters.value.date_from)
   if (auditFilters.value.date_to) params.set('date_to', auditFilters.value.date_to)
+
+  return params
+}
+
+function auditQuery(page: number): string {
+  const params = auditFilterParams()
+  params.set('page', String(page))
+
   return params.toString()
+}
+
+/*
+ * TASK-242 — the trail as a file.
+ *
+ * api.download(), never an <a href> (Section 5 rule 6): the request has to
+ * carry the same session cookie and XSRF token as every other call, and the
+ * server records who took the copy.
+ *
+ * The server refuses a range wider than a year and says by how much; that
+ * message is what ApiError carries, so it is shown verbatim rather than
+ * replaced with a generic failure the admin cannot act on.
+ */
+const auditExporting = ref(false)
+
+async function exportAuditCsv() {
+  auditExporting.value = true
+  auditError.value = ''
+  try {
+    const query = auditFilterParams().toString()
+    await api.download(`/audit-logs/export${query ? `?${query}` : ''}`)
+  } catch (e) {
+    auditError.value = apiErrorMessage(e, 'ส่งออก CSV ไม่สำเร็จ')
+  } finally {
+    auditExporting.value = false
+  }
 }
 
 async function loadAuditLog(page = 1) {
@@ -148,9 +279,44 @@ async function loadAuditLog(page = 1) {
     auditLoadedOnce.value = true
   }
 }
+/**
+ * TASK-240 — the actor filter lives in the URL.
+ *
+ * Two reasons, both about how this screen gets used: the question is asked
+ * FROM somewhere else ("what did this agent do?", clicked on the roster),
+ * and the answer is usually shown to somebody else. A filter that exists
+ * only in component state can be neither linked to nor sent.
+ *
+ * `replace`, not `push`: refining a filter is not a place in history, and
+ * pushing would make Back walk through every refinement instead of leaving
+ * the page.
+ *
+ * Only the id travels, never the name — a person's name in a URL ends up in
+ * browser history and in the Referer of everything the next page loads (§6).
+ */
+function syncAuditFiltersToUrl() {
+  const query: Record<string, string> = { ...route.query as Record<string, string> }
+
+  if (auditFilters.value.actor_user_id === '') delete query.actor
+  else query.actor = String(auditFilters.value.actor_user_id)
+
+  void router.replace({ query })
+}
+
 function applyAuditFilters() {
+  syncAuditFiltersToUrl()
   loadAuditLog(1)
 }
+
+/** Cleared from the chip above the table, without touching the other filters. */
+function clearActorFilter() {
+  auditFilters.value.actor_user_id = ''
+  applyAuditFilters()
+}
+
+const selectedActorName = computed(
+  () => actorOptions.value.find((a) => a.id === auditFilters.value.actor_user_id)?.name ?? '',
+)
 function goToAuditPage(page: number) {
   if (!auditMeta.value || page < 1 || page > auditMeta.value.last_page) return
   loadAuditLog(page)
@@ -257,6 +423,20 @@ async function loadConfigHealthReport() {
 watch(() => activeCompany.companyId, () => {
   loadConfigHealthReport()
   loadAuditLog(1)
+  // The people who can appear as an actor are a per-company list too.
+  void loadActorOptions()
+})
+
+/*
+ * TASK-240 — arriving from somewhere else with a person already in mind.
+ *
+ * The FILTER itself is read in actorFromQuery() during setup (see the note
+ * there — the first fetch happens before this hook runs). What is left here
+ * is only what can safely wait a tick: the dropdown of names, which nothing
+ * on screen depends on.
+ */
+onMounted(() => {
+  void loadActorOptions()
 })
 
 // commission_rules has NO platform-default fallback (a company with
@@ -321,14 +501,34 @@ watch(
 
     <!-- ═══════════ Tab 1: บันทึกการตรวจสอบ (Audit Log) ═══════════ -->
     <section v-if="activeTab === 'audit'" class="mt-4">
+      <!-- 2026-09-05 — this notice used to list four actions and say the
+           coverage was "งานต่อเนื่อง". It had been out of date for a while:
+           the trail now records around forty actions across users, money,
+           orders, PDPA reads and Academy. Rewritten to say what is true,
+           including the one thing that is still genuinely missing, rather
+           than deleted — a reader deserves to know where the edge is. -->
       <div class="mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-        บันทึกนี้ยังไม่ครอบคลุมทุก action ตามที่ Section 6 กำหนด (เงิน/คอมมิชชั่น/สถานะ/ใบรับรอง/สิทธิ์) — ปัจจุบันบันทึก:
-        ย้ายบริษัท, สร้าง/แก้ไขกฎคอมมิชชั่น, อนุมัติ/ปฏิเสธ agent, แก้ไขยอดขั้นต่ำเบิกค่าคอม
-        และเหตุการณ์จากช่องทางรับชำระเงินออนไลน์ (จ่ายไม่สำเร็จ / หมดเวลา / แจ้งคืนเงิน / จับคู่คำสั่งซื้อไม่ได้)
-        การขยายให้ครอบคลุมทุก action เป็นงานต่อเนื่อง
+        บันทึกนี้เก็บ <strong>การเปลี่ยนแปลง</strong> ที่กระทบสิทธิ์ เงิน คำสั่งซื้อ และข้อมูลส่วนบุคคล
+        รวมถึงการเข้าสู่ระบบ (สำเร็จ / ไม่สำเร็จ / ถูกล็อก)
+        — <strong>ยังไม่เก็บการ “เปิดดู” ข้อมูลทั่วไป</strong> ยกเว้น 2 กรณีที่บันทึกไว้แล้ว
+        (เปิดดูข้อมูล Super Admin และหัวหน้าทีมเปิดแฟ้มลูกค้าของลูกทีม)
       </div>
 
       <div class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
+        <!-- TASK-240 — the filter this screen was missing. Names, not ids:
+             nobody remembers a user id, and the whole question is about a
+             person. -->
+        <div>
+          <label class="block text-xs font-bold text-slate-500 mb-1">ผู้ทำรายการ</label>
+          <select
+            v-model="auditFilters.actor_user_id"
+            data-test="actor-filter"
+            class="px-3 py-2 rounded-lg border border-slate-200 text-sm min-w-[14rem] bg-white"
+          >
+            <option value="">ทุกคน</option>
+            <option v-for="actor in actorOptions" :key="actor.id" :value="actor.id">{{ actor.name }}</option>
+          </select>
+        </div>
         <div>
           <label class="block text-xs font-bold text-slate-500 mb-1">การกระทำ</label>
           <input v-model="auditFilters.action" placeholder="เช่น commission_rule.created" class="px-3 py-2 rounded-lg border border-slate-200 text-sm min-w-[14rem]" />
@@ -336,6 +536,36 @@ watch(
         <DateRangeFilter v-model:date-from="auditFilters.date_from" v-model:date-to="auditFilters.date_to" :years-back="3" :years-forward="0" />
         <button class="btn-primary" @click="applyAuditFilters">
           กรอง
+        </button>
+        <!-- TASK-242 — the same filters, as a file. Beside "กรอง" on purpose:
+             the file is what is on screen, and a button anywhere else reads
+             as "export everything". -->
+        <button
+          class="btn-secondary inline-flex items-center gap-1.5"
+          data-test="export-audit-csv"
+          :disabled="auditExporting"
+          @click="exportAuditCsv"
+        >
+          <Icon name="download" :size="14" />
+          {{ auditExporting ? 'กำลังส่งออก…' : 'ส่งออก CSV' }}
+        </button>
+        <p class="w-full text-[11px] text-slate-400">
+          ไฟล์ที่ส่งออกใช้ตัวกรองเดียวกับตารางด้านล่าง · ส่งออกได้ครั้งละไม่เกิน 1 ปี
+          (ถ้าไม่ระบุวันที่ จะได้ข้อมูลย้อนหลัง 1 ปีล่าสุด) · ระบบบันทึกทุกครั้งที่มีการส่งออก
+        </p>
+      </div>
+
+      <!-- Says out loud that the table is narrowed to one person. Without
+           it, arriving from a "ดูกิจกรรมของผู้ใช้นี้" link looks identical to
+           a quiet day on the whole platform. -->
+      <div
+        v-if="auditFilters.actor_user_id !== ''"
+        class="mb-3 px-4 py-2.5 rounded-xl bg-brand-50 border border-brand-200 text-sm text-brand-800 flex items-center gap-2"
+      >
+        <Icon name="user" :size="16" />
+        <span>กำลังดูเฉพาะกิจกรรมของ <strong>{{ selectedActorName || `ผู้ใช้ #${auditFilters.actor_user_id}` }}</strong></span>
+        <button class="ml-auto text-xs font-bold underline hover:no-underline" @click="clearActorFilter">
+          ดูของทุกคน
         </button>
       </div>
 

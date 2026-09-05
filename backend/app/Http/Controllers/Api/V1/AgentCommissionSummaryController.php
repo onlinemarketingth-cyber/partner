@@ -7,6 +7,7 @@ use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\Commission\AgentCommissionSummaryService;
+use App\Support\CsvCell;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -240,13 +241,17 @@ class AgentCommissionSummaryController extends Controller
      *
      * Only strings are passed through here. The money column is built by
      * number_format() from an integer and cannot begin with any of these.
+     *
+     * ── THE RULE ITSELF NOW LIVES IN App\Support\CsvCell (2026-09-05) ──
+     *
+     * TASK-242 added a second export (the audit trail) that needs exactly
+     * this, and a copy-pasted security rule is one that gets fixed in one
+     * file and left armed in the other. The reasoning above is kept here
+     * because it is about THIS file's data; the implementation, and the test
+     * that pins it, are shared.
      */
     private static function csvSafe(string $value): string
     {
-        if ($value === '') {
-            return $value;
-        }
-
-        return str_contains("=+-@\t\r", $value[0]) ? "'".$value : $value;
+        return CsvCell::safe($value);
     }
 }

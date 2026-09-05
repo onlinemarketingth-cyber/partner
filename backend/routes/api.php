@@ -1256,6 +1256,16 @@ Route::prefix('v1')->group(function () {
         // /products-abc-grades above). Section 6 audit trail viewer +
         // BR-7 config-health/compliance/cross-company aggregate reports.
         Route::get('/audit-logs', [AuditLogController::class, 'index']);
+        /*
+         * TASK-242 — the same trail as a CSV.
+         *
+         * BEFORE the /audit-logs/{id} shape any future task might add:
+         * "export" would be swallowed as an id by a wildcard route declared
+         * first, and the failure would be a 404 on a route that plainly
+         * exists. Same gate as index() (AuditLogPolicy::viewAny), and the
+         * export writes an `audit_log.exported` row about itself.
+         */
+        Route::get('/audit-logs/export', [AuditLogController::class, 'export']);
         Route::get('/platform-report', [PlatformReportController::class, 'index']);
         Route::get('/compliance-report', [ComplianceReportController::class, 'index']);
         Route::get('/config-health-report', [ConfigHealthReportController::class, 'index']);
