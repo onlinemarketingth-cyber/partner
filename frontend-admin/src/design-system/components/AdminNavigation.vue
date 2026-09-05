@@ -269,6 +269,11 @@ const navItems: NavItem[] = [
       // used to be reachable ONLY from AdminHomeView's card grid, which
       // no longer exists. Without an entry here the route would still
       // resolve but nothing in the UI would lead to it.
+      // TASK-258 (human request, 2026-09-05) — the activity log gets its own
+      // entry, ABOVE the reports page it used to hide inside. "ใครทำอะไรไป
+      // บ้างในระบบ" is a question asked far more often than any of the three
+      // reports beside it, and a tab is not a menu.
+      { name: 'activity-log', icon: 'document', label: { th: 'บันทึกการใช้งานระบบ', en: 'Activity log' } },
       { name: 'policy-report', icon: 'shield', label: { th: 'นโยบายและรายงาน', en: 'Policy & Reports' } },
     ],
   },

@@ -1648,17 +1648,19 @@ watch(
               ทุกปุ่มในส่วนนี้<strong class="font-bold">มีผลทันทีที่กด</strong> — ไม่เกี่ยวกับปุ่ม "บันทึก" ด้านล่าง
             </p>
 
-            <!-- TASK-240 — "what has this person been doing?" is asked HERE,
-                 with the person on screen, not from a reports page where an
-                 admin would have to find them again in a filter. The audit
-                 screen takes ?actor=<id> and opens already narrowed. -->
+            <!-- TASK-240/258 — "what has this person been doing?" is asked
+                 HERE, with the person on screen. It is not a separate
+                 per-person history (the human corrected that on 2026-09-05):
+                 it opens the ONE combined activity log with the person filter
+                 already applied, which is the same screen and the same list
+                 an admin would otherwise filter by hand. -->
             <div v-if="agent" class="mt-3 pt-3 border-t border-slate-200">
               <p class="text-xs font-bold text-slate-700">ประวัติการใช้งาน</p>
               <p class="text-[11px] text-slate-500 mt-0.5">
                 ดูว่าผู้ใช้คนนี้ทำอะไรไปบ้าง — เข้าสู่ระบบ แก้ไขข้อมูล อนุมัติรายการ ฯลฯ
               </p>
               <RouterLink
-                :to="{ name: 'policy-report', query: { actor: agent?.id } }"
+                :to="{ name: 'activity-log', query: { actor: agent?.id } }"
                 data-test="view-activity"
                 class="btn-secondary inline-flex items-center gap-1.5 mt-2"
               >

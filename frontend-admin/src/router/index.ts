@@ -313,6 +313,22 @@ const router = createRouter({
       component: () => import('../views/PolicyReportView.vue'),
       meta: { navLabel: 'นโยบายและรายงาน' },
     },
+    /*
+     * TASK-258 (human request, 2026-09-05) — "ผมต้องการ Log รวมว่าใครทำอะไร
+     * ไปบ้างที่ผ่านมาในระบบ อยู่ใน เมนู Setting".
+     *
+     * The log itself is not new; being findable is. It had been tab 1 of 4
+     * inside /policy-report, which is a screen you only reach if you already
+     * know it is there. Its own route means a menu entry, a bookmark, and a
+     * URL somebody can be sent — the reports page keeps rendering the same
+     * component on its audit tab, so no existing link breaks.
+     */
+    {
+      path: '/activity-log',
+      name: 'activity-log',
+      component: () => import('../views/SystemActivityLogView.vue'),
+      meta: { navLabel: 'บันทึกการใช้งานระบบ' },
+    },
     // ADR-033 (TASK-189) §2.1/F2 — voucher redemption lookup. Gated
     // server-side by Ability::VoucherRedeem (CompanyAdmin/SuperAdmin,
     // NOT Agent). No extra per-route meta beyond the app-wide Agent

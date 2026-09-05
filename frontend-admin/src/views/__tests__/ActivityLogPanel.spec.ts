@@ -1,5 +1,11 @@
 /**
- * TASK-241 — "which user did what", asked from the screen.
+ * TASK-241/258 — the combined activity log and its filters.
+ *
+ * MOVED HERE FROM PolicyReportActorFilter.spec.ts (2026-09-05) when the log
+ * became its own component with two homes. The subject under test never
+ * changed — it is still "the list, and what the filters send" — but mounting
+ * the whole reports page to reach it meant three of these tests broke the day
+ * the log moved, for reasons that had nothing to do with the log.
  *
  * The backend half (TASK-240) added `?actor_user_id=` to /audit-logs. This
  * file is about the four ways the FRONT half of that question goes wrong,
@@ -73,7 +79,7 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ replace, push: vi.fn() }),
 }))
 
-import PolicyReportView from '../PolicyReportView.vue'
+import ActivityLogPanel from '../ActivityLogPanel.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { useAuthStore } from '@/stores/auth'
 
@@ -138,16 +144,14 @@ async function mountView(routeQuery: Record<string, string> = {}) {
   for (const key of Object.keys(query)) delete query[key]
   Object.assign(query, routeQuery)
 
-  const wrapper = mount(PolicyReportView, {
+  const wrapper = mount(ActivityLogPanel, {
     global: {
       stubs: {
-        HeroHeader: { template: '<div><slot name="tabs" /></div>' },
         EmptyState: true,
         Icon: true,
         LoadingSkeleton: true,
         DateRangeFilter: true,
-        PlatformScopeBadge: true,
-      },
+              },
     },
   })
   await flushPromises()
@@ -180,7 +184,7 @@ beforeEach(() => {
   activeCompany.setCompany(4)
 })
 
-describe('PolicyReportView — filtering the trail by person', () => {
+describe('ActivityLogPanel — filtering the trail by person', () => {
   it('sends the chosen person to the API rather than sifting the page in the browser', async () => {
     // Defect 1. This table paginates; a client-side filter answers a
     // different question than the one asked and cannot be told apart from
@@ -206,7 +210,7 @@ describe('PolicyReportView — filtering the trail by person', () => {
   it('keeps the other filters instead of replacing them', async () => {
     // Two filters that silently cancel each other are worse than one.
     const wrapper = await mountView()
-    await wrapper.find('input[placeholder^="เช่น"]').setValue('user.role_changed')
+    await wrapper.find('[data-test="action-filter"]').setValue('user.role_changed')
 
     await chooseActor(wrapper, 7)
 
@@ -226,7 +230,7 @@ describe('PolicyReportView — filtering the trail by person', () => {
   })
 })
 
-describe('PolicyReportView — the filter in the URL', () => {
+describe('ActivityLogPanel — the filter in the URL', () => {
   it('writes the choice into the address bar so the answer can be linked to', async () => {
     // Defect 2.
     const wrapper = await mountView()
@@ -285,7 +289,7 @@ describe('PolicyReportView — the filter in the URL', () => {
   })
 })
 
-describe('PolicyReportView — saying that the table is narrowed', () => {
+describe('ActivityLogPanel — saying that the table is narrowed', () => {
   it('names the person the table is limited to', async () => {
     // Defect 4.
     const wrapper = await mountView({ actor: '7' })
@@ -325,7 +329,7 @@ describe('PolicyReportView — saying that the table is narrowed', () => {
   })
 })
 
-describe('PolicyReportView — the list of people to choose from', () => {
+describe('ActivityLogPanel — the list of people to choose from', () => {
   it('reads the whole roster, including deactivated accounts', async () => {
     /*
      * /users paginates at 15 with no ?per_page, so a bare GET offers the
@@ -369,7 +373,7 @@ describe('PolicyReportView — the list of people to choose from', () => {
   })
 })
 
-describe('PolicyReportView — reading the rows', () => {
+describe('ActivityLogPanel — reading the rows', () => {
   it('translates the new account and login actions instead of printing their keys', async () => {
     // TASK-237/238/240 added around twenty actions. An unmapped one still
     // renders (raw), so the failure mode is a screen of dotted identifiers
@@ -377,8 +381,11 @@ describe('PolicyReportView — reading the rows', () => {
     // exactly what a human notices first.
     const wrapper = await mountView()
 
-    expect(wrapper.text()).toContain('เปลี่ยนบทบาท')
-    expect(wrapper.text()).not.toContain('user.role_changed')
+    // The dropdown lists every action, so a naive "does the page contain the
+    // Thai label" would pass even with a raw key in the table. Assert on the
+    // ROW.
+    expect(wrapper.find('tbody').text()).toContain('เปลี่ยนบทบาท')
+    expect(wrapper.find('tbody').text()).not.toContain('user.role_changed')
   })
 
   it('warns that reads are not recorded, because absence of a row is not absence of an event', async () => {
@@ -394,7 +401,7 @@ describe('PolicyReportView — reading the rows', () => {
   })
 })
 
-describe('PolicyReportView — taking the trail away as a file', () => {
+describe('ActivityLogPanel — taking the trail away as a file', () => {
   const exportButton = (wrapper: Wrapper) => wrapper.find('[data-test="export-audit-csv"]')
 
   /** The path handed to api.download — asserted on, so its absence must fail. */
@@ -413,7 +420,7 @@ describe('PolicyReportView — taking the trail away as a file', () => {
      * it, and by then it is a document that says something nobody checked.
      */
     const wrapper = await mountView({ actor: '7' })
-    await wrapper.find('input[placeholder^="เช่น"]').setValue('user.role_changed')
+    await wrapper.find('[data-test="action-filter"]').setValue('user.role_changed')
 
     await exportButton(wrapper).trigger('click')
     await flushPromises()
@@ -486,7 +493,7 @@ describe('PolicyReportView — taking the trail away as a file', () => {
 
     const wrapper = await mountView()
 
-    expect(wrapper.text()).toContain('ส่งออกบันทึกการตรวจสอบเป็นไฟล์ CSV')
-    expect(wrapper.text()).not.toContain('audit_log.exported')
+    expect(wrapper.find('tbody').text()).toContain('ส่งออกบันทึกการใช้งานเป็นไฟล์ CSV')
+    expect(wrapper.find('tbody').text()).not.toContain('audit_log.exported')
   })
 })

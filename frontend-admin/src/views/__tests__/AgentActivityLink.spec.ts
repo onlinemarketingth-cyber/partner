@@ -40,9 +40,13 @@ const router = createRouter({
 
 describe('AgentEditModal — the link to this person\'s activity', () => {
   it('points at a route that exists', () => {
+    // TASK-258 — retargeted from 'policy-report' to the log's own page. A
+    // RouterLink to a renamed route renders href="/" and warns to a console
+    // nobody is reading, so the rename is exactly the kind of change that
+    // needs a test rather than a careful search.
     // A RouterLink to an unknown name renders href="/" and warns. The modal
     // still looks perfect: a button that quietly goes to the dashboard.
-    expect(router.hasRoute('policy-report')).toBe(true)
+    expect(router.hasRoute('activity-log')).toBe(true)
   })
 
   it('resolves to the query key the audit screen actually reads', () => {
@@ -52,7 +56,7 @@ describe('AgentEditModal — the link to this person\'s activity', () => {
      * mismatch opens the trail for EVERYBODY under a heading that promised
      * one person.
      */
-    const resolved = router.resolve({ name: 'policy-report', query: { actor: 7 } })
+    const resolved = router.resolve({ name: 'activity-log', query: { actor: 7 } })
 
     expect(resolved.fullPath).toContain('actor=7')
   })
