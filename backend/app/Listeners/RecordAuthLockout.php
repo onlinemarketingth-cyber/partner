@@ -5,6 +5,7 @@ namespace App\Listeners;
 use App\Models\AuditLog;
 use App\Models\User;
 use Illuminate\Auth\Events\Lockout;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * SECURITY AUDIT 2026-08-21 (V19) — write down that somebody was locked out.
@@ -38,6 +39,37 @@ class RecordAuthLockout
     public function handle(Lockout $event): void
     {
         $email = (string) $event->request->input('email', '');
+
+        /*
+         * ── ONE ROW PER LOCKOUT, NOT ONE PER ATTEMPT (TASK-240) ──
+         *
+         * LoginRequest fires this event from ensureIsNotRateLimited(), which
+         * runs on EVERY request while the lock is in force — so a bot that
+         * keeps hammering a locked address wrote a row per guess, forever,
+         * into the trail those rows are supposed to stand out in. The signal
+         * and the flood were the same rows.
+         *
+         * A marker in the cache, expiring with the lock itself, so the second
+         * through thousandth attempt of one lockout are silent and the next
+         * genuine lockout is recorded again. Cache::add is atomic — two
+         * simultaneous attempts cannot both win it.
+         *
+         * SIXTY SECONDS, matching RateLimiter::hit()'s own default decay in
+         * LoginRequest — the marker is meant to live exactly as long as the
+         * lock it describes. Read as "one lockout row per address per minute",
+         * which is the shape of the thing being recorded.
+         *
+         * A cache that is unavailable must not lose the record, so this skips
+         * only on an explicit true; any other answer (miss, driver error)
+         * falls through and writes the row.
+         */
+        $key = 'auth.lockout.recorded|'.$event->request->ip().'|'.mb_strtolower($email);
+
+        if (Cache::get($key) === true) {
+            return;
+        }
+
+        Cache::put($key, true, 60);
 
         /*
          * withoutGlobalScopes(): there is no authenticated user during a

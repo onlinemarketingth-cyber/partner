@@ -131,6 +131,20 @@ class AgentApprovalTest extends TestCase
 
         Notification::assertSentTo([$admin1, $admin2], NewAgentRegistrationNotification::class);
         Notification::assertNotSentTo($foreignAdmin, NewAgentRegistrationNotification::class);
+
+        /*
+         * ── ONCE, NOT TWICE (added 2026-09-05) ──
+         *
+         * assertSentTo passes on one notification and on twenty; nothing here
+         * counted. NotifyCompanyAdminsOfPendingAgent was registered twice —
+         * explicitly in AppServiceProvider AND by Laravel's listener
+         * discovery — so every company admin had been receiving TWO emails
+         * for every agent who registered since the day it shipped. The
+         * explicit registration is gone; this assertion is what keeps it
+         * gone, because the duplicate is invisible in any test that only asks
+         * "was it sent".
+         */
+        Notification::assertSentToTimes($admin1, NewAgentRegistrationNotification::class, 1);
     }
 
     public function test_agent_ready_for_approval_with_no_company_admin_sends_nothing_and_does_not_error(): void

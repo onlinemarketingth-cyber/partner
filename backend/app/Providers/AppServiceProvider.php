@@ -3,14 +3,10 @@
 namespace App\Providers;
 
 use App\Enums\Ability;
-use App\Events\AgentReadyForApproval;
-use App\Listeners\NotifyCompanyAdminsOfPendingAgent;
-use App\Listeners\RecordAuthLockout;
 use App\Models\User;
 use App\Services\Academy\LessonAccessGate;
 use App\Services\Authorization\PermissionResolver;
 use App\Services\Platform\MailSettingsService;
-use Illuminate\Auth\Events\Lockout;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
@@ -47,12 +43,35 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        // TASK-020 (ADR-005) — Laravel 12 removed the default
-        // EventServiceProvider, so listeners are registered here via the
-        // Event facade instead of a $listen[] array. Same spot TASK-019
-        // will register Socialite's SocialiteWasCalled -> Line provider
-        // extension once that task starts.
-        Event::listen(AgentReadyForApproval::class, NotifyCompanyAdminsOfPendingAgent::class);
+        /*
+         * ══ NO LISTENERS ARE REGISTERED HERE ANY MORE (2026-09-05) ══
+         *
+         * TASK-020 registered two by hand, on the understanding that Laravel
+         * 12 dropped the default EventServiceProvider and something had to
+         * take its place. Discovery took its place: Laravel scans
+         * app/Listeners on its own, so each explicit line registered a SECOND
+         * copy and both listeners ran twice for every event.
+         *
+         * `php artisan event:list` showed the duplicates the whole time —
+         * each listener printed once as a class and once as `@handle`.
+         *
+         * Both lines are gone. The two blocks below keep their reasoning
+         * because it is still true of the listeners themselves, and because
+         * the next person searching this file for "where is Lockout wired up"
+         * must not conclude that nothing listens.
+         */
+
+        /*
+         * ── THE LOUDER OF THE TWO DUPLICATES ──
+         *
+         *     Event::listen(AgentReadyForApproval::class, NotifyCompanyAdminsOfPendingAgent::class);
+         *
+         * This one was visible to people, not just to auditors:
+         * NotifyCompanyAdminsOfPendingAgent SENDS A NOTIFICATION, so every
+         * company admin received two emails for every agent who registered,
+         * and had done since the day the listener shipped. Nothing counted
+         * them, which is why it survived — a test now does.
+         */
 
         /*
          * SECURITY AUDIT 2026-08-21 (V19) — somebody is now listening.
@@ -65,7 +84,14 @@ class AppServiceProvider extends ServiceProvider
          * could notice or investigate afterwards. Throttling stops the
          * attack in progress; it does not tell you it occurred.
          */
-        Event::listen(Lockout::class, RecordAuthLockout::class);
+        /*
+         *     Event::listen(Lockout::class, RecordAuthLockout::class);
+         *
+         * The quieter duplicate: every lockout wrote two identical audit
+         * rows. Found by TASK-240's test counting them, not by reading
+         * either file. RecordAuthLockout still runs, once — its own docblock
+         * carries the reasoning for why it exists at all.
+         */
 
         /*
          * SECURITY AUDIT 2026-08-21 (V18) — ONE password policy, in one place.

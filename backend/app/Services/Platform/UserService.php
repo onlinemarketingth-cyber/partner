@@ -190,6 +190,22 @@ class UserService
                     [$column => $oldRights[$column]],
                     [$column => $newValue],
                 );
+
+                /*
+                 * TASK-238 — a ROLE change is the one of these three that
+                 * changes what the holder may DO, so their live tokens must
+                 * stop working now rather than at the next 12-hour expiry.
+                 * Demotion is the dangerous direction and the reason this is
+                 * here; promotion revokes too, because a token minted under
+                 * the old role is a token whose abilities nobody re-checked.
+                 *
+                 * Not for is_team_leader / manager_id: those change what a
+                 * person SEES within rights they already hold, and logging
+                 * somebody out for a reporting-line edit would be noise.
+                 */
+                if ($column === 'role') {
+                    $this->revokeApiTokens($target, 'role changed');
+                }
             }
 
             return $target;
@@ -377,6 +393,7 @@ class UserService
     {
         return DB::transaction(function () use ($target, $newPassword, $actor) {
             $target->update(['password' => $newPassword]);
+            $this->revokeApiTokens($target, 'password reset by an admin');
 
             $this->writeAudit('user.password_reset_by_admin', $target, $actor, null, null);
 
@@ -396,6 +413,7 @@ class UserService
     {
         DB::transaction(function () use ($target, $actor) {
             $target->delete(); // SoftDeletes — see UserPolicy/TASK-009 design notes.
+            $this->revokeApiTokens($target, 'account deactivated');
 
             $this->writeAudit(
                 'user.deactivated',
@@ -455,6 +473,7 @@ class UserService
             ]);
 
             $target->update(['company_id' => $newCompanyId]);
+            $this->revokeApiTokens($target, 'moved to another company');
 
             return $target;
         });
@@ -540,6 +559,46 @@ class UserService
      * @param  array<string, mixed>|null  $oldValues
      * @param  array<string, mixed>|null  $newValues
      */
+    /**
+     * TASK-238 — WHEN SOMEBODY'S RIGHTS CHANGE, THEIR TOKENS DIE.
+     *
+     * ── THE GAP THIS CLOSES (2026-09-05) ──
+     *
+     * The agent portal authenticates with a bearer token that lives for 12
+     * hours (AuthController). Deactivating an account, changing its role,
+     * resetting its password or moving it to another company all wrote the
+     * new state to the database and touched nothing else — so the person
+     * just locked out kept a working token, on a system that moves money,
+     * for as long as twelve hours. "Deactivated" has to mean deactivated
+     * NOW, not at the next expiry.
+     *
+     * ── WHAT IS NOT TOUCHED ──
+     *
+     * The admin console logs in with a cookie session, whose
+     * currentAccessToken() is Sanctum's TransientToken and never appears in
+     * this table at all. Deleting rows here cannot log an admin out of their
+     * own console — see AuthController::logout for the same distinction.
+     *
+     * The reason is a parameter so the audit trail can say WHY a token
+     * disappeared; a revocation with no cause is the kind of entry that
+     * makes a reviewer suspect a breach.
+     */
+    private function revokeApiTokens(User $target, string $reason): void
+    {
+        $revoked = $target->tokens()->delete();
+
+        // No row when there was nothing to revoke: an audit trail that
+        // records non-events is one people stop reading.
+        if ($revoked === 0) {
+            return;
+        }
+
+        $this->writeAudit('user.api_tokens_revoked', $target, null, null, [
+            'revoked_count' => $revoked,
+            'reason' => $reason,
+        ]);
+    }
+
     private function writeAudit(string $action, User $target, ?User $actor, ?array $oldValues, ?array $newValues): void
     {
         AuditLog::create([

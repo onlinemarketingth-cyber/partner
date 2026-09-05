@@ -3,6 +3,8 @@
 namespace App\Http\Requests;
 
 use App\Exceptions\LoginBlockedException;
+use App\Models\AuditLog;
+use App\Models\User;
 use App\Services\Auth\LoginGateService;
 use Illuminate\Auth\Events\Lockout;
 use Illuminate\Foundation\Http\FormRequest;
@@ -79,6 +81,7 @@ class LoginRequest extends FormRequest
 
         if (! Auth::guard('web')->attempt($this->only('email', 'password'), $this->boolean('remember'))) {
             RateLimiter::hit($this->throttleKey());
+            $this->recordFailedAttempt();
 
             // UNCHANGED, AND DELIBERATELY SO. This single branch answers both
             // "no such user" and "wrong password" with the same 422 and the
@@ -107,6 +110,8 @@ class LoginRequest extends FormRequest
         try {
             app(LoginGateService::class)->assertMayLogIn($user);
         } catch (LoginBlockedException $e) {
+            $this->recordBlockedLogin($user, $e);
+
             // attempt() has already written the user into the session (and,
             // with `remember`, minted a remember cookie). Undo both before the
             // 403 leaves, or a blocked account would hold a usable session
@@ -146,6 +151,7 @@ class LoginRequest extends FormRequest
 
         if (! $guard->validate($this->only('email', 'password'))) {
             RateLimiter::hit($this->throttleKey());
+            $this->recordFailedAttempt();
 
             // Same single branch, same reason as the session path above:
             // "no such user" and "wrong password" must stay
@@ -163,7 +169,13 @@ class LoginRequest extends FormRequest
         // Throws LoginBlockedException -> 403 before the user is ever set
         // on the guard, so a blocked account cannot reach the token-minting
         // code in AuthController::login() at all.
-        app(LoginGateService::class)->assertMayLogIn($user);
+        try {
+            app(LoginGateService::class)->assertMayLogIn($user);
+        } catch (LoginBlockedException $e) {
+            $this->recordBlockedLogin($user, $e);
+
+            throw $e;
+        }
 
         // In-memory only (no session write): gives AuthController's
         // $request->user() the authenticated user for this one request.
@@ -190,6 +202,101 @@ class LoginRequest extends FormRequest
                 'seconds' => $seconds,
                 'minutes' => ceil($seconds / 60),
             ]),
+        ]);
+    }
+
+    /*
+     * ══ TASK-240 — THE FAILED HALF OF THE LOGIN TRAIL ══
+     *
+     * Successful logins have been audited since the 2026-08-21 security work
+     * (`auth.login`, written in AuthController). Failures were not recorded
+     * anywhere, so the first question anyone asks of a login trail — "has
+     * somebody been trying to get into this account?" — had no answer at all.
+     *
+     * Three rules hold these methods together. Each exists because the
+     * obvious implementation of a login log is harmful:
+     *
+     * 1. NO CREDENTIALS, EVER. Not the attempted password, obviously — but
+     *    also not the attempted EMAIL when it belongs to no account. A log of
+     *    addresses that people tried is a list of addresses somebody probes
+     *    to build, readable by everyone who can read the audit screen. The
+     *    row still exists (the attempt is the fact worth keeping); it just
+     *    identifies nobody.
+     *
+     * 2. AT MOST SIX ROWS PER LOCKOUT. A bot pointed at one address would
+     *    otherwise write a row per guess, forever, and drown the trail it is
+     *    supposed to appear in. Five failures fit under the throttle, then
+     *    RecordAuthLockout writes exactly one `auth.lockout`, and every
+     *    attempt after that is refused by ensureIsNotRateLimited() before
+     *    reaching this class's audit code at all.
+     *
+     * 3. A REFUSED GATE IS NOT A FAILED PASSWORD. Someone whose password was
+     *    correct but whose account is deactivated, unverified or awaiting
+     *    approval is a different event with a different follow-up, and it
+     *    gets its own action plus the reason. Collapsing the two would make
+     *    the trail unable to tell an attack from a person waiting to be
+     *    approved.
+     */
+
+    /**
+     * A wrong password, or an address with no account behind it.
+     */
+    private function recordFailedAttempt(): void
+    {
+        $email = Str::lower(trim((string) $this->string('email')));
+        $user = User::withoutGlobalScopes()->where('email', $email)->first();
+
+        /*
+         * ONLY THE FAILURE. `auth.lockout` belongs to RecordAuthLockout,
+         * which has owned it since the 2026-08-21 security audit and listens
+         * for the Lockout event this class already fires. Writing it here too
+         * would put two different authors on one action name and double every
+         * lockout in the trail — which is exactly the bug this change found
+         * in the listener's own registration.
+         */
+        $this->writeAuthAudit(
+            'auth.login_failed',
+            $user,
+            // Rule 1: `known` says whether the address exists WITHOUT
+            // repeating it. That single boolean is what makes a run of
+            // failures against one real account visible.
+            ['known_account' => $user !== null],
+        );
+    }
+
+    /**
+     * The password was right; the account is not allowed in.
+     */
+    private function recordBlockedLogin(User $user, LoginBlockedException $exception): void
+    {
+        $this->writeAuthAudit('auth.login_blocked', $user, [
+            // LoginBlockReason distinguishes deactivated / unverified /
+            // pending / rejected / company inactive — the whole point of
+            // recording this separately.
+            'reason' => $exception->reason->value,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $newValues
+     */
+    private function writeAuthAudit(string $action, ?User $user, array $newValues): void
+    {
+        AuditLog::create([
+            'company_id' => $user?->company_id,
+            // Null for an unknown address — there is no actor to name, and
+            // this row exists to say that an attempt happened at all.
+            'actor_user_id' => $user?->id,
+            'action' => $action,
+            'auditable_type' => User::class,
+            // 0 when nobody matched: the polymorphic column is not nullable,
+            // and a real id here would attribute a stranger's attempt to a
+            // real person's record.
+            'auditable_id' => $user?->id ?? 0,
+            'old_values' => null,
+            'new_values' => $newValues,
+            // The one field that matters most on these rows.
+            'ip_address' => $this->ip(),
         ]);
     }
 

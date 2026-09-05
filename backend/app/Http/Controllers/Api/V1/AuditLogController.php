@@ -38,6 +38,25 @@ class AuditLogController extends Controller
             $query->where('company_id', $user->company_id);
         }
 
+        /*
+         * TASK-240 — "WHICH USER DID WHAT", the question this table could
+         * always answer and nothing ever asked.
+         *
+         * `actor_user_id` has been written on every row since the table was
+         * created; no endpoint and no screen ever read it back, so the trail
+         * could be browsed by action and by date but never by person.
+         *
+         * BR-6: a Company Admin may only ask about people in their own
+         * company. The narrowing is done by intersecting with the company
+         * scope already applied above rather than by rejecting the id —
+         * an actor from another company simply matches nothing. A 403 here
+         * would answer a question nobody should be able to ask: whether
+         * that user id exists at all.
+         */
+        if ($request->filled('actor_user_id')) {
+            $query->where('actor_user_id', $request->integer('actor_user_id'));
+        }
+
         if ($request->filled('action')) {
             $query->where('action', 'like', '%'.$request->input('action').'%');
         }

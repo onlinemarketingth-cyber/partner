@@ -10,6 +10,7 @@ use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Laravel\Sanctum\PersonalAccessToken;
 
 /**
  * Personal profile customization — avatar + background (human-requested
@@ -193,6 +194,46 @@ class UserProfileService
         // trail — the worst of the three possible outcomes.
         return DB::transaction(function () use ($user, $newPassword) {
             $user->update(['password' => $newPassword]);
+
+            /*
+             * TASK-238 — every OTHER session ends here.
+             *
+             * Changing a password is what somebody does when they think a
+             * credential is compromised, and until now it invalidated nothing:
+             * a token already in someone else's hands kept working for up to
+             * twelve hours. This is the "sign out everywhere else" that a
+             * password change is expected to mean.
+             *
+             * THE CURRENT TOKEN SURVIVES, deliberately — logging a person out
+             * of the device they are standing at, as a reward for improving
+             * their own security, is how people learn not to do it.
+             *
+             * The instanceof is not defensive noise: a cookie-session caller
+             * (the admin console) has a Sanctum TransientToken, which is not
+             * an Eloquent model and has no getKey() at all. Calling it threw
+             * a 500 on every self-service password change from the console —
+             * caught by UserProfileTest the moment this was added, and the
+             * same distinction AuthController::logout already makes.
+             */
+            $current = $user->currentAccessToken();
+            $currentTokenId = $current instanceof PersonalAccessToken ? $current->getKey() : null;
+
+            $revoked = $currentTokenId === null
+                ? $user->tokens()->delete()
+                : $user->tokens()->whereKeyNot($currentTokenId)->delete();
+
+            if ($revoked > 0) {
+                AuditLog::create([
+                    'company_id' => $user->company_id,
+                    'actor_user_id' => $user->id,
+                    'action' => 'user.api_tokens_revoked',
+                    'auditable_type' => User::class,
+                    'auditable_id' => $user->id,
+                    'old_values' => null,
+                    'new_values' => ['revoked_count' => $revoked, 'reason' => 'password changed by the owner'],
+                    'ip_address' => request()?->ip(),
+                ]);
+            }
 
             AuditLog::create([
                 'company_id' => $user->company_id,
