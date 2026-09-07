@@ -87,3 +87,29 @@ By hand, through a command, with `--dry-run` — never a migration that runs its
 - **`commission_ledger` and every existing order are untouched.** They snapshot amounts (BR-4); nothing in this ADR rewrites a money record.
 - **Brands and categories are not made central in this ADR.** ADR-036 Amendment 1 documented that `products.category_id` has three non-display readers (category-scoped commission rules, pipeline templates, the product filters), and a central product needs a category those readers can still match. That is TASK-253's first design question, and it gets answered there with the readers in front of us — not assumed here.
 - **Company Admin self-service pricing** — still Super Admin only, per the decision table.
+
+---
+
+## Amendment 1 (2026-09-07) — §7's open question, answered by shipping it
+
+§7 above left one question deliberately open: *"Brands and categories are not made central in this ADR … that is TASK-253's first design question, and it gets answered there with the readers in front of us."* It was answered, and the answer belongs here rather than only in a commit message.
+
+**Brands and categories DID become platform-capable**, by the same rule as products: `company_id` nullable, read through `SharedOrTenantScope`, written by Super Admin only. A shared product cannot sit inside one company's taxonomy — the other companies cannot see those rows at all — so `catalog:promote-products` repoints a promoted product at a platform brand and category, matched by NAME, and leaves the company's own rows exactly where they are (other products still point at them).
+
+The three non-display readers ADR-036 Amendment 1 identified were each handled explicitly:
+
+- **A category-scoped commission rule** matches through `product_category_id`. Repointing the product would make it stop matching SILENTLY, sending the sale to the company default rate and writing a wrong payout into an immutable ledger (BR-2/BR-4). The command **refuses**: it skips such a product and names the rule. That is a human decision, and not one a migration takes at 3am.
+- **`PipelineTemplateResolver`** — a template belongs to one company, so a shared product carries none. `pipeline_template_id` is cleared on promotion and the journey then resolves per company (category → company default, ADR-026 §3.3), which is the right answer for every company including the original.
+- **The brand/category filters** are display-only and follow the taxonomy.
+
+### What the rest of the sprint turned out to be
+
+| Task | What it was |
+|---|---|
+| TASK-256 | The admin row, plus `CompanyScopeFilter::contextCompanyId()`. Every resolved field answered for `$request->user()->company_id` — correct for a Company Admin, wrong for the only role allowed to edit these, because a Super Admin belongs to no company. The header picker already travels as `?company_id=`; that IS their context. Read only for a Super Admin, exactly as `apply()` has always done. |
+| TASK-245 | Eight admin controls a Company Admin could click that the server would refuse. Not one was a missing rule — every refusal was correctly enforced; the screens re-derived "may I?" from the nearest-looking field. Brand/Category/Product resources now carry the Policy's own answer per row. `set_commission_rule` is deliberately NOT derived from `update`: this ADR keeps commission per company, so a Company Admin may price their own commission on a shared product they may not otherwise touch. |
+| TASK-257 | The money-facing half, and the one that mattered most. §4 predicted it: *"every caller must pass the company."* Five resources had not been given one — the public share page, the affiliate landing page, the deal card, the storefront pin and the promotion form. `PublicProductShareResource` was the worst: it advertised the CENTRAL price while `OrderService::createForReferral()` charged the sharing company's, which is TASK-136's risk R1 re-opened without anybody editing either file. The affiliate page also filtered its catalogue on `company_id`, excluding every shared product outright. |
+
+### The trap this re-model leaves behind
+
+`Product::withoutGlobalScope(TenantScope::class)` no longer removes the scope, because the scope is now `SharedOrTenantScope`. It compiles, it runs, and it silently narrows the query. A source-scanning test guards it; anything new that strips a scope from `Product` must name `SharedOrTenantScope`.
