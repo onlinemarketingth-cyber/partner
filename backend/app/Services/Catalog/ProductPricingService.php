@@ -3,6 +3,7 @@
 namespace App\Services\Catalog;
 
 use App\Enums\PromotionStatus;
+use App\Models\CompanyProductSetting;
 use App\Models\Product;
 use App\Models\ProductPricePromotion;
 use App\Models\Scopes\TenantScope;
@@ -47,10 +48,44 @@ class ProductPricingService
      * moment the amount is fixed, never one that was active earlier
      * (at referral submission) or that starts later.
      */
-    public function effectivePriceSatang(Product $product): int
+    public function effectivePriceSatang(Product $product, ?int $companyId = null): int
     {
-        return $this->activePromotion($product)?->discounted_price_satang
-            ?? $product->price_satang;
+        $companyId ??= $product->company_id;
+
+        return $this->activePromotion($product, $companyId)?->discounted_price_satang
+            ?? $this->listPriceSatang($product, $companyId);
+    }
+
+    /**
+     * TASK-254 / ADR-040 — the price BEFORE any promotion, for the company
+     * that is asking.
+     *
+     * A company that has set its own price uses it; one that has not INHERITS
+     * the product's central price. That fallback is the human's decision
+     * ("ถ้าไม่มีการแก้ไขให้ใช้ราคากลางไปก่อน") and it is safe for BR-7 because
+     * the inherited number is one a Super Admin typed on the product — not one
+     * this system invented.
+     *
+     * A company-owned product ignores all of it: nothing else can own a price
+     * for a row that belongs to one company already.
+     */
+    public function listPriceSatang(Product $product, ?int $companyId = null): int
+    {
+        $companyId ??= $product->company_id;
+
+        if (! $product->isShared() || $companyId === null) {
+            return (int) $product->price_satang;
+        }
+
+        $ownPrice = CompanyProductSetting::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('product_id', $product->id)
+            ->value('price_satang');
+
+        // `?? central` and not `?: central`: 0 satang is a price a Super Admin
+        // may deliberately set (a free onboarding item), and treating it as
+        // "unset" would silently charge the central price instead.
+        return (int) ($ownPrice ?? $product->price_satang);
     }
 
     /**
@@ -83,10 +118,25 @@ class ProductPricingService
      * happens, `latest('id')` is a deterministic (not silently random)
      * tie-break, picking the most-recently-created row.
      */
-    public function activePromotion(Product $product): ?ProductPricePromotion
+    public function activePromotion(Product $product, ?int $companyId = null): ?ProductPricePromotion
     {
+        /*
+         * TASK-254 / ADR-040 — a promotion belongs to a COMPANY, and a shared
+         * product has none of its own, so the caller says who is asking. Left
+         * to `$product->company_id` a shared product would look for a
+         * promotion with a NULL company — matching nothing, or worse, matching
+         * a row that has no owner.
+         */
+        $companyId ??= $product->company_id;
+
+        if ($companyId === null) {
+            // Nobody in particular is asking (a Super Admin reading across
+            // companies). No company means no promotion, not "any promotion".
+            return null;
+        }
+
         return ProductPricePromotion::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $product->company_id)
+            ->where('company_id', $companyId)
             ->where('product_id', $product->id)
             ->where('status', PromotionStatus::Active)
             ->latest('id')

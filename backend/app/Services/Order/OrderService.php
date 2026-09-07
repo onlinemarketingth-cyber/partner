@@ -146,7 +146,14 @@ class OrderService
             // commission without moving the agreed price, which is correct:
             // the order is a quote to the customer, the ledger is a payout
             // to the agent.
-            'amount_satang' => $this->productPricingService->effectivePriceSatang($referral->product),
+            // TASK-254 / ADR-040 — priced for the REFERRAL's company: its own
+            // override if it set one, the central price if not. Passing the
+            // company explicitly is what stops a shared product being charged
+            // at another tenant's price.
+            'amount_satang' => $this->productPricingService->effectivePriceSatang(
+                $referral->product,
+                (int) $referral->company_id,
+            ),
             'payment_method' => $method,
             'status' => OrderStatus::Pending,
             /*

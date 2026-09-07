@@ -98,12 +98,24 @@ class SharedProductIsolationTest extends TestCase
         $this->assertCount(1, $response->json('data'));
     }
 
-    public function test_an_agent_sees_it_too(): void
+    public function test_an_agent_sees_it_only_once_their_company_switches_it_on(): void
     {
-        // The whole point of the re-model: AIA's agents can sell it without
-        // AIA owning a copy of it.
-        $this->sharedProduct();
+        /*
+         * The whole point of the re-model — AIA's agents can sell it without
+         * AIA owning a copy — and its one condition: AIA has to say yes first.
+         *
+         * An ADMIN sees it either way (they are the one who switches it on);
+         * an AGENT sees a catalogue of what their company actually sells.
+         * TASK-254 is where that distinction is enforced.
+         */
+        $product = $this->sharedProduct();
         $agent = User::factory()->agent()->create(['company_id' => $this->aia->id]);
+
+        $this->actingAs($agent)->getJson('/api/v1/products')->assertOk()->assertJsonCount(0, 'data');
+
+        CompanyProductSetting::withoutGlobalScopes()->create([
+            'company_id' => $this->aia->id, 'product_id' => $product->id, 'is_active' => true,
+        ]);
 
         $this->actingAs($agent)->getJson('/api/v1/products')->assertOk()->assertJsonCount(1, 'data');
     }

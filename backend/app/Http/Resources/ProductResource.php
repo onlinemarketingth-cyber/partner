@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Enums\ProductMediaPurpose;
 use App\Enums\ProductMediaType;
+use App\Services\Catalog\ProductPricingService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use App\Support\RequestScopedService;
 use Illuminate\Http\Request;
@@ -46,7 +47,31 @@ class ProductResource extends JsonResource
                     : new ProductCategoryResource($this->category)
             ),
             'name' => $this->effectiveName(),
+            /*
+             * TASK-254 / ADR-040 — `price_satang` is the row's own number: the
+             * platform's central price for a shared product, the company's for
+             * its own. It stays exactly as it was, because a Super Admin
+             * editing the central price needs to see the central price.
+             *
+             * `effective_price_satang` is what the VIEWER's company actually
+             * charges: their own override if they set one, the central price
+             * if they did not, and the active promotion above either. Screens
+             * that show a customer-facing number must read this one — the
+             * difference between them is somebody's money.
+             */
             'price_satang' => $this->price_satang,
+            'effective_price_satang' => app(ProductPricingService::class)
+                ->effectivePriceSatang($this->resource, $request->user()?->company_id),
+            'is_shared' => $this->isShared(),
+            /*
+             * Whether THIS viewer's company may sell it. For a shared product
+             * that is their own switch (default off, no inheritance — see
+             * Product::isSellableBy); for their own product it is simply
+             * is_active. A screen that renders `is_active` for a shared
+             * product would show the PLATFORM's state and read as the
+             * company's.
+             */
+            'is_sellable_here' => $this->isSellableBy($request->user()?->company_id),
             'description' => $this->effectiveDescription(),
             'spec_description' => $this->effectiveSpecDescription(),
             'is_active' => $this->is_active,

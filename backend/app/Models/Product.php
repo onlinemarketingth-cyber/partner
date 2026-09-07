@@ -6,6 +6,7 @@ use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
 use App\Models\Scopes\SharedOrTenantScope;
+use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -56,6 +57,46 @@ class Product extends Model
     public function isShared(): bool
     {
         return $this->company_id === null;
+    }
+
+    /**
+     * TASK-254 / ADR-040 — may this company sell this product right now?
+     *
+     * Two switches, and they are NOT symmetrical with the price:
+     *
+     *   • `products.is_active` is the platform's. A shared product switched
+     *     off centrally is off everywhere, because it is one product.
+     *   • the company's own `is_active` has NO fallback and defaults to false.
+     *     Inheriting a price is reasonable — the number is knowable. Inheriting
+     *     PERMISSION TO SELL is not: it would put a product on sale in a
+     *     company whose admin has never seen it, which is the one thing every
+     *     version of this feature has been careful never to do ("ปิดไว้ก่อน").
+     *
+     * A company-owned product keeps exactly today's behaviour: its own
+     * is_active and nothing else.
+     */
+    public function isSellableBy(?int $companyId): bool
+    {
+        if (! $this->is_active) {
+            return false;
+        }
+
+        if (! $this->isShared()) {
+            return $companyId === null || $companyId === (int) $this->company_id;
+        }
+
+        if ($companyId === null) {
+            // Asked without a company (a Super Admin reading across all of
+            // them). "Is it on sale" has no answer that is true everywhere,
+            // and false is the safe half of that: nothing is offered for sale
+            // on the strength of a question nobody scoped.
+            return false;
+        }
+
+        return (bool) CompanyProductSetting::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('product_id', $this->id)
+            ->value('is_active');
     }
 
     protected $fillable = [

@@ -158,8 +158,17 @@ class CommissionService
         // consistently promotion-aware with zero changes needed in the 4
         // other Commission*Service classes (see this method's own
         // resolveActivePricePromotion() docblock for the lookup itself).
-        $appliedPromotion = $this->resolveActivePricePromotion($referral->product);
-        $productPriceSatang = $appliedPromotion?->discounted_price_satang ?? $referral->product->price_satang;
+        $appliedPromotion = $this->resolveActivePricePromotion($referral->product, (int) $referral->company_id);
+        /*
+         * TASK-254 / ADR-040 — the base a commission is computed from is what
+         * THIS company charges: its own price for a shared product, the
+         * product's own for its own. Reading `product->price_satang` directly
+         * would pay commission on the platform's central price while the
+         * customer paid the company's — a wrong amount in an immutable ledger
+         * row (BR-3/BR-4), and one nobody would notice until a payout.
+         */
+        $productPriceSatang = $appliedPromotion?->discounted_price_satang
+            ?? $this->productPricingService->listPriceSatang($referral->product, (int) $referral->company_id);
 
         $amountSatang = $this->computeAmount($rule->rate_type, $rule->rate_value, $productPriceSatang);
 
@@ -539,9 +548,12 @@ class CommissionService
      * at the call site so this class's flow (and its long TASK-047
      * comment at recordForReferral()) reads exactly as it did.
      */
-    private function resolveActivePricePromotion(Product $product): ?ProductPricePromotion
+    private function resolveActivePricePromotion(Product $product, ?int $companyId = null): ?ProductPricePromotion
     {
-        return $this->productPricingService->activePromotion($product);
+        // TASK-254 / ADR-040 — a promotion belongs to a company; a shared
+        // product has none of its own, so the caller passes the one whose sale
+        // this is.
+        return $this->productPricingService->activePromotion($product, $companyId);
     }
 
     /**

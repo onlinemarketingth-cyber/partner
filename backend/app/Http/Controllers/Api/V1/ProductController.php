@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreProductRequest;
+use App\Http\Requests\Catalog\UpdateCompanyProductSettingRequest;
 use App\Http\Requests\Catalog\UpdateProductRequest;
+use App\Http\Resources\CompanyProductSettingResource;
 use App\Http\Resources\ProductResource;
 use App\Models\CommissionLedger;
 use App\Models\Product;
 use App\Models\Referral;
+use App\Services\Catalog\CompanyProductSettingService;
 use App\Services\Catalog\ProductGradingService;
 use App\Services\Catalog\ProductRecommendationService;
 use App\Services\Catalog\ProductService;
@@ -101,6 +104,27 @@ class ProductController extends Controller
         // into "blank where it already happened".
         if ($request->user()?->isAgent()) {
             $query->where('is_active', true);
+
+            /*
+             * TASK-254 / ADR-040 — and, for a PLATFORM-owned product, this
+             * agent's own company must have switched it on.
+             *
+             * Enforced in SQL rather than by filtering the page afterwards:
+             * this endpoint paginates, so a client-side pass would answer
+             * "the sellable products that happen to be on page 1 of all of
+             * them" — the same class of lie TASK-202 fixed for the company
+             * scope. A company-owned product is untouched by the clause.
+             */
+            $companyId = $request->user()->company_id;
+
+            $query->where(fn ($outer) => $outer
+                ->whereNotNull('products.company_id')
+                ->orWhereExists(fn ($exists) => $exists
+                    ->selectRaw('1')
+                    ->from('company_product_settings')
+                    ->whereColumn('company_product_settings.product_id', 'products.id')
+                    ->where('company_product_settings.company_id', $companyId)
+                    ->where('company_product_settings.is_active', true)));
         } elseif ($request->has('is_active')) {
             $query->where('is_active', $request->boolean('is_active'));
         }
@@ -152,7 +176,13 @@ class ProductController extends Controller
      */
     public function show(Request $request, Product $product): ProductResource
     {
-        abort_if($request->user()?->isAgent() && ! $product->is_active, 404);
+        // TASK-254 / ADR-040 — `isSellableBy`, not `is_active`: for a shared
+        // product the agent's own company decides, and a product their company
+        // has not switched on must be as invisible here as a deactivated one.
+        abort_if(
+            $request->user()?->isAgent() && ! $product->isSellableBy($request->user()->company_id),
+            404,
+        );
 
         // `media` is loaded here as of 2026-08-21: ProductResource wraps
         // `thumbnail_url` in when(relationLoaded('media')), so without it the
@@ -190,6 +220,51 @@ class ProductController extends Controller
         $product->delete();
 
         return response()->noContent();
+    }
+
+    /**
+     * PUT /products/{product}/company-settings — TASK-254 / ADR-040.
+     *
+     * What ONE company charges for a SHARED product, and whether it is on sale
+     * there. Super-Admin-only (UpdateCompanyProductSettingRequest), because
+     * that is the human's decision in both ADR-036 and ADR-040.
+     *
+     * Refused for a company-owned product, deliberately: that row already has
+     * exactly one company and its price lives on the product itself. Accepting
+     * it here would create a second place where a price could be set, and two
+     * places to look is how the two disagree.
+     */
+    public function updateCompanySetting(
+        UpdateCompanyProductSettingRequest $request,
+        Product $product,
+        CompanyProductSettingService $service,
+    ): JsonResponse {
+        abort_unless(
+            $product->isShared(),
+            422,
+            'สินค้านี้เป็นของบริษัทเดียว — ตั้งราคาที่ตัวสินค้าโดยตรง ไม่ใช่ที่นี่',
+        );
+
+        $setting = $service->set(
+            $product,
+            $request->integer('company_id'),
+            $request->safe()->except('company_id'),
+            $request->user(),
+        );
+
+        /*
+         * ALWAYS 200, never 201 — even though the underlying row may have just
+         * been inserted.
+         *
+         * Laravel returns 201 for a resource whose model was recently created,
+         * which would make this PUT answer 201 the first time a company is
+         * priced and 200 every time after. The caller did not create anything:
+         * "this company has not decided yet" and "this company decided" are
+         * the same object in two states, and the row's existence is
+         * bookkeeping. A status code that alternates is one every client has
+         * to special-case.
+         */
+        return (new CompanyProductSettingResource($setting))->response()->setStatusCode(200);
     }
 
     /**

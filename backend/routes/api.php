@@ -463,6 +463,13 @@ Route::prefix('v1')->group(function () {
             ->parameters(['catalog-categories' => 'catalog_category']);
         Route::apiResource('product-catalog-items', ProductCatalogItemController::class)
             ->parameters(['product-catalog-items' => 'product_catalog_item']);
+        /*
+         * TASK-254 / ADR-040 — what ONE company charges for a SHARED product,
+         * and whether it sells it at all. Super-Admin-only inside the Form
+         * Request; refused with a 422 for a company-owned product, whose price
+         * lives on the product row itself.
+         */
+        Route::put('/products/{product}/company-settings', [ProductController::class, 'updateCompanySetting']);
         Route::post('/products/{product}/catalog-link', [ProductCatalogLinkController::class, 'store']);
         Route::delete('/products/{product}/catalog-link', [ProductCatalogLinkController::class, 'destroy']);
 

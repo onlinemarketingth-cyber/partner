@@ -130,7 +130,14 @@ class ProductShareCheckoutService
         // (§6), and "this product was discontinued" is not something a
         // customer can act on any more than "the agent's certification
         // lapsed" is.
-        if (! $product->is_active) {
+        /*
+         * TASK-254 / ADR-040 — `isSellableBy`, not `is_active`. A shared
+         * product the platform publishes is not automatically on sale in THIS
+         * link's company: that company has its own switch, default off. A
+         * checkout that ignored it would take a customer's money for a product
+         * the company never listed.
+         */
+        if (! $product->isSellableBy((int) $link->company_id)) {
             return null;
         }
 
