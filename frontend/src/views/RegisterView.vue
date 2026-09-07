@@ -766,7 +766,13 @@ const introLine = computed(() => {
   >
     <div class="w-full max-w-xl rounded-[28px] bg-surface-card shadow-xl border border-line-card/80 overflow-hidden p-8 sm:p-12">
       <div class="flex items-center justify-between">
-        <AppLogo mode="wordmark" :height="30" />
+        <!-- 2026-09-07 (human: "เอา Sync Vision Agent นี้ออก") — a recruit
+             signing up with a partner company has no relationship with the
+             platform vendor, so its wordmark is the one piece of branding on
+             this page that belongs to nobody in the conversation. A company
+             that uploaded its own logo, or set its own app name, still shows
+             it here: `hide` suppresses only the built-in fallback. -->
+        <AppLogo mode="wordmark" :height="30" fallback="hide" />
 
         <button
           type="button"

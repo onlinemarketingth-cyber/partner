@@ -42,8 +42,28 @@ const props = withDefaults(
         /** Explicit image URL override. Falls back to the company's uploaded logo. */
         src?: string | null
         context?: 'nav' | 'login'
+        /**
+         * What to render for a company that has uploaded nothing and set no
+         * app name (2026-09-07, human: "เอา Sync Vision Agent นี้ออก", looking
+         * at a partner's own signup page).
+         *
+         *   'builtin' — the Neural Atlas mark and the "Sync Vision Agent"
+         *               wordmark. Right inside the product, where the platform
+         *               IS the thing you are using.
+         *   'hide'    — nothing at all. Right on a page shown to somebody
+         *               outside the company: a recruit signing up with GENESENN
+         *               has no relationship with the platform vendor, and a
+         *               vendor's name at the top of that page is the one piece
+         *               of branding on it that does not belong to anybody in
+         *               the conversation.
+         *
+         * A company that HAS uploaded a logo or set an app name is unaffected
+         * either way — that is its own brand, and hiding it would be the
+         * opposite of white-label.
+         */
+        fallback?: 'builtin' | 'hide'
     }>(),
-    { mode: 'icon', size: 28, height: 32, label: undefined, src: undefined, context: 'login' },
+    { mode: 'icon', size: 28, height: 32, label: undefined, src: undefined, context: 'login', fallback: 'builtin' },
 )
 
 const theme = useThemeStore()
@@ -63,6 +83,15 @@ const wordmarkLabel = computed<string | null>(() => {
     const configured = theme.label('app_name', 'Sync Vision Agent')
     return configured && configured !== 'Sync Vision Agent' ? configured : null
 })
+
+/**
+ * Whether the built-in mark would be what renders — i.e. this company has
+ * supplied no branding of its own. `fallback="hide"` suppresses exactly this
+ * case and nothing else.
+ */
+const showsBuiltin = computed(() => logoSrc.value === null && wordmarkLabel.value === null)
+
+const hidden = computed(() => props.fallback === 'hide' && showsBuiltin.value)
 
 // 3x3 dot grid, evenly spaced in a 24x24 viewBox.
 const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, cy })))
@@ -90,7 +119,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
     />
 
     <div
-        v-else-if="mode === 'icon'"
+        v-else-if="mode === 'icon' && !hidden"
         class="rounded-xl bg-brand-600 flex items-center justify-center shrink-0"
         :style="{ width: size + 'px', height: size + 'px' }"
     >
@@ -98,7 +127,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
             <circle v-for="(d, i) in dotPositions" :key="i" :cx="d.cx" :cy="d.cy" r="2" fill="currentColor" />
         </svg>
     </div>
-    <div v-else class="flex items-center gap-2" :style="{ height: height + 'px' }">
+    <div v-else-if="!hidden" class="flex items-center gap-2" :style="{ height: height + 'px' }">
         <div
             class="rounded-xl bg-brand-600 flex items-center justify-center shrink-0"
             :style="{ width: height + 'px', height: height + 'px' }"
