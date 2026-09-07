@@ -38,7 +38,10 @@ class PublicProductShareResource extends JsonResource
         // would still be two objects and two chain walks.
         $pricing = app(ProductPricingService::class);
         $templateResolver = app(PipelineTemplateResolver::class);
-        $template = $product ? $templateResolver->resolveForProduct($product) : null;
+        // TASK-253 / ADR-040 — the link's company, not the product's: a
+        // shared product has none of its own, and this page is that company's
+        // storefront.
+        $template = $product ? $templateResolver->resolveForProduct($product, (int) $this->company_id) : null;
 
         return [
             'company_name' => $this->company?->name,

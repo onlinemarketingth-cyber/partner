@@ -7,6 +7,7 @@ use App\Models\Company;
 use App\Models\PipelineTemplate;
 use App\Models\Product;
 use App\Models\ProductCategory;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
@@ -65,9 +66,29 @@ class PipelineTemplateResolver
      * assumption, not an invariant the schema enforces, so a caller must
      * still handle null rather than this method inventing a journey.
      */
-    public function resolveForProduct(Product $product): ?PipelineTemplate
+    public function resolveForProduct(Product $product, ?int $companyId = null): ?PipelineTemplate
     {
-        $companyId = $product->company_id;
+        /*
+         * TASK-253 / ADR-040 — a PLATFORM-owned product (company_id null) has
+         * no journey of its own: a pipeline template belongs to a company, and
+         * the same shared product is sold through several. So the caller says
+         * which company is asking — the referral's, the order's, the viewer's
+         * — and a company-owned product ignores the argument exactly as
+         * before.
+         */
+        $companyId ??= $product->company_id;
+
+        if ($companyId === null) {
+            /*
+             * Nobody in particular is asking (a Super Admin browsing across
+             * companies). "Which journey does this product use" has no answer
+             * without a company, and null is what this method already returns
+             * for "could not resolve" — deliberately WITHOUT the warning
+             * below, because this is a question with no company, not a
+             * company with no templates.
+             */
+            return null;
+        }
 
         $cacheKey = implode('|', [
             $product->pipeline_template_id ?? '-',
@@ -284,7 +305,7 @@ class PipelineTemplateResolver
             return null;
         }
 
-        return ProductCategory::withoutGlobalScope(TenantScope::class)
+        return ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('company_id', $product->company_id)
             ->find($product->category_id)?->pipeline_template_id;
     }

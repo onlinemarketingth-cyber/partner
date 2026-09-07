@@ -82,9 +82,22 @@ class ReferralService
         // in this company / no template resolvable) leaves the snapshot
         // NULL, which TASK-133 treats as the legacy enum-default journey
         // rather than guessing one.
-        $product = Product::where('company_id', $data['company_id'])->find($data['product_id'] ?? null);
+        /*
+         * TASK-253 / ADR-040 — `orWhereNull` because a PLATFORM-owned product
+         * (company_id null) is sold by every company, so pinning the lookup to
+         * `company_id = X` alone would make a shared product unreferrable
+         * while it sits on the agent's own screen. The BR-6 intent is
+         * unchanged: another company's OWN product still does not match.
+         */
+        $product = Product::where(fn ($q) => $q
+            ->where('company_id', $data['company_id'])
+            ->orWhereNull('company_id'))
+            ->find($data['product_id'] ?? null);
+
+        // The journey belongs to the REFERRAL's company, which for a shared
+        // product is the only company in the question at all.
         $data['pipeline_template_id'] = $product
-            ? $this->pipelineTemplateResolver->resolveForProduct($product)?->id
+            ? $this->pipelineTemplateResolver->resolveForProduct($product, (int) $data['company_id'])?->id
             : null;
 
         return DB::transaction(function () use ($data, $actor, $referringAgent) {

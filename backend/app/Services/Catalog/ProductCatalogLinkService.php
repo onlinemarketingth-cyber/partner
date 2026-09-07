@@ -6,6 +6,7 @@ use App\Models\Brand;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
 use App\Models\ProductCategory;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Support\Facades\DB;
 
@@ -139,7 +140,7 @@ class ProductCatalogLinkService
             return $product->brand_id;
         }
 
-        return Brand::withoutGlobalScope(TenantScope::class)
+        return Brand::withoutGlobalScope(SharedOrTenantScope::class)
             ->firstOrCreate(
                 ['company_id' => $product->company_id, 'name' => $name],
                 ['is_active' => true],
@@ -154,7 +155,7 @@ class ProductCatalogLinkService
             return $product->category_id;
         }
 
-        return ProductCategory::withoutGlobalScope(TenantScope::class)
+        return ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)
             ->firstOrCreate(
                 ['company_id' => $product->company_id, 'name' => $name],
                 // sort_order/icon are presentation-only and belong to the

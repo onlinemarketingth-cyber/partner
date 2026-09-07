@@ -10,7 +10,7 @@ use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
 use App\Models\ProductCategory;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -47,12 +47,12 @@ class AdoptProductsIntoCatalogCommandTest extends TestCase
 
     private function productIn(Company $company, string $name, int $priceSatang = 890000): Product
     {
-        return Product::withoutGlobalScope(TenantScope::class)->create([
+        return Product::withoutGlobalScope(SharedOrTenantScope::class)->create([
             'company_id' => $company->id,
-            'brand_id' => Brand::withoutGlobalScope(TenantScope::class)->create([
+            'brand_id' => Brand::withoutGlobalScope(SharedOrTenantScope::class)->create([
                 'company_id' => $company->id, 'name' => 'Genesenn', 'is_active' => true,
             ])->id,
-            'category_id' => ProductCategory::withoutGlobalScope(TenantScope::class)->create([
+            'category_id' => ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)->create([
                 'company_id' => $company->id, 'name' => 'Anti Aging', 'is_active' => true, 'sort_order' => 0,
             ])->id,
             'name' => $name,
@@ -63,7 +63,7 @@ class AdoptProductsIntoCatalogCommandTest extends TestCase
 
     private function listingsOf(ProductCatalogItem $item)
     {
-        return Product::withoutGlobalScope(TenantScope::class)->where('catalog_item_id', $item->id)->get();
+        return Product::withoutGlobalScope(SharedOrTenantScope::class)->where('catalog_item_id', $item->id)->get();
     }
 
     public function test_an_existing_product_becomes_a_catalog_item_at_its_own_price(): void
@@ -143,7 +143,7 @@ class AdoptProductsIntoCatalogCommandTest extends TestCase
         $this->assertSame(0, ProductCatalogItem::count());
         $this->assertSame(0, CatalogBrand::count());
         $this->assertSame(0, CatalogCategory::count());
-        $this->assertSame(1, Product::withoutGlobalScope(TenantScope::class)->count());
+        $this->assertSame(1, Product::withoutGlobalScope(SharedOrTenantScope::class)->count());
     }
 
     public function test_running_it_twice_changes_nothing_the_second_time(): void
@@ -156,7 +156,7 @@ class AdoptProductsIntoCatalogCommandTest extends TestCase
         $this->artisan('catalog:adopt-products')->assertSuccessful();
 
         $this->assertSame(1, ProductCatalogItem::count());
-        $this->assertSame(2, Product::withoutGlobalScope(TenantScope::class)->count());
+        $this->assertSame(2, Product::withoutGlobalScope(SharedOrTenantScope::class)->count());
     }
 
     public function test_a_same_named_product_in_another_company_is_skipped_not_merged(): void

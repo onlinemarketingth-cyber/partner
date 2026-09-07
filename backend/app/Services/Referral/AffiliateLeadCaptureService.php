@@ -78,9 +78,14 @@ class AffiliateLeadCaptureService
         // for that product would. Resolved from the LINK's company (BR-6):
         // this runs unauthenticated, where TenantScope is a complete no-op,
         // so the company filter has to be explicit.
-        $product = Product::where('company_id', $link->company_id)->find($productId);
+        // TASK-253 / ADR-040 — a platform-owned product is sold through every
+        // company's links too; another company's OWN product still is not.
+        $product = Product::where(fn ($q) => $q
+            ->where('company_id', $link->company_id)
+            ->orWhereNull('company_id'))
+            ->find($productId);
         $pipelineTemplateId = $product
-            ? $this->pipelineTemplateResolver->resolveForProduct($product)?->id
+            ? $this->pipelineTemplateResolver->resolveForProduct($product, (int) $link->company_id)?->id
             : null;
 
         return DB::transaction(function () use ($link, $data, $productId, $isAttributed, $pipelineTemplateId) {

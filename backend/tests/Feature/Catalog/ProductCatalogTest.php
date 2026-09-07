@@ -11,7 +11,7 @@ use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
 use App\Models\ProductCategory;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\User;
 use App\Services\Commission\CommissionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -247,8 +247,8 @@ class ProductCatalogTest extends TestCase
             ->assertOk();
 
         $product->refresh();
-        $brand = Brand::withoutGlobalScope(TenantScope::class)->find($product->brand_id);
-        $category = ProductCategory::withoutGlobalScope(TenantScope::class)->find($product->category_id);
+        $brand = Brand::withoutGlobalScope(SharedOrTenantScope::class)->find($product->brand_id);
+        $category = ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)->find($product->category_id);
 
         $this->assertSame('Shared Brand', $brand->name);
         $this->assertSame('Shared Category', $category->name);
@@ -276,7 +276,7 @@ class ProductCatalogTest extends TestCase
             $this->assertSame($existing->id, $product->refresh()->brand_id);
         }
 
-        $this->assertSame(1, Brand::withoutGlobalScope(TenantScope::class)
+        $this->assertSame(1, Brand::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('company_id', $company->id)->where('name', 'Shared Brand')->count());
     }
 
@@ -465,8 +465,8 @@ class ProductCatalogTest extends TestCase
         $fixed = $stranded->fresh();
         $this->assertNotNull($fixed->brand_id);
         $this->assertNotNull($fixed->category_id);
-        $this->assertSame('Legacy Brand', Brand::withoutGlobalScope(TenantScope::class)->find($fixed->brand_id)->name);
-        $this->assertSame($company->id, Brand::withoutGlobalScope(TenantScope::class)->find($fixed->brand_id)->company_id);
+        $this->assertSame('Legacy Brand', Brand::withoutGlobalScope(SharedOrTenantScope::class)->find($fixed->brand_id)->name);
+        $this->assertSame($company->id, Brand::withoutGlobalScope(SharedOrTenantScope::class)->find($fixed->brand_id)->company_id);
 
         // A standalone product is not touched, and re-running is a no-op.
         $this->assertSame($healthy->brand_id, $healthy->fresh()->brand_id);

@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\ProductMediaPurpose;
+use App\Enums\ProductMediaType;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use App\Support\RequestScopedService;
 use Illuminate\Http\Request;
@@ -69,7 +71,7 @@ class ProductResource extends JsonResource
             // covers yet. Dropping it would blank the card for every
             // product whose photos still live in the detail gallery.
             'thumbnail_url' => $this->when($this->relationLoaded('media'), function () {
-                $covers = $this->media->where('purpose', \App\Enums\ProductMediaPurpose::Cover);
+                $covers = $this->media->where('purpose', ProductMediaPurpose::Cover);
 
                 $primary = $covers->firstWhere('is_primary', true)
                     ?? $covers->first()
@@ -84,14 +86,19 @@ class ProductResource extends JsonResource
                     return route('product-media.thumbnail', $primary->id);
                 }
 
-                return $primary->media_type === \App\Enums\ProductMediaType::Image ? route('product-media.stream', $primary->id) : null;
+                return $primary->media_type === ProductMediaType::Image ? route('product-media.stream', $primary->id) : null;
             }),
             // ADR-011/TASK-027 — commission_plan_type is the product's OWN
             // override (null = inheriting); effective_plan_type is always
             // resolved (Product::effectivePlanType()) so ag-ui never has
             // to duplicate the inherit-fallback logic client-side.
             'commission_plan_type' => $this->commission_plan_type?->value,
-            'effective_plan_type' => $this->effectivePlanType()->value,
+            // TASK-253 / ADR-040 — the VIEWER's company answers for a
+            // platform-owned product: "which plan applies to this product"
+            // has a different answer per company, and the person reading the
+            // screen is asking about their own. A company-owned product
+            // ignores the argument (it inherits from its own company).
+            'effective_plan_type' => $this->effectivePlanType($request->user()?->company)->value,
             // TASK-194 §3.1/§3.4 — same "own override + always-resolved
             // effective value" pairing as commission_plan_type/
             // effective_plan_type above, so ag-ui never has to duplicate
@@ -144,7 +151,10 @@ class ProductResource extends JsonResource
             // ag-ui must treat null as "misconfigured", not as "none".
             'effective_pipeline_template' => (function () use ($request) {
                 $template = RequestScopedService::get($request, PipelineTemplateResolver::class)
-                    ->resolveForProduct($this->resource);
+                    // The viewer's company, for the same reason
+                    // effective_plan_type passes it: a shared product's
+                    // journey is the asking company's (TASK-253 / ADR-040).
+                    ->resolveForProduct($this->resource, $request->user()?->company_id);
 
                 // loadMissing, not load: the resolver hands back the SAME
                 // model instance for every product that resolves the same

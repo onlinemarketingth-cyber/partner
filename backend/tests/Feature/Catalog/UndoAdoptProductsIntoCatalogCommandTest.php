@@ -11,7 +11,7 @@ use App\Models\Product;
 use App\Models\ProductCatalogItem;
 use App\Models\ProductCategory;
 use App\Models\Referral;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -50,12 +50,12 @@ class UndoAdoptProductsIntoCatalogCommandTest extends TestCase
     /** The exact production shape: one real product, then adoption. */
     private function adoptedProduct(string $name = 'Vital Blueprint V5', int $price = 890000): Product
     {
-        $product = Product::withoutGlobalScope(TenantScope::class)->create([
+        $product = Product::withoutGlobalScope(SharedOrTenantScope::class)->create([
             'company_id' => $this->thaiLife->id,
-            'brand_id' => Brand::withoutGlobalScope(TenantScope::class)->create([
+            'brand_id' => Brand::withoutGlobalScope(SharedOrTenantScope::class)->create([
                 'company_id' => $this->thaiLife->id, 'name' => 'Genesenn', 'is_active' => true,
             ])->id,
-            'category_id' => ProductCategory::withoutGlobalScope(TenantScope::class)->create([
+            'category_id' => ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)->create([
                 'company_id' => $this->thaiLife->id, 'name' => 'Anti Aging', 'is_active' => true, 'sort_order' => 0,
             ])->id,
             'name' => $name,
@@ -71,7 +71,7 @@ class UndoAdoptProductsIntoCatalogCommandTest extends TestCase
 
     private function allProducts()
     {
-        return Product::withoutGlobalScope(TenantScope::class)->withTrashed()->get();
+        return Product::withoutGlobalScope(SharedOrTenantScope::class)->withTrashed()->get();
     }
 
     public function test_the_copies_are_gone_and_the_original_stands_alone_again(): void
@@ -137,7 +137,7 @@ class UndoAdoptProductsIntoCatalogCommandTest extends TestCase
          * than an un-reversed one.
          */
         $original = $this->adoptedProduct();
-        $copy = Product::withoutGlobalScope(TenantScope::class)
+        $copy = Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('company_id', $this->aia->id)
             ->firstOrFail();
 

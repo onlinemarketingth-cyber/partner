@@ -10,6 +10,7 @@ use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
 use App\Models\ProductCategory;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Catalog\ProductCatalogPropagationService;
@@ -53,7 +54,7 @@ class SharedCatalogPropagationTest extends TestCase
     /** Every company's listing of one catalog item, TenantScope out of the way. */
     private function listings(ProductCatalogItem $item)
     {
-        return Product::withoutGlobalScope(TenantScope::class)
+        return Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('catalog_item_id', $item->id)
             ->get();
     }
@@ -183,7 +184,7 @@ class SharedCatalogPropagationTest extends TestCase
         $this->propagate($item);
 
         $this->assertCount(0, $this->listings($item));
-        $this->assertCount(1, Product::withoutGlobalScope(TenantScope::class)->withTrashed()->get());
+        $this->assertCount(1, Product::withoutGlobalScope(SharedOrTenantScope::class)->withTrashed()->get());
     }
 
     // ── A new company gets the catalog it missed ───────────────────────
@@ -202,7 +203,7 @@ class SharedCatalogPropagationTest extends TestCase
         // factory row above exists only so "every company" means more than one.
         $provisioned = Company::where('name', 'Genesenn')->firstOrFail();
 
-        $listings = Product::withoutGlobalScope(TenantScope::class)
+        $listings = Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->where('company_id', $provisioned->id)
             ->get();
 
@@ -243,11 +244,11 @@ class SharedCatalogPropagationTest extends TestCase
             // the acting Super Admin and never to a shared global row.
             $this->assertSame(
                 $company->id,
-                Brand::withoutGlobalScope(TenantScope::class)->find($listing->brand_id)->company_id,
+                Brand::withoutGlobalScope(SharedOrTenantScope::class)->find($listing->brand_id)->company_id,
             );
             $this->assertSame(
                 $company->id,
-                ProductCategory::withoutGlobalScope(TenantScope::class)->find($listing->category_id)->company_id,
+                ProductCategory::withoutGlobalScope(SharedOrTenantScope::class)->find($listing->category_id)->company_id,
             );
         }
     }

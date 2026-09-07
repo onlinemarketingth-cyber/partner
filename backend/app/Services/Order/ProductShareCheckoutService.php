@@ -13,6 +13,7 @@ use App\Models\PipelineStageLog;
 use App\Models\Product;
 use App\Models\ProductShareLink;
 use App\Models\Referral;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Services\Gamification\GamificationService;
 use App\Services\Link\TrackedLinkService;
@@ -103,8 +104,12 @@ class ProductShareCheckoutService
         // unauthenticated, where TenantScope is a complete no-op, so the
         // company filter has to be explicit — same reasoning as
         // AffiliateLeadCaptureService and PipelineTemplateResolver.
-        $product = Product::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $link->company_id)
+        $product = Product::withoutGlobalScope(SharedOrTenantScope::class)
+            // TASK-253 / ADR-040 — a platform-owned product (company_id null)
+            // is sold through this company's links too. Another company's own
+            // product still does not match, which is the BR-6 half of this
+            // lookup and the reason it is written by hand at all.
+            ->where(fn ($q) => $q->where('company_id', $link->company_id)->orWhereNull('company_id'))
             ->find($link->product_id);
 
         if (! $product) {
@@ -129,7 +134,9 @@ class ProductShareCheckoutService
             return null;
         }
 
-        $template = $this->pipelineTemplateResolver->resolveForProduct($product);
+        // TASK-253 / ADR-040 — the SHARE LINK's company owns this checkout;
+        // for a shared product it is the only company in the question.
+        $template = $this->pipelineTemplateResolver->resolveForProduct($product, (int) $link->company_id);
 
         // ADR-026 §3.7 — the one rule that decides whether this product is
         // self-serve at all: can a referral created now reach

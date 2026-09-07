@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -169,7 +170,7 @@ class ProductCatalogPropagationService
      */
     private function createListing(ProductCatalogItem $catalogItem, int $companyId): ?Product
     {
-        $exists = Product::withoutGlobalScope(TenantScope::class)
+        $exists = Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->withTrashed()
             ->where('company_id', $companyId)
             ->where('catalog_item_id', $catalogItem->id)
@@ -194,7 +195,7 @@ class ProductCatalogPropagationService
              * service means a propagated product cannot quietly miss what a
              * hand-linked one gets.
              */
-            $product = Product::withoutGlobalScope(TenantScope::class)->create([
+            $product = Product::withoutGlobalScope(SharedOrTenantScope::class)->create([
                 'company_id' => $companyId,
                 'catalog_item_id' => $catalogItem->id,
                 'price_satang' => $catalogItem->default_price_satang,

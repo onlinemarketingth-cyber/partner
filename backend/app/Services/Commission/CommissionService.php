@@ -176,7 +176,12 @@ class CommissionService
         // Gated on the PRODUCT's effective plan type (TASK-027 —
         // Product::effectivePlanType(), not just the company default)
         // since ADR-011 allows a plan type override per product.
-        $effectivePlanType = $referral->product->effectivePlanType();
+        // TASK-253 / ADR-040 — the REFERRAL's company answers for a
+        // platform-owned product. Passing it explicitly rather than letting
+        // the product look up its own company is what keeps a shared product
+        // from silently resolving the wrong plan (BR-2, into an immutable
+        // ledger row — BR-4).
+        $effectivePlanType = $referral->product->effectivePlanType($referral->company);
 
         // TASK-194 §3.2 — Affiliate's deductive mode has to be resolved
         // BEFORE recordDirectSale() writes the agent's own ledger row,

@@ -5,7 +5,7 @@ namespace App\Models;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +16,28 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * Product catalog — ERD-001 §"Product Catalog". CLAUDE.md §2 "Package /
  * Product". price_satang is BR-3 integer THB cents — the 8,900/9,900 THB
  * figures are seed data (BR-7), never hardcoded in code.
+ *
+ * ── company_id MAY NOW BE NULL (TASK-253 / ADR-040) ──
+ *
+ * NULL means the row belongs to the PLATFORM and every company sells it; a
+ * value means today's company-owned product, unchanged in every way. What
+ * differs per company about a shared product — price, on/off — lives in
+ * `company_product_settings`; commission stays where it already was, in
+ * `commission_rules` (BR-2), pointing at a product id that never moves.
+ *
+ * The scope below is therefore SharedOrTenantScope, the same one
+ * theme_presets has used since TASK-217. Two consequences worth knowing
+ * before touching this file:
+ *
+ *   1. `withoutGlobalScope(TenantScope::class)` NO LONGER REMOVES IT. The
+ *      identifier is the scope's own class, so a call site using the old
+ *      name silently keeps the scope applied and quietly returns fewer rows
+ *      — the failure is missing data, not an error. Use
+ *      SharedOrTenantScope::class; SharedProductIsolationTest fails the
+ *      build if the old spelling reappears against this model.
+ *   2. A Company Admin can now READ a row they do not own. Writing one is
+ *      still refused — ProductPolicy answers Super Admin only for a
+ *      platform-owned product, which is ADR-036 §5's rule surviving intact.
  */
 class Product extends Model
 {
@@ -23,7 +45,17 @@ class Product extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(new TenantScope);
+        static::addGlobalScope(new SharedOrTenantScope);
+    }
+
+    /**
+     * True when this product belongs to the platform rather than to one
+     * company (ADR-040) — the single question every "may I write this?" and
+     * "whose price is this?" decision turns on.
+     */
+    public function isShared(): bool
+    {
+        return $this->company_id === null;
     }
 
     protected $fillable = [
@@ -99,9 +131,43 @@ class Product extends Model
      * read $product->commission_plan_type or $company->commission_plan_type
      * directly, so the inherit rule can't be duplicated/drifted elsewhere.
      */
-    public function effectivePlanType(): CommissionPlanType
+    public function effectivePlanType(?Company $context = null): CommissionPlanType
     {
-        return $this->commission_plan_type ?? $this->company->commission_plan_type;
+        if ($this->commission_plan_type !== null) {
+            return $this->commission_plan_type;
+        }
+
+        /*
+         * TASK-253 / ADR-040 — a PLATFORM-owned product has no company of its
+         * own to inherit from, so the caller says which company is asking.
+         *
+         * `$context` is that company: the referral's for a commission
+         * calculation, the viewer's for a screen. Falling back to
+         * `$this->company` keeps every existing caller byte-for-byte
+         * unchanged — a company-owned product ignores the argument entirely.
+         */
+        $company = $context ?? $this->company;
+
+        if ($company === null) {
+            /*
+             * A shared product with no plan type of its own, asked about by
+             * nobody in particular. There is no honest answer: the plan type
+             * decides HOW commission is calculated, and inventing one here
+             * would put a wrong number in an immutable ledger row (BR-2/BR-4).
+             *
+             * Unreachable by construction — a platform-owned product is
+             * required to carry an explicit commission_plan_type (see
+             * ProductObserver / TASK-255's migration command) — and it throws
+             * rather than returning a default precisely so that "unreachable"
+             * stays true instead of quietly becoming "usually right".
+             */
+            throw new \LogicException(
+                "Product #{$this->id} is platform-owned and has no commission_plan_type of its own; "
+                .'the caller must pass the company asking (ADR-040).'
+            );
+        }
+
+        return $company->commission_plan_type;
     }
 
     /**
@@ -149,19 +215,32 @@ class Product extends Model
         return $this->catalog_item_id ? $this->catalogItem?->spec_description : $this->spec_description;
     }
 
-    /** @return \App\Models\Brand|\App\Models\CatalogBrand|null */
     public function effectiveBrand(): Brand|CatalogBrand|null
     {
         return $this->catalog_item_id ? $this->catalogItem?->catalogBrand : $this->brand;
     }
 
-    /** @return \App\Models\ProductCategory|\App\Models\CatalogCategory|null */
     public function effectiveCategory(): ProductCategory|CatalogCategory|null
     {
         return $this->catalog_item_id ? $this->catalogItem?->catalogCategory : $this->category;
     }
 
     /** @return BelongsTo<Company, $this> */
+    /**
+     * TASK-253 — every company's own price/on-off for this product.
+     *
+     * TenantScope on CompanyProductSetting means a Company Admin loading
+     * this relation sees exactly one row (their own) and a Super Admin sees
+     * all of them, which is the behaviour both callers want without either
+     * having to ask.
+     *
+     * @return HasMany<CompanyProductSetting, $this>
+     */
+    public function companySettings(): HasMany
+    {
+        return $this->hasMany(CompanyProductSetting::class);
+    }
+
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);

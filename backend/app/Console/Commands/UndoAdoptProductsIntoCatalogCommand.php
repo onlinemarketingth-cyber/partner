@@ -14,6 +14,7 @@ use App\Models\ProductSalesMaterial;
 use App\Models\ProductShareLink;
 use App\Models\ProductSpec;
 use App\Models\Referral;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Models\StorefrontBanner;
 use App\Services\Catalog\ProductCatalogLinkService;
@@ -91,7 +92,7 @@ class UndoAdoptProductsIntoCatalogCommand extends Command
         $skipped = 0;
 
         foreach ($items as $item) {
-            $linked = Product::withoutGlobalScope(TenantScope::class)
+            $linked = Product::withoutGlobalScope(SharedOrTenantScope::class)
                 ->withTrashed()
                 ->where('catalog_item_id', $item->id)
                 ->orderBy('id')

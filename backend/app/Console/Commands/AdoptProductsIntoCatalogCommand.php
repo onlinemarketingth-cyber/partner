@@ -6,6 +6,7 @@ use App\Models\CatalogBrand;
 use App\Models\CatalogCategory;
 use App\Models\Product;
 use App\Models\ProductCatalogItem;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Services\Catalog\ProductCatalogLinkService;
 use App\Services\Catalog\ProductCatalogPropagationService;
@@ -78,7 +79,7 @@ class AdoptProductsIntoCatalogCommand extends Command
          * deliberately NOT used — a soft-deleted product is one somebody
          * removed, and adopting it would put it back in front of everybody.
          */
-        $query = Product::withoutGlobalScope(TenantScope::class)
+        $query = Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->with(['brand', 'category', 'company'])
             ->whereNull('catalog_item_id');
 

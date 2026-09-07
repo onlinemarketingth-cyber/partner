@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\Product;
+use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Services\Catalog\ProductCatalogLinkService;
 use Illuminate\Console\Command;
@@ -34,7 +35,7 @@ class BackfillCatalogLinkedTaxonomyCommand extends Command
         // withoutGlobalScope(TenantScope) — a maintenance sweep across every
         // company, run from the console with no authenticated actor. Same
         // rationale as DispatchDueRenewalCommissions' own withoutGlobalScopes().
-        $stranded = Product::withoutGlobalScope(TenantScope::class)
+        $stranded = Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->whereNotNull('catalog_item_id')
             ->where(fn ($q) => $q->whereNull('brand_id')->orWhereNull('category_id'))
             ->with('company')

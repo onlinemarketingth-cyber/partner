@@ -48,7 +48,18 @@ class ProductCategoryController extends Controller
         $query = ProductCategory::query()->withCount('products')->orderBy('sort_order')->orderBy('name');
 
         // TASK-209 — Super Admin's header company scope, applied in SQL.
-        CompanyScopeFilter::apply($query, $request);
+        /*
+         * TASK-253 / ADR-040 — includePlatformWide, because a NULL company_id
+         * here now means "the platform owns this row and every company uses
+         * it", exactly as it already did for announcements and reward items.
+         *
+         * Without it the picker would CONTRADICT the tenant scope: a Company
+         * Admin (SharedOrTenantScope) sees the shared rows, while a Super
+         * Admin who narrows to that same company does not — so the person
+         * with more authority sees less, and would reasonably conclude the
+         * shared product is missing from that company.
+         */
+        CompanyScopeFilter::apply($query, $request, includePlatformWide: true);
 
         if ($request->user()?->isAgent()) {
             $query->where('is_active', true);

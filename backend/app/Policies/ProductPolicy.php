@@ -16,6 +16,18 @@ class ProductPolicy
 
     public function view(User $user, Product $product): bool
     {
+        /*
+         * TASK-253 / ADR-040 — a PLATFORM-owned product (company_id null) is
+         * readable by everyone, because every company sells it. Without this
+         * branch the comparison below is `4 === null` for every Company
+         * Admin: the row would be listed by SharedOrTenantScope and then
+         * 403/404 on the way in, which is the most confusing possible
+         * combination.
+         */
+        if ($product->isShared()) {
+            return true;
+        }
+
         return $user->isSuperAdmin() || $user->company_id === $product->company_id;
     }
 
@@ -28,6 +40,21 @@ class ProductPolicy
     {
         if ($user->isSuperAdmin()) {
             return true;
+        }
+
+        /*
+         * TASK-253 / ADR-040 §3 — reading a shared product is not owning it.
+         * The identity of a platform product (name, description, spec, brand,
+         * category, central price) is Super-Admin-only, exactly as ADR-036 §5
+         * decided and the human confirmed again on 2026-09-05 ("Super Admin
+         * เท่านั้น").
+         *
+         * A company's own price and on/off switch are NOT this row — they
+         * live in company_product_settings, gated separately. So this refusal
+         * costs a Company Admin nothing they were promised.
+         */
+        if ($product->isShared()) {
+            return false;
         }
 
         // ADR-036 §5/§6 (human decision, ADR-036 decision table: "Super
