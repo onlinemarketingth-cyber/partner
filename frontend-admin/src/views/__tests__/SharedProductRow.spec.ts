@@ -74,6 +74,12 @@ function sharedProduct(overrides: Record<string, unknown> = {}) {
     brand: BRAND,
     category: CATEGORY,
     commission_rate_type: null,
+    /*
+     * TASK-245 — the Policy's answer, and it is the SERVER that varies it by
+     * viewer, not the screen. The default here is what a Super Admin gets;
+     * the Company Admin tests below pass the answer that role receives.
+     */
+    permissions: { update: true, delete: true, set_commission_rule: true },
     ...overrides,
   }
 }
@@ -92,6 +98,7 @@ function ownProduct(overrides: Record<string, unknown> = {}) {
     brand: BRAND,
     category: CATEGORY,
     commission_rate_type: null,
+    permissions: { update: true, delete: true, set_commission_rule: true },
   }
 }
 
@@ -348,7 +355,9 @@ describe('ProductCatalogView — changing one company\'s settings', () => {
     const auth = useAuthStore()
     auth.user = { id: 2, name: 'แอดมินบริษัท', role: 'company_admin', company: AIA } as never
 
-    const wrapper = await mountView([sharedProduct()], AIA.id)
+    const wrapper = await mountView([sharedProduct({
+      permissions: { update: false, delete: false, set_commission_rule: true },
+    })], AIA.id)
 
     expect(wrapper.findAll('button').some((b) => b.text().trim() === 'ตั้งราคา')).toBe(false)
     expect(wrapper.findAll('button').some((b) => b.text().trim() === 'เปิดขาย')).toBe(false)
@@ -356,13 +365,47 @@ describe('ProductCatalogView — changing one company\'s settings', () => {
     expect(wrapper.text()).toContain('ยังไม่เปิดขายที่ AIA')
   })
 
-  it('hides แก้ไข on a shared product from a Company Admin', async () => {
-    // Editing the central row changes it for every company at once.
+  it('offers ดู instead of แก้ไข when the server says the row is not theirs', async () => {
+    /*
+     * TASK-245 — editing the central row changes it for every company, so the
+     * pencil is gone. The detail page still renders read-only, so the link
+     * stays and is relabelled rather than removed: taking away the only way to
+     * SEE a product would be a different bug.
+     */
     const auth = useAuthStore()
     auth.user = { id: 2, name: 'แอดมินบริษัท', role: 'company_admin', company: AIA } as never
 
-    const wrapper = await mountView([sharedProduct()], AIA.id)
+    const wrapper = await mountView([sharedProduct({
+      permissions: { update: false, delete: false, set_commission_rule: true },
+    })], AIA.id)
 
     expect(wrapper.text()).not.toContain('แก้ไข')
+    expect(wrapper.text()).toContain('ดู')
+  })
+
+  it('hides ลบ on a catalog-linked product even though it is the company\'s own', async () => {
+    /*
+     * GAP 5, and the reason the screen may not answer this itself. This
+     * product's company_id IS this company — is_shared is false — so the old
+     * guard (`!p.is_shared || isSuperAdmin`) showed the trash icon, and
+     * ProductPolicy::update refused the delete anyway (ADR-036 §5/§6).
+     */
+    const auth = useAuthStore()
+    auth.user = { id: 2, name: 'แอดมินบริษัท', role: 'company_admin', company: AIA } as never
+
+    const wrapper = await mountView([{
+      ...ownProduct(),
+      company_id: AIA.id,
+      permissions: { update: false, delete: false, set_commission_rule: false },
+    }], AIA.id)
+
+    expect(wrapper.text()).toContain('Thai Life Only')
+    expect(wrapper.find('[title="ลบ"]').exists()).toBe(false)
+  })
+
+  it('still offers ลบ on a product the server says is theirs', async () => {
+    const wrapper = await mountView([ownProduct()])
+
+    expect(wrapper.find('[title="ลบ"]').exists()).toBe(true)
   })
 })

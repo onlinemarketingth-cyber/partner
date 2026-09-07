@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Enums\ProductMediaPurpose;
 use App\Enums\ProductMediaType;
+use App\Models\CommissionRule;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use App\Support\CompanyScopeFilter;
@@ -198,6 +199,34 @@ class ProductResource extends JsonResource
                 // and undo the memo.
                 return $template ? new PipelineTemplateResource($template->loadMissing('stages')) : null;
             })(),
+            /*
+             * TASK-245 — the three questions the catalogue screen used to
+             * answer for itself, asked of the rules that will actually decide.
+             *
+             * They are three because they genuinely differ, and the screen had
+             * been treating them as one:
+             *
+             *   update/delete   Super-Admin-only for a PLATFORM product (its
+             *                   identity is the platform's) AND for a
+             *                   catalog-linked one (ADR-036 §5/§6), which
+             *                   `is_shared` alone cannot see — a linked product
+             *                   still belongs to its company.
+             *
+             *   set_commission_rule   NOT the same question, and the difference
+             *                   is the point of ADR-040: a Company Admin may
+             *                   absolutely set their own commission on a shared
+             *                   product — commission stays per company. What
+             *                   they may not do is set one on a catalog-LINKED
+             *                   product, which is what StoreCommissionRuleRequest
+             *                   refuses. Deriving this from `update` would take
+             *                   away a right the ADR grants.
+             */
+            'permissions' => [
+                'update' => (bool) $request->user()?->can('update', $this->resource),
+                'delete' => (bool) $request->user()?->can('delete', $this->resource),
+                'set_commission_rule' => (bool) $request->user()?->can('create', CommissionRule::class)
+                    && ((bool) $request->user()?->isSuperAdmin() || $this->catalog_item_id === null),
+            ],
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

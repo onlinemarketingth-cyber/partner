@@ -33,6 +33,18 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 // TASK-208 / ADR-038 — the app-wide company scope. Declared HERE (not beside
 // the rest of the company code far below) because top-level watchers further
 // up this file read it during setup(); see the note at the old location.
+/**
+ * TASK-245 — the Policy's own answer, carried on every row.
+ *
+ * `undefined` means an older payload that predates the field, and it reads as
+ * NO. A permission that defaults to "allowed" when the answer is missing is
+ * how a button comes back the day a resource is refactored.
+ */
+interface RowPermissions {
+  update: boolean
+  delete: boolean
+}
+
 const activeCompany = useActiveCompanyStore()
 const selectedCatalogCompanyId = computed(() => activeCompany.companyId)
 const companyOptions = computed(() => activeCompany.companies)
@@ -54,6 +66,7 @@ interface Brand {
   // (BrandResource), null when no logo has been uploaded.
   logo_path?: string | null
   logo_url?: string | null
+  permissions?: RowPermissions
 }
 interface ProductCategory {
   id: number
@@ -69,6 +82,7 @@ interface ProductCategory {
   sort_order: number
   is_active: boolean
   products_count?: number
+  permissions?: RowPermissions
 }
 interface Product {
   id: number
@@ -105,6 +119,13 @@ interface Product {
   // decides it server-side). Read by the commission_rules tab's
   // per-product form below.
   commission_rate_type: 'percentage' | 'fixed_satang' | null
+  /**
+   * TASK-245 — `set_commission_rule` is deliberately NOT derived from
+   * `update`: ADR-040 keeps commission per company, so a Company Admin may
+   * price their own commission on a shared product they may not otherwise
+   * touch. Only a catalog-LINKED product refuses both.
+   */
+  permissions?: RowPermissions & { set_commission_rule: boolean }
 }
 // TASK-068 / ADR-020 row 2.
 // TASK-073 (2026-08-02, human-confirmed) — link_type/external_url/
@@ -639,10 +660,14 @@ async function saveEditBrand(): Promise<void> {
       return fd
     }
 
-    // The platform row is always in the update set: it is never added and
-    // never removed here, but a rename has to reach it or the group splits
-    // into two names on the next reload.
-    for (const row of rows.filter((r) => r.company_id === null || ticked.includes(r.company_id))) {
+    /*
+     * The platform row is in the update set — a rename has to reach it or the
+     * group splits into two names on the next reload — but ONLY for someone
+     * allowed to write it (TASK-245). For a Company Admin it is skipped, they
+     * rename their own half, and the note in the form says the central one did
+     * not move. Sending it anyway is the 403 this whole payload exists to stop.
+     */
+    for (const row of rows.filter((r) => canUpdate(r) && (r.company_id === null || ticked.includes(r.company_id)))) {
       try {
         await api.postForm(`/brands/${row.id}`, editFormData(null))
       } catch (e) {
@@ -658,7 +683,7 @@ async function saveEditBrand(): Promise<void> {
       }
     }
 
-    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id))) {
+    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id) && canDelete(r))) {
       try {
         await api.delete(`/brands/${row.id}`)
       } catch (e) {
@@ -686,12 +711,36 @@ const pendingDeleteBrand = ref<RefNameGroup<Brand> | null>(null)
 function deleteBrand(group: RefNameGroup<Brand>): void {
   pendingDeleteBrand.value = group
 }
+
+/**
+ * TASK-245 — the dialog counts the rows that will ACTUALLY be deleted.
+ *
+ * It used to say "จาก 2 บริษัท" and name the platform among them, then delete
+ * one and 403 on the other. A confirmation that overstates what it is about to
+ * do is worse than no confirmation: it is the sentence the person read before
+ * agreeing.
+ */
+function refDeleteBody(group: RefNameGroup<{ company_id: number | null, permissions?: RowPermissions }> | null, noun: string, tail: string): string {
+  if (!group) return ''
+
+  const targets = group.rows.filter(canDelete)
+  const kept = group.rows.length - targets.length
+  const owners = targets.map((r) => ownerLabel(r.company_id)).join(', ')
+  const note = kept > 0 ? ` · ${PLATFORM_OWNER_LABEL}จะยังอยู่ (ลบได้เฉพาะ Super Admin)` : ''
+
+  return `ซ่อน${noun} "${group.name}" จาก ${targets.length} บริษัท (${owners})?${note} ${tail}`
+}
+
+const deleteBrandBody = computed(() => refDeleteBody(pendingDeleteBrand.value, 'แบรนด์', 'สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ'))
 async function confirmDeleteBrand(): Promise<void> {
   const group = pendingDeleteBrand.value
   if (!group) return
   const failures: string[] = []
 
-  for (const row of group.rows) {
+  // TASK-245 — only the rows this viewer may delete. A Company Admin removing
+  // a name that also exists centrally removes THEIR row; the platform's stays,
+  // and the message below says so rather than letting a 403 say it.
+  for (const row of group.rows.filter(canDelete)) {
     try {
       await api.delete(`/brands/${row.id}`)
     } catch (e) {
@@ -766,7 +815,9 @@ async function saveEditCategory(): Promise<void> {
   }
 
   try {
-    for (const row of rows.filter((r) => r.company_id === null || ticked.includes(r.company_id))) {
+    // TASK-245 — see saveEditBrand(): the platform row is renamed with the
+    // rest only by somebody allowed to rename it.
+    for (const row of rows.filter((r) => canUpdate(r) && (r.company_id === null || ticked.includes(r.company_id)))) {
       try {
         await api.put(`/product-categories/${row.id}`, payload)
       } catch (e) {
@@ -788,7 +839,7 @@ async function saveEditCategory(): Promise<void> {
       }
     }
 
-    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id))) {
+    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id) && canDelete(r))) {
       try {
         await api.delete(`/product-categories/${row.id}`)
       } catch (e) {
@@ -825,6 +876,7 @@ async function saveEditCategory(): Promise<void> {
  * category still in use would be refused by the database.
  */
 const pendingDeleteCategory = ref<RefNameGroup<ProductCategory> | null>(null)
+const deleteCategoryBody = computed(() => refDeleteBody(pendingDeleteCategory.value, 'หมวดหมู่', 'สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ'))
 function deleteCategory(group: RefNameGroup<ProductCategory>): void {
   pendingDeleteCategory.value = group
 }
@@ -833,7 +885,8 @@ async function confirmDeleteCategory(): Promise<void> {
   if (!group) return
   const failures: string[] = []
 
-  for (const row of group.rows) {
+  // TASK-245 — same as confirmDeleteBrand(): their rows, not the platform's.
+  for (const row of group.rows.filter(canDelete)) {
     try {
       await api.delete(`/product-categories/${row.id}`)
     } catch (e) {
@@ -1436,6 +1489,30 @@ function ownerLabel(companyId: number | null): string {
   return companyName(companyId) ?? `#${companyId}`
 }
 
+/*
+ * TASK-245 — ask, never re-derive.
+ *
+ * Every one of these used to be a guess on this screen, and each guess was
+ * wrong in a way nobody could see by looking:
+ *
+ *   • the brand/category cards group rows BY NAME, so one card holds this
+ *     company's row AND the platform's — and "แก้ไข" reached both. A Company
+ *     Admin renaming their own brand got a 403 from the platform half.
+ *   • the product row asked `is_shared`, which cannot see a catalog-LINKED
+ *     product: company_id is still theirs, and every write is still refused
+ *     (ADR-036 §5/§6).
+ *
+ * Missing permissions read as NO. Failing closed costs a button; failing open
+ * costs a 403 in front of somebody who was told they could.
+ */
+function canUpdate(row: { permissions?: RowPermissions }): boolean {
+  return row.permissions?.update === true
+}
+
+function canDelete(row: { permissions?: RowPermissions }): boolean {
+  return row.permissions?.delete === true
+}
+
 /**
  * TASK-209 (browser QA, 2026-08-19: "ระบบ Filter brand ในโหมดทุกบริษัท ควรมี
  * ชื่อบริษัทนำหน้าใน Select box ผู้ใช้สับสน").
@@ -1528,6 +1605,14 @@ interface RefNameGroup<T> {
    * tick-box picker below never adds or removes it.
    */
   hasPlatformRow: boolean
+  /**
+   * TASK-245 — whether the card's buttons do anything at all. A card is
+   * editable when at least ONE of its rows is: a Company Admin whose card also
+   * holds the platform's row still renames their own half, and the save skips
+   * the half that is not theirs.
+   */
+  canEditAny: boolean
+  canDeleteAny: boolean
   totalProducts: number
 }
 
@@ -1542,7 +1627,7 @@ function matchesRefSearch(name: string): boolean {
  * about ownership, so a shared row simply joins the group its name belongs to
  * — which is what the screen already says ("ใช้งาน 2/3 บริษัท").
  */
-function groupByName<T extends { company_id: number | null, name: string, is_active: boolean, products_count?: number }>(items: T[]): RefNameGroup<T>[] {
+function groupByName<T extends { company_id: number | null, name: string, is_active: boolean, products_count?: number, permissions?: RowPermissions }>(items: T[]): RefNameGroup<T>[] {
   const scope = selectedCatalogCompanyId.value
   const buckets = new Map<string, T[]>()
   for (const item of items) {
@@ -1575,6 +1660,8 @@ function groupByName<T extends { company_id: number | null, name: string, is_act
       }),
       companyIds: rows.map((r) => r.company_id),
       hasPlatformRow: rows.some((r) => r.company_id === null),
+      canEditAny: rows.some(canUpdate),
+      canDeleteAny: rows.some(canDelete),
       totalProducts: rows.reduce((n, r) => n + (r.products_count ?? 0), 0),
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'th'))
@@ -1846,6 +1933,12 @@ function toggleRefForm(): void {
           <template v-if="editingBrandKey === g.key">
             <div class="space-y-3">
               <p class="text-[11px] font-bold text-brand-700">กำลังแก้ไข · {{ g.name }}</p>
+              <!-- TASK-245 — said before the save, not discovered after it: a
+                   Company Admin editing a name that also exists centrally
+                   changes only their own row. -->
+              <p v-if="g.hasPlatformRow && !isSuperAdmin" class="text-[11px] text-amber-600">
+                ชื่อนี้มี{{ PLATFORM_OWNER_LABEL }}อยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะแบรนด์ของบริษัทคุณ ส่วนของกลางแก้ไขได้เฉพาะ Super Admin
+              </p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
                 <input v-model="editBrandForm.name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -1919,12 +2012,17 @@ function toggleRefForm(): void {
               <!-- products_count summed across every company holding this name. -->
               <span class="text-[11px] text-slate-400 whitespace-nowrap">ใช้กับสินค้า {{ g.totalProducts }}</span>
               <span :class="refStatusClass(g.rows)" class="text-xs font-bold whitespace-nowrap">{{ refStatusLabel(g.rows) }}</span>
-              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditBrand(g)">
+              <!-- TASK-245 — hidden when nothing in this card is the viewer's
+                   to change. A card holding ONLY the platform's brand offers a
+                   Company Admin no buttons; one holding both still offers them,
+                   and the save touches only their own row. -->
+              <button v-if="g.canEditAny" class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditBrand(g)">
                 <Icon name="pencil" :size="14" />
               </button>
-              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteBrand(g)">
+              <button v-if="g.canDeleteAny" class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteBrand(g)">
                 <Icon name="trash" :size="14" />
               </button>
+              <span v-if="!g.canEditAny && !g.canDeleteAny" class="text-[11px] text-slate-400 whitespace-nowrap" title="แบรนด์กลางแก้ไขได้เฉพาะ Super Admin">อ่านอย่างเดียว</span>
             </div>
           </div>
         </div>
@@ -1975,6 +2073,10 @@ function toggleRefForm(): void {
           <template v-if="editingCategoryKey === g.key">
             <div class="space-y-3">
               <p class="text-[11px] font-bold text-brand-700">กำลังแก้ไข · {{ g.name }}</p>
+              <!-- TASK-245 — see the brand form above. -->
+              <p v-if="g.hasPlatformRow && !isSuperAdmin" class="text-[11px] text-amber-600">
+                ชื่อนี้มี{{ PLATFORM_OWNER_LABEL }}อยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะหมวดหมู่ของบริษัทคุณ ส่วนของกลางแก้ไขได้เฉพาะ Super Admin
+              </p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อหมวดหมู่</label>
                 <input v-model="editCategoryForm.name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
@@ -2031,12 +2133,14 @@ function toggleRefForm(): void {
             <div class="flex items-center gap-3 shrink-0">
               <span class="text-[11px] text-slate-400 whitespace-nowrap">ใช้กับสินค้า {{ g.totalProducts }}</span>
               <span :class="refStatusClass(g.rows)" class="text-xs font-bold whitespace-nowrap">{{ refStatusLabel(g.rows) }}</span>
-              <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditCategory(g)">
+              <!-- TASK-245 — see the brand card above. -->
+              <button v-if="g.canEditAny" class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditCategory(g)">
                 <Icon name="pencil" :size="14" />
               </button>
-              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteCategory(g)">
+              <button v-if="g.canDeleteAny" class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteCategory(g)">
                 <Icon name="trash" :size="14" />
               </button>
+              <span v-if="!g.canEditAny && !g.canDeleteAny" class="text-[11px] text-slate-400 whitespace-nowrap" title="หมวดหมู่กลางแก้ไขได้เฉพาะ Super Admin">อ่านอย่างเดียว</span>
             </div>
           </div>
         </div>
@@ -2180,21 +2284,23 @@ function toggleRefForm(): void {
               </button>
             </template>
 
-            <!-- Editing or deleting a SHARED product changes it for every
-                 company, so only the Super Admin who owns the central row may
-                 do it. A Company Admin's controls here are the two above. -->
-            <template v-if="!p.is_shared || isSuperAdmin">
-              <RouterLink
-                :to="{ name: 'product-edit', params: { id: p.id } }"
-                class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 flex items-center gap-1"
-                :title="p.is_shared ? 'แก้ไขสินค้ากลาง — มีผลกับทุกบริษัท' : 'แก้ไข'"
-              >
-                <Icon name="pencil" :size="12" /> แก้ไข
-              </RouterLink>
-              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteProduct(p)">
-                <Icon name="trash" :size="14" />
-              </button>
-            </template>
+            <!-- TASK-245 — the server's answer, not `is_shared`.
+                 `is_shared` misses a catalog-LINKED product: it still belongs
+                 to this company, and every write to it is still refused
+                 (ADR-036 §5/§6), so the delete button used to be offered and
+                 then 403'd. The detail page stays reachable either way — it
+                 renders read-only — so the link is relabelled rather than
+                 removed. -->
+            <RouterLink
+              :to="{ name: 'product-edit', params: { id: p.id } }"
+              class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 flex items-center gap-1"
+              :title="canUpdate(p) ? (p.is_shared ? 'แก้ไขสินค้ากลาง — มีผลกับทุกบริษัท' : 'แก้ไข') : 'ดูรายละเอียด (แก้ไขได้เฉพาะ Super Admin)'"
+            >
+              <Icon :name="canUpdate(p) ? 'pencil' : 'search'" :size="12" /> {{ canUpdate(p) ? 'แก้ไข' : 'ดู' }}
+            </RouterLink>
+            <button v-if="canDelete(p)" class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteProduct(p)">
+              <Icon name="trash" :size="14" />
+            </button>
           </div>
         </div>
       </TransitionGroup>
@@ -2453,7 +2559,7 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteBrand !== null"
       variant="danger"
-      :body='pendingDeleteBrand ? `ซ่อนแบรนด์ "${pendingDeleteBrand.name}" จาก ${pendingDeleteBrand.rows.length} บริษัท (${pendingDeleteBrand.rows.map((r) => ownerLabel(r.company_id)).join(", ")})? สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ` : ""'
+      :body="deleteBrandBody"
       @confirm="confirmDeleteBrand"
       @update:show="(v) => { if (!v) pendingDeleteBrand = null }"
     />
@@ -2462,7 +2568,7 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteCategory !== null"
       variant="danger"
-      :body='pendingDeleteCategory ? `ซ่อนหมวดหมู่ "${pendingDeleteCategory.name}" จาก ${pendingDeleteCategory.rows.length} บริษัท (${pendingDeleteCategory.rows.map((r) => ownerLabel(r.company_id)).join(", ")})? สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ` : ""'
+      :body="deleteCategoryBody"
       @confirm="confirmDeleteCategory"
       @update:show="(v) => { if (!v) pendingDeleteCategory = null }"
     />

@@ -99,8 +99,32 @@ function companyQuery(): string {
 function withCompanyBody<T extends Record<string, unknown>>(body: T): T & { company_id?: number } {
   return isSuperAdmin.value && selectedCompanyId.value ? { ...body, company_id: selectedCompanyId.value } : body
 }
-function byCompany<T extends { company_id: number }>(items: T[]): T[] {
-  return isSuperAdmin.value && selectedCompanyId.value ? items.filter((i) => i.company_id === selectedCompanyId.value) : items
+/*
+ * TASK-245 / ADR-040 — a PLATFORM row (company_id null) belongs to the scoped
+ * company as much as to any other, so narrowing must keep it. Dropping it here
+ * would hide every shared product from the screen that sets its commission —
+ * and commission on a shared product is precisely what stays per company.
+ */
+function byCompany<T extends { company_id: number | null }>(items: T[]): T[] {
+  return isSuperAdmin.value && selectedCompanyId.value
+    ? items.filter((i) => i.company_id === null || i.company_id === selectedCompanyId.value)
+    : items
+}
+
+/**
+ * TASK-245 — may THIS viewer set a commission rule on this product?
+ *
+ * Missing reads as NO, for the same reason as everywhere else: a permission
+ * that defaults to "allowed" when the answer is absent is how a 403 gets put
+ * in front of somebody who was told they could.
+ */
+function canSetCommission(product: ProductOption): boolean {
+  return product.permissions?.set_commission_rule === true
+}
+
+/** Whether the product's own plan-type override may be changed (PUT /products). */
+function canEditPlanType(product: ProductOption): boolean {
+  return product.permissions?.update === true
 }
 
 type Tab = 'rules' | 'binary' | 'matrix' | 'ranks' | 'generation' | 'affiliate'
@@ -174,7 +198,21 @@ const errorMessage = ref('')
 interface CertTierOption { id: number; key: string; name: string }
 interface ProductOption {
   id: number
-  company_id: number
+  /**
+   * TASK-245 / ADR-040 — null for a PLATFORM-owned product: one row every
+   * company sells. It is not "missing", and byCompany() must not drop it.
+   */
+  company_id: number | null
+  /**
+   * TASK-245 — the Policy's own answer, per row.
+   *
+   * `set_commission_rule` is deliberately its own question and NOT derived
+   * from `update`: ADR-040 keeps commission per company, so a Company Admin
+   * may set their own rate on a shared product whose identity is not theirs
+   * to edit. Only a catalog-LINKED product refuses both (ADR-036 §5/§6), and
+   * that one is invisible from here — its company_id is still this company.
+   */
+  permissions?: { update: boolean, delete: boolean, set_commission_rule: boolean }
   name: string
   category?: { id: number; name: string } | null
   price_satang?: number
@@ -1030,7 +1068,15 @@ async function wizardConfirmProductAndPlan() {
   wizardPlanTypeError.value = ''
   try {
     const desired = wizardPlanChoice.value === 'inherit' ? null : wizardPlanChoice.value
-    if (desired !== (wizardProduct.value.commission_plan_type ?? null)) {
+    /*
+     * TASK-245 — `canEditPlanType` as well as "did it change".
+     *
+     * The read-only field above already keeps `desired` equal to the current
+     * value, so this is belt and braces — and it is worth having: the day
+     * somebody adds a code path that sets wizardPlanChoice, the guard that
+     * stops the 403 should be the rule, not a coincidence of the markup.
+     */
+    if (canEditPlanType(wizardProduct.value) && desired !== (wizardProduct.value.commission_plan_type ?? null)) {
       await api.put(`/products/${wizardProduct.value.id}`, withCompanyBody({ commission_plan_type: desired }))
       await loadRulesTabData() // refresh products' effective_plan_type
     }
@@ -1689,7 +1735,7 @@ onMounted(async () => {
                   <button class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50" @click="openSimulate(p)">
                     ทดสอบคำนวณ
                   </button>
-                  <button class="px-3 py-1.5 rounded-lg text-brand-700 border border-brand-200 bg-brand-50 text-xs font-bold hover:bg-brand-100 flex items-center gap-1" @click="openWizard(p.id)">
+                  <button v-if="canSetCommission(p)" class="px-3 py-1.5 rounded-lg text-brand-700 border border-brand-200 bg-brand-50 text-xs font-bold hover:bg-brand-100 flex items-center gap-1" @click="openWizard(p.id)">
                     <Icon name="sparkles" :size="12" />
                     Wizard
                   </button>
@@ -1699,9 +1745,18 @@ onMounted(async () => {
                        wording flips to "แก้ไข" once a rule already resolves
                        for this product (openRuleFormForProduct still pins
                        scope='product' + this product's id). -->
-                  <button class="btn-primary" @click="openRuleFormForProduct(p)">
+                  <!-- TASK-245 — hidden when the server will refuse it. A
+                       catalog-LINKED product still belongs to this company, so
+                       nothing visible on this card said the rule form would
+                       403 (StoreCommissionRuleRequest, ADR-036 §5/§6). A
+                       SHARED product is not affected: commission stays per
+                       company, which is the whole point of ADR-040. -->
+                  <button v-if="canSetCommission(p)" class="btn-primary" @click="openRuleFormForProduct(p)">
                     {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
                   </button>
+                  <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="สินค้าที่ผูกกับแคตตาล็อกกลาง ตั้งค่าคอมมิชชั่นได้เฉพาะ Super Admin">
+                    ตั้งค่าโดย Super Admin
+                  </span>
                 </div>
               </div>
 
@@ -2530,7 +2585,11 @@ onMounted(async () => {
             <label class="text-sm font-bold text-slate-500">สินค้า</label>
             <select v-model="wizardProductId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
               <option value="" disabled>เลือกสินค้า</option>
-              <option v-for="p in byCompany(products)" :key="p.id" :value="p.id">{{ p.name }}</option>
+              <!-- TASK-245 — the wizard's first step writes the product's
+                   plan type and its last writes a commission rule, so a
+                   product it may not do EITHER to has no business in the
+                   list. -->
+              <option v-for="p in byCompany(products).filter(canSetCommission)" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
           <!-- TASK-198 — this product's commission_rate_type is already
@@ -2544,10 +2603,26 @@ onMounted(async () => {
           </div>
           <div v-else-if="wizardProduct">
             <label class="text-sm font-bold text-slate-500">รูปแบบแผนคอมมิชชั่น</label>
-            <select v-model="wizardPlanChoice" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+            <!-- TASK-245 — the plan type lives on the PRODUCT row, so changing
+                 it is PUT /products/{id}, which is refused for a shared or
+                 catalog-linked product. The rest of the wizard (the rate, and
+                 the structure it sits in) is this company's own and carries on
+                 — so the field is shown read-only rather than the wizard being
+                 taken away. -->
+            <select
+              v-if="canEditPlanType(wizardProduct)"
+              v-model="wizardPlanChoice"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+            >
               <option value="inherit">สืบทอดจากบริษัท{{ wizardProduct.effective_plan_type ? ' (' + planTypeLabels[wizardProduct.effective_plan_type] + ')' : '' }}</option>
               <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }} (กำหนดเฉพาะสินค้านี้)</option>
             </select>
+            <template v-else>
+              <p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-700">
+                {{ wizardProduct.effective_plan_type ? planTypeLabels[wizardProduct.effective_plan_type] : 'สืบทอดจากบริษัท' }}
+              </p>
+              <p class="mt-1 text-[11px] text-slate-400">รูปแบบแผนของสินค้ากลางตั้งโดย Super Admin — อัตราคอมมิชชั่นในขั้นถัดไปยังเป็นของบริษัทคุณตามเดิม</p>
+            </template>
           </div>
           <div v-if="wizardPlanTypeError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ wizardPlanTypeError }}</div>
           <div v-if="!wizardProductBlockedFixedSatang" class="flex justify-end">

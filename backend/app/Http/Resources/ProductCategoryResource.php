@@ -24,6 +24,13 @@ class ProductCategoryResource extends JsonResource
             'pipeline_template_id' => $this->pipeline_template_id,
             // TASK-202 — see BrandResource; only present when counted.
             'products_count' => $this->whenCounted('products'),
+            // TASK-245 — see BrandResource::permissions for why this is asked
+            // rather than re-derived. Same situation exactly: a category name
+            // card can hold this company's row and the platform's.
+            'permissions' => [
+                'update' => (bool) $request->user()?->can('update', $this->resource),
+                'delete' => (bool) $request->user()?->can('delete', $this->resource),
+            ],
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];
