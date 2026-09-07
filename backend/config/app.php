@@ -43,6 +43,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Server-Timing
+    |--------------------------------------------------------------------------
+    |
+    | 2026-09-07 — when true, every response carries a Server-Timing header
+    | with the request's total time, the time spent inside database queries and
+    | how many there were (App\Http\Middleware\ServerTiming).
+    |
+    | Off by default and meant to be switched on only while investigating: a
+    | duration is a side channel on the endpoints that work hardest to make two
+    | outcomes indistinguishable (login, registration), and counting queries
+    | costs a listener on every one of them.
+    |
+    */
+
+    'server_timing' => (bool) env('SERVER_TIMING', false),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application URL
     |--------------------------------------------------------------------------
     |

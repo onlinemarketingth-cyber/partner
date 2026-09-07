@@ -3,6 +3,7 @@
 use App\Http\Middleware\EnsureCompanyIsOperational;
 use App\Http\Middleware\ResolveChunkedUpload;
 use App\Http\Middleware\SecurityHeaders;
+use App\Http\Middleware\ServerTiming;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -81,6 +82,19 @@ return Application::configure(basePath: dirname(__DIR__))
          * "all of them", and a list is a list somebody forgets to add to.
          */
         $middleware->append(SecurityHeaders::class);
+
+        /*
+         * 2026-09-07 — Server-Timing, so "why is this slow" is measured on the
+         * machine it is slow on rather than argued about from source.
+         *
+         * PREPENDED, not appended: it has to wrap every other middleware to
+         * report the request's real duration — the cost of the throttle, the
+         * tenant check and Sanctum is part of what a person waited for.
+         *
+         * The middleware itself is a no-op unless SERVER_TIMING=true; see its
+         * docblock for why it is not left on.
+         */
+        $middleware->prepend(ServerTiming::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Second half of the same fix — CLAUDE.md Section 3: "strictly a
