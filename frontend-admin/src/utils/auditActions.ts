@@ -46,6 +46,10 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       { value: 'user.deactivated', label: 'ปิดบัญชี' },
       { value: 'user.restored', label: 'กู้คืนบัญชี' },
       { value: 'user.password_changed', label: 'เจ้าของเปลี่ยนรหัสผ่านเอง' },
+      // TASK-247 — the only place the OLD address survives, which is what
+      // makes it worth finding: an email change is the first half of an
+      // account takeover.
+      { value: 'user.email_changed', label: 'เจ้าของเปลี่ยนอีเมลเข้าระบบเอง' },
       { value: 'user.password_reset_by_admin', label: 'แอดมินรีเซ็ตรหัสผ่านให้' },
       { value: 'user.api_tokens_revoked', label: 'ถอนสิทธิ์เข้าใช้งานที่ค้างอยู่ (token)' },
       { value: 'user.super_admin_created', label: 'สร้าง Super Admin (จากบรรทัดคำสั่ง)' },

@@ -364,6 +364,10 @@ Route::prefix('v1')->group(function () {
         Route::delete('/me/background', [UserProfileController::class, 'destroyBackground']);
         Route::put('/me/name', [UserProfileController::class, 'updateName']);
         Route::put('/me/password', [UserProfileController::class, 'updatePassword']);
+        // TASK-247 — the owner's own login address. Guarded by the current
+        // password (UpdateEmailRequest), because the email IS the identifier
+        // this account signs in with.
+        Route::put('/me/email', [UserProfileController::class, 'updateEmail']);
         // 2026-08-22 — the agent's own notification-email off switch.
         Route::put('/me/notification-preferences', [UserProfileController::class, 'updateNotificationPreferences']);
 

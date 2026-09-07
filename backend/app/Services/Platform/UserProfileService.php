@@ -186,6 +186,73 @@ class UserProfileService
      * the full argument (audit_logs is read by a wider audience than the users
      * row, so putting a crackable hash there would undo the point of hashing).
      */
+    /**
+     * TASK-247 — the owner changes the address they sign in with.
+     *
+     * ── AUDITED, ALWAYS, AND WITH BOTH VALUES ──
+     *
+     * An email change is the first half of an account takeover: point the
+     * account at an address you control, then use whatever recovery exists.
+     * `user.email_changed` with old and new is the row that answers "when did
+     * this account stop belonging to the person whose name is on it", and it
+     * is the only place the OLD address survives — the users row has already
+     * forgotten it by the time anybody asks. The ip_address column is what
+     * makes it worth writing at all.
+     *
+     * Deliberately a different action name from anything an Admin does to
+     * somebody else's account, for the same reason
+     * `user.password_changed` differs from `user.password_reset_by_admin`:
+     * actor == target on both, so the name is the only thing that
+     * distinguishes them.
+     *
+     * ── WHY THIS DOES NOT REVOKE OTHER SESSIONS, UNLIKE A PASSWORD CHANGE ──
+     *
+     * updatePassword() ends every other session because the credential it
+     * replaced may be in someone else's hands — that is what a password change
+     * usually means. Nothing equivalent is true here: no credential has been
+     * invalidated, every existing session is exactly as trustworthy as it was
+     * a second ago, and signing the owner out of their other devices for
+     * correcting a typo would be a surprise with no security to show for it.
+     *
+     * The takeover case is covered where it actually happens: an attacker
+     * needs the current password to reach this method at all
+     * (UpdateEmailRequest), and if they then change the password, THAT is what
+     * revokes the owner's sessions — which is the correct place for it.
+     *
+     * An unchanged address writes nothing. Re-submitting the value you already
+     * have is not an event, and a trail that records non-changes is one more
+     * thing to read past.
+     */
+    public function updateEmail(User $user, string $newEmail): User
+    {
+        $oldEmail = (string) $user->email;
+
+        if ($oldEmail === $newEmail) {
+            return $user;
+        }
+
+        // Transaction for the same reason updatePassword() has one: if the
+        // audit write throws after the address already committed, the owner
+        // sees a 500 while the account silently answers to a different email
+        // with no trail — the worst of the three possible outcomes.
+        return DB::transaction(function () use ($user, $oldEmail, $newEmail) {
+            $user->update(['email' => $newEmail]);
+
+            AuditLog::create([
+                'company_id' => $user->company_id,
+                'actor_user_id' => $user->id,
+                'action' => 'user.email_changed',
+                'auditable_type' => User::class,
+                'auditable_id' => $user->id,
+                'old_values' => ['email' => $oldEmail],
+                'new_values' => ['email' => $newEmail],
+                'ip_address' => request()?->ip(),
+            ]);
+
+            return $user->fresh();
+        });
+    }
+
     public function updatePassword(User $user, string $newPassword): User
     {
         // Transaction for the same reason updateBankAccount() below has one:

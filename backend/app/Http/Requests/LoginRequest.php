@@ -3,6 +3,7 @@
 namespace App\Http\Requests;
 
 use App\Exceptions\LoginBlockedException;
+use App\Exceptions\LoginFailedException;
 use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\Auth\LoginGateService;
@@ -11,7 +12,6 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
 
 // Standard Laravel session-auth login request (same pattern Laravel's
 // own Breeze starter kit uses) — rate-limit + lockout per CLAUDE.md
@@ -25,6 +25,13 @@ use Illuminate\Validation\ValidationException;
 // future edit cannot move one without seeing the other.
 class LoginRequest extends FormRequest
 {
+    /**
+     * Failures allowed before the throttle closes. Named because TASK-247
+     * made it appear in two more places — the remaining-attempts count and
+     * the lockout check — and three literal 5s is three chances to disagree.
+     */
+    private const MAX_ATTEMPTS = 5;
+
     public function authorize(): bool
     {
         return true;
@@ -50,8 +57,8 @@ class LoginRequest extends FormRequest
     /**
      * Attempt to authenticate the request's credentials.
      *
-     * @throws \Illuminate\Validation\ValidationException      wrong password / unknown email / locked out
-     * @throws \App\Exceptions\LoginBlockedException           correct password, but unverified/pending/rejected
+     * @throws LoginFailedException wrong password / unknown email / locked out
+     * @throws LoginBlockedException correct password, but unverified/pending/rejected
      */
     public function authenticate(): void
     {
@@ -88,9 +95,13 @@ class LoginRequest extends FormRequest
             // same throttle hit, which is what makes the gate below
             // non-enumerable — see LoginGateService's analysis. Do not split
             // it into two messages "to be more helpful".
-            throw ValidationException::withMessages([
-                'email' => __('auth.failed'),
-            ]);
+            //
+            // TASK-247 — same status, same message, same field; the response
+            // now also carries how many attempts are left. That count is a
+            // property of the throttle key (email+IP), incremented identically
+            // whether or not the address exists, so it says nothing the caller
+            // could not count for themselves.
+            throw $this->failedCredentials();
         }
 
         // Cleared BEFORE the gate, not after: the throttle key exists to stop
@@ -104,7 +115,7 @@ class LoginRequest extends FormRequest
         // owns the account) and before AuthController regenerates the
         // session. Throws LoginBlockedException -> 403 with a distinguishable
         // error_code.
-        /** @var \App\Models\User $user */
+        /** @var User $user */
         $user = Auth::guard('web')->user();
 
         try {
@@ -142,8 +153,8 @@ class LoginRequest extends FormRequest
      * `remember` is meaningless here and ignored on purpose: token
      * lifetime is the token's own expiry, not a remember-me cookie.
      *
-     * @throws \Illuminate\Validation\ValidationException
-     * @throws \App\Exceptions\LoginBlockedException
+     * @throws LoginFailedException
+     * @throws LoginBlockedException
      */
     protected function authenticateStateless(): void
     {
@@ -156,14 +167,12 @@ class LoginRequest extends FormRequest
             // Same single branch, same reason as the session path above:
             // "no such user" and "wrong password" must stay
             // indistinguishable. Do not split this into two messages.
-            throw ValidationException::withMessages([
-                'email' => __('auth.failed'),
-            ]);
+            throw $this->failedCredentials();
         }
 
         RateLimiter::clear($this->throttleKey());
 
-        /** @var \App\Models\User $user */
+        /** @var User $user */
         $user = $guard->getLastAttempted();
 
         // Throws LoginBlockedException -> 403 before the user is ever set
@@ -185,11 +194,11 @@ class LoginRequest extends FormRequest
     /**
      * Ensure the login request is not rate limited.
      *
-     * @throws \Illuminate\Validation\ValidationException
+     * @throws LoginFailedException
      */
     public function ensureIsNotRateLimited(): void
     {
-        if (! RateLimiter::tooManyAttempts($this->throttleKey(), 5)) {
+        if (! RateLimiter::tooManyAttempts($this->throttleKey(), self::MAX_ATTEMPTS)) {
             return;
         }
 
@@ -197,12 +206,39 @@ class LoginRequest extends FormRequest
 
         $seconds = RateLimiter::availableIn($this->throttleKey());
 
-        throw ValidationException::withMessages([
-            'email' => __('auth.throttle', [
+        /*
+         * TASK-247 — the wait, as a NUMBER.
+         *
+         * The interpolated sentence is still the message, unchanged, so
+         * nothing that reads it breaks. But the login screen owns its own
+         * Thai/English copy (the API runs under APP_LOCALE=en and the screen
+         * has a language switch), so a sentence composed here arrives in the
+         * wrong language half the time — and the one fact that makes a lockout
+         * survivable is how long it lasts. Without it the usual next step is
+         * asking an admin to reset a password that was never wrong.
+         */
+        throw LoginFailedException::throttled(
+            __('auth.throttle', [
                 'seconds' => $seconds,
                 'minutes' => ceil($seconds / 60),
             ]),
-        ]);
+            $seconds,
+        );
+    }
+
+    /**
+     * The one refusal both authentication paths share.
+     *
+     * Written once so the two can never drift: the moment the session path
+     * and the token path answer a wrong password differently, the difference
+     * is a way to tell them apart.
+     */
+    private function failedCredentials(): LoginFailedException
+    {
+        return LoginFailedException::credentials(
+            __('auth.failed'),
+            RateLimiter::remaining($this->throttleKey(), self::MAX_ATTEMPTS),
+        );
     }
 
     /*

@@ -7,6 +7,7 @@ use App\Http\Requests\Profile\UpdateAvatarRequest;
 use App\Http\Requests\Profile\UpdateBackgroundGradientRequest;
 use App\Http\Requests\Profile\UpdateBackgroundImageRequest;
 use App\Http\Requests\Profile\UpdateBankAccountRequest;
+use App\Http\Requests\Profile\UpdateEmailRequest;
 use App\Http\Requests\Profile\UpdateIdDocumentRequest;
 use App\Http\Requests\Profile\UpdateNameRequest;
 use App\Http\Requests\Profile\UpdateNotificationPreferencesRequest;
@@ -66,6 +67,20 @@ class UserProfileController extends Controller
     public function updateName(UpdateNameRequest $request, UserProfileService $service): UserResource
     {
         $user = $service->updateName($request->user(), $request->validated());
+
+        return UserResource::forOwner($user->load('company'));
+    }
+
+    /**
+     * TASK-247 — the owner's own login address. Returns the full owner
+     * resource, like every other method here, so the SPA refreshes its auth
+     * user from the response rather than trusting a local optimistic value —
+     * which matters more here than anywhere else on this controller: the value
+     * it just changed is the one it will sign in with next time.
+     */
+    public function updateEmail(UpdateEmailRequest $request, UserProfileService $service): UserResource
+    {
+        $user = $service->updateEmail($request->user(), $request->validated('email'));
 
         return UserResource::forOwner($user->load('company'));
     }

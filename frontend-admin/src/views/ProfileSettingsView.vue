@@ -175,6 +175,54 @@ async function saveName(): Promise<void> {
   }
 }
 
+/*
+ * --- Email (TASK-247) ---
+ *
+ * The last field on this screen that was not self-service: correcting a typo
+ * in your own login address meant asking an admin to do it, on a screen that
+ * until TASK-246 could not do it either.
+ *
+ * The current password is required by the API and stated here, because the
+ * reason is not obvious from a form: the email IS the identifier this account
+ * signs in with, so changing it is the first half of an account takeover, and
+ * a borrowed session must not be enough on its own.
+ */
+const email = ref(auth.user?.email ?? '')
+const emailPassword = ref('')
+const emailBusy = ref(false)
+const emailError = ref('')
+const emailSaved = ref(false)
+
+async function saveEmail(): Promise<void> {
+  emailBusy.value = true
+  emailError.value = ''
+  emailSaved.value = false
+  try {
+    const res = await api.put<{ data: AuthUser }>('/me/email', {
+      current_password: emailPassword.value,
+      email: email.value,
+    })
+    // From the response, not optimistically: the value just changed is the one
+    // this session will sign in with next time, so a local guess that drifted
+    // would be the worst possible field to be wrong about.
+    auth.setUser(res.data)
+    emailSaved.value = true
+    emailPassword.value = ''
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 422) {
+      const errors = (e.body as { errors?: Record<string, string[]> } | undefined)?.errors
+      // The server's own messages — "รหัสผ่านปัจจุบันไม่ถูกต้อง" and
+      // "อีเมลนี้ถูกใช้กับบัญชีอื่นแล้ว" are different problems with
+      // different fixes, and a single "บันทึกไม่สำเร็จ" hides which.
+      emailError.value = errors ? Object.values(errors).flat().join(' ') : 'บันทึกไม่สำเร็จ'
+    } else {
+      emailError.value = 'บันทึกไม่สำเร็จ'
+    }
+  } finally {
+    emailBusy.value = false
+  }
+}
+
 // --- Password ---
 const currentPassword = ref('')
 const newPassword = ref('')
@@ -371,6 +419,50 @@ async function savePassword(): Promise<void> {
           </button>
           <p v-if="nameSaved" class="text-xs font-bold text-emerald-600">บันทึกสำเร็จ</p>
           <p v-if="nameError" class="text-xs font-bold text-rose-600">{{ nameError }}</p>
+        </div>
+      </div>
+
+      <!-- Email (TASK-247) -->
+      <div class="bg-white/95 border border-slate-200 rounded-2xl p-5">
+        <h2 class="text-sm font-bold text-slate-900 mb-1">อีเมลเข้าระบบ</h2>
+        <!-- Said before the form, not after a rejection: the password box below
+             looks like an odd thing to ask for until you know why. -->
+        <p class="text-xs text-slate-400 mb-4">
+          อีเมลนี้คือชื่อผู้ใช้ที่คุณใช้เข้าสู่ระบบ — เปลี่ยนแล้วต้องใช้อีเมลใหม่ในการเข้าสู่ระบบครั้งถัดไป
+          จึงต้องยืนยันด้วยรหัสผ่านปัจจุบัน
+        </p>
+        <div class="space-y-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">อีเมล</label>
+            <input
+              v-model="email"
+              type="email"
+              autocomplete="username"
+              data-test="profile-email"
+              class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
+            />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500 block mb-1">รหัสผ่านปัจจุบัน</label>
+            <input
+              v-model="emailPassword"
+              type="password"
+              autocomplete="current-password"
+              data-test="profile-email-password"
+              class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
+            />
+          </div>
+          <button
+            type="button"
+            :disabled="emailBusy"
+            data-test="profile-email-save"
+            @click="saveEmail"
+            class="btn-primary"
+          >
+            {{ emailBusy ? 'กำลังบันทึก...' : 'บันทึกอีเมล' }}
+          </button>
+          <p v-if="emailSaved" class="text-xs font-bold text-emerald-600" data-test="profile-email-saved">บันทึกสำเร็จ — ครั้งถัดไปให้เข้าสู่ระบบด้วยอีเมลนี้</p>
+          <p v-if="emailError" class="text-xs font-bold text-rose-600" data-test="profile-email-error">{{ emailError }}</p>
         </div>
       </div>
 

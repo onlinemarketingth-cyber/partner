@@ -63,11 +63,76 @@ function toggleLang() {
 function localizeAuthError(raw: string): string {
   if (lang.value !== 'TH') return raw
   if (raw.includes('do not match')) return 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
-  if (raw.includes('Too many login attempts')) return 'พยายามเข้าสู่ระบบบ่อยเกินไป กรุณาลองใหม่อีกครั้งในภายหลัง'
+  if (raw.includes('Too many login attempts')) return 'พยายามเข้าสู่ระบบบ่อยเกินไป'
   return raw
 }
 
 const emailError = computed(() => fieldErrors.value.email?.[0])
+
+/*
+ * ── TASK-247 — a refusal that says what to do next ──
+ *
+ * Three refusals reach this screen and only one of them used to be readable:
+ *
+ *   422 wrong password   said so, but never that the account was one attempt
+ *                        from being locked.
+ *   422 locked out       said "try again later" and dropped the wait, because
+ *                        the server interpolates the seconds into an English
+ *                        sentence and this screen renders Thai. A person then
+ *                        refreshes for an unknown number of minutes, and the
+ *                        usual next step is asking an admin to reset a
+ *                        password that was never wrong.
+ *   403 blocked          NOT HANDLED AT ALL. A company that has been suspended
+ *                        (LoginBlockReason::CompanyInactive) fell to the
+ *                        `else` branch and was told "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้"
+ *                        — which is false, and sends the reader to check their
+ *                        internet instead of contacting their administrator.
+ *
+ * The counts now arrive as numbers (`attempts_remaining`, `lockout_seconds`),
+ * so the sentence is composed here, in whichever language is switched on.
+ */
+interface LoginFailureBody {
+  message?: string
+  errors?: Record<string, string[]>
+  attempts_remaining?: number | null
+  lockout_seconds?: number | null
+}
+
+/** "อีก 2 นาที" reads better than "อีก 97 วินาที"; under a minute stays seconds. */
+function formatWait(seconds: number): string {
+  if (seconds < 60) {
+    return lang.value === 'TH' ? `${seconds} วินาที` : `${seconds} seconds`
+  }
+
+  const minutes = Math.ceil(seconds / 60)
+
+  return lang.value === 'TH' ? `${minutes} นาที` : `${minutes} minute${minutes === 1 ? '' : 's'}`
+}
+
+function lockoutMessage(seconds: number): string {
+  return lang.value === 'TH'
+    ? `พยายามเข้าสู่ระบบผิดหลายครั้งเกินไป ระบบล็อกชั่วคราว — ลองใหม่อีกครั้งในอีก ${formatWait(seconds)} · รหัสผ่านของคุณยังใช้ได้ตามปกติ ไม่ต้องขอรีเซ็ต`
+    : `Too many failed attempts. Locked temporarily — try again in ${formatWait(seconds)}. Your password still works; no reset is needed.`
+}
+
+/**
+ * The warning only appears when it changes what somebody does — at two left
+ * and at one. "เหลืออีก 4 ครั้ง" after a single mistyped character is noise,
+ * and a warning that is always on is one nobody reads by the time it matters.
+ */
+function attemptsWarning(remaining: number): string {
+  if (remaining > 2) return ''
+
+  if (remaining <= 0) {
+    return lang.value === 'TH'
+      ? ' · ครั้งถัดไปที่ผิด บัญชีจะถูกล็อกชั่วคราว'
+      : ' · One more failure will lock the account temporarily.'
+  }
+
+  return lang.value === 'TH'
+    ? ` · เหลืออีก ${remaining} ครั้งก่อนถูกล็อกชั่วคราว`
+    : ` · ${remaining} attempt${remaining === 1 ? '' : 's'} left before a temporary lock.`
+}
 
 async function handleSubmit() {
   if (submitting.value) return
@@ -80,11 +145,36 @@ async function handleSubmit() {
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     router.push(redirect)
   } catch (err) {
-    if (err instanceof ApiError && err.status === 422) {
-      const body = err.body as { errors?: Record<string, string[]> }
+    if (err instanceof ApiError && err.status === 403) {
+      /*
+       * TASK-247 — the branch that did not exist. The password was CORRECT
+       * and the account is not allowed in (LoginBlockedException): a
+       * suspended company, an unverified email, an approval still pending.
+       * The server sends Thai copy written for exactly this reader, plus a
+       * stable error_code — so it is shown as-is rather than restated, and
+       * the field errors are cleared because nothing is wrong with the form.
+       */
+      const body = err.body as { message?: string, error_code?: string }
+      fieldErrors.value = {}
+      errorMessage.value = body.message || t(
+        'login_blocked_generic',
+        'บัญชีนี้ยังเข้าใช้งานไม่ได้ กรุณาติดต่อผู้ดูแลระบบ',
+        'This account cannot sign in yet. Please contact your administrator.',
+      )
+    } else if (err instanceof ApiError && err.status === 422) {
+      const body = err.body as LoginFailureBody
       fieldErrors.value = body.errors ?? {}
-      const first = Object.values(fieldErrors.value)[0]?.[0]
-      errorMessage.value = first ? localizeAuthError(first) : t('login_error_generic', 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่', 'Login failed. Please try again.')
+
+      if (typeof body.lockout_seconds === 'number') {
+        // The throttle is closed. The form is not the problem, so it is not
+        // marked as one.
+        fieldErrors.value = {}
+        errorMessage.value = lockoutMessage(body.lockout_seconds)
+      } else {
+        const first = Object.values(fieldErrors.value)[0]?.[0]
+        const base = first ? localizeAuthError(first) : t('login_error_generic', 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่', 'Login failed. Please try again.')
+        errorMessage.value = base + (typeof body.attempts_remaining === 'number' ? attemptsWarning(body.attempts_remaining) : '')
+      }
     } else {
       errorMessage.value = t(
         'login_error_network',
