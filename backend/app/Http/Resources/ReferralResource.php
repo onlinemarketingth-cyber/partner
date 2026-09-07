@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Enums\PipelineStage;
+use App\Services\Catalog\ProductPricingService;
 use App\Services\Commission\CommissionSplitSettingService;
 use App\Services\Order\OrderService;
 use App\Services\Referral\PipelineService;
@@ -60,7 +61,20 @@ class ReferralResource extends JsonResource
                 'name' => $this->product->name,
                 // BR-3 — satang stays an integer all the way to the
                 // wire; only the UI display layer divides by 100.
-                'price_satang' => $this->product->price_satang,
+                //
+                // TASK-257 / ADR-040 — priced for THIS REFERRAL's company,
+                // which is also the company OrderService::createForReferral()
+                // will charge. A shared product read off the row would put the
+                // central price on the deal card and a different one on the
+                // order, in front of the agent who has to explain it.
+                //
+                // NOT the amount already agreed: an order that exists carries
+                // its own snapshot (BR-4) and is never re-read from here.
+                // Request-scoped, like the two services above it: this
+                // resource renders a paginated LIST, so a fresh instance per
+                // row would throw away the price memo on every one.
+                'price_satang' => RequestScopedService::get($request, ProductPricingService::class)
+                    ->effectivePriceSatang($this->product, (int) $this->company_id),
             ]),
             // TASK-134a — nullable since the branch column was widened
             // (ag-lead ruling 2026-08-08). NULL means "this sale did not

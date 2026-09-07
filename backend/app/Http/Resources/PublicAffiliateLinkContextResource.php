@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Http\Resources\Concerns\ResolvesPublicTheme;
 use App\Models\Product;
+use App\Services\Catalog\ProductPricingService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -43,20 +44,54 @@ class PublicAffiliateLinkContextResource extends JsonResource
             // prospect knows who referred them; this mirrors what any
             // real-world agent's business card/marketing link would show.
             'agent_name' => $this->agent?->name,
+            /*
+             * TASK-257 / ADR-040 — priced for the LINK'S company.
+             *
+             * A platform product has no company of its own, so reading
+             * price_satang off the row shows the CENTRAL price to a prospect
+             * who will be charged this company's. Same defect, same fix, same
+             * reason as PublicProductShareResource: one service, and every
+             * caller passes who is asking.
+             */
             'product' => $this->product ? [
                 'id' => $this->product->id,
                 'name' => $this->product->name,
-                'price_satang' => $this->product->price_satang,
+                'price_satang' => app(ProductPricingService::class)
+                    ->effectivePriceSatang($this->product, (int) $this->company_id),
             ] : null,
             // Only populated when the link is NOT pre-scoped to one
             // product — the prospect then picks from this company's
             // active catalog, same set an Agent would submit a manual
             // SWS Referral against (StoreReferralRequest's product_id).
+            /*
+             * TASK-257 / ADR-040 — the company's own products AND the platform
+             * products it has switched on.
+             *
+             * The `where('company_id', ...)` alone excluded every shared
+             * product, so a prospect on an affiliate link could not choose one
+             * at all — the catalogue would simply look shorter than the one
+             * the agent sees, with nothing to say why. `is_active` is the
+             * platform's switch and stays; the EXISTS clause is this
+             * company's, which never inherits (ADR-040 §2).
+             */
             'products' => $this->product_id ? null : Product::withoutGlobalScopes()
-                ->where('company_id', $this->company_id)
                 ->where('is_active', true)
+                ->where(fn ($outer) => $outer
+                    ->where('products.company_id', $this->company_id)
+                    ->orWhereExists(fn ($exists) => $exists
+                        ->selectRaw('1')
+                        ->from('company_product_settings')
+                        ->whereColumn('company_product_settings.product_id', 'products.id')
+                        ->where('company_product_settings.company_id', $this->company_id)
+                        ->where('company_product_settings.is_active', true)))
                 ->orderBy('name')
-                ->get(['id', 'name', 'price_satang']),
+                ->get()
+                ->map(fn (Product $product) => [
+                    'id' => $product->id,
+                    'name' => $product->name,
+                    'price_satang' => app(ProductPricingService::class)
+                        ->effectivePriceSatang($product, (int) $this->company_id),
+                ]),
         ];
     }
 }

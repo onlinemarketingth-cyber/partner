@@ -38,10 +38,14 @@ class PublicProductShareResource extends JsonResource
         // would still be two objects and two chain walks.
         $pricing = app(ProductPricingService::class);
         $templateResolver = app(PipelineTemplateResolver::class);
-        // TASK-253 / ADR-040 — the link's company, not the product's: a
-        // shared product has none of its own, and this page is that company's
-        // storefront.
-        $template = $product ? $templateResolver->resolveForProduct($product, (int) $this->company_id) : null;
+        /*
+         * TASK-253 / ADR-040 — the link's company, not the product's: a shared
+         * product has none of its own, and this page is that company's
+         * storefront. Every resolved value below reads it — the journey, and
+         * (TASK-257) all three prices.
+         */
+        $companyId = (int) $this->company_id;
+        $template = $product ? $templateResolver->resolveForProduct($product, $companyId) : null;
 
         return [
             'company_name' => $this->company?->name,
@@ -92,9 +96,19 @@ class PublicProductShareResource extends JsonResource
                 'name' => $product->name,
                 'description' => $product->description,
                 'spec_description' => $product->spec_description,
-                // The LIST price, unchanged — existing callers keep
-                // reading exactly what they always did.
-                'price_satang' => $product->price_satang,
+                /*
+                 * The LIST price — what this is struck through against when a
+                 * promotion is running.
+                 *
+                 * TASK-257 / ADR-040 — resolved for the SHARING COMPANY, not
+                 * read off the row. For a company-owned product the two are
+                 * the same number and nothing changes. For a PLATFORM product
+                 * the row carries the central price, and a company that priced
+                 * it lower would have shown its own price struck through
+                 * against a higher one it never charges — an advertised
+                 * discount that does not exist.
+                 */
+                'price_satang' => $pricing->listPriceSatang($product, $companyId),
                 // TASK-136 (risk R1) — what the customer will ACTUALLY be
                 // charged if they check out right now. Identical to
                 // price_satang unless a product_price_promotion is live,
@@ -108,11 +122,19 @@ class PublicProductShareResource extends JsonResource
                 // also what TASK-137's acceptance criterion "price shown
                 // must equal the price the order is created at" is checked
                 // against. BR-3: integer satang, never divided here.
-                'payable_price_satang' => $pricing->effectivePriceSatang($product),
+                //
+                // TASK-257 / ADR-040 — the company is passed explicitly. A
+                // shared product has no company of its own, so without it this
+                // resolved the CENTRAL price while
+                // OrderService::createForReferral() charged the sharing
+                // company's — the page and the order disagreeing about money,
+                // which is the exact defect TASK-136 built this service to
+                // remove.
+                'payable_price_satang' => $pricing->effectivePriceSatang($product, $companyId),
                 // Non-null only while a promotion is running — lets the UI
                 // decide whether there is a discount to advertise at all
                 // without comparing two numbers itself.
-                'promotional_price_satang' => $pricing->activePromotion($product)?->discounted_price_satang,
+                'promotional_price_satang' => $pricing->activePromotion($product, $companyId)?->discounted_price_satang,
                 // ADR-026 §3.7 (TASK-136) — may an anonymous visitor buy
                 // this product straight from the page, or does its journey
                 // still route through an appointment and a doctor's visit?
