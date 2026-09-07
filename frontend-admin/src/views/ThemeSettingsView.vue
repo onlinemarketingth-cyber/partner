@@ -899,6 +899,54 @@ function presetCompanyPayload(): Record<string, number> {
 const presets = ref<ThemePreset[]>([])
 const presetsLoading = ref(false)
 const presetsError = ref('')
+/**
+ * 2026-09-07 (human: "ทำไมชุดสีที่บันทึกไว้ถึงไม่ขึ้น").
+ *
+ * They had saved one. It was in the list — underneath the six palettes the
+ * platform provisions, because the API returns shared/system rows FIRST (so a
+ * feature meant to be reused does not go unnoticed) and the screen rendered
+ * that order flat. On a panel titled "ชุดสีที่บันทึกไว้" the six sets nobody
+ * at this company saved were the only ones visible without scrolling, and the
+ * one they had just created was the last row.
+ *
+ * Saving also said nothing: the name box cleared, the list reloaded, and the
+ * visible part looked identical. "Nothing happened" is a reasonable reading of
+ * a screen that gives no other evidence.
+ *
+ * So the list is split, own-first, and a save says so by name.
+ */
+const presetSaved = ref('')
+
+/**
+ * Two labelled groups, own first.
+ *
+ * The split is by `is_system` and not by ownership, because the question the
+ * first group answers is "did my save work" — and a palette the platform
+ * provisioned is never the answer to that, while a Super Admin's ชุดกลาง is
+ * (somebody chose to create it).
+ *
+ * Sections rather than two copies of the row markup: the row carries chips,
+ * inline rename and three buttons, and a second copy is a second copy to keep
+ * true.
+ */
+const presetSections = computed(() => [
+  {
+    key: 'own',
+    title: 'ชุดสีที่บันทึกไว้เอง',
+    note: '',
+    rows: presets.value.filter((p) => !p.is_system),
+    // Said in place, so the answer to "where did my set go" is where the set
+    // would have been.
+    emptyText: 'ยังไม่มีชุดสีที่บันทึกเอง — ตั้งชื่อด้านบนแล้วกด "บันทึกสีปัจจุบันเป็นชุด" ชุดที่บันทึกจะมาอยู่ตรงนี้',
+  },
+  {
+    key: 'system',
+    title: 'ชุดสีมาตรฐานของระบบ',
+    note: 'ใช้ได้เลย แต่เปลี่ยนชื่อหรือลบไม่ได้',
+    rows: presets.value.filter((p) => p.is_system),
+    emptyText: '',
+  },
+].filter((section) => section.rows.length > 0 || section.emptyText !== ''))
 const newPresetName = ref('')
 /**
  * TASK-217 — "ใช้ร่วมทุกบริษัท". Reset after every successful save on
@@ -1027,6 +1075,7 @@ async function savePreset(): Promise<void> {
   }
   savingPreset.value = true
   presetsError.value = ''
+  presetSaved.value = ''
   try {
     /*
      * TASK-163 — SAVE THE FORM FIRST, THEN SNAPSHOT.
@@ -1079,6 +1128,9 @@ async function savePreset(): Promise<void> {
     // Re-list rather than push the create response: the list endpoint is
     // the one shape this screen actually depends on.
     await loadPresets()
+    // By NAME. "บันทึกแล้ว" alone still leaves the reader looking for the row;
+    // naming it tells them which of the rows below is theirs.
+    presetSaved.value = `บันทึกชุดสี "${name}" แล้ว — อยู่ในรายการด้านล่าง`
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'บันทึกชุดสีไม่สำเร็จ')
   } finally {
@@ -1527,6 +1579,10 @@ onMounted(loadPresets)
               </p>
 
               <p v-if="presetsError" class="mb-3 text-xs font-bold text-rose-600">{{ presetsError }}</p>
+              <!-- 2026-09-07 — saving used to clear the name box and say
+                   nothing else; on a list whose visible rows did not change,
+                   "nothing happened" was a fair reading. -->
+              <p v-if="presetSaved" class="mb-3 text-xs font-bold text-emerald-600" data-test="preset-saved">{{ presetSaved }}</p>
 
               <!-- Save current colours as a preset -->
               <div class="flex items-center gap-2 mb-4">
@@ -1586,12 +1642,29 @@ onMounted(loadPresets)
                 @cta="focusPresetName"
               />
 
-              <ul v-else class="space-y-2">
-                <li
-                  v-for="preset in presets"
-                  :key="preset.id"
-                  class="flex items-center gap-3 bg-white/95 border border-slate-200 rounded-xl p-3"
-                >
+              <!-- 2026-09-07 (human: "ทำไมชุดสีที่บันทึกไว้ถึงไม่ขึ้น") — own
+                   sets FIRST, under a heading that says which is which.
+
+                   The API returns the platform's palettes first on purpose: a
+                   shared palette buried under a company's own saved looks goes
+                   unnoticed. Rendering that order FLAT, though, put six sets
+                   nobody here saved above the one they had just created — on a
+                   panel titled "ชุดสีที่บันทึกไว้", with the answer below the
+                   fold. Two labelled groups keep both findable instead of
+                   trading one for the other. -->
+              <template v-else>
+                <div v-for="section in presetSections" :key="section.key" class="mb-4 last:mb-0">
+                  <p class="text-xs font-bold text-slate-500 mb-2">
+                    {{ section.title }}
+                    <span v-if="section.note" class="font-normal text-slate-400">— {{ section.note }}</span>
+                  </p>
+                  <p v-if="!section.rows.length" class="text-xs text-slate-400">{{ section.emptyText }}</p>
+                  <ul v-else class="space-y-2">
+                    <li
+                      v-for="preset in section.rows"
+                      :key="preset.id"
+                      class="flex items-center gap-3 bg-white/95 border border-slate-200 rounded-xl p-3"
+                    >
                   <!-- Swatch preview -->
                   <div class="flex items-center gap-1 shrink-0">
                     <span
@@ -1693,9 +1766,11 @@ onMounted(loadPresets)
                         <Icon name="trash" :size="14" />
                       </button>
                     </template>
-                  </div>
-                </li>
-              </ul>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+              </template>
             </template>
 
             <!-- TASK-161 §5.2 — a Super Admin now manages presets too, but
