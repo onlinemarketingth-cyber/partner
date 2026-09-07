@@ -57,6 +57,11 @@ function makeUser(over: Partial<Record<string, unknown>> = {}) {
   return {
     id: 7,
     name: 'สมชาย ใจดี',
+    // TASK-246 — the editable halves. `name` is the server's joined display
+    // string; the edit form writes these two, never a split of that one.
+    first_name: 'สมชาย',
+    last_name: 'ใจดี',
+    phone: null,
     email: 'somchai@example.com',
     role: 'agent',
     company: { id: 4, name: 'ไทยประกันชีวิต' },
@@ -69,8 +74,24 @@ function makeUser(over: Partial<Record<string, unknown>> = {}) {
   }
 }
 
+/**
+ * The company list the store will load. It matters more than it looks:
+ * activeCompany.loadCompanies() DROPS a selected id that is not in this list
+ * (that is how a stale persisted company is cleaned up), so a stub that
+ * answered /companies with anything else would silently reset the scope and
+ * hide exactly the controls under test.
+ */
+const COMPANIES = [
+  { id: 4, name: 'ไทยประกันชีวิต', slug: 'tli' },
+  { id: 5, name: 'AIA', slug: 'aia' },
+]
+
 function mockUsers(users: unknown[]) {
-  get.mockImplementation(async () => ({ data: users }))
+  get.mockImplementation(async (path: string) => {
+    if (String(path).startsWith('/companies')) return { data: COMPANIES }
+
+    return { data: users }
+  })
 }
 
 async function mountView() {
@@ -291,5 +312,161 @@ describe('UserManagementView — what the list says', () => {
 
     expect(wrapper.find('tbody').text()).toContain('(คุณ)')
     expect(btn(wrapper, 'deactivate').exists()).toBe(false)
+  })
+})
+
+/**
+ * TASK-246 — the three things this screen could not do.
+ *
+ * It could change a role, close an account and reset a password, but it could
+ * not CREATE an account, could not fix a typo in the address somebody logs in
+ * with, and never read the `move_company` permission it had been receiving
+ * since the day it was built. A page called "จัดการผู้ใช้ระบบ" that cannot add
+ * a user sends the admin to the agent roster (which hides the ผู้ดูแลบริษัท
+ * option) or to the database by hand.
+ */
+describe('UserManagementView — creating an account', () => {
+  it('sends the typed password and the scoped company', async () => {
+    /*
+     * StoreUserRequest REQUIRES company_id from a Super Admin — they belong to
+     * no company, so there is nothing to infer — and the scoped company is the
+     * only honest answer available.
+     */
+    useActiveCompanyStore().setCompany(4)
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-first-name').setValue('อารีย์')
+    await btn(wrapper, 'create-last-name').setValue('ทองดี')
+    await btn(wrapper, 'create-email').setValue('aree@example.com')
+    await btn(wrapper, 'create-password').setValue('Str0ngPass')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/users', {
+      first_name: 'อารีย์',
+      last_name: 'ทองดี',
+      email: 'aree@example.com',
+      password: 'Str0ngPass',
+      role: 'company_admin',
+      company_id: 4,
+    })
+  })
+
+  it('refuses to guess a company in ทุกบริษัท mode', async () => {
+    // The alternative is picking one for them, which files a person under a
+    // tenant nobody chose.
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+
+    expect(btn(wrapper, 'create-needs-company').exists()).toBe(true)
+    expect((btn(wrapper, 'submit-create').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('does not repeat the new password back on screen', async () => {
+    /*
+     * The admin typed it a second ago; printing it into a success banner is
+     * how a live credential ends up in a screenshot. The banner says to hand
+     * it over, not what it is.
+     */
+    useActiveCompanyStore().setCompany(4)
+    post.mockResolvedValue({ data: { ...makeUser(), name: 'อารีย์ ทองดี', role: 'company_admin' } })
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-first-name').setValue('อารีย์')
+    await btn(wrapper, 'create-last-name').setValue('ทองดี')
+    await btn(wrapper, 'create-email').setValue('aree@example.com')
+    await btn(wrapper, 'create-password').setValue('Str0ngPass')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('สร้างบัญชี อารีย์ ทองดี')
+    expect(wrapper.text()).not.toContain('Str0ngPass')
+  })
+
+  it('rejects a short password before sending it', async () => {
+    useActiveCompanyStore().setCompany(4)
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-password').setValue('short')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await flushPromises()
+
+    expect(post).not.toHaveBeenCalled()
+    expect(btn(wrapper, 'create-error').exists()).toBe(true)
+  })
+})
+
+describe('UserManagementView — editing an account', () => {
+  it('sends the two name halves rather than a split of the display name', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'edit-user').trigger('click')
+    await btn(wrapper, 'edit-email').setValue('somchai.new@example.com')
+    await btn(wrapper, 'submit-edit').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7', {
+      first_name: 'สมชาย',
+      last_name: 'ใจดี',
+      email: 'somchai.new@example.com',
+      phone: null,
+    })
+  })
+
+  it('sends null for a phone left blank, not an empty string', async () => {
+    // '' fails the string rule server-side; null is the value the column
+    // actually holds for "no phone".
+    const wrapper = await mountView()
+    await btn(wrapper, 'edit-user').trigger('click')
+    await btn(wrapper, 'edit-phone').setValue('   ')
+    await btn(wrapper, 'submit-edit').trigger('click')
+    await flushPromises()
+
+    expect(put.mock.calls[0]![1]).toMatchObject({ phone: null })
+  })
+
+  it('is hidden when the server says this row is not the viewer\'s to change', async () => {
+    mockUsers([makeUser({ permissions: { ...ALL, update: false } })])
+
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'edit-user').exists()).toBe(false)
+  })
+})
+
+describe('UserManagementView — moving an account to another company', () => {
+  it('offers it only when the server says so', async () => {
+    mockUsers([makeUser({ permissions: { ...ALL, move_company: false } })])
+
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'move-company').exists()).toBe(false)
+  })
+
+  it('never offers the company the person is already in', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'move-company').trigger('click')
+    await flushPromises()
+
+    const options = btn(wrapper, 'move-target').findAll('option').map((o) => o.text())
+    expect(options).toContain('AIA')
+    expect(options).not.toContain('ไทยประกันชีวิต')
+  })
+
+  it('says what changes before the move, then sends it', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'move-company').trigger('click')
+    await flushPromises()
+
+    // The account's whole tenant changes; what already happened does not.
+    expect(wrapper.text()).toContain('ยังอยู่กับบริษัทเดิม')
+
+    await btn(wrapper, 'move-target').setValue(5)
+    await btn(wrapper, 'submit-move').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/users/7/move-company', { company_id: 5 })
   })
 })

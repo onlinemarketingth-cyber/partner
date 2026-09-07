@@ -61,6 +61,12 @@ interface RowPermissions {
 interface UserRow {
   id: number
   name: string
+  // TASK-246 — the EDITABLE halves. `name` is the server's joined display
+  // string; a form that wrote back into it would have to guess where the
+  // first name ends, which is a guess that gets somebody's name wrong.
+  first_name: string
+  last_name: string
+  phone: string | null
   email: string
   role: 'agent' | 'company_admin'
   company: { id: number; name: string } | null
@@ -216,6 +222,168 @@ async function submitReset() {
   }
 }
 
+// ── Create a system user ───────────────────────────────────────────────
+/*
+ * TASK-246 — the gap that made this screen odd to use: a page called
+ * "จัดการผู้ใช้ระบบ" that could change and close accounts but not open one.
+ * Adding an admin meant the agent roster's own form (which hides the
+ * company_admin option, TASK-130) or the database by hand.
+ *
+ * The password is TYPED BY THE ADMIN and never generated here, for the same
+ * reason as the reset form below: there is no email in this product, so a
+ * temporary password is handed over in person — and one this screen invented
+ * would be a value nobody chose, shown once in a toast and gone.
+ */
+const showCreate = ref(false)
+const createForm = ref({ first_name: '', last_name: '', email: '', password: '', role: 'company_admin' as 'agent' | 'company_admin' })
+const createError = ref('')
+const creating = ref(false)
+
+/**
+ * StoreUserRequest REQUIRES company_id from a Super Admin and PROHIBITS it
+ * from anybody else — there is nothing to infer for someone who belongs to no
+ * company. So in "ทุกบริษัท" the answer is genuinely missing, and the form
+ * says which company it is about to create in rather than picking one.
+ */
+const createCompanyBlocked = computed(() => isSuperAdmin.value && activeCompany.companyId === null)
+const createCompanyName = computed(() => activeCompany.companyName ?? auth.user?.company?.name ?? '')
+
+function openCreate(): void {
+  createForm.value = { first_name: '', last_name: '', email: '', password: '', role: 'company_admin' }
+  createError.value = ''
+  showCreate.value = true
+}
+
+async function submitCreate(): Promise<void> {
+  if (createCompanyBlocked.value) {
+    createError.value = 'เลือกบริษัทที่แถบด้านบนก่อน จึงจะสร้างผู้ใช้ได้'
+
+    return
+  }
+  if (createForm.value.password.length < 8) {
+    createError.value = 'รหัสผ่านต้องยาวอย่างน้อย 8 ตัว มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข'
+
+    return
+  }
+
+  creating.value = true
+  createError.value = ''
+  try {
+    const created = await api.post<{ data: UserRow }>('/users', {
+      ...createForm.value,
+      // Only a Super Admin may send it, and must; a Company Admin sending it
+      // is a 422 by rule, not an oversight.
+      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
+    })
+    // The password is deliberately absent from this sentence — it was typed a
+    // second ago by the person reading it, and repeating a live credential on
+    // screen is how it ends up in a screenshot.
+    successMessage.value = `สร้างบัญชี ${created.data.name} (${roleLabel(created.data.role)}) แล้ว — ส่งรหัสผ่านให้เจ้าตัวโดยตรง`
+    showCreate.value = false
+    createForm.value.password = ''
+    await load()
+  } catch (e) {
+    createError.value = apiErrorMessage(e, 'สร้างผู้ใช้ไม่สำเร็จ')
+  } finally {
+    creating.value = false
+  }
+}
+
+// ── Edit name / email / phone ──────────────────────────────────────────
+/*
+ * TASK-246 — the screen could change somebody's ROLE but not their name, so a
+ * typo in an email (the thing they log in with) had no fix here at all.
+ *
+ * Only these four fields. Everything else UpdateUserRequest accepts —
+ * uplines, team-leader flag, bank details, identity documents — belongs to
+ * the agent roster, which is about selling; duplicating them here would make
+ * two screens that disagree about who owns a field.
+ */
+const editing = ref<UserRow | null>(null)
+const editForm = ref({ first_name: '', last_name: '', email: '', phone: '' })
+const editError = ref('')
+const savingEdit = ref(false)
+
+function openEdit(user: UserRow): void {
+  editing.value = user
+  editForm.value = {
+    first_name: user.first_name,
+    last_name: user.last_name,
+    email: user.email,
+    phone: user.phone ?? '',
+  }
+  editError.value = ''
+}
+
+async function submitEdit(): Promise<void> {
+  const user = editing.value
+  if (!user) return
+
+  savingEdit.value = true
+  editError.value = ''
+  try {
+    await api.put(`/users/${user.id}`, {
+      first_name: editForm.value.first_name,
+      last_name: editForm.value.last_name,
+      email: editForm.value.email,
+      // Empty means "no phone", which is a value; '' would fail the string
+      // rule, so it is sent as the null the column actually holds.
+      phone: editForm.value.phone.trim() === '' ? null : editForm.value.phone.trim(),
+    })
+    successMessage.value = `แก้ไขข้อมูลของ ${user.name} แล้ว`
+    editing.value = null
+    await load()
+  } catch (e) {
+    editError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+// ── Move to another company ────────────────────────────────────────────
+/*
+ * TASK-246 — `move_company` has been in the permissions payload since
+ * TASK-259 and nothing on this screen read it. It is Super-Admin-only and
+ * refused against another Super Admin (UserPolicy::move).
+ *
+ * It is a heavier action than it looks: the account's whole tenant changes,
+ * so what they can see changes with it. Hence a confirm step that names both
+ * companies rather than a bare dropdown that saves on change.
+ */
+const moving = ref<UserRow | null>(null)
+const moveCompanyId = ref<number | ''>('')
+const moveError = ref('')
+const savingMove = ref(false)
+
+function openMove(user: UserRow): void {
+  moving.value = user
+  moveCompanyId.value = ''
+  moveError.value = ''
+  activeCompany.loadCompanies()
+}
+
+/** Every company except the one they are already in. */
+const moveTargets = computed(() => activeCompany.companies.filter((c) => c.id !== moving.value?.company?.id))
+
+async function submitMove(): Promise<void> {
+  const user = moving.value
+  if (!user || moveCompanyId.value === '') return
+
+  savingMove.value = true
+  moveError.value = ''
+  try {
+    await api.post(`/users/${user.id}/move-company`, { company_id: moveCompanyId.value })
+    const target = activeCompany.companies.find((c) => c.id === moveCompanyId.value)
+    successMessage.value = `ย้าย ${user.name} ไปบริษัท ${target?.name ?? `#${moveCompanyId.value}`} แล้ว`
+    moving.value = null
+    await load()
+  } catch (e) {
+    moveError.value = apiErrorMessage(e, 'ย้ายบริษัทไม่สำเร็จ')
+  } finally {
+    savingMove.value = false
+  }
+}
+
 function formatDateTime(iso: string | null): string {
   if (iso === null) return '—'
 
@@ -268,8 +436,14 @@ onMounted(() => {
         <input v-model="filters.include_inactive" type="checkbox" class="rounded border-slate-300" @change="load" />
         แสดงบัญชีที่ปิดแล้วด้วย
       </label>
-      <button class="btn-primary" @click="load">
+      <button class="btn-secondary" @click="load">
         ค้นหา
+      </button>
+      <!-- TASK-246 — the action a screen called "จัดการผู้ใช้ระบบ" has to
+           have. Until now adding an admin meant the agent roster's form
+           (which hides the ผู้ดูแลบริษัท option) or the database by hand. -->
+      <button class="btn-primary" data-test="open-create" @click="openCreate">
+        + เพิ่มผู้ใช้
       </button>
     </div>
 
@@ -327,6 +501,16 @@ onMounted(() => {
                   <div class="flex items-center justify-end gap-1.5 flex-wrap">
                     <!-- Every button below is gated on the SERVER's answer for
                          this row, never on a rule re-derived here. -->
+                    <!-- TASK-246 — a typo in the address somebody logs in
+                         with had no fix on this screen at all. -->
+                    <button
+                      v-if="user.permissions.update"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      data-test="edit-user"
+                      @click="openEdit(user)"
+                    >
+                      แก้ไขข้อมูล
+                    </button>
                     <button
                       v-if="user.permissions.update && user.is_active && user.role === 'agent'"
                       class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -350,6 +534,16 @@ onMounted(() => {
                       @click="askReset(user)"
                     >
                       ตั้งรหัสผ่านใหม่
+                    </button>
+                    <!-- TASK-246 — `move_company` has been in the payload
+                         since this screen was built and nothing read it. -->
+                    <button
+                      v-if="user.permissions.move_company && user.is_active"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      data-test="move-company"
+                      @click="openMove(user)"
+                    >
+                      ย้ายบริษัท
                     </button>
                     <RouterLink
                       :to="{ name: 'activity-log', query: { actor: user.id } }"
@@ -428,5 +622,128 @@ onMounted(() => {
       @confirm="confirmDeactivate"
       @cancel="pendingDeactivate = null"
     />
+
+    <!-- TASK-246 — create. Its own modal rather than an inline row so the
+         password field is never sitting open on a screen somebody walked
+         away from. -->
+    <div v-if="showCreate" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" @click.self="showCreate = false">
+      <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+        <p class="text-sm font-bold text-slate-900">เพิ่มผู้ใช้เข้าระบบ</p>
+        <p v-if="!createCompanyBlocked" class="mt-0.5 text-xs text-slate-400">บริษัท: <strong>{{ createCompanyName }}</strong></p>
+        <!-- The server REQUIRES a company from a Super Admin and has nothing
+             to infer one from. Said here, before the form is filled in. -->
+        <p v-else class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700" data-test="create-needs-company">
+          ตอนนี้เลือก "ทุกบริษัท" อยู่ — เลือกบริษัทที่แถบด้านบนก่อน จึงจะสร้างผู้ใช้ได้ว่าอยู่บริษัทไหน
+        </p>
+
+        <div class="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500">ชื่อ</label>
+            <input v-model="createForm.first_name" data-test="create-first-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500">นามสกุล</label>
+            <input v-model="createForm.last_name" data-test="create-last-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="text-xs font-bold text-slate-500">อีเมล (ใช้เข้าสู่ระบบ)</label>
+          <input v-model="createForm.email" type="email" data-test="create-email" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        </div>
+        <div class="mt-3">
+          <label class="text-xs font-bold text-slate-500">บทบาท</label>
+          <select v-model="createForm.role" data-test="create-role" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+            <option value="company_admin">ผู้ดูแลบริษัท</option>
+            <option value="agent">ตัวแทน</option>
+          </select>
+        </div>
+        <div class="mt-3">
+          <label class="text-xs font-bold text-slate-500">รหัสผ่านเริ่มต้น</label>
+          <input
+            v-model="createForm.password"
+            type="text"
+            data-test="create-password"
+            placeholder="อย่างน้อย 8 ตัว มีพิมพ์ใหญ่ พิมพ์เล็ก ตัวเลข"
+            class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+          />
+          <!-- Typed by the admin, never generated here and never shown again
+               afterwards — same rule as ตั้งรหัสผ่านใหม่ below. -->
+          <p class="mt-1 text-[11px] text-slate-400">คุณเป็นคนกำหนดเอง แล้วส่งให้เจ้าตัวโดยตรง — ระบบไม่มีอีเมลแจ้ง และจะไม่แสดงรหัสนี้อีกหลังบันทึก</p>
+        </div>
+
+        <p v-if="createError" class="mt-2 text-xs font-bold text-rose-600" data-test="create-error">{{ createError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="btn-secondary" :disabled="creating" @click="showCreate = false">ยกเลิก</button>
+          <button class="btn-primary" :disabled="creating || createCompanyBlocked" data-test="submit-create" @click="submitCreate">
+            {{ creating ? 'กำลังสร้าง…' : 'สร้างบัญชี' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TASK-246 — edit. Four fields only; everything else about an agent
+         belongs to จัดการตัวแทน, and two screens owning one field is how they
+         start disagreeing. -->
+    <div v-if="editing" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" @click.self="editing = null">
+      <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+        <p class="text-sm font-bold text-slate-900">แก้ไขข้อมูลผู้ใช้</p>
+        <p class="mt-0.5 text-xs text-slate-400">{{ editing.name }} · {{ roleLabel(editing.role) }}</p>
+
+        <div class="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs font-bold text-slate-500">ชื่อ</label>
+            <input v-model="editForm.first_name" data-test="edit-first-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-xs font-bold text-slate-500">นามสกุล</label>
+            <input v-model="editForm.last_name" data-test="edit-last-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="text-xs font-bold text-slate-500">อีเมล (ใช้เข้าสู่ระบบ)</label>
+          <input v-model="editForm.email" type="email" data-test="edit-email" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          <p class="mt-1 text-[11px] text-slate-400">เปลี่ยนอีเมลแล้ว เจ้าตัวต้องใช้อีเมลใหม่เข้าสู่ระบบครั้งถัดไป</p>
+        </div>
+        <div class="mt-3">
+          <label class="text-xs font-bold text-slate-500">เบอร์โทร (ไม่บังคับ)</label>
+          <input v-model="editForm.phone" data-test="edit-phone" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        </div>
+
+        <p v-if="editError" class="mt-2 text-xs font-bold text-rose-600" data-test="edit-error">{{ editError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="btn-secondary" :disabled="savingEdit" @click="editing = null">ยกเลิก</button>
+          <button class="btn-primary" :disabled="savingEdit" data-test="submit-edit" @click="submitEdit">
+            {{ savingEdit ? 'กำลังบันทึก…' : 'บันทึก' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TASK-246 — move company. A confirm step that names both companies,
+         because the account's whole tenant changes and what they can see
+         changes with it. -->
+    <div v-if="moving" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" @click.self="moving = null">
+      <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+        <p class="text-sm font-bold text-slate-900">ย้ายผู้ใช้ไปบริษัทอื่น</p>
+        <p class="mt-0.5 text-xs text-slate-400">{{ moving.name }} · ตอนนี้อยู่ {{ moving.company?.name ?? '—' }}</p>
+        <p class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+          ย้ายแล้วบัญชีนี้จะเห็นข้อมูลของบริษัทใหม่แทนบริษัทเดิมทั้งหมด — ลูกค้า ดีล และค่าคอมมิชชั่นที่เกิดขึ้นแล้วยังอยู่กับบริษัทเดิมตามเดิม
+        </p>
+
+        <label class="mt-3 block text-xs font-bold text-slate-500">บริษัทปลายทาง</label>
+        <select v-model="moveCompanyId" data-test="move-target" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+          <option value="" disabled>เลือกบริษัท</option>
+          <option v-for="c in moveTargets" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+
+        <p v-if="moveError" class="mt-2 text-xs font-bold text-rose-600" data-test="move-error">{{ moveError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="btn-secondary" :disabled="savingMove" @click="moving = null">ยกเลิก</button>
+          <button class="btn-primary" :disabled="savingMove || moveCompanyId === ''" data-test="submit-move" @click="submitMove">
+            {{ savingMove ? 'กำลังย้าย…' : 'ย้ายบริษัท' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
