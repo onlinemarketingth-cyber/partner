@@ -44,7 +44,7 @@ interface Brand {
   // so the manage dialog rendered a flat cross-company list (TenantScope
   // does not narrow a Super Admin) with nothing saying which row belonged
   // to whom. Same field, same reason, as Product.company_id below.
-  company_id: number
+  company_id: number | null
   name: string
   is_active: boolean
   // TASK-202 — withCount('products') on the index query only; absent on
@@ -57,7 +57,11 @@ interface Brand {
 }
 interface ProductCategory {
   id: number
-  company_id: number
+  // TASK-256 / ADR-040 — null once the category belongs to the PLATFORM.
+  // catalog:promote-products repoints a promoted product at a platform
+  // brand/category, because a product every company sells cannot sit inside
+  // one company's taxonomy.
+  company_id: number | null
   name: string
   // TASK-068 / ADR-020 row 3 — Icon.vue name from the curated whitelist
   // (App\Support\CuratedIcons::WHITELIST), or null if unset.
@@ -68,11 +72,29 @@ interface ProductCategory {
 }
 interface Product {
   id: number
+  /*
+   * TASK-256 / ADR-040 — a PLATFORM-owned product: one row every company
+   * sells. `company_id` is null for these, which is why every field below
+   * that used to be "the product's" now comes in two flavours.
+   */
+  is_shared: boolean
+  /** What the company in the header actually charges (own price, else central). */
+  effective_price_satang: number
+  /** Whether that company has switched this product on. Never inherited. */
+  is_sellable_here: boolean
+  /**
+   * That company's OWN price, or null when it has never set one and is
+   * therefore riding the central price. Not derivable from
+   * effective_price_satang === price_satang: a company may have deliberately
+   * matched the centre, and that price does NOT move when the centre does.
+   */
+  own_price_satang: number | null
   // TASK-069 — needed client-side to scope the Banner/Pin product
   // pickers to the caller's own company when Super Admin has multiple
   // companies' products in one flat /products response (TenantScope
   // only auto-filters for non-Super-Admin actors).
-  company_id: number
+  // TASK-256 / ADR-040 — NULL for a platform-owned product.
+  company_id: number | null
   name: string
   price_satang: number
   is_active: boolean
@@ -231,6 +253,17 @@ async function loadAll() {
     loading.value = false
     hasLoadedOnce.value = true
   }
+}
+
+/**
+ * TASK-256 — just the packages, for after a per-company price or switch is
+ * saved. Nothing else on the screen can have changed, and reloading brands,
+ * categories and banners as well would blank the list for a beat over a
+ * one-field write.
+ */
+async function loadProducts(): Promise<void> {
+  const p = await api.get<{ data: Product[] }>(activeCompany.scopedPath('/products'))
+  products.value = p.data
 }
 
 onMounted(loadAll)
@@ -531,6 +564,18 @@ function deleteFailureMessage(e: unknown): string {
  *                         and DeletionGuard still refuses while products
  *                         use it — reported per company, never swallowed)
  */
+/**
+ * TASK-256 / ADR-040 — the real companies in a group, platform row excluded.
+ *
+ * Used to seed the tick-box picker and to decide what "untick everything"
+ * means. A platform brand cannot be unticked away: every company's promoted
+ * products point at that one row, so removing it is a catalogue-wide delete,
+ * not "take it off this company".
+ */
+function tenantCompanyIds<T>(group: RefNameGroup<T>): number[] {
+  return group.companyIds.filter((id): id is number => id !== null)
+}
+
 const editingBrandKey = ref<string | null>(null)
 const editBrandForm = ref({ name: '', is_active: true })
 const editBrandCompanyIds = ref<number[]>([])
@@ -541,7 +586,9 @@ const savingBrandEdit = ref(false)
 function startEditBrand(group: RefNameGroup<Brand>): void {
   editingBrandKey.value = group.key
   editBrandForm.value = { name: group.name, is_active: group.rows.every((r) => r.is_active) }
-  editBrandCompanyIds.value = [...group.companyIds]
+  // TASK-256 — the picker is "which COMPANIES have this name", so the platform
+  // row is not one of its boxes. It is still edited (rename/activate) below.
+  editBrandCompanyIds.value = tenantCompanyIds(group)
   editBrandRows.value = [...group.rows]
   editBrandError.value = ''
   resetBrandLogo('edit')
@@ -557,7 +604,11 @@ const editBrandCurrentLogoUrl = computed(() => editBrandRows.value.find((r) => r
 
 async function saveEditBrand(): Promise<void> {
   if (editingBrandKey.value === null) return
-  if (isSuperAdmin.value && !editBrandCompanyIds.value.length) {
+  const rows = editBrandRows.value
+  // TASK-256 — a platform row is not one of the boxes, so an empty picker on a
+  // group that HAS one still leaves a brand standing; the guard would be a lie.
+  const hasPlatformRow = rows.some((r) => r.company_id === null)
+  if (isSuperAdmin.value && !editBrandCompanyIds.value.length && !hasPlatformRow) {
     // Untick-everything is a delete in disguise; make the admin say so with
     // the delete button, which asks for confirmation.
     editBrandError.value = 'ต้องเหลืออย่างน้อย 1 บริษัท — ถ้าต้องการเอาออกทุกบริษัท ให้ใช้ปุ่มลบ'
@@ -566,10 +617,10 @@ async function saveEditBrand(): Promise<void> {
 
   savingBrandEdit.value = true
   editBrandError.value = ''
-  const rows = editBrandRows.value
-  const ticked = isSuperAdmin.value ? editBrandCompanyIds.value : rows.map((r) => r.company_id)
+  const tenantRows = rows.filter((r): r is Brand & { company_id: number } => r.company_id !== null)
+  const ticked = isSuperAdmin.value ? editBrandCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
-  const label = (companyId: number) => `${companyName(companyId) ?? `#${companyId}`}: `
+  const label = (companyId: number | null) => `${ownerLabel(companyId)}: `
 
   try {
     // TASK-205 — multipart, so a logo can be replaced or cleared in the same
@@ -588,7 +639,10 @@ async function saveEditBrand(): Promise<void> {
       return fd
     }
 
-    for (const row of rows.filter((r) => ticked.includes(r.company_id))) {
+    // The platform row is always in the update set: it is never added and
+    // never removed here, but a rename has to reach it or the group splits
+    // into two names on the next reload.
+    for (const row of rows.filter((r) => r.company_id === null || ticked.includes(r.company_id))) {
       try {
         await api.postForm(`/brands/${row.id}`, editFormData(null))
       } catch (e) {
@@ -596,7 +650,7 @@ async function saveEditBrand(): Promise<void> {
       }
     }
 
-    for (const companyId of ticked.filter((id) => !rows.some((r) => r.company_id === id))) {
+    for (const companyId of ticked.filter((id) => !tenantRows.some((r) => r.company_id === id))) {
       try {
         await api.postForm('/brands', editFormData(companyId))
       } catch (e) {
@@ -604,7 +658,7 @@ async function saveEditBrand(): Promise<void> {
       }
     }
 
-    for (const row of rows.filter((r) => !ticked.includes(r.company_id))) {
+    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id))) {
       try {
         await api.delete(`/brands/${row.id}`)
       } catch (e) {
@@ -641,7 +695,7 @@ async function confirmDeleteBrand(): Promise<void> {
     try {
       await api.delete(`/brands/${row.id}`)
     } catch (e) {
-      failures.push(`${companyName(row.company_id) ?? `#${row.company_id}`}: ${deleteFailureMessage(e)}`)
+      failures.push(`${ownerLabel(row.company_id)}: ${deleteFailureMessage(e)}`)
     }
   }
 
@@ -677,7 +731,7 @@ function startEditCategory(group: RefNameGroup<ProductCategory>): void {
     sort_order: first.sort_order,
     is_active: group.rows.every((r) => r.is_active),
   }
-  editCategoryCompanyIds.value = [...group.companyIds]
+  editCategoryCompanyIds.value = tenantCompanyIds(group)
   editCategoryRows.value = [...group.rows]
   editCategoryError.value = ''
 }
@@ -686,7 +740,8 @@ function cancelEditCategory(): void {
 }
 async function saveEditCategory(): Promise<void> {
   if (editingCategoryKey.value === null) return
-  if (isSuperAdmin.value && !editCategoryCompanyIds.value.length) {
+  const hasPlatformRow = editCategoryRows.value.some((r) => r.company_id === null)
+  if (isSuperAdmin.value && !editCategoryCompanyIds.value.length && !hasPlatformRow) {
     editCategoryError.value = 'ต้องเหลืออย่างน้อย 1 บริษัท — ถ้าต้องการเอาออกทุกบริษัท ให้ใช้ปุ่มลบ'
     return
   }
@@ -694,9 +749,12 @@ async function saveEditCategory(): Promise<void> {
   savingCategoryEdit.value = true
   editCategoryError.value = ''
   const rows = editCategoryRows.value
-  const ticked = isSuperAdmin.value ? editCategoryCompanyIds.value : rows.map((r) => r.company_id)
+  // TASK-256 — same split as saveEditBrand(): the platform row is renamed with
+  // the rest, but is never one of the tick boxes.
+  const tenantRows = rows.filter((r): r is ProductCategory & { company_id: number } => r.company_id !== null)
+  const ticked = isSuperAdmin.value ? editCategoryCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
-  const label = (companyId: number) => `${companyName(companyId) ?? `#${companyId}`}: `
+  const label = (companyId: number | null) => `${ownerLabel(companyId)}: `
   const payload = {
     name: editCategoryForm.value.name,
     // Explicit null (not omitted) so a cleared icon actually clears
@@ -708,7 +766,7 @@ async function saveEditCategory(): Promise<void> {
   }
 
   try {
-    for (const row of rows.filter((r) => ticked.includes(r.company_id))) {
+    for (const row of rows.filter((r) => r.company_id === null || ticked.includes(r.company_id))) {
       try {
         await api.put(`/product-categories/${row.id}`, payload)
       } catch (e) {
@@ -716,7 +774,7 @@ async function saveEditCategory(): Promise<void> {
       }
     }
 
-    for (const companyId of ticked.filter((id) => !rows.some((r) => r.company_id === id))) {
+    for (const companyId of ticked.filter((id) => !tenantRows.some((r) => r.company_id === id))) {
       try {
         // StoreProductCategoryRequest treats icon as nullable+optional; send
         // it only when set, matching submitCategory()'s create payload.
@@ -730,7 +788,7 @@ async function saveEditCategory(): Promise<void> {
       }
     }
 
-    for (const row of rows.filter((r) => !ticked.includes(r.company_id))) {
+    for (const row of tenantRows.filter((r) => !ticked.includes(r.company_id))) {
       try {
         await api.delete(`/product-categories/${row.id}`)
       } catch (e) {
@@ -779,7 +837,7 @@ async function confirmDeleteCategory(): Promise<void> {
     try {
       await api.delete(`/product-categories/${row.id}`)
     } catch (e) {
-      failures.push(`${companyName(row.company_id) ?? `#${row.company_id}`}: ${deleteFailureMessage(e)}`)
+      failures.push(`${ownerLabel(row.company_id)}: ${deleteFailureMessage(e)}`)
     }
   }
 
@@ -829,10 +887,23 @@ const bannerImageSizeError = ref('')
 // is already tenant-scoped (TenantScope), but Super Admin's is NOT (see
 // TenantScope::apply() — it returns unfiltered for Super Admin), so this
 // filters client-side by whichever company is currently selected above.
+/*
+ * TASK-256 / ADR-040 — a shared product qualifies only when this company has
+ * actually switched it ON. `is_sellable_here` is resolved for the company in
+ * the header (see CompanyScopeFilter::contextCompanyId), which is the same
+ * company this banner is being created for.
+ *
+ * Not `is_shared` alone: a banner pointing at a product the company does not
+ * sell is a dead link on its storefront, and not `is_active` either — that is
+ * the platform's switch, not theirs.
+ */
 const bannerCompanyProducts = computed(() => {
-  if (!isSuperAdmin.value) return products.value
+  if (!isSuperAdmin.value) return products.value.filter((p) => !p.is_shared || p.is_sellable_here)
   if (!selectedCatalogCompanyId.value) return []
-  return products.value.filter((p) => p.company_id === selectedCatalogCompanyId.value)
+
+  return products.value.filter((p) => p.is_shared
+    ? p.is_sellable_here
+    : p.company_id === selectedCatalogCompanyId.value)
 })
 
 function resetBannerForm(): void {
@@ -1024,6 +1095,116 @@ function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 0 }) + ' บาท'
 }
 
+/*
+ * ── TASK-256 / ADR-040 — the per-company price and on/off switch ──
+ *
+ * A shared product is ONE row that every company sells, so this list can no
+ * longer print "the price" and "ใช้งาน/ปิดใช้งาน" and mean anything: those
+ * belong to a company now, and the company is the one in the header switcher.
+ *
+ *   is_active            the PLATFORM's — "does this product exist at all"
+ *   is_sellable_here     this company's switch, default off, never inherited
+ *   price_satang         the central price a Super Admin types
+ *   effective_price_satang  what this company actually charges
+ *   own_price_satang     null when that number is inherited, not chosen
+ *
+ * The controls only appear with a company selected. In "ทุกบริษัท" there is no
+ * company to answer for — the API says so by reporting the central price and
+ * false — so the row shows the central price alone rather than a state that
+ * belongs to nobody.
+ */
+const scopedCompanyLabel = computed(() => {
+  const id = selectedCatalogCompanyId.value
+
+  return id === null ? null : (companyName(id) ?? `บริษัท #${id}`)
+})
+
+const companySettingProduct = ref<Product | null>(null)
+const companySettingInherit = ref(true)
+const companySettingPriceBaht = ref('')
+const companySettingError = ref('')
+const savingCompanySetting = ref(false)
+/** Product ids whose on/off switch is mid-flight, so the row can disable it. */
+const togglingSellHere = ref<number[]>([])
+
+function openCompanySetting(product: Product): void {
+  companySettingProduct.value = product
+  companySettingInherit.value = product.own_price_satang === null
+  // BR-3 — satang is divided by 100 here, at the display edge, and nowhere
+  // else. An inherited row shows the central price as the starting point so
+  // the admin edits from a real number rather than an empty box.
+  companySettingPriceBaht.value = String((product.own_price_satang ?? product.price_satang) / 100)
+  companySettingError.value = ''
+}
+
+function closeCompanySetting(): void {
+  companySettingProduct.value = null
+  companySettingError.value = ''
+}
+
+/**
+ * PUT /products/{id}/company-settings — Super Admin only, and the server says
+ * so too (UpdateCompanyProductSettingRequest::authorize()). The button is
+ * hidden for anyone else; the endpoint is what actually refuses.
+ *
+ * `price_satang: null` is a real instruction ("stop overriding, go back to the
+ * central price"), which is why the tick box sends null rather than omitting
+ * the key — omitting it means "leave the price alone", a different request.
+ */
+async function saveCompanySetting(): Promise<void> {
+  const product = companySettingProduct.value
+  const companyId = selectedCatalogCompanyId.value
+  if (!product || companyId === null) return
+
+  let priceSatang: number | null = null
+  if (!companySettingInherit.value) {
+    const baht = Number(companySettingPriceBaht.value)
+    if (!Number.isFinite(baht) || baht < 0) {
+      companySettingError.value = 'ราคาไม่ถูกต้อง'
+      return
+    }
+    // Math.round, not truncation: 199.99 baht is 19999 satang, and a
+    // float that lands on 19998.999999 must not quietly become 19998.
+    priceSatang = Math.round(baht * 100)
+  }
+
+  savingCompanySetting.value = true
+  companySettingError.value = ''
+  try {
+    await api.put(`/products/${product.id}/company-settings`, {
+      company_id: companyId,
+      price_satang: priceSatang,
+    })
+    await loadProducts()
+    companySettingProduct.value = null
+  } catch (e) {
+    companySettingError.value = saveFailureMessage(e)
+  } finally {
+    savingCompanySetting.value = false
+  }
+}
+
+async function toggleSellHere(product: Product): Promise<void> {
+  const companyId = selectedCatalogCompanyId.value
+  if (companyId === null || togglingSellHere.value.includes(product.id)) return
+
+  togglingSellHere.value = [...togglingSellHere.value, product.id]
+  errorMessage.value = ''
+  try {
+    // Only is_active — the price key is deliberately absent, because opening
+    // a product for sale must not also decide what it costs.
+    await api.put(`/products/${product.id}/company-settings`, {
+      company_id: companyId,
+      is_active: !product.is_sellable_here,
+    })
+    await loadProducts()
+  } catch (e) {
+    errorMessage.value = saveFailureMessage(e)
+  } finally {
+    togglingSellHere.value = togglingSellHere.value.filter((id) => id !== product.id)
+  }
+}
+
 // ── Video processing settings (ADR-007) — per-company override of
 // config/media.php's platform defaults (max upload size, target
 // resolution/bitrate for the async compression job). Company Admin
@@ -1212,7 +1393,11 @@ const filteredProducts = computed(() => {
     if (productFilters.brandId !== null && p.brand?.id !== productFilters.brandId) return false
     if (productFilters.categoryId !== null && p.category?.id !== productFilters.categoryId) return false
     // TASK-208 — narrowing by company is the header switcher's job now.
-    if (activeCompany.companyId !== null && p.company_id !== activeCompany.companyId) return false
+    // TASK-256 / ADR-040 — a PLATFORM product (company_id null) belongs to the
+    // scoped company as much as to any other; the server already sends it
+    // (CompanyScopeFilter includePlatformWide) and dropping it here would hide
+    // the shared catalogue from the only screen that can switch it on.
+    if (activeCompany.companyId !== null && p.company_id !== null && p.company_id !== activeCompany.companyId) return false
     if (q && !p.name.toLowerCase().includes(q)) return false
 
     return true
@@ -1229,8 +1414,26 @@ const productFilterCount = computed(
 // no-op otherwise), so this naturally returns undefined and the label
 // stays hidden for Company Admin — nothing to look up when every row is
 // already their own one company.
-function companyName(companyId: number): string | undefined {
+function companyName(companyId: number | null): string | undefined {
+  if (companyId === null) return undefined
+
   return activeCompany.companies.find((c) => c.id === companyId)?.name
+}
+
+/**
+ * TASK-256 / ADR-040 — what to CALL an owner, now that `null` is a real one.
+ *
+ * companyName() answers "which company row is this" and returns undefined for
+ * a platform row, which is right for it: there is no company. But every place
+ * that prints an owner needs a word, and "#null" or a blank chip would read as
+ * a bug. `null` is not a missing company — it is the platform, deliberately.
+ */
+const PLATFORM_OWNER_LABEL = 'ของกลาง'
+
+function ownerLabel(companyId: number | null): string {
+  if (companyId === null) return PLATFORM_OWNER_LABEL
+
+  return companyName(companyId) ?? `#${companyId}`
 }
 
 /**
@@ -1250,8 +1453,8 @@ function companyName(companyId: number): string | undefined {
  * With a company scoped there is only one company on screen — the prefix
  * would be noise, so the plain name is used exactly as before.
  */
-function groupOptionsByCompany<T extends { id: number, name: string, company_id: number }>(items: T[]) {
-  const buckets = new Map<number, T[]>()
+function groupOptionsByCompany<T extends { id: number, name: string, company_id: number | null }>(items: T[]) {
+  const buckets = new Map<number | null, T[]>()
   for (const item of items) {
     const bucket = buckets.get(item.company_id)
     if (bucket) bucket.push(item)
@@ -1261,10 +1464,19 @@ function groupOptionsByCompany<T extends { id: number, name: string, company_id:
   return [...buckets.entries()]
     .map(([id, list]) => ({
       companyId: id,
-      companyName: companyName(id) ?? `บริษัท #${id}`,
+      // v-for needs a PropertyKey and `null` is not one — TASK-256.
+      key: id === null ? 'platform' : String(id),
+      companyName: id === null ? PLATFORM_OWNER_LABEL : (companyName(id) ?? `บริษัท #${id}`),
       items: [...list].sort((a, b) => a.name.localeCompare(b.name, 'th')),
     }))
-    .sort((a, b) => a.companyName.localeCompare(b.companyName, 'th'))
+    // TASK-256 — the platform's brands and categories head the list. They are
+    // the ones every company can use, so they are the likeliest pick; sorting
+    // them alphabetically would bury them somewhere in the middle.
+    .sort((a, b) => {
+      if ((a.companyId === null) !== (b.companyId === null)) return a.companyId === null ? -1 : 1
+
+      return a.companyName.localeCompare(b.companyName, 'th')
+    })
 }
 
 const brandFilterGroups = computed(() => groupOptionsByCompany(brands.value))
@@ -1309,7 +1521,13 @@ interface RefNameGroup<T> {
   name: string
   /** One row per company that has this name. */
   rows: T[]
-  companyIds: number[]
+  companyIds: (number | null)[]
+  /**
+   * TASK-256 — true when one of the rows is the PLATFORM's. Such a row is not
+   * "a company that has this name": it is the row every company shares, so the
+   * tick-box picker below never adds or removes it.
+   */
+  hasPlatformRow: boolean
   totalProducts: number
 }
 
@@ -1318,7 +1536,13 @@ function matchesRefSearch(name: string): boolean {
   return q === '' || name.toLowerCase().includes(q)
 }
 
-function groupByName<T extends { company_id: number, name: string, is_active: boolean, products_count?: number }>(items: T[]): RefNameGroup<T>[] {
+/*
+ * TASK-256 / ADR-040 — `company_id: number | null`, because a brand or
+ * category may now belong to the PLATFORM. Grouping is by NAME and was never
+ * about ownership, so a shared row simply joins the group its name belongs to
+ * — which is what the screen already says ("ใช้งาน 2/3 บริษัท").
+ */
+function groupByName<T extends { company_id: number | null, name: string, is_active: boolean, products_count?: number }>(items: T[]): RefNameGroup<T>[] {
   const scope = selectedCatalogCompanyId.value
   const buckets = new Map<string, T[]>()
   for (const item of items) {
@@ -1333,15 +1557,24 @@ function groupByName<T extends { company_id: number, name: string, is_active: bo
     // Scoped: only names this company actually has. The chips below still
     // list every company holding the name — hiding those would put us back
     // at "why does this name exist twice".
-    .filter(([, rows]) => scope === null || rows.some((r) => r.company_id === scope))
+    // TASK-256 — a PLATFORM row (company_id null) belongs to this company too;
+    // it belongs to all of them. Filtering it out would hide the brand a
+    // promoted product actually points at.
+    .filter(([, rows]) => scope === null || rows.some((r) => r.company_id === scope || r.company_id === null))
     .map(([key, rows]) => ({
       key,
       // `rows` came from a bucket created by pushing its first element, so
       // it is never empty; the fallback keeps noUncheckedIndexedAccess happy
       // without an assertion that claims more than the code proves.
       name: rows[0]?.name ?? key,
-      rows: [...rows].sort((a, b) => (companyName(a.company_id) ?? '').localeCompare(companyName(b.company_id) ?? '', 'th')),
+      // The platform row first, for the same reason as the filter dropdown.
+      rows: [...rows].sort((a, b) => {
+        if ((a.company_id === null) !== (b.company_id === null)) return a.company_id === null ? -1 : 1
+
+        return ownerLabel(a.company_id).localeCompare(ownerLabel(b.company_id), 'th')
+      }),
       companyIds: rows.map((r) => r.company_id),
+      hasPlatformRow: rows.some((r) => r.company_id === null),
       totalProducts: rows.reduce((n, r) => n + (r.products_count ?? 0), 0),
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'th'))
@@ -1679,7 +1912,7 @@ function toggleRefForm(): void {
                     ? 'bg-brand-600 text-white border-brand-600'
                     : 'bg-brand-50 text-brand-700 border-brand-100'"
                   :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
-                >{{ companyName(row.company_id) ?? `#${row.company_id}` }}<template v-if="!row.is_active"> (ปิด)</template></span>
+                >{{ ownerLabel(row.company_id) }}<template v-if="!row.is_active"> (ปิด)</template></span>
               </div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
@@ -1791,7 +2024,7 @@ function toggleRefForm(): void {
                       ? 'bg-brand-600 text-white border-brand-600'
                       : 'bg-brand-50 text-brand-700 border-brand-100'"
                     :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
-                  >{{ companyName(row.company_id) ?? `#${row.company_id}` }}<template v-if="!row.is_active"> (ปิด)</template></span>
+                  >{{ ownerLabel(row.company_id) }}<template v-if="!row.is_active"> (ปิด)</template></span>
                 </div>
               </div>
             </div>
@@ -1837,7 +2070,7 @@ function toggleRefForm(): void {
         <select v-model.number="productFilters.brandId" class="h-[40px] px-3 rounded-lg border border-slate-200 text-sm">
           <option :value="null">แบรนด์: ทั้งหมด</option>
           <template v-if="activeCompany.isAllCompanies">
-            <optgroup v-for="g in brandFilterGroups" :key="g.companyId" :label="g.companyName">
+            <optgroup v-for="g in brandFilterGroups" :key="g.key" :label="g.companyName">
               <option v-for="b in g.items" :key="b.id" :value="b.id">{{ g.companyName }} · {{ b.name }}</option>
             </optgroup>
           </template>
@@ -1846,7 +2079,7 @@ function toggleRefForm(): void {
         <select v-model.number="productFilters.categoryId" class="h-[40px] px-3 rounded-lg border border-slate-200 text-sm">
           <option :value="null">หมวดหมู่: ทั้งหมด</option>
           <template v-if="activeCompany.isAllCompanies">
-            <optgroup v-for="g in categoryFilterGroups" :key="g.companyId" :label="g.companyName">
+            <optgroup v-for="g in categoryFilterGroups" :key="g.key" :label="g.companyName">
               <option v-for="c in g.items" :key="c.id" :value="c.id">{{ g.companyName }} · {{ c.name }}</option>
             </optgroup>
           </template>
@@ -1883,10 +2116,20 @@ function toggleRefForm(): void {
         title="ไม่พบแพ็กเกจที่ตรงกับตัวกรอง"
         message="ลองล้างตัวกรองหรือค้นหาด้วยคำอื่น"
       />
+      <!-- TASK-256 / ADR-040 — one row per PRODUCT, not per company copy. A
+           shared product's price and on-sale state belong to the company in
+           the header switcher, so both are labelled with that company's name;
+           in ทุกบริษัท mode neither exists and the row falls back to the
+           central price alone. -->
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="p in filteredProducts" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <p class="text-sm font-bold text-slate-900">{{ p.name }}</p>
+        <div v-for="p in filteredProducts" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <span class="truncate">{{ p.name }}</span>
+              <span v-if="p.is_shared" class="shrink-0 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-bold" title="สินค้ากลาง — ทุกบริษัทใช้รายการเดียวกัน แต่ตั้งราคาและเปิด/ปิดขายเองได้">
+                ของกลาง
+              </span>
+            </p>
             <p class="text-xs text-slate-400">
               {{ p.brand?.name }} · {{ p.category?.name }}
               <!-- Company name only for Super Admin (2026-08-18, human
@@ -1895,22 +2138,105 @@ function toggleRefForm(): void {
                    label disambiguates anything for — see companyName(). -->
               <template v-if="isSuperAdmin && companyName(p.company_id)"> · {{ companyName(p.company_id) }}</template>
             </p>
+            <!-- The sentence a Company Admin actually needs: not "ใช้งาน",
+                 which is the platform's state, but whether THEIR company is
+                 selling it. Never inherited, so it is never a guess. -->
+            <p v-if="p.is_shared && scopedCompanyLabel" class="mt-0.5 text-xs" :class="p.is_sellable_here ? 'text-emerald-600' : 'text-slate-400'">
+              {{ p.is_sellable_here ? `ขายอยู่ที่ ${scopedCompanyLabel}` : `ยังไม่เปิดขายที่ ${scopedCompanyLabel}` }}
+            </p>
           </div>
-          <div class="flex items-center gap-3">
-            <span :class="p.is_active ? 'text-emerald-600' : 'text-slate-400'" class="text-xs font-bold">{{ p.is_active ? 'ใช้งาน' : 'ปิดใช้งาน' }}</span>
-            <span class="text-sm font-bold text-slate-900">{{ formatSatang(p.price_satang) }}</span>
-            <RouterLink
-              :to="{ name: 'product-edit', params: { id: p.id } }"
-              class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 flex items-center gap-1"
-            >
-              <Icon name="pencil" :size="12" /> แก้ไข
-            </RouterLink>
-            <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteProduct(p)">
-              <Icon name="trash" :size="14" />
-            </button>
+          <div class="flex items-center gap-3 shrink-0">
+            <!-- A shared product that the platform switched off is off
+                 everywhere, whatever a company set — say so rather than
+                 letting the per-company line above read as the whole truth. -->
+            <span v-if="!p.is_active" class="text-xs font-bold text-slate-400" title="ปิดที่ระดับสินค้า — ปิดทุกบริษัท">ปิดใช้งาน</span>
+            <span v-else-if="!p.is_shared" class="text-xs font-bold text-emerald-600">ใช้งาน</span>
+
+            <div class="text-right">
+              <span class="text-sm font-bold text-slate-900">{{ formatSatang(p.is_shared && scopedCompanyLabel ? p.effective_price_satang : p.price_satang) }}</span>
+              <!-- An inherited price is not the same number as a chosen one:
+                   it moves the next time the central price is edited. -->
+              <p v-if="p.is_shared && scopedCompanyLabel && p.own_price_satang === null" class="text-[10px] text-slate-400 leading-tight">
+                (ราคากลาง)
+              </p>
+            </div>
+
+            <template v-if="isSuperAdmin && p.is_shared && scopedCompanyLabel">
+              <button
+                class="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
+                :title="`ตั้งราคาเฉพาะของ ${scopedCompanyLabel}`"
+                @click="openCompanySetting(p)"
+              >
+                ตั้งราคา
+              </button>
+              <button
+                class="px-2.5 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50"
+                :class="p.is_sellable_here ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+                :disabled="togglingSellHere.includes(p.id)"
+                :title="p.is_sellable_here ? `ปิดขายที่ ${scopedCompanyLabel}` : `เปิดขายที่ ${scopedCompanyLabel}`"
+                @click="toggleSellHere(p)"
+              >
+                {{ p.is_sellable_here ? 'ปิดขาย' : 'เปิดขาย' }}
+              </button>
+            </template>
+
+            <!-- Editing or deleting a SHARED product changes it for every
+                 company, so only the Super Admin who owns the central row may
+                 do it. A Company Admin's controls here are the two above. -->
+            <template v-if="!p.is_shared || isSuperAdmin">
+              <RouterLink
+                :to="{ name: 'product-edit', params: { id: p.id } }"
+                class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200 flex items-center gap-1"
+                :title="p.is_shared ? 'แก้ไขสินค้ากลาง — มีผลกับทุกบริษัท' : 'แก้ไข'"
+              >
+                <Icon name="pencil" :size="12" /> แก้ไข
+              </RouterLink>
+              <button class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteProduct(p)">
+                <Icon name="trash" :size="14" />
+              </button>
+            </template>
           </div>
         </div>
       </TransitionGroup>
+
+      <!-- TASK-256 — the per-company price. Deliberately a separate action
+           from "เปิดขาย": opening a product for sale must not also decide
+           what it costs, and clearing the override is a real instruction
+           (null), not an empty field. -->
+      <div v-if="companySettingProduct" class="fixed inset-0 z-40 bg-slate-900/40 flex items-center justify-center p-4" @click.self="closeCompanySetting()">
+        <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+          <p class="text-sm font-bold text-slate-900">ตั้งราคาของ {{ scopedCompanyLabel }}</p>
+          <p class="mt-0.5 text-xs text-slate-400">{{ companySettingProduct.name }} · ราคากลาง {{ formatSatang(companySettingProduct.price_satang) }}</p>
+
+          <label class="mt-4 flex items-start gap-2 text-sm text-slate-700">
+            <input v-model="companySettingInherit" type="checkbox" class="mt-0.5" />
+            <span>
+              ใช้ราคากลาง
+              <span class="block text-xs text-slate-400">ถ้า Super Admin แก้ราคากลางในอนาคต บริษัทนี้จะเปลี่ยนตามด้วย</span>
+            </span>
+          </label>
+
+          <div v-if="!companySettingInherit" class="mt-3">
+            <label class="text-xs font-bold text-slate-500">ราคาของบริษัทนี้ (บาท)</label>
+            <input
+              v-model="companySettingPriceBaht"
+              type="number"
+              min="0"
+              step="0.01"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            />
+          </div>
+
+          <p v-if="companySettingError" class="mt-2 text-xs text-rose-600">{{ companySettingError }}</p>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button class="btn-secondary" :disabled="savingCompanySetting" @click="closeCompanySetting()">ยกเลิก</button>
+            <button class="btn-primary" :disabled="savingCompanySetting" @click="saveCompanySetting()">
+              {{ savingCompanySetting ? 'กำลังบันทึก…' : 'บันทึก' }}
+            </button>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Banners (TASK-068 / ADR-020 row 2) -->
@@ -2127,7 +2453,7 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteBrand !== null"
       variant="danger"
-      :body='pendingDeleteBrand ? `ซ่อนแบรนด์ "${pendingDeleteBrand.name}" จาก ${pendingDeleteBrand.rows.length} บริษัท (${pendingDeleteBrand.rows.map((r) => companyName(r.company_id) ?? `#${r.company_id}`).join(", ")})? สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ` : ""'
+      :body='pendingDeleteBrand ? `ซ่อนแบรนด์ "${pendingDeleteBrand.name}" จาก ${pendingDeleteBrand.rows.length} บริษัท (${pendingDeleteBrand.rows.map((r) => ownerLabel(r.company_id)).join(", ")})? สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ` : ""'
       @confirm="confirmDeleteBrand"
       @update:show="(v) => { if (!v) pendingDeleteBrand = null }"
     />
@@ -2136,7 +2462,7 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteCategory !== null"
       variant="danger"
-      :body='pendingDeleteCategory ? `ซ่อนหมวดหมู่ "${pendingDeleteCategory.name}" จาก ${pendingDeleteCategory.rows.length} บริษัท (${pendingDeleteCategory.rows.map((r) => companyName(r.company_id) ?? `#${r.company_id}`).join(", ")})? สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ` : ""'
+      :body='pendingDeleteCategory ? `ซ่อนหมวดหมู่ "${pendingDeleteCategory.name}" จาก ${pendingDeleteCategory.rows.length} บริษัท (${pendingDeleteCategory.rows.map((r) => ownerLabel(r.company_id)).join(", ")})? สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ` : ""'
       @confirm="confirmDeleteCategory"
       @update:show="(v) => { if (!v) pendingDeleteCategory = null }"
     />

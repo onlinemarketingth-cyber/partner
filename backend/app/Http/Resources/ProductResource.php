@@ -6,6 +6,7 @@ use App\Enums\ProductMediaPurpose;
 use App\Enums\ProductMediaType;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Pipeline\PipelineTemplateResolver;
+use App\Support\CompanyScopeFilter;
 use App\Support\RequestScopedService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -60,8 +61,18 @@ class ProductResource extends JsonResource
              * difference between them is somebody's money.
              */
             'price_satang' => $this->price_satang,
-            'effective_price_satang' => app(ProductPricingService::class)
-                ->effectivePriceSatang($this->resource, $request->user()?->company_id),
+            'effective_price_satang' => RequestScopedService::get($request, ProductPricingService::class)
+                ->effectivePriceSatang($this->resource, CompanyScopeFilter::contextCompanyId($request)),
+            /*
+             * TASK-256 — null means "this company has not set a price", which
+             * is not the same as "its price happens to equal the central one".
+             * The admin screen needs the difference: an inherited price moves
+             * the next time a Super Admin edits the centre, and the row says
+             * so. Deriving it from effective == central would call two
+             * deliberate decisions one accident.
+             */
+            'own_price_satang' => RequestScopedService::get($request, ProductPricingService::class)
+                ->ownPriceSatang($this->resource, CompanyScopeFilter::contextCompanyId($request)),
             'is_shared' => $this->isShared(),
             /*
              * Whether THIS viewer's company may sell it. For a shared product
@@ -71,7 +82,7 @@ class ProductResource extends JsonResource
              * product would show the PLATFORM's state and read as the
              * company's.
              */
-            'is_sellable_here' => $this->isSellableBy($request->user()?->company_id),
+            'is_sellable_here' => $this->isSellableBy(CompanyScopeFilter::contextCompanyId($request)),
             'description' => $this->effectiveDescription(),
             'spec_description' => $this->effectiveSpecDescription(),
             'is_active' => $this->is_active,
@@ -123,7 +134,7 @@ class ProductResource extends JsonResource
             // has a different answer per company, and the person reading the
             // screen is asking about their own. A company-owned product
             // ignores the argument (it inherits from its own company).
-            'effective_plan_type' => $this->effectivePlanType($request->user()?->company)->value,
+            'effective_plan_type' => $this->effectivePlanType(CompanyScopeFilter::contextCompany($request))->value,
             // TASK-194 §3.1/§3.4 — same "own override + always-resolved
             // effective value" pairing as commission_plan_type/
             // effective_plan_type above, so ag-ui never has to duplicate
@@ -179,7 +190,7 @@ class ProductResource extends JsonResource
                     // The viewer's company, for the same reason
                     // effective_plan_type passes it: a shared product's
                     // journey is the asking company's (TASK-253 / ADR-040).
-                    ->resolveForProduct($this->resource, $request->user()?->company_id);
+                    ->resolveForProduct($this->resource, CompanyScopeFilter::contextCompanyId($request));
 
                 // loadMissing, not load: the resolver hands back the SAME
                 // model instance for every product that resolves the same

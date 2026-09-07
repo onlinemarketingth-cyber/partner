@@ -20,6 +20,12 @@ use Illuminate\Http\Request;
  *                         but only if they share the instance.
  *   - ProductResource   → PipelineTemplateResolver, for
  *                         `effective_pipeline_template`. Same story.
+ *   - ProductResource   → ProductPricingService (TASK-256 / ADR-040). It is
+ *                         asked twice per row — the effective price and
+ *                         whether that price is inherited — and both answers
+ *                         come from the same `company_product_settings` row.
+ *                         Sharing the instance makes a catalogue page pay for
+ *                         that lookup once per product instead of twice.
  *
  * Scoped to the Request object (not a container singleton, not a static)
  * on purpose: a singleton would survive across the several requests a

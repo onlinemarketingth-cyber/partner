@@ -39,6 +39,13 @@ use App\Models\Scopes\TenantScope;
 class ProductPricingService
 {
     /**
+     * product id + company id -> that company's own price, or null.
+     *
+     * @var array<string, int|null>
+     */
+    private array $ownPriceMemo = [];
+
+    /**
      * The price a customer is charged for this product RIGHT NOW —
      * the active promotion's discounted price if one is running, else
      * the product's list price.
@@ -73,8 +80,45 @@ class ProductPricingService
     {
         $companyId ??= $product->company_id;
 
+        // `?? central` and not `?: central`: 0 satang is a price a Super Admin
+        // may deliberately set (a free onboarding item), and treating it as
+        // "unset" would silently charge the central price instead.
+        return (int) ($this->ownPriceSatang($product, $companyId) ?? $product->price_satang);
+    }
+
+    /**
+     * TASK-256 — the company's OWN price, or null when it has not set one.
+     *
+     * listPriceSatang() answers "what does this company pay", which is never
+     * null and therefore cannot distinguish a company that deliberately priced
+     * the product at the central figure from one that has simply never
+     * touched it. The admin screen has to tell those apart: one shows a price,
+     * the other shows "(ราคากลาง)" and will move on its own the next time a
+     * Super Admin edits the central number.
+     *
+     * Null for a company-owned product too — there is nothing else that could
+     * own a price for a row that already belongs to one company.
+     */
+    public function ownPriceSatang(Product $product, ?int $companyId = null): ?int
+    {
+        $companyId ??= $product->company_id;
+
         if (! $product->isShared() || $companyId === null) {
-            return (int) $product->price_satang;
+            return null;
+        }
+
+        $key = $product->id.':'.$companyId;
+
+        /*
+         * Memoised because ProductResource asks twice per row — once for the
+         * effective price, once to say whether it is inherited — and a
+         * paginated catalogue would otherwise pay for both. This is a READ
+         * cache on one instance: resources take a request-scoped instance
+         * (RequestScopedService), writers construct their own, so a save
+         * never reads back a stale number here.
+         */
+        if (array_key_exists($key, $this->ownPriceMemo)) {
+            return $this->ownPriceMemo[$key];
         }
 
         $ownPrice = CompanyProductSetting::withoutGlobalScope(TenantScope::class)
@@ -82,10 +126,7 @@ class ProductPricingService
             ->where('product_id', $product->id)
             ->value('price_satang');
 
-        // `?? central` and not `?: central`: 0 satang is a price a Super Admin
-        // may deliberately set (a free onboarding item), and treating it as
-        // "unset" would silently charge the central price instead.
-        return (int) ($ownPrice ?? $product->price_satang);
+        return $this->ownPriceMemo[$key] = $ownPrice === null ? null : (int) $ownPrice;
     }
 
     /**

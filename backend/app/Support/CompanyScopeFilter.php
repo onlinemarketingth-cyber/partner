@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Company;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 
@@ -62,5 +63,69 @@ class CompanyScopeFilter
         $query->where(fn (Builder $q) => $includePlatformWide
             ? $q->where($column, $companyId)->orWhereNull($column)
             : $q->where($column, $companyId));
+    }
+
+    /**
+     * TASK-256 / ADR-040 — "whose company is this answer about?"
+     *
+     * A platform-owned product has no single price and no single on-sale
+     * state: it has one PER COMPANY (`company_product_settings`). So every
+     * resolved field — effective price, may-this-company-sell-it, which
+     * commission plan, which journey — needs a company to be resolved
+     * against, and until now that was always `$request->user()->company_id`.
+     *
+     * That is right for a Company Admin and for an agent, and WRONG for the
+     * only person who can edit these: a Super Admin belongs to no company, so
+     * every shared product would report the central price and "not for sale"
+     * no matter which company they had picked in the header. The header
+     * picker already travels as `?company_id=` (it is the same value
+     * apply() narrows the query with), so a Super Admin's context is simply
+     * the company they are looking at — and "ทุกบริษัท" (no scope) honestly
+     * has no context, which is what null means here.
+     *
+     * Same security contract as apply(): the parameter is read ONLY for a
+     * Super Admin. For anyone else their own company is the answer and a
+     * `?company_id=` in their query string is ignored, never trusted — this
+     * resolves what to DISPLAY, and must not become a way to ask about a
+     * company you cannot see.
+     */
+    public static function contextCompanyId(Request $request, string $column = 'company_id'): ?int
+    {
+        $user = $request->user();
+
+        if ($user === null) {
+            return null;
+        }
+
+        if (! $user->isSuperAdmin()) {
+            return $user->company_id === null ? null : (int) $user->company_id;
+        }
+
+        return $request->filled($column) ? $request->integer($column) : null;
+    }
+
+    /**
+     * The same company as an entity, for the callers that need more than its
+     * id (Product::effectivePlanType() reads the company's plan type).
+     *
+     * Memoised on the request so a paginated page of products costs one
+     * lookup, not one per row; for a non-Super-Admin it is the already-loaded
+     * relation and costs no query at all.
+     */
+    public static function contextCompany(Request $request): ?Company
+    {
+        if ($request->attributes->has('scope_company')) {
+            return $request->attributes->get('scope_company');
+        }
+
+        $user = $request->user();
+
+        $company = $user !== null && ! $user->isSuperAdmin()
+            ? $user->company
+            : (($id = self::contextCompanyId($request)) === null ? null : Company::find($id));
+
+        $request->attributes->set('scope_company', $company);
+
+        return $company;
     }
 }
