@@ -270,6 +270,74 @@ onMounted(async () => {
   }
 })
 
+/*
+ * ── 2026-09-07 (production report) — WHAT A REFUSAL ACTUALLY WAS ──
+ *
+ * A visitor filling in this form saw "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" and a 429 in
+ * the console. The server was not unreachable; it was refusing, because
+ * POST /register is `throttle:10,1` and they had submitted more than ten times
+ * in a minute. Every catch on this page tested for 422 and sent everything
+ * else to one network message — so a throttle, an expired CSRF token and a
+ * real outage were the same sentence, and only one of the three was true.
+ *
+ * That message is not merely unhelpful, it is misdirection: the reader goes to
+ * check their internet, or reloads and submits again, which extends the very
+ * lockout they are inside. So the two refusals that are NOT outages now say
+ * what they are and what to do, and the network message is kept for the case
+ * where it is actually correct.
+ */
+function formatWait(seconds: number): string {
+  if (seconds < 60) {
+    return t('reg_wait_seconds', `${seconds} วินาที`, `${seconds} seconds`)
+  }
+
+  const minutes = Math.ceil(seconds / 60)
+
+  return t('reg_wait_minutes', `${minutes} นาที`, `${minutes} minute${minutes === 1 ? '' : 's'}`)
+}
+
+/**
+ * The message for a failure that is not a 422. Returns null when the error
+ * really is "we could not reach the server", so each caller keeps its own
+ * wording for that case.
+ */
+function refusalMessage(e: unknown): string | null {
+  if (!(e instanceof ApiError)) return null
+
+  if (e.status === 429) {
+    // The wait, when the server told us; otherwise no invented number (BR-7).
+    const wait = e.retryAfterSeconds !== null
+      ? t('reg_throttled_wait', ` กรุณารออีก ${formatWait(e.retryAfterSeconds)} แล้วลองใหม่`, ` Please wait ${formatWait(e.retryAfterSeconds)} and try again.`)
+      : t('reg_throttled_soon', ' กรุณารอสักครู่แล้วลองใหม่', ' Please wait a moment and try again.')
+
+    return t(
+      'reg_throttled',
+      'ส่งข้อมูลถี่เกินไป ระบบจึงหยุดรับไว้ชั่วคราวเพื่อความปลอดภัย — ข้อมูลที่กรอกไว้ยังอยู่ครบ',
+      'Too many attempts in a short time, so the system paused them for safety — nothing you typed has been lost.',
+    ) + wait
+  }
+
+  if (e.status === 419) {
+    // Sanctum's CSRF token expired — a form left open too long, not a
+    // mistake in anything the person typed.
+    return t(
+      'reg_expired',
+      'หน้านี้เปิดทิ้งไว้นานเกินไป กรุณารีเฟรชหน้าแล้วกรอกใหม่อีกครั้ง',
+      'This page was left open too long. Please refresh and fill the form in again.',
+    )
+  }
+
+  if (e.status >= 500) {
+    return t(
+      'reg_server_error',
+      'ระบบขัดข้องชั่วคราว กรุณาลองใหม่อีกครั้งในอีกสักครู่ — หากยังไม่ได้ กรุณาแจ้งหัวหน้าทีมของคุณ',
+      'The system had a temporary problem. Please try again shortly, and tell your team leader if it continues.',
+    )
+  }
+
+  return null
+}
+
 // --- Step 1: invite code ---
 const inviteCode = ref('')
 const inviteCodeInputEl = ref<HTMLInputElement | null>(null)
@@ -301,10 +369,15 @@ async function submitInviteCode() {
   } catch (e) {
     // 404 either way (unknown/expired/revoked) — see ResolveInviteCodeRequest's
     // own comment on why the backend never distinguishes the reason.
+    // A refused code and a refused REQUEST are different problems: this
+    // endpoint is throttle:10,1 too, and telling somebody their invite code is
+    // invalid when the server never looked at it sends them to ask their team
+    // leader for a code that was fine.
     inviteCodeError.value =
-      e instanceof ApiError
+      refusalMessage(e)
+      ?? (e instanceof ApiError
         ? t('reg_invite_invalid', 'ไม่พบรหัสเชิญนี้ หรือรหัสหมดอายุ/ถูกยกเลิกแล้ว', 'Invite code not found, or it has expired/been revoked')
-        : t('reg_network_error', 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง', 'Could not reach the server. Please try again.')
+        : t('reg_network_error', 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง', 'Could not reach the server. Please try again.'))
     inviteCodeInputEl.value?.focus()
   } finally {
     resolvingCode.value = false
@@ -646,7 +719,10 @@ async function submitRegister() {
         errorMessage.value = t('reg_error_generic', 'สมัครไม่สำเร็จ กรุณาตรวจสอบข้อมูลและลองใหม่', 'Registration failed. Please check your details and try again.')
       }
     } else {
-      errorMessage.value = t('reg_network_error', 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง', 'Could not reach the server. Please try again.')
+      // 429 / 419 / 5xx say what they are; only a genuinely unreachable
+      // server falls through to the network message.
+      errorMessage.value = refusalMessage(e)
+        ?? t('reg_network_error', 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ กรุณาลองใหม่อีกครั้ง', 'Could not reach the server. Please try again.')
     }
   } finally {
     submitting.value = false

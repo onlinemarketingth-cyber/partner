@@ -142,9 +142,38 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     public body: unknown,
+    /**
+     * Seconds until the caller may retry, from the response's `Retry-After`
+     * header. Only ever set on a 429.
+     *
+     * It is on the error rather than left in the response because of a
+     * production report (2026-09-07): a visitor filling in the sign-up form
+     * hit `throttle:10,1` and the page told them
+     * "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" — the server was answering perfectly, it
+     * was refusing. Without the number the only honest thing a screen can say
+     * is "later", which is what made the message useless enough to be replaced
+     * by a wrong one.
+     */
+    public retryAfterSeconds: number | null = null,
   ) {
     super(`API error ${status}`)
   }
+}
+
+/**
+ * `Retry-After` as a number of seconds, or null.
+ *
+ * Laravel's ThrottleRequests always sends it as a delta-seconds integer; the
+ * HTTP-date form the RFC also allows is not parsed, because nothing in this
+ * API emits it and a half-supported parse is worse than an honest null.
+ */
+function retryAfterSeconds(res: Response): number | null {
+  const raw = res.headers.get('Retry-After')
+  if (raw === null) return null
+
+  const seconds = Number(raw)
+
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null
 }
 
 // Bug fix: the router guard only calls authStore.fetchUser() ONCE per
@@ -195,7 +224,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const isJson = res.headers.get('content-type')?.includes('application/json')
   const body = isJson ? await res.json() : await res.text()
 
-  if (!res.ok) throw new ApiError(res.status, body)
+  if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
   return body as T
 }
 
@@ -216,7 +245,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   const isJson = res.headers.get('content-type')?.includes('application/json')
   const body = isJson ? await res.json() : await res.text()
 
-  if (!res.ok) throw new ApiError(res.status, body)
+  if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
   return body as T
 }
 
@@ -239,7 +268,7 @@ async function requestDownload(path: string, filename: string): Promise<void> {
 
   if (!res.ok) {
     const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
   }
 
   const blob = await res.blob()
@@ -278,7 +307,7 @@ async function requestDownloadAbsolute(url: string, filename?: string): Promise<
 
   if (!res.ok) {
     const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
   }
 
   const header = res.headers.get('content-disposition') ?? ''
@@ -320,7 +349,7 @@ async function requestBlob(path: string): Promise<Blob> {
 
   if (!res.ok) {
     const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
   }
 
   return res.blob()
