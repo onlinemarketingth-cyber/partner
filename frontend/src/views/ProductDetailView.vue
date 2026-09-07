@@ -58,7 +58,11 @@ interface MediaItem {
 interface ProductDetail {
   id: number
   name: string
+  // TASK-257 / ADR-040 — see ProductCardItem: `price_satang` is the row's own
+  // number, which for a shared product is the platform's, and
+  // `effective_price_satang` is what this agent's company charges.
   price_satang: number
+  effective_price_satang?: number
   description: string | null
   spec_description: string | null
   thumbnail_url?: string | null
@@ -238,7 +242,7 @@ onMounted(load)
             <template v-if="product.brand"> · {{ product.brand.name }}</template>
           </p>
           <h1 class="text-xl font-bold text-ink-card leading-tight mt-1">{{ product.name }}</h1>
-          <p class="text-2xl font-bold text-ink-brand mt-2">{{ formatBaht(product.price_satang) }}</p>
+          <p class="text-2xl font-bold text-ink-brand mt-2">{{ formatBaht(product.effective_price_satang ?? product.price_satang) }}</p>
 
           <!-- whitespace-pre-line: an admin types these in a textarea, so the
                line breaks they put in are content, not incidental. -->

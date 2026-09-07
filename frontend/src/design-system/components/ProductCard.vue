@@ -30,7 +30,24 @@ import AuthenticatedMedia from './AuthenticatedMedia.vue'
 export interface ProductCardItem {
   id: number
   name: string
+  /**
+   * The product row's own price. For a PLATFORM product (ADR-040) that is the
+   * CENTRAL price — not what this agent's company charges — so it is not what
+   * the card shows.
+   */
   price_satang: number
+  /**
+   * TASK-257 / ADR-040 — what THIS agent's company actually charges: its own
+   * price if it set one, the central price if not, and an active promotion
+   * above either. Resolved server-side by the one service that also prices the
+   * order (ProductPricingService), so the card and the checkout cannot drift.
+   *
+   * Optional and falling back to `price_satang`: every caller of this
+   * component reads /products, which sends it — the fallback exists so a
+   * future caller that does not is wrong by a stale number rather than by
+   * `undefined` rendering as NaN.
+   */
+  effective_price_satang?: number
   thumbnail_url: string | null
   category?: { id: number; name: string } | null
 }
@@ -81,7 +98,7 @@ function formatBaht(satang: number): string {
         {{ product.category.name }}
       </p>
       <p class="text-sm font-bold text-ink-card leading-tight line-clamp-2">{{ product.name }}</p>
-      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.price_satang) }}</p>
+      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.effective_price_satang ?? product.price_satang) }}</p>
 
       <!-- `.stop.prevent` is load-bearing now that the card is a link:
            without it, every share press would ALSO navigate, and the
