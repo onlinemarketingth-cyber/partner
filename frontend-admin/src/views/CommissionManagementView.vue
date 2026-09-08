@@ -12,12 +12,15 @@
  * payment_status/paid_at — no other field is ever editable here.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+
+const route = useRoute()
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
@@ -121,7 +124,27 @@ async function loadAll() {
 }
 onMounted(loadAll)
 
-const activeTab = ref<'all' | 'pending' | 'paid'>('pending')
+/*
+ * 2026-09-08 — the tab can be named in the URL, so the dashboard's
+ * "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card lands on the set it counted rather than on
+ * this screen's default (รอจ่าย), which is a different number entirely.
+ *
+ * Read ONCE at setup, not watched: this is a starting point handed over by a
+ * link, and re-applying it would fight the person who then clicks another tab.
+ * An unknown value falls through to the default rather than showing nothing.
+ */
+const TAB_IDS = ['all', 'pending', 'paid'] as const
+type TabId = (typeof TAB_IDS)[number]
+
+function tabFromQuery(): TabId {
+  const asked = route.query.tab
+
+  return typeof asked === 'string' && (TAB_IDS as readonly string[]).includes(asked)
+    ? (asked as TabId)
+    : 'pending'
+}
+
+const activeTab = ref<TabId>(tabFromQuery())
 const tabs = computed(() => [
   { id: 'all', label: 'ทั้งหมด', count: entries.value.length },
   { id: 'pending', label: 'รอจ่าย', count: entries.value.filter((e) => e.payment_status === 'pending').length },
@@ -201,7 +224,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             type="button"
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors"
             :class="activeTab === t.id ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
-            @click="activeTab = t.id as 'all' | 'pending' | 'paid'"
+            @click="activeTab = t.id as TabId"
           >
             {{ t.label }} ({{ t.count }})
           </button>

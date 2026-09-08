@@ -83,7 +83,10 @@
     "pending_unknown": "{error} — cannot tell whether anyone is waiting for approval",
     "pending_showing": "Showing {shown} of {total}",
     "pending_none": "Nobody is waiting for approval",
-    "pending_loading": "Loading the approval queue..."
+    "pending_loading": "Loading the approval queue...",
+    "kpi_open": "View details",
+    "kpi_open_pending": "View pending approvals",
+    "kpi_scope_note": "The destination lists everything, not only what this number counts"
   },
   "reward": {
     "title": "Reward Center",

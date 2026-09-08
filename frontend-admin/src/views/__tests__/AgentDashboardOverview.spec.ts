@@ -197,7 +197,23 @@ function wireApi(metrics: unknown, approvals: ApprovalsResponse | 'fail' = { dat
 }
 
 async function mountDashboard() {
-  const wrapper = mount(AgentDashboardOverview)
+  const wrapper = mount(AgentDashboardOverview, {
+    global: {
+      stubs: {
+        /*
+         * 2026-09-08 — the KPI cards became links, so this mount needs a
+         * RouterLink. A real <a> that keeps `to` as an attribute rather than
+         * `RouterLink: true`: the tests below assert WHERE each card goes,
+         * and a stub that swallowed the destination would let every card
+         * point at the same page and still pass.
+         */
+        RouterLink: {
+          props: ['to'],
+          template: '<a :data-to="JSON.stringify(to)"><slot /></a>',
+        },
+      },
+    },
+  })
   await flushPromises()
   return wrapper
 }
@@ -537,5 +553,122 @@ describe('pending approvals panel', () => {
     const wrapper = await mountDashboard()
 
     expect(wrapper.text()).toContain('ไม่มีผู้ใช้รออนุมัติ')
+  })
+})
+
+/**
+ * 2026-09-08 (human: "หน้า Dashboard ผมอยากให้คลิ๊กไปดูรายละเอียดได้ในแต่ละ
+ * หน้า เช่นตอนนี้ มีข้อมูลตัวแทน 1 ต้องคลิ๊ก link ไปที่ตัวแทน 1 ได้").
+ *
+ * A dashboard that states a total and offers no way to see what it is made of
+ * sends the reader hunting through the menu for the page they were already
+ * looking at.
+ *
+ * The delicate half is not the links — it is where each one goes, and whether
+ * the page it lands on shows the same set the number counted. Only ONE of the
+ * five can: the commission screen has a "จ่ายแล้ว" tab, so that card names it
+ * in the URL and the two numbers agree. The other four land on screens that
+ * list more (every order status, every pipeline stage, active AND deactivated
+ * agents), and a reader who clicks 12 and then counts 15 rows has been quietly
+ * told the dashboard is wrong — so those cards say so before the click.
+ */
+function cardAt(wrapper: Awaited<ReturnType<typeof mountDashboard>>, index: number) {
+  const cards = wrapper.findAll('[data-test="kpi-card"]')
+  const card = cards[index]
+  if (!card) throw new Error(`no KPI card at index ${index} — found ${cards.length}`)
+
+  return card
+}
+
+/** The `to` this card actually carries, as the router would receive it. */
+function destinationOf(wrapper: Awaited<ReturnType<typeof mountDashboard>>, index: number) {
+  return JSON.parse(cardAt(wrapper, index).attributes('data-to') ?? 'null')
+}
+
+describe('AgentDashboardOverview — every number opens what it counts', () => {
+  it('sends each card to the screen holding its records', async () => {
+    wireApi(makeMetrics())
+
+    const wrapper = await mountDashboard()
+
+    expect(destinationOf(wrapper, 0)).toEqual({ name: 'agent-roster' })
+    expect(destinationOf(wrapper, 1)).toEqual({ name: 'order-payments' })
+    expect(destinationOf(wrapper, 3)).toEqual({ name: 'client-management' })
+    expect(destinationOf(wrapper, 4)).toEqual({ name: 'referral-pipeline-management' })
+  })
+
+  it('opens the commission screen on the tab that shows the same number', async () => {
+    /*
+     * The card counts commission ALREADY PAID; that screen opens on รอจ่าย by
+     * default, which is a different figure entirely. Landing on the default
+     * would show the reader a number they did not click on.
+     */
+    wireApi(makeMetrics())
+
+    const wrapper = await mountDashboard()
+
+    expect(destinationOf(wrapper, 2)).toEqual({
+      name: 'commission-management',
+      query: { tab: 'paid' },
+    })
+  })
+
+  it('warns on the cards whose destination lists more than they count', async () => {
+    // 12 active agents, 3 deactivated: the roster shows 15.
+    wireApi(makeMetrics())
+
+    const wrapper = await mountDashboard()
+
+    expect(cardAt(wrapper, 0).text()).toContain('ไม่ได้กรองเฉพาะตัวเลขนี้')
+    expect(cardAt(wrapper, 4).text()).toContain('ไม่ได้กรองเฉพาะตัวเลขนี้')
+  })
+
+  it('says nothing about scope where the destination matches exactly', async () => {
+    /*
+     * A caveat that is always there is a caveat nobody reads — the same rule
+     * §4.2 already applies to the unbooked-sales note. Clients and the paid
+     * commission tab genuinely show what was counted.
+     */
+    wireApi(makeMetrics())
+
+    const wrapper = await mountDashboard()
+
+    expect(cardAt(wrapper, 2).text()).not.toContain('ไม่ได้กรองเฉพาะตัวเลขนี้')
+    expect(cardAt(wrapper, 3).text()).not.toContain('ไม่ได้กรองเฉพาะตัวเลขนี้')
+  })
+
+  it('drops the agent warning when there is nothing extra to see', async () => {
+    // No deactivated agents ⇒ the roster and the card show the same people,
+    // so there is nothing to warn about.
+    wireApi(makeMetrics({ totals: { agents_inactive: 0 } }))
+
+    const wrapper = await mountDashboard()
+
+    expect(cardAt(wrapper, 0).text()).not.toContain('ไม่ได้กรองเฉพาะตัวเลขนี้')
+  })
+
+  it('gives the pending queue its own link, not a word inside another card', async () => {
+    /*
+     * The pending count is NOT what the first card counts — that one counts
+     * active agents, this counts every role waiting for approval, admins
+     * included (§3.4/F-7) — and it lives on a different screen. Folding it
+     * into that card's sentence would make one link mean two things.
+     */
+    wireApi(makeMetrics())
+
+    const wrapper = await mountDashboard()
+    const link = wrapper.find('[data-test="kpi-pending-link"]')
+
+    expect(link.exists()).toBe(true)
+    expect(JSON.parse(link.attributes('data-to') ?? 'null')).toEqual({ name: 'agent-approvals' })
+    expect(link.text()).toContain('4')
+  })
+
+  it('hides that link when nobody is waiting', async () => {
+    wireApi(makeMetrics({ totals: { agents_pending: 0 } }))
+
+    const wrapper = await mountDashboard()
+
+    expect(wrapper.find('[data-test="kpi-pending-link"]').exists()).toBe(false)
   })
 })

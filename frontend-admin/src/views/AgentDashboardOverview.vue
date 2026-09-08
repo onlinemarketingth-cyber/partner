@@ -49,6 +49,7 @@
  *    a green "nothing pending" when the request fails.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import VueApexCharts from 'vue3-apexcharts'
 import type { ApexOptions } from 'apexcharts'
 import { api, ApiError } from '@/api/client'
@@ -276,6 +277,30 @@ interface Kpi {
   icon: string
   /** §4.2 — a plain-sentence caveat, rendered only when present. */
   note?: string
+  /*
+   * 2026-09-08 (human: "หน้า Dashboard ผมอยากให้คลิ๊กไปดูรายละเอียดได้ในแต่ละ
+   * หน้า เช่นตอนนี้ มีข้อมูลตัวแทน 1 ต้องคลิ๊ก link ไปที่ตัวแทน 1 ได้").
+   *
+   * Where the records behind this number live. Every card has one — a
+   * dashboard that states a total and offers no way to see what it is made
+   * of makes the reader hunt through the menu for the page they were already
+   * looking at.
+   */
+  to: RouteLocationRaw
+  /*
+   * TRUE when the destination shows MORE than this number counts.
+   *
+   * This matters more than the link does. "ตัวแทนที่ใช้งานอยู่" counts ACTIVE
+   * agents and the roster has no active/inactive filter, so it lists the
+   * deactivated ones too; a reader who clicks 12 and then counts 15 rows has
+   * been quietly told the dashboard is wrong. The card says so on the way out
+   * instead — one sentence, and only on the cards where it is true.
+   *
+   * The alternative was to add a status filter to four other screens before
+   * linking anything, which is a much bigger change than the one asked for.
+   * Saying what the link actually does is the smaller true thing.
+   */
+  broader?: boolean
 }
 const kpiCards = computed<Kpi[]>(() => {
   const t = totals.value
@@ -290,6 +315,10 @@ const kpiCards = computed<Kpi[]>(() => {
       // role, including a Company Admin waiting for approval.
       sub: td('dash.kpi_active_agents_sub', '', { inactive: t.agents_inactive, pending: t.agents_pending }),
       icon: 'users',
+      to: { name: 'agent-roster' },
+      // The roster always requests include_inactive=1 and has no filter for
+      // it, so it lists more than this number counts.
+      broader: t.agents_inactive > 0,
     },
     {
       // D1/D2 — customer money from paid orders. "(จ่ายแล้ว)" is gone: on a
@@ -298,6 +327,9 @@ const kpiCards = computed<Kpi[]>(() => {
       value: `฿${baht(t.sales_paid_satang)}`,
       sub: td('dash.kpi_sales_sub'),
       icon: 'cart',
+      // Paid orders only; the orders screen lists every status.
+      to: { name: 'order-payments' },
+      broader: true,
       // §4.2 — say nothing when it is 0. A caveat that is always there is
       // a caveat nobody reads.
       note:
@@ -310,12 +342,20 @@ const kpiCards = computed<Kpi[]>(() => {
       value: `฿${baht(t.commission_paid_satang)}`,
       sub: td('dash.kpi_commission_paid_sub', '', { amount: baht(t.commission_pending_satang) }),
       icon: 'money',
+      /*
+       * The one card that CAN land on exactly what it counts: the commission
+       * screen already has a "จ่ายแล้ว" tab, so the link opens that tab and
+       * the two numbers agree. No caveat, because none would be true.
+       */
+      to: { name: 'commission-management', query: { tab: 'paid' } },
     },
     {
       label: td('dash.kpi_clients'),
       value: t.clients_total.toLocaleString('th-TH'),
       sub: td('dash.kpi_clients_sub'),
       icon: 'contact',
+      // Every client in the company — the same set the list shows.
+      to: { name: 'client-management' },
     },
     {
       // D4 — "ปิด" means REACHED Complete Payment (post-sale stages
@@ -330,6 +370,9 @@ const kpiCards = computed<Kpi[]>(() => {
           })
         : td('dash.kpi_closed_deals_none'),
       icon: 'deal',
+      // Closed deals only; the pipeline board shows every stage.
+      to: { name: 'referral-pipeline-management' },
+      broader: t.deals_total > t.deals_closed,
     },
   ]
 })
@@ -519,14 +562,20 @@ function topBarWidth(satang: number): string {
     <div v-else class="mt-4 space-y-4">
       <!-- ═══ KPI stat cards ═══ -->
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-        <div
+        <!-- 2026-09-08 — the whole card is the link, not a small "ดู" at the
+             bottom: the number IS the thing you want to look into, so the
+             thing you point at should be the thing you click. -->
+        <RouterLink
           v-for="(k, i) in kpiCards"
           :key="k.label"
-          class="bg-white/95 border border-slate-200 rounded-2xl p-4 flex flex-col"
+          :to="k.to"
+          data-test="kpi-card"
+          class="bg-white/95 border border-slate-200 rounded-2xl p-4 flex flex-col transition hover:border-brand-300 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-200"
         >
           <div class="flex items-center gap-2 text-slate-400">
             <Icon :name="k.icon" :size="16" />
             <span class="text-xs font-bold">{{ k.label }}</span>
+            <Icon name="chevron_right" :size="14" class="ml-auto shrink-0" />
           </div>
           <p class="text-xl font-bold text-slate-900 mt-2 leading-tight truncate">{{ k.value }}</p>
           <p class="text-xs text-slate-400 mt-0.5 truncate">{{ k.sub }}</p>
@@ -534,6 +583,11 @@ function topBarWidth(satang: number): string {
                ONLY when the server sends a non-zero count; it wraps rather
                than truncating, because a caveat you cannot read is not one. -->
           <p v-if="k.note" class="text-[11px] text-amber-600 mt-1 leading-snug">{{ k.note }}</p>
+          <!-- 2026-09-08 — said BEFORE the click, on the cards where the
+               destination lists more than this number counts. A reader who
+               clicks 12 and counts 15 rows has been quietly told the
+               dashboard is wrong. -->
+          <p v-if="k.broader" class="text-[11px] text-slate-400 mt-1 leading-snug">{{ td('dash.kpi_scope_note') }}</p>
           <!-- §4.4 — the KPI sparklines are the same 6-month series as the
                big chart below, so they are gated on the same question. A flat
                sparkline under a ฿0 card is the miniature of F-13. -->
@@ -555,7 +609,24 @@ function topBarWidth(satang: number): string {
               :series="commissionSparkSeries"
             />
           </div>
-        </div>
+        </RouterLink>
+      </div>
+
+      <!-- 2026-09-08 — the pending queue, which is NOT what the first card
+           counts (that one counts active agents; this counts every role
+           waiting for approval, admins included) and lives on its own screen.
+           Its own link rather than a word inside the card's sub-line: they go
+           to different places, and a link that is part of a sentence about
+           another number is a link people press by accident. -->
+      <div v-if="(totals?.agents_pending ?? 0) > 0" class="-mt-1">
+        <RouterLink
+          :to="{ name: 'agent-approvals' }"
+          data-test="kpi-pending-link"
+          class="inline-flex items-center gap-1 text-xs font-bold text-brand-600 hover:text-brand-700"
+        >
+          {{ td('dash.kpi_open_pending') }} ({{ totals?.agents_pending }})
+          <Icon name="chevron_right" :size="14" />
+        </RouterLink>
       </div>
 
       <!-- ═══ Area chart (wide) + Radial gauge ═══ -->
