@@ -1042,8 +1042,40 @@ function presetSwatches(preset: ThemePreset): { key: string; caption: string; ba
     .map((s) => ({ key: s.key, caption: s.caption, background: s.background }))
 }
 
+/*
+ * 2026-09-08 (human: "ตอนเปลี่ยนบริษัท ชุดสีขึ้นช้ากว่าที่อื่น หรือบางครั้ง
+ * ไม่ขึ้นเลย ต้อง Refresh ถึงขึ้น").
+ *
+ * Two defects, and only one of them was slowness.
+ *
+ *  1. NO SEQUENCING. Every company switch fired a request and whichever
+ *     RESPONSE arrived last won. Switch A → B while A is still in flight and
+ *     A's list lands after B's, so the screen shows A's palettes under B's
+ *     name and stays that way until a reload — "ไม่ขึ้นเลย ต้อง Refresh".
+ *     Nothing about it looks like a bug in the code; it needs two switches
+ *     and a slow answer.
+ *
+ *  2. THE EARLY RETURN KEPT THE OLD LIST. With no company scoped there is
+ *     nothing to list, and the guard simply returned — leaving the previous
+ *     company's rows on screen, labelled as this one's.
+ *
+ * The counter is the fix for both: a response is applied only if no newer
+ * request has started since it left.
+ */
+let presetsRequestSeq = 0
+
 async function loadPresets(): Promise<void> {
-  if (!canManagePresets.value) return
+  const seq = ++presetsRequestSeq
+
+  if (!canManagePresets.value) {
+    // Nothing to list — and that must be shown as nothing, not as whichever
+    // company was on screen a moment ago.
+    presets.value = []
+    presetsLoading.value = false
+
+    return
+  }
+
   presetsLoading.value = true
   presetsError.value = ''
   try {
@@ -1053,11 +1085,15 @@ async function loadPresets(): Promise<void> {
       ? `/theme-presets?company_id=${selectedCompanyId.value}`
       : '/theme-presets'
     const res = await api.get<{ data: ThemePreset[] }>(path)
+    if (seq !== presetsRequestSeq) return
     presets.value = res.data
   } catch (e) {
+    if (seq !== presetsRequestSeq) return
     presetsError.value = presetErrorMessage(e, 'โหลดชุดสีไม่สำเร็จ')
   } finally {
-    presetsLoading.value = false
+    // Only the newest request owns the spinner; an older one finishing must
+    // not announce that the current load is done.
+    if (seq === presetsRequestSeq) presetsLoading.value = false
   }
 }
 
@@ -1190,6 +1226,47 @@ async function submitRenamePreset(preset: ThemePreset): Promise<void> {
     await loadPresets()
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'เปลี่ยนชื่อชุดสีไม่สำเร็จ')
+  }
+}
+
+/*
+ * 2026-09-08 (human: "ผมบันทึกสีชุด Live to 100 Club ไว้แล้ว แต่ชุดสีนี้ไม่
+ * บันทึกข้ามบริษัท ทำให้บันทึกข้ามบริษัทและสามารถตั้งค่าให้ใช้ได้ทุกบริษัท โดย
+ * สิทธิ์ Super Admin").
+ *
+ * TASK-217 put the "ใช้ร่วมกันทุกบริษัท" choice on the SAVE form only, so a
+ * palette already saved for one company could not become ชุดกลาง — the only
+ * route was to re-create it by hand under a company you were not looking at.
+ *
+ * ONE-WAY, and the dialog says so: `company_id` is the only record of who
+ * owned the palette, so un-sharing would have to guess an owner. The reverse
+ * is "apply it in the company that should own it and save it again", which
+ * this screen already does.
+ */
+const pendingSharePreset = ref<ThemePreset | null>(null)
+const sharingPreset = ref(false)
+
+/** Super Admin only, and only for a palette that belongs to one company. */
+function canSharePreset(preset: ThemePreset): boolean {
+  return isSuperAdmin.value && !preset.is_system && !preset.is_shared
+}
+
+async function confirmSharePreset(): Promise<void> {
+  const preset = pendingSharePreset.value
+  if (!preset) return
+  sharingPreset.value = true
+  presetsError.value = ''
+  try {
+    // `name` too: PUT has always required it, and sending the name it already
+    // has keeps this one request rather than inventing a second endpoint.
+    await api.put(`/theme-presets/${preset.id}`, { name: preset.name, is_shared: true })
+    pendingSharePreset.value = null
+    await loadPresets()
+  } catch (e) {
+    presetsError.value = presetErrorMessage(e, 'ตั้งเป็นชุดกลางไม่สำเร็จ')
+    pendingSharePreset.value = null
+  } finally {
+    sharingPreset.value = false
   }
 }
 
@@ -1757,6 +1834,21 @@ onMounted(loadPresets)
                       >
                         <Icon name="pencil" :size="14" />
                       </button>
+                      <!-- 2026-09-08 — promote a palette already saved for one
+                           company to ชุดกลาง. TASK-217 offered this on the SAVE
+                           form only, so a palette saved a minute earlier could
+                           not be shared without re-creating it by hand under a
+                           company you were not looking at. -->
+                      <button
+                        v-if="canSharePreset(preset)"
+                        type="button"
+                        title="ตั้งเป็นชุดกลาง — ให้ทุกบริษัทใช้ได้"
+                        data-test="share-preset"
+                        class="p-1.5 rounded-lg text-slate-400 hover:text-brand-600 hover:bg-brand-50"
+                        @click="pendingSharePreset = preset"
+                      >
+                        <Icon name="globe" :size="14" />
+                      </button>
                       <button
                         type="button"
                         title="ลบชุดสี"
@@ -2119,6 +2211,22 @@ onMounted(loadPresets)
       :body="pendingDeletePreset ? `ยืนยันลบชุดสี “${pendingDeletePreset.name}” — ธีมที่ใช้อยู่ตอนนี้ไม่เปลี่ยน` : ''"
       @confirm="deletePendingPreset"
       @update:show="(v) => { if (!v) pendingDeletePreset = null }"
+    />
+
+    <!-- 2026-09-08 — the confirm says ONE-WAY out loud, because it is. The
+         palette's company_id is the only record of who owned it, so there is
+         no honest "undo" to offer afterwards. -->
+    <ConfirmDialog
+      :show="pendingSharePreset !== null"
+      variant="primary"
+      :busy="sharingPreset"
+      title="ตั้งเป็นชุดกลาง?"
+      confirm-label="ตั้งเป็นชุดกลาง"
+      :body="pendingSharePreset
+        ? `“${pendingSharePreset.name}” จะขึ้นในรายการของทุกบริษัท และกด “ใช้ชุดนี้” ได้ทุกที่ · สีที่เก็บไว้ไม่เปลี่ยน · ย้อนกลับเป็นชุดของบริษัทเดียวไม่ได้ — ถ้าต้องการแบบนั้นให้ใช้ชุดนี้ในบริษัทที่ต้องการแล้วบันทึกเป็นชุดใหม่`
+        : ''"
+      @confirm="confirmSharePreset"
+      @update:show="(v) => { if (!v) pendingSharePreset = null }"
     />
   </main>
 </template>

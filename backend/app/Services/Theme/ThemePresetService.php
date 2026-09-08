@@ -374,14 +374,77 @@ class ThemePresetService
         ));
     }
 
-    public function rename(ThemePreset $preset, string $name, ?User $actor = null): ThemePreset
+    /**
+     * Rename a preset and, since 2026-09-08, promote it to ชุดกลาง.
+     *
+     * ── WHY PROMOTION IS ONE-WAY ──
+     *
+     * Sharing sets `company_id` to NULL, and that column is the ONLY record of
+     * which company the palette belonged to. Un-sharing would therefore have
+     * to answer "back to whom?" with a guess — in practice the company the
+     * Super Admin happens to be scoped to, which may be a tenant that never
+     * had this palette and would silently acquire it.
+     *
+     * A column recording the previous owner would make it reversible, and that
+     * is machinery for an undo nobody has asked for. The escape hatch already
+     * exists and is honest: apply the palette in the company that should own
+     * it and save it again, then delete the shared row. So `is_shared: false`
+     * is ACCEPTED and does nothing, rather than silently doing something
+     * plausible.
+     *
+     * The order matters. Both guards run against the preset AS IT IS — a
+     * Company Admin cannot rename a shared preset, and cannot promote one
+     * either, because the flag never survives their Form Request.
+     *
+     * @param  array{name: string, is_shared?: bool}  $data
+     */
+    public function update(ThemePreset $preset, array $data, ?User $actor = null): ThemePreset
     {
         $this->guardNotSystem($preset);
         $this->guardMayChangeShared($preset, $actor);
 
-        $preset->update(['name' => $name]);
+        $changes = ['name' => $data['name']];
+
+        if (($data['is_shared'] ?? false) === true && $preset->company_id !== null) {
+            /*
+             * Belt and braces over the Form Request, for the same reason
+             * guardNotSystem exists as a Service method at all: a Policy and a
+             * Request guard one route, this guards the method. A console
+             * command or a job that promoted a preset without going through
+             * Gate would otherwise put one company's palette on every screen
+             * on the platform.
+             */
+            $this->guardMayShare($actor);
+
+            $changes['company_id'] = null;
+        }
+
+        $preset->update($changes);
 
         return $preset;
+    }
+
+    /**
+     * Kept as the old name so nothing that only renames has to change, and so
+     * "rename" still reads as rename at its call sites.
+     */
+    public function rename(ThemePreset $preset, string $name, ?User $actor = null): ThemePreset
+    {
+        return $this->update($preset, ['name' => $name], $actor);
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    private function guardMayShare(?User $actor): void
+    {
+        if ($actor?->isSuperAdmin()) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'is_shared' => 'เฉพาะ Super Admin เท่านั้นที่ตั้งชุดสีให้ใช้ร่วมกันทุกบริษัทได้',
+        ]);
     }
 
     /**

@@ -49,14 +49,17 @@ vi.mock('@/api/client', () => ({
   ApiError: FakeApiError,
 }))
 
+let role = 'company_admin'
+
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({ user: { role: 'company_admin' } }),
+  useAuthStore: () => ({ user: { role } }),
 }))
 
 vi.mock('@/utils/qrCode', () => ({ generateQrDataUrl: vi.fn().mockResolvedValue('') }))
 vi.mock('@/utils/imageCompression', () => ({ compressImage: vi.fn() }))
 
 import ThemeSettingsView from '../ThemeSettingsView.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 const THEME = {
   company: { name: 'GENESENN', slug: 'genesenn' },
@@ -111,8 +114,22 @@ const SYSTEM_SIX = [
   preset(6, 'ค่าเริ่มต้น', true),
 ]
 
-async function mountView(presets: unknown[]) {
+const COMPANIES = [
+  { id: 4, name: 'ไทยประกันชีวิต', slug: 'tli' },
+  { id: 5, name: 'GENESENN', slug: 'genesenn' },
+]
+
+/**
+ * A Super Admin belongs to no company, and with none scoped this whole screen
+ * refuses to edit anything ("กำลังดูข้ามทุกบริษัท"). So the Super-Admin tests
+ * below scope one first — which is also what the person in the report was
+ * doing when they hit this.
+ */
+type PresetsResponder = (path: string) => Promise<{ data: unknown[] }>
+
+async function mountView(presets: unknown[], presetsResponder?: PresetsResponder) {
   get.mockImplementation((path: string) => {
+    if (path.startsWith('/companies')) return Promise.resolve({ data: COMPANIES })
     if (path === '/me/theme') return Promise.resolve({ data: structuredClone(THEME) })
     if (path === '/video-processing-settings') {
       return Promise.resolve({ data: { max_upload_mb: 200, target_resolution: '720p', target_bitrate_kbps: 2500 } })
@@ -120,10 +137,19 @@ async function mountView(presets: unknown[]) {
     if (path === '/team-visibility-settings') {
       return Promise.resolve({ data: { client_visibility_level: 'counts_only', is_enabled: true } })
     }
-    if (path === '/theme-presets') return Promise.resolve({ data: presets })
+    if (path.startsWith('/theme-presets')) {
+      // A responder rather than a fixed array, so a test can hold one
+      // company's answer open while another company's returns — which is the
+      // ordering the "ไม่ขึ้นเลย ต้อง Refresh" report describes.
+      return presetsResponder ? presetsResponder(path) : Promise.resolve({ data: presets })
+    }
 
     return Promise.reject(new FakeApiError(404, null))
   })
+
+  const active = useActiveCompanyStore()
+  active.companies = COMPANIES
+  if (role === 'super_admin') active.setCompany(4)
 
   const wrapper = mount(ThemeSettingsView, {
     global: {
@@ -146,6 +172,7 @@ function rowOrder(wrapper: Wrapper): string[] {
 }
 
 beforeEach(() => {
+  role = 'company_admin'
   get.mockReset()
   put.mockReset()
   post.mockReset()
@@ -223,5 +250,159 @@ describe('ThemeSettingsView — saving a colour set says so', () => {
 
     expect(wrapper.find('[data-test="preset-saved"]').text()).toContain('โทนหลักบริษัท')
     expect(rowOrder(wrapper)[0]).toBe('โทนหลักบริษัท')
+  })
+})
+
+/**
+ * 2026-09-08 — the two things the human reported about this panel on the same
+ * day, which are the same panel and completely different bugs.
+ */
+describe('ThemeSettingsView — promoting a saved palette to ชุดกลาง', () => {
+  /*
+   * "ผมบันทึกสีชุด Live to 100 Club ไว้แล้ว แต่ชุดสีนี้ไม่บันทึกข้ามบริษัท
+   * ทำให้บันทึกข้ามบริษัทและสามารถตั้งค่าให้ใช้ได้ทุกบริษัท โดยสิทธิ์ Super
+   * Admin."
+   *
+   * TASK-217 put the choice on the SAVE form only, so a palette saved a minute
+   * earlier could not become shared — the only route was to re-create it by
+   * hand under a company you were not looking at.
+   */
+  const OWN = preset(7, 'Live to 100 Club', false)
+
+  it('offers a Super Admin the control on a palette owned by one company', async () => {
+    role = 'super_admin'
+
+    const wrapper = await mountView([OWN])
+
+    expect(wrapper.find('[data-test="share-preset"]').exists()).toBe(true)
+  })
+
+  it('does not offer it to a Company Admin', async () => {
+    // Sharing puts one tenant's palette on every other tenant's screen; the
+    // server strips the flag for them too.
+    const wrapper = await mountView([OWN])
+
+    expect(wrapper.find('[data-test="share-preset"]').exists()).toBe(false)
+  })
+
+  it('does not offer it on a palette that is already shared', async () => {
+    role = 'super_admin'
+
+    const wrapper = await mountView([{ ...OWN, is_shared: true }])
+
+    expect(wrapper.find('[data-test="share-preset"]').exists()).toBe(false)
+  })
+
+  it('does not offer it on a platform palette', async () => {
+    role = 'super_admin'
+
+    const wrapper = await mountView([preset(1, 'ม่วงพรีเมียม', true)])
+
+    expect(wrapper.find('[data-test="share-preset"]').exists()).toBe(false)
+  })
+
+  it('warns that it cannot be undone, then sends the flag', async () => {
+    /*
+     * One-way on purpose: company_id is the only record of who owned the
+     * palette, so un-sharing would have to guess an owner. Said before the
+     * click, because there is no undo to offer after it.
+     */
+    role = 'super_admin'
+    put.mockResolvedValue({ data: { ...OWN, is_shared: true } })
+
+    const wrapper = await mountView([OWN])
+    await wrapper.find('[data-test="share-preset"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('ย้อนกลับเป็นชุดของบริษัทเดียวไม่ได้')
+
+    await (wrapper.vm as unknown as { confirmSharePreset: () => Promise<void> }).confirmSharePreset()
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/theme-presets/7', {
+      name: 'Live to 100 Club',
+      is_shared: true,
+    })
+  })
+})
+
+describe('ThemeSettingsView — switching company', () => {
+  /*
+   * "ตอนเปลี่ยนบริษัท ชุดสีขึ้นช้ากว่าที่อื่น หรือบางครั้งไม่ขึ้นเลย ต้อง
+   * Refresh ถึงขึ้น."
+   *
+   * Two defects, and only one of them was slowness. The list had no request
+   * sequencing, so whichever RESPONSE arrived last won: switch A → B while A
+   * is still in flight and A's palettes land after B's, then stay on screen
+   * under B's name until a reload. It needs two switches and a slow answer,
+   * which is why nothing about the code looked wrong.
+   */
+  it('ignores a slow answer that a newer switch has already overtaken', async () => {
+    role = 'super_admin'
+
+    let releaseCompanyA: (v: unknown) => void = () => {}
+    const companyAAnswer = new Promise((resolve) => { releaseCompanyA = resolve })
+    let call = 0
+
+    const wrapper = await mountView([], async () => {
+      call += 1
+      // Company A's answer is held open; every later one returns at once.
+      if (call === 1) {
+        await companyAAnswer
+
+        return { data: [preset(90, 'PALETTE OF COMPANY A', false)] }
+      }
+
+      return { data: [preset(91, 'PALETTE OF COMPANY B', false)] }
+    })
+
+    // Switch companies while A is still in flight. B answers first.
+    useActiveCompanyStore().setCompany(5)
+    await flushPromises()
+    expect(wrapper.text()).toContain('PALETTE OF COMPANY B')
+
+    // A finally answers — a reply to a question nobody is asking any more.
+    releaseCompanyA(null)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('PALETTE OF COMPANY B')
+    expect(wrapper.text()).not.toContain('PALETTE OF COMPANY A')
+  })
+
+  it('does not keep the previous company\'s palettes while the next ones load', async () => {
+    /*
+     * The other half of the report. A switch used to leave the old rows on
+     * screen until the new answer arrived — labelled as the new company's.
+     */
+    role = 'super_admin'
+
+    let call = 0
+    let releaseSecond: (v: unknown) => void = () => {}
+    const second = new Promise((resolve) => { releaseSecond = resolve })
+
+    const wrapper = await mountView([], async () => {
+      call += 1
+      if (call === 1) return { data: [preset(90, 'PALETTE OF COMPANY A', false)] }
+      await second
+
+      return { data: [] }
+    })
+
+    expect(wrapper.text()).toContain('PALETTE OF COMPANY A')
+
+    useActiveCompanyStore().setCompany(5)
+    await flushPromises()
+
+    // Mid-switch: company B's answer has not arrived, and A's palette must
+    // already be gone rather than sitting under B's name.
+    expect(wrapper.text()).not.toContain('PALETTE OF COMPANY A')
+
+    releaseSecond(null)
+    await flushPromises()
+
+    // Company B genuinely has none, so the panel's own empty state is the
+    // honest end state — not the previous company's rows.
+    expect(wrapper.text()).toContain('ยังไม่มีชุดสีที่บันทึกไว้')
+    expect(wrapper.text()).not.toContain('PALETTE OF COMPANY A')
   })
 })

@@ -117,9 +117,9 @@ class ThemePresetController extends Controller
     {
         return new ThemePresetResource(
             // TASK-217 — the actor is passed so the Service can re-check the
-            // shared-preset rule itself (guardMayChangeShared), not only the
-            // Policy that already ran on the way in.
-            $service->rename($themePreset, $request->validated()['name'], $request->user())
+            // shared-preset rules itself (guardMayChangeShared, guardMayShare),
+            // not only the Policy and Form Request that ran on the way in.
+            $service->update($themePreset, $request->validated(), $request->user())
         );
     }
 
