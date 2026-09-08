@@ -93,6 +93,7 @@ function preset(id: number, name: string, isSystem: boolean) {
     name,
     is_system: isSystem,
     is_shared: false,
+    is_default_for_new_companies: false,
     primary_hex: '#1e3a8a',
     accent_hex: '#f59e0b',
     nav_bg_hex: null,
@@ -323,6 +324,134 @@ describe('ThemeSettingsView — promoting a saved palette to ชุดกลา�
       name: 'Live to 100 Club',
       is_shared: true,
     })
+  })
+})
+
+/**
+ * 2026-09-08, the human's follow-up question: "พอมีบริษัทใหม่เราต้องมาตั้งค่าเอง
+ * หรือ Super Admin เลือกได้ให้ใช้ได้ทุกบริษัท".
+ *
+ * Sharing answered half of it — a ชุดกลาง already appears in every company's
+ * list, including companies created later. But appearing is not wearing: a new
+ * tenant still opened on the platform's colours until somebody found the row
+ * and pressed "ใช้ชุดนี้". The star is the other half.
+ */
+describe('ThemeSettingsView — the palette new companies start on', () => {
+  const SHARED = { ...preset(8, 'Live to 100 Club', false), is_shared: true }
+  const STARRED = { ...SHARED, is_default_for_new_companies: true }
+
+  it('offers a Super Admin the star on a ชุดกลาง', async () => {
+    role = 'super_admin'
+
+    const wrapper = await mountView([SHARED])
+
+    expect(wrapper.find('[data-test="default-preset"]').exists()).toBe(true)
+  })
+
+  it('does not offer it on a palette one company owns', async () => {
+    /*
+     * The leak the server refuses with a 422: the palette belongs to one
+     * customer, and starring it would put their colours on every tenant
+     * created afterwards. Hidden here so nobody discovers that by trying —
+     * promoting it to ชุดกลาง first is the separate, deliberate step.
+     */
+    role = 'super_admin'
+
+    const wrapper = await mountView([preset(7, 'Live to 100 Club', false)])
+
+    expect(wrapper.find('[data-test="default-preset"]').exists()).toBe(false)
+  })
+
+  it('does not offer it to a Company Admin', async () => {
+    // What every new tenant on the platform looks like is not theirs to
+    // decide, and the server strips the flag for them too.
+    const wrapper = await mountView([SHARED])
+
+    expect(wrapper.find('[data-test="default-preset"]').exists()).toBe(false)
+  })
+
+  it('tells a Company Admin which palette it is anyway', async () => {
+    /*
+     * Visible to everyone who can see the row, changeable by a Super Admin
+     * only. "Which set is the platform's starting look" is a fair question to
+     * have answered without asking anyone.
+     */
+    const wrapper = await mountView([STARRED])
+
+    expect(wrapper.find('[data-test="default-preset-chip"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="default-preset"]').exists()).toBe(false)
+  })
+
+  it('promises that existing companies do not change, then sends the flag', async () => {
+    /*
+     * The sentence a Super Admin needs FIRST. A control labelled "for every
+     * new company" reads, at the moment of clicking, as though it might
+     * repaint the tenants already trading — so the dialog answers that before
+     * it explains what the flag does.
+     */
+    role = 'super_admin'
+    put.mockResolvedValue({ data: STARRED })
+
+    const wrapper = await mountView([SHARED])
+    await wrapper.find('[data-test="default-preset"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('บริษัทที่มีอยู่แล้วไม่เปลี่ยนสี')
+
+    await (wrapper.vm as unknown as { confirmDefaultPreset: () => Promise<void> }).confirmDefaultPreset()
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/theme-presets/8', {
+      name: 'Live to 100 Club',
+      is_default_for_new_companies: true,
+    })
+  })
+
+  it('clicking the filled star clears the choice instead of re-setting it', async () => {
+    /*
+     * The deliberate contrast with sharing, which is one-way. Un-starring
+     * loses nothing — "new companies start on the platform's colours" is a
+     * state that already existed — so the control stays put and toggles rather
+     * than disappearing once used, which would leave no way to undo it.
+     */
+    role = 'super_admin'
+    put.mockResolvedValue({ data: SHARED })
+
+    const wrapper = await mountView([STARRED])
+    const star = wrapper.find('[data-test="default-preset"]')
+
+    expect(star.attributes('data-on')).toBe('true')
+
+    await star.trigger('click')
+    await flushPromises()
+
+    await (wrapper.vm as unknown as { confirmDefaultPreset: () => Promise<void> }).confirmDefaultPreset()
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/theme-presets/8', {
+      name: 'Live to 100 Club',
+      is_default_for_new_companies: false,
+    })
+  })
+
+  it('re-reads the list after starring rather than patching the row', async () => {
+    /*
+     * Starring one palette UNSTARS another on the server. Editing the clicked
+     * row in place would leave two stars on screen until the next visit — the
+     * one state this feature must never show, since it is exactly the question
+     * "which one do new companies get" that the star exists to answer.
+     */
+    role = 'super_admin'
+    put.mockResolvedValue({ data: STARRED })
+
+    const wrapper = await mountView([SHARED])
+    const before = get.mock.calls.filter(([p]) => String(p).startsWith('/theme-presets')).length
+
+    await wrapper.find('[data-test="default-preset"]').trigger('click')
+    await (wrapper.vm as unknown as { confirmDefaultPreset: () => Promise<void> }).confirmDefaultPreset()
+    await flushPromises()
+
+    expect(get.mock.calls.filter(([p]) => String(p).startsWith('/theme-presets')).length).toBe(before + 1)
   })
 })
 

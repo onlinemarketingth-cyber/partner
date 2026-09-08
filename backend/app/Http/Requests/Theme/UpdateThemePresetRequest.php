@@ -57,6 +57,12 @@ class UpdateThemePresetRequest extends FormRequest
 
         $this->getInputSource()->remove('is_shared');
         $this->query->remove('is_shared');
+
+        // 2026-09-08 — same treatment, same reason. Which palette every new
+        // tenant on the platform opens on is not a Company Admin's decision to
+        // express, and they are never shown the control.
+        $this->getInputSource()->remove('is_default_for_new_companies');
+        $this->query->remove('is_default_for_new_companies');
     }
 
     /**
@@ -73,6 +79,14 @@ class UpdateThemePresetRequest extends FormRequest
              * answer.
              */
             'is_shared' => ['sometimes', 'boolean'],
+            /*
+             * Optional, and unlike `is_shared` it is TWO-WAY: `false` really
+             * un-stars the palette, because "new companies start on the
+             * platform's colours" is a state that needs no guess about who
+             * used to own anything. Only meaningful on a ชุดกลาง — see
+             * ThemePresetService::resolveDefaultFlag().
+             */
+            'is_default_for_new_companies' => ['sometimes', 'boolean'],
         ];
     }
 }

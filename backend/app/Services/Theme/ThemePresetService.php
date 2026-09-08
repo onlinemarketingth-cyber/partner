@@ -396,7 +396,23 @@ class ThemePresetService
      * Company Admin cannot rename a shared preset, and cannot promote one
      * either, because the flag never survives their Form Request.
      *
-     * @param  array{name: string, is_shared?: bool}  $data
+     * ── AND, SINCE 2026-09-08, THE STARTING LOOK FOR NEW COMPANIES ──
+     *
+     * `is_default_for_new_companies` answers the human's follow-up question:
+     * "พอมีบริษัทใหม่เราต้องมาตั้งค่าเอง หรือ Super Admin เลือกได้". Sharing
+     * makes a palette VISIBLE everywhere; this makes one company-creation
+     * WEAR it. The two are deliberately separate flags — a Super Admin may
+     * well want six ชุดกลาง on offer and only one of them as the starting
+     * look — and they can be sent in the same request, in which case the
+     * promotion is applied first so a freshly shared palette can be chosen
+     * without a second round trip.
+     *
+     * Unlike `is_shared`, this one is REVERSIBLE. Clearing it loses nothing:
+     * it means "new companies fall back to the platform's own colours", which
+     * is a real, previously-existing state and needs no guess about the past.
+     * That asymmetry is the whole reason the two flags do not share a guard.
+     *
+     * @param  array{name: string, is_shared?: bool, is_default_for_new_companies?: bool}  $data
      */
     public function update(ThemePreset $preset, array $data, ?User $actor = null): ThemePreset
     {
@@ -419,9 +435,129 @@ class ThemePresetService
             $changes['company_id'] = null;
         }
 
-        $preset->update($changes);
+        if (array_key_exists('is_default_for_new_companies', $data)) {
+            $this->guardMayChooseDefault($actor);
 
-        return $preset;
+            /*
+             * Sharedness AFTER this request, not before: `is_shared` above may
+             * have just set it. Reading `$preset->company_id` here instead
+             * would refuse the one request the screen actually sends when a
+             * Super Admin promotes and stars a palette in one go.
+             */
+            $willBeShared = array_key_exists('company_id', $changes) || $preset->company_id === null;
+
+            $changes['is_default_for_new_companies'] = $this->resolveDefaultFlag(
+                (bool) $data['is_default_for_new_companies'],
+                $willBeShared,
+            );
+        }
+
+        return DB::transaction(function () use ($preset, $changes) {
+            /*
+             * "At most one" is enforced HERE rather than by an index (see the
+             * migration for why an index cannot express it portably), and
+             * inside the same transaction as the write that needs it — so
+             * there is no instant at which two palettes both claim to be the
+             * starting look, and no instant at which none does.
+             */
+            if (($changes['is_default_for_new_companies'] ?? false) === true) {
+                ThemePreset::withoutGlobalScope(SharedOrTenantScope::class)
+                    ->where('is_default_for_new_companies', true)
+                    ->whereKeyNot($preset->getKey())
+                    ->update(['is_default_for_new_companies' => false]);
+            }
+
+            $preset->update($changes);
+
+            return $preset;
+        });
+    }
+
+    /**
+     * @throws ValidationException when a company-owned palette is chosen
+     */
+    private function resolveDefaultFlag(bool $wanted, bool $willBeShared): bool
+    {
+        if (! $wanted) {
+            return false;
+        }
+
+        /*
+         * A company-owned palette must not become the look every new tenant
+         * opens on: it belongs to one customer, and the colours would arrive
+         * at companies that have no way to see where they came from. Promote
+         * it to ชุดกลาง first — an explicit, audited step the Super Admin
+         * already has a control for — or send both flags together.
+         *
+         * Refused rather than silently promoted, because "star this" and "give
+         * this palette away to the whole platform" are not the same decision
+         * and only one of them is undoable.
+         */
+        if (! $willBeShared) {
+            throw ValidationException::withMessages([
+                'is_default_for_new_companies' => 'ต้องตั้งชุดสีนี้เป็นชุดกลางก่อน จึงจะใช้เป็นชุดเริ่มต้นของบริษัทใหม่ได้',
+            ]);
+        }
+
+        return true;
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    private function guardMayChooseDefault(?User $actor): void
+    {
+        if ($actor?->isSuperAdmin()) {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'is_default_for_new_companies' => 'เฉพาะ Super Admin เท่านั้นที่เลือกชุดสีเริ่มต้นของบริษัทใหม่ได้',
+        ]);
+    }
+
+    /**
+     * The ชุดกลาง a company created from now on should open wearing, or NULL
+     * when nobody has chosen one — in which case company creation behaves
+     * exactly as it did before this existed.
+     *
+     * Reads without the tenant scope on purpose: this runs inside company
+     * PROVISIONING, where the acting user may be a Super Admin, a console
+     * command with no user at all, or (through the seeders) nobody. The answer
+     * is a property of the platform and must not vary with who is asking.
+     *
+     * `first()` and not `sole()`: if two rows ever both claimed the flag, the
+     * right outcome is a company that gets one of them, not a company creation
+     * that throws.
+     */
+    public function defaultForNewCompanies(): ?ThemePreset
+    {
+        return ThemePreset::withoutGlobalScope(SharedOrTenantScope::class)
+            ->whereNull('company_id')
+            ->where('is_default_for_new_companies', true)
+            ->orderBy('id')
+            ->first();
+    }
+
+    /**
+     * 2026-09-08 — the half of the human's question that did not exist yet:
+     * a new company opens ALREADY WEARING the chosen palette, instead of
+     * merely having it in a list somebody has to find and press.
+     *
+     * Returns null (and writes nothing) when no palette is flagged, which is
+     * the state every existing installation is in until a Super Admin picks
+     * one. Company creation is unchanged in that case, deliberately: this
+     * feature must be invisible until it is used.
+     */
+    public function applyDefaultForNewCompany(Company $company): ?CompanyThemeSetting
+    {
+        $preset = $this->defaultForNewCompanies();
+
+        if ($preset === null) {
+            return null;
+        }
+
+        return $this->apply($preset, $company->id);
     }
 
     /**

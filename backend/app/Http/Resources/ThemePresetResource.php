@@ -44,6 +44,13 @@ class ThemePresetResource extends JsonResource
             // null company_id, because "no company" and "the company field
             // was not loaded" look identical from there.
             'is_shared' => $this->company_id === null,
+            // 2026-09-08 — the palette a company created from now on opens
+            // wearing. Shipped to every admin who can see the row, not only to
+            // the Super Admin who can change it: a Company Admin looking at
+            // their theme screen is entitled to know which set is the
+            // platform's starting look, and the control that CHANGES it is
+            // gated separately (Policy + Service + Form Request).
+            'is_default_for_new_companies' => (bool) $this->is_default_for_new_companies,
             // The seeding handle. Useful to a support engineer asking
             // "which palette is this row", and harmless to expose — it
             // names a platform palette, not anything tenant-specific.

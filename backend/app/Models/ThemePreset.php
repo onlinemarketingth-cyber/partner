@@ -55,6 +55,12 @@ class ThemePreset extends Model
         'name',
         'is_system',
         'key',
+        // 2026-09-08 — same reasoning again: the only writer is
+        // ThemePresetService::update(), which checks the actor is a Super
+        // Admin and that the palette is a ชุดกลาง before it ever appears in
+        // the array. UpdateThemePresetRequest strips the field for everybody
+        // else, so it cannot arrive from a client that was never shown it.
+        'is_default_for_new_companies',
         'colors',
         'created_by',
     ];
@@ -68,6 +74,9 @@ class ThemePreset extends Model
             // accident — but ThemePresetResource would ship 0/1 to a
             // frontend that checks `preset.is_system === true`.
             'is_system' => 'boolean',
+            // Same reason as is_system: the admin console decides whether to
+            // fill the star with `=== true`.
+            'is_default_for_new_companies' => 'boolean',
         ];
     }
 

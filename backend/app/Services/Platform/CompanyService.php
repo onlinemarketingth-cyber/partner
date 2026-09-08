@@ -83,6 +83,21 @@ class CompanyService
             // transaction and the same reasoning: a tenant missing its
             // starter palettes looks healthy until an admin opens the
             // theme screen and finds nothing to start from.
+            /*
+             * 2026-09-08 (human: "พอมีบริษัทใหม่เราต้องมาตั้งค่าเอง หรือ Super
+             * Admin เลือกได้ให้ใช้ได้ทุกบริษัท"). If a Super Admin has starred
+             * a ชุดกลาง, the company opens WEARING it rather than merely
+             * having it in a list. No preset starred → this writes nothing and
+             * the company starts on the platform's colours exactly as before.
+             *
+             * BEFORE provisionSystemPresets() and not after, which is the only
+             * ordering that keeps "ค่าเริ่มต้น" honest: that preset is a
+             * SNAPSHOT of how this company looks, offered as the restore point
+             * a nervous admin can always get back to. Taken first, it would
+             * record a look this company never had.
+             */
+            $this->themePresetService->applyDefaultForNewCompany($company);
+
             $this->themePresetService->provisionSystemPresets($company);
 
             /*

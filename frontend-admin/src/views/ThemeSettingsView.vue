@@ -874,6 +874,16 @@ interface ThemePreset {
    * system rows. A row can be both, and the read-only rules simply stack.
    */
   is_shared: boolean
+  /**
+   * 2026-09-08 — the ชุดกลาง a company created FROM NOW ON opens wearing.
+   * At most one row on the platform carries it.
+   *
+   * Sent to every admin who can see the row, not only to the Super Admin who
+   * can change it: a Company Admin comparing their look against "the
+   * platform's starting look" should not have to guess which row that is.
+   * Whether the STAR is drawn is a separate question — canChooseDefaultPreset().
+   */
+  is_default_for_new_companies: boolean
   /** Colour surface only — see §3.2 for the exact key list. */
   colors: Record<string, unknown>
 }
@@ -977,6 +987,14 @@ const SYSTEM_PRESET_HINT = 'ชุดสีมาตรฐานของระ�
  * at a row with fewer buttons than its neighbours learns why in one hover.
  */
 const SHARED_PRESET_HINT = 'ชุดสีกลางที่ใช้ร่วมกันทุกบริษัท — กด "ใช้ชุดนี้" เพื่อนำมาใช้กับบริษัทนี้ได้ ส่วนการเปลี่ยนชื่อ/ลบทำได้เฉพาะ Super Admin'
+
+/**
+ * 2026-09-08 — the tooltip on the "เริ่มต้นของบริษัทใหม่" chip. Says what the
+ * flag does AND what it does not: an admin who sees it on a palette their own
+ * company is not wearing would otherwise reasonably wonder whether their
+ * colours are about to change.
+ */
+const DEFAULT_PRESET_HINT = 'บริษัทที่สร้างใหม่จะเริ่มต้นด้วยชุดสีนี้ — บริษัทที่มีอยู่แล้วไม่เปลี่ยน'
 
 /**
  * Whether THIS admin may rename or delete THIS preset — i.e. whether the
@@ -1267,6 +1285,67 @@ async function confirmSharePreset(): Promise<void> {
     pendingSharePreset.value = null
   } finally {
     sharingPreset.value = false
+  }
+}
+
+/*
+ * 2026-09-08, the human's follow-up: "พอมีบริษัทใหม่เราต้องมาตั้งค่าเอง หรือ
+ * Super Admin เลือกได้ให้ใช้ได้ทุกบริษัท".
+ *
+ * Sharing answers half of it — a ชุดกลาง appears in every company's list,
+ * including companies created later, with nothing to set up per company. But
+ * APPEARING is not WEARING: a new tenant still opened on the platform's own
+ * colours until somebody found the row and pressed "ใช้ชุดนี้".
+ *
+ * The star is the other half. One ชุดกลาง at a time is the look a company
+ * created from now on starts in.
+ *
+ * TWO-WAY, unlike sharing, and the dialog says so: un-starring means "new
+ * companies start on the platform's colours", a state that already existed and
+ * needs no guess about the past. It also never repaints a company that already
+ * exists — that is the sentence the confirm dialog leads with, because it is
+ * the thing a Super Admin will be most afraid of when they click.
+ */
+const pendingDefaultPreset = ref<ThemePreset | null>(null)
+const savingDefaultPreset = ref(false)
+
+/**
+ * Only a Super Admin, and only on a ชุดกลาง.
+ *
+ * Mirrors ThemePresetService::resolveDefaultFlag(): a company-owned palette
+ * belongs to one customer, and starring it would put their colours on every
+ * tenant created afterwards. The server refuses it with a 422 — this hides the
+ * control so nobody has to discover that by trying.
+ */
+function canChooseDefaultPreset(preset: ThemePreset): boolean {
+  return isSuperAdmin.value && preset.is_shared && !preset.is_system
+}
+
+/** Clicking the star on the palette that already holds it clears the choice. */
+function defaultPresetIntent(preset: ThemePreset): boolean {
+  return !preset.is_default_for_new_companies
+}
+
+async function confirmDefaultPreset(): Promise<void> {
+  const preset = pendingDefaultPreset.value
+  if (!preset) return
+  savingDefaultPreset.value = true
+  presetsError.value = ''
+  try {
+    await api.put(`/theme-presets/${preset.id}`, {
+      name: preset.name,
+      is_default_for_new_companies: defaultPresetIntent(preset),
+    })
+    pendingDefaultPreset.value = null
+    // Reload rather than patching the row in place: starring one palette
+    // UNSTARS another on the server, and a local edit would leave two stars on
+    // screen until the next visit.
+    await loadPresets()
+  } catch (e) {
+    presetsError.value = presetErrorMessage(e, 'ตั้งชุดสีเริ่มต้นของบริษัทใหม่ไม่สำเร็จ')
+    pendingDefaultPreset.value = null
+  } finally {
+    savingDefaultPreset.value = false
   }
 }
 
@@ -1790,6 +1869,21 @@ onMounted(loadPresets)
                         <Icon name="globe" :size="11" />
                         ชุดกลาง
                       </span>
+                      <!-- 2026-09-08 — the palette a company created from now
+                           on opens WEARING. Shown to every admin who can see
+                           the row, including the Company Admins who cannot
+                           change it: "which set is the platform's starting
+                           look" is a fair question for them to have answered
+                           without asking anyone. -->
+                      <span
+                        v-if="preset.is_default_for_new_companies"
+                        :title="DEFAULT_PRESET_HINT"
+                        data-test="default-preset-chip"
+                        class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[11px] font-bold"
+                      >
+                        <Icon name="star" :size="11" />
+                        เริ่มต้นของบริษัทใหม่
+                      </span>
                     </div>
                   </div>
 
@@ -1848,6 +1942,30 @@ onMounted(loadPresets)
                         @click="pendingSharePreset = preset"
                       >
                         <Icon name="globe" :size="14" />
+                      </button>
+                      <!-- 2026-09-08 (human: "พอมีบริษัทใหม่เราต้องมาตั้งค่าเอง
+                           หรือ Super Admin เลือกได้ให้ใช้ได้ทุกบริษัท") — the
+                           ชุดกลาง every company created from now on starts in.
+                           Only rendered where the server would accept it: a
+                           Super Admin, on a ชุดกลาง. Clicking the filled star
+                           clears the choice, which is why the title changes
+                           rather than the button disappearing — a control that
+                           vanishes once used gives no way to undo it. -->
+                      <button
+                        v-if="canChooseDefaultPreset(preset)"
+                        type="button"
+                        :title="preset.is_default_for_new_companies
+                          ? 'เลิกใช้เป็นชุดเริ่มต้นของบริษัทใหม่'
+                          : 'ตั้งเป็นชุดเริ่มต้นของบริษัทใหม่'"
+                        data-test="default-preset"
+                        :data-on="preset.is_default_for_new_companies ? 'true' : 'false'"
+                        class="p-1.5 rounded-lg hover:bg-amber-50"
+                        :class="preset.is_default_for_new_companies
+                          ? 'text-amber-500 hover:text-amber-600'
+                          : 'text-slate-400 hover:text-amber-600'"
+                        @click="pendingDefaultPreset = preset"
+                      >
+                        <Icon name="star" :size="14" />
                       </button>
                       <button
                         type="button"
@@ -2227,6 +2345,30 @@ onMounted(loadPresets)
         : ''"
       @confirm="confirmSharePreset"
       @update:show="(v) => { if (!v) pendingSharePreset = null }"
+    />
+
+    <!-- 2026-09-08 — the sentence a Super Admin needs first is the one about
+         companies that ALREADY EXIST, because that is what they will be afraid
+         of when they click a control that says "for every new company". It
+         leads the body for that reason, ahead of what the flag actually does.
+    -->
+    <ConfirmDialog
+      :show="pendingDefaultPreset !== null"
+      variant="primary"
+      :busy="savingDefaultPreset"
+      :title="pendingDefaultPreset && !pendingDefaultPreset.is_default_for_new_companies
+        ? 'ตั้งเป็นชุดเริ่มต้นของบริษัทใหม่?'
+        : 'เลิกใช้เป็นชุดเริ่มต้น?'"
+      :confirm-label="pendingDefaultPreset && !pendingDefaultPreset.is_default_for_new_companies
+        ? 'ตั้งเป็นชุดเริ่มต้น'
+        : 'เลิกใช้'"
+      :body="pendingDefaultPreset
+        ? (pendingDefaultPreset.is_default_for_new_companies
+          ? `บริษัทที่สร้างใหม่หลังจากนี้จะกลับไปเริ่มต้นด้วยสีมาตรฐานของระบบแทน “${pendingDefaultPreset.name}” · บริษัทที่มีอยู่แล้วไม่เปลี่ยน · ชุดสีนี้ยังเป็นชุดกลางและยังใช้ได้ทุกบริษัทเหมือนเดิม`
+          : `บริษัทที่มีอยู่แล้วไม่เปลี่ยนสี · บริษัทที่สร้างใหม่หลังจากนี้จะเริ่มต้นด้วย “${pendingDefaultPreset.name}” ทันทีโดยไม่ต้องมาตั้งค่าเอง · ถ้ามีชุดอื่นตั้งไว้อยู่ ระบบจะย้ายมาที่ชุดนี้แทน · กดซ้ำเพื่อเลิกใช้ได้ตลอด`)
+        : ''"
+      @confirm="confirmDefaultPreset"
+      @update:show="(v) => { if (!v) pendingDefaultPreset = null }"
     />
   </main>
 </template>
