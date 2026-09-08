@@ -192,7 +192,55 @@ const detailItem = ref<AgentItem | null>(null)
 // ── Approve / reject (TASK-020) ──
 const rejectingId = ref<number | null>(null)
 const rejectReason = ref('')
+
+/*
+ * 2026-09-08 (human: "ผมอนุมัติแล้ว error แต่อนุมัติได้").
+ *
+ * They were right on both counts, and the two facts are the same event.
+ *
+ * The approval succeeded. The 422 came from a SECOND request for the same
+ * person: AgentApprovalService::assertPending() refuses to decide a
+ * registration twice, and says so in words —
+ *
+ *   "ผู้ใช้นี้ไม่ได้อยู่ในสถานะรออนุมัติแล้ว (อาจถูกดำเนินการไปแล้วโดยผู้ดูแลคนอื่น)"
+ *
+ * — which is exactly what the admin needed to read. This screen threw that
+ * sentence away and rendered `อนุมัติไม่สำเร็จ (422)` instead: a flat denial of
+ * something that had in fact just worked. ApiError.message has carried the
+ * server's real text since 2026-07-20; three call sites here simply did not
+ * read it.
+ *
+ * Three things made the second request easy to send, and all three are fixed
+ * below:
+ *
+ *   NOTHING STOPPED IT. No in-flight state, no disabled button. A double
+ *   click — or one more click because the row had not visibly changed yet —
+ *   sent the decision twice.
+ *
+ *   THE ROW STAYED PUT ON FAILURE. Only the success path reloaded, so after
+ *   the error the queue still showed the person as pending. The screen was
+ *   then arguing with itself: a banner saying the approval failed, above a
+ *   row saying they are still waiting, for someone who was already approved.
+ *   Every refusal here means the world moved, so every refusal reloads.
+ *
+ *   THE MESSAGE HID THE REASON. A status code cannot distinguish "already
+ *   decided" from "we lost your click"; the sentence behind it can.
+ */
+const decidingId = ref<number | null>(null)
+
+/** The server's own sentence when it wrote one; the code only as a fallback. */
+function decisionError(e: unknown, fallback: string): string {
+  if (!(e instanceof ApiError)) return fallback
+
+  return e.message && e.message !== `API error ${e.status}` ? e.message : `${fallback} (${e.status})`
+}
+
 async function approvePending(item: AgentItem) {
+  // A second click while the first is still in the air is the exact shape of
+  // the report; ignoring it is cheaper than explaining it afterwards.
+  if (decidingId.value !== null) return
+  decidingId.value = item.id
+  errorMessage.value = ''
   try {
     await api.put(`/agent-approvals/${item.id}/approve`)
     // Closed on success only. Leaving it open over a stale row would show
@@ -200,10 +248,19 @@ async function approvePending(item: AgentItem) {
     detailItem.value = null
     await loadPendingApprovals()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `อนุมัติไม่สำเร็จ (${e.status})` : 'อนุมัติไม่สำเร็จ'
+    errorMessage.value = decisionError(e, 'อนุมัติไม่สำเร็จ')
+    detailItem.value = null
+    // The refusal is almost always "this was already decided", so the list on
+    // screen is the stale half of the contradiction. Reload it.
+    await loadPendingApprovals()
+  } finally {
+    decidingId.value = null
   }
 }
 async function submitReject(item: AgentItem) {
+  if (decidingId.value !== null) return
+  decidingId.value = item.id
+  errorMessage.value = ''
   try {
     await api.put(`/agent-approvals/${item.id}/reject`, { reason: rejectReason.value || undefined })
     rejectingId.value = null
@@ -211,7 +268,11 @@ async function submitReject(item: AgentItem) {
     detailItem.value = null
     await loadPendingApprovals()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `ปฏิเสธไม่สำเร็จ (${e.status})` : 'ปฏิเสธไม่สำเร็จ'
+    errorMessage.value = decisionError(e, 'ปฏิเสธไม่สำเร็จ')
+    detailItem.value = null
+    await loadPendingApprovals()
+  } finally {
+    decidingId.value = null
   }
 }
 
@@ -224,6 +285,12 @@ async function submitReject(item: AgentItem) {
 const revokingApprovalId = ref<number | null>(null)
 const revokeReason = ref('')
 async function submitRevokeApproval(item: AgentItem) {
+  // Same guard and same honesty as approve/reject above — a revoke sent twice
+  // is refused by AgentApprovalService for the same reason and with the same
+  // kind of sentence.
+  if (decidingId.value !== null) return
+  decidingId.value = item.id
+  errorMessage.value = ''
   try {
     await api.put(`/agent-approvals/${item.id}/revoke`, { reason: revokeReason.value || undefined })
     revokingApprovalId.value = null
@@ -231,7 +298,11 @@ async function submitRevokeApproval(item: AgentItem) {
     detailItem.value = null
     await loadPendingApprovals()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `เพิกถอนการอนุมัติไม่สำเร็จ (${e.status})` : 'เพิกถอนการอนุมัติไม่สำเร็จ'
+    errorMessage.value = decisionError(e, 'เพิกถอนการอนุมัติไม่สำเร็จ')
+    detailItem.value = null
+    await loadPendingApprovals()
+  } finally {
+    decidingId.value = null
   }
 }
 
@@ -359,17 +430,24 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
                    the one control here that cannot be undone by pressing it
                    again. Fill + icon + label means the difference survives
                    without colour at all. -->
+              <!-- 2026-09-08 — disabled while a decision is in the air. The
+                   row does not change until the reload lands, so without this
+                   the natural response to "nothing happened yet" is to press
+                   it again, and the second press is refused as a duplicate. -->
               <button
                 type="button"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-colors"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                data-test="approve"
+                :disabled="decidingId !== null"
                 @click="approvePending(p)"
               >
                 <Icon name="check" :size="14" />
-                อนุมัติ
+                {{ decidingId === p.id ? 'กำลังอนุมัติ…' : 'อนุมัติ' }}
               </button>
               <button
                 type="button"
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition-colors"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="decidingId !== null"
                 @click="rejectingId = rejectingId === p.id ? null : p.id"
               >
                 <Icon name="x" :size="14" />
@@ -553,7 +631,9 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
             </button>
             <button
               type="button"
-              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors"
+              class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-test="approve-detail"
+              :disabled="decidingId !== null"
               @click="approvePending(detailItem)"
             >
               <Icon name="check" :size="16" />

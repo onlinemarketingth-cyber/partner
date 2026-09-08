@@ -30,9 +30,7 @@ class UserService
         'manager_id' => 'user.manager_changed',
     ];
 
-    public function __construct(private readonly MatrixCommissionService $matrixCommissionService)
-    {
-    }
+    public function __construct(private readonly MatrixCommissionService $matrixCommissionService) {}
 
     /**
      * TASK-183 §4.1 — creating a user IS a permissions event (§6: "record
@@ -408,15 +406,31 @@ class UserService
      * old/new_values name `deleted_at` rather than an invented "is_active"
      * key, because that IS the column this operation moves — a reader of the
      * trail can go straight to it.
+     *
+     * ── TWO ACTIONS, ONE OPERATION (2026-09-08) ──
+     *
+     * Removing a sign-up that never completed and switching off a trading
+     * agent write the identical column, but they are not the same event, and
+     * "why did this account go away" is most of what an audit trail is for.
+     * So the row is labelled `user.applicant_removed` or `user.deactivated`
+     * accordingly.
+     *
+     * Which one it was is decided HERE, from the target's own state at the
+     * moment of deletion — never from a parameter the caller supplies. A
+     * client that could name its own audit action could name the wrong one.
      */
     public function deactivate(User $target, User $actor): void
     {
         DB::transaction(function () use ($target, $actor) {
+            $action = $target->isUnconfirmedApplicant()
+                ? 'user.applicant_removed'
+                : 'user.deactivated';
+
             $target->delete(); // SoftDeletes — see UserPolicy/TASK-009 design notes.
             $this->revokeApiTokens($target, 'account deactivated');
 
             $this->writeAudit(
-                'user.deactivated',
+                $action,
                 $target,
                 $actor,
                 ['deleted_at' => null],

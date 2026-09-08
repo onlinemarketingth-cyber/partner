@@ -44,6 +44,11 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       { value: 'user.team_leader_changed', label: 'เปลี่ยนสถานะหัวหน้าทีม' },
       { value: 'user.manager_changed', label: 'เปลี่ยนหัวหน้า' },
       { value: 'user.deactivated', label: 'ปิดบัญชี' },
+      // 2026-09-08 — its own entry, not a variant of ปิดบัญชี above. Both move
+      // `deleted_at`, but one withdraws a trading agent's access and the other
+      // clears a sign-up that never completed. Filtering the trail for "who
+      // did we cut off" must not return a pile of junk registrations.
+      { value: 'user.applicant_removed', label: 'ลบผู้สมัครที่ยังไม่ยืนยัน' },
       { value: 'user.restored', label: 'กู้คืนบัญชี' },
       { value: 'user.password_changed', label: 'เจ้าของเปลี่ยนรหัสผ่านเอง' },
       // TASK-247 — the only place the OLD address survives, which is what

@@ -41,6 +41,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import AgentEditModal from './AgentEditModal.vue'
 import {
   type AgentItem,
@@ -104,6 +105,13 @@ const searching = ref(false)
 function buildUsersPath(): string {
   const params = new URLSearchParams()
   params.set('include_inactive', '1')
+  /*
+   * 2026-09-08 — the roster draws row actions now (ลบผู้สมัคร / กู้คืน), so it
+   * has to ask the server what this admin may do to each row. Without this the
+   * only honest options are hiding the buttons or rendering them and letting
+   * the 403 be the answer, which TASK-245 already ruled out.
+   */
+  params.set('with_permissions', '1')
   if (q.value.trim()) params.set('q', q.value.trim())
   if (nationalIdSearch.value.trim()) params.set('national_id', nationalIdSearch.value.trim())
   return `/users?${params.toString()}`
@@ -273,6 +281,158 @@ async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMess
   }
   await loadAgents()
   if (payload.leaderChanged) await loadInviteLinks()
+}
+
+/*
+ * 2026-09-08 (human: "อยากทำ soft delete ในการลบผู้สมัคร ที่ยังไม่ยืนยัน
+ * ด้วยสิทธิ์ Super Admin และ Admin Company").
+ *
+ * The soft delete already existed — DELETE /users/{id} has moved `deleted_at`,
+ * revoked tokens and written an audit row since TASK-183. What did not exist
+ * was a way to reach it from the screen the junk sign-ups are actually ON: the
+ * roster row offered "แก้ไข" and nothing else, and the deactivate control sat
+ * five sections down inside the edit modal, among controls written for a
+ * trading agent.
+ *
+ * So this is the SAME endpoint, offered in a second place, under a second name
+ * — and only over rows where that name is true. `is_unconfirmed_applicant` is
+ * the server's answer to "did this sign-up ever complete"; it is never
+ * reassembled here from approval status and a verification flag, because a
+ * mistake in that arithmetic puts a delete button over a working agent.
+ *
+ * Both halves of the promise are on this screen: the row goes to the
+ * "ปิดใช้งาน" tab wearing a badge that says what it was, with กู้คืน beside
+ * it. A soft delete the screen gives no way to undo is a hard delete with
+ * better paperwork.
+ */
+const pendingRemoveApplicant = ref<AgentItem | null>(null)
+const rowActionBusy = ref(false)
+/** Which row is mid-request, so its buttons can say so and refuse a second click. */
+const decidingId = ref<number | null>(null)
+
+/*
+ * 2026-09-08 (human: "หน้ารายชื่อตัวแทน ผมจะอนุมัติ ไม่อนุมัติ หรือ soft delete
+ * ไม่มี UI ให้ใช้ในหน้านี้เลย").
+ *
+ * All three decisions existed; none of them was reachable from the list where
+ * the people are. Approve and reject lived on a separate queue screen, and the
+ * off-switch was five sections down inside the edit modal. So an admin looking
+ * at "รออนุมัติ (สมัครผ่าน อีเมล)" on a roster row had to leave the page to act
+ * on the very thing the row was telling them about.
+ *
+ * Same endpoints, same guards, offered where the information is.
+ */
+const rejectingId = ref<number | null>(null)
+const rejectReason = ref('')
+
+/** The server's own sentence when it wrote one; the code only as a fallback. */
+function decisionError(e: unknown, fallback: string): string {
+  if (!(e instanceof ApiError)) return fallback
+
+  return e.message && e.message !== `API error ${e.status}` ? e.message : `${fallback} (${e.status})`
+}
+
+function isPendingApplicant(a: AgentItem): boolean {
+  return a.is_active && a.agent_approval_status === 'pending'
+}
+
+function canApprove(a: AgentItem): boolean {
+  return isPendingApplicant(a) && a.permissions?.approve_registration === true
+}
+
+function canReject(a: AgentItem): boolean {
+  return isPendingApplicant(a) && a.permissions?.reject_registration === true
+}
+
+/*
+ * The guard the approvals queue was missing until this morning, applied here
+ * from the start: the row does not change until the reload lands, so the
+ * natural response to "nothing happened yet" is a second click — and the
+ * server refuses a decision made twice, which reads as the first one having
+ * failed.
+ */
+async function decide(a: AgentItem, run: () => Promise<void>, fallback: string, done: string): Promise<void> {
+  if (decidingId.value !== null) return
+  decidingId.value = a.id
+  errorMessage.value = ''
+  try {
+    await run()
+    await loadAgents()
+    savedMessage.value = done
+    showSavedDialog.value = true
+  } catch (e) {
+    errorMessage.value = decisionError(e, fallback)
+    // A refusal here almost always means the decision was already made, so the
+    // row on screen is the stale half of the contradiction.
+    await loadAgents()
+  } finally {
+    decidingId.value = null
+  }
+}
+
+async function approveApplicant(a: AgentItem): Promise<void> {
+  await decide(
+    a,
+    () => api.put(`/agent-approvals/${a.id}/approve`),
+    'อนุมัติไม่สำเร็จ',
+    `อนุมัติ ${a.name} แล้ว — เข้าใช้งานได้เมื่อยืนยันอีเมลเรียบร้อย`,
+  )
+}
+
+async function submitRejectApplicant(a: AgentItem): Promise<void> {
+  const reason = rejectReason.value.trim()
+  await decide(
+    a,
+    () => api.put(`/agent-approvals/${a.id}/reject`, { reason: reason || undefined }),
+    'ไม่อนุมัติไม่สำเร็จ',
+    `บันทึกว่าไม่อนุมัติ ${a.name} แล้ว`,
+  )
+  rejectingId.value = null
+  rejectReason.value = ''
+}
+
+/** Only where the server would allow it, and only for an unfinished sign-up. */
+function canRemoveApplicant(a: AgentItem): boolean {
+  return a.is_active && a.is_unconfirmed_applicant === true && a.permissions?.deactivate === true
+}
+
+/** The mirror. Offered on the same rows, so the undo is where the delete was. */
+function canRestoreApplicant(a: AgentItem): boolean {
+  return !a.is_active && a.is_unconfirmed_applicant === true && a.permissions?.restore === true
+}
+
+async function confirmRemoveApplicant(): Promise<void> {
+  const target = pendingRemoveApplicant.value
+  if (!target) return
+  rowActionBusy.value = true
+  errorMessage.value = ''
+  try {
+    await api.delete(`/users/${target.id}`)
+    pendingRemoveApplicant.value = null
+    await loadAgents()
+    savedMessage.value = `ลบผู้สมัคร ${target.name} แล้ว — ยังกู้คืนได้ที่แท็บ "ปิดใช้งาน"`
+    showSavedDialog.value = true
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
+    pendingRemoveApplicant.value = null
+  } finally {
+    rowActionBusy.value = false
+  }
+}
+
+async function restoreApplicant(a: AgentItem): Promise<void> {
+  rowActionBusy.value = true
+  errorMessage.value = ''
+  try {
+    await api.post(`/users/${a.id}/restore`, {})
+    await loadAgents()
+    savedMessage.value = `กู้คืน ${a.name} แล้ว — กลับไปอยู่ในแท็บ "ใช้งานอยู่"`
+    showSavedDialog.value = true
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `กู้คืนไม่สำเร็จ (${e.status})` : 'กู้คืนไม่สำเร็จ'
+  } finally {
+    rowActionBusy.value = false
+  }
 }
 
 onMounted(() => {
@@ -487,16 +647,118 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 <p v-else-if="a.agent_approval_status === 'rejected'" class="text-xs text-rose-600 mt-1">
                   ถูกปฏิเสธ<span v-if="a.approval_rejection_reason"> — {{ a.approval_rejection_reason }}</span>
                 </p>
+                <!-- 2026-09-08 — in the ปิดใช้งาน tab, WHY this row is there.
+                     A removed junk sign-up and a switched-off trading agent
+                     land in the same list wearing the same grey; without this
+                     the tab reads as "agents we let go" and nobody dares
+                     empty it. -->
+                <p
+                  v-if="!a.is_active && a.is_unconfirmed_applicant"
+                  class="text-xs text-slate-400 mt-1"
+                  data-test="removed-applicant-note"
+                >
+                  ผู้สมัครที่ถูกลบ — สมัครไว้แต่ไม่เคยยืนยัน กู้คืนได้ตลอด
+                </p>
               </div>
             </div>
-            <button
-              type="button"
-              class="btn-secondary shrink-0 gap-1.5"
-              @click="editingAgentId = a.id"
-            >
-              <Icon name="pencil" :size="14" />
-              แก้ไข
-            </button>
+            <div class="flex items-center gap-2 shrink-0">
+              <!-- 2026-09-08 — the decision the row is already telling them
+                   about ("รออนุมัติ"), offered on the row itself. Same two
+                   endpoints the approvals queue uses; separate permissions
+                   because the server treats approve and reject as separate
+                   grants. -->
+              <button
+                v-if="canApprove(a)"
+                type="button"
+                class="btn-secondary gap-1.5 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 disabled:opacity-50"
+                data-test="approve-applicant"
+                :disabled="decidingId !== null"
+                @click="approveApplicant(a)"
+              >
+                <Icon name="check" :size="14" />
+                {{ decidingId === a.id ? 'กำลังอนุมัติ…' : 'อนุมัติ' }}
+              </button>
+              <button
+                v-if="canReject(a)"
+                type="button"
+                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-50"
+                data-test="reject-applicant"
+                :disabled="decidingId !== null"
+                @click="rejectingId = rejectingId === a.id ? null : a.id; rejectReason = ''"
+              >
+                <Icon name="x" :size="14" />
+                ไม่อนุมัติ
+              </button>
+              <!-- Only for a sign-up that never completed, and only when the
+                   server says this admin may. Deactivating a TRADING agent is
+                   a different decision and keeps its own control inside
+                   แก้ไข → การจัดการบัญชี. -->
+              <button
+                v-if="canRemoveApplicant(a)"
+                type="button"
+                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200"
+                data-test="remove-applicant"
+                :disabled="rowActionBusy"
+                @click="pendingRemoveApplicant = a"
+              >
+                <Icon name="trash" :size="14" />
+                ลบผู้สมัคร
+              </button>
+              <button
+                v-if="canRestoreApplicant(a)"
+                type="button"
+                class="btn-secondary gap-1.5"
+                data-test="restore-applicant"
+                :disabled="rowActionBusy"
+                @click="restoreApplicant(a)"
+              >
+                <Icon name="refresh" :size="14" />
+                กู้คืน
+              </button>
+              <button
+                type="button"
+                class="btn-secondary gap-1.5"
+                @click="editingAgentId = a.id"
+              >
+                <Icon name="pencil" :size="14" />
+                แก้ไข
+              </button>
+            </div>
+          </div>
+          <!-- 2026-09-08 — the reason box, inline rather than in a dialog: the
+               text is optional but it is shown to the applicant verbatim at the
+               login screen, so it is written where the person's name and email
+               are still visible. Same pattern as the approvals queue. -->
+          <div v-if="rejectingId === a.id" class="mt-3 pt-3 border-t border-slate-100">
+            <p class="text-xs text-slate-500 mb-2">
+              เขาจะเข้าใช้งานไม่ได้ และจะเห็นเหตุผลนี้ตอนพยายามเข้าสู่ระบบ — เว้นว่างได้ถ้าไม่อยากบอกเหตุผล
+            </p>
+            <div class="flex gap-2 items-center">
+              <input
+                v-model="rejectReason"
+                type="text"
+                maxlength="1000"
+                placeholder="เหตุผล (ไม่บังคับ) เช่น ข้อมูลไม่ครบ"
+                data-test="reject-reason"
+                class="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm"
+              />
+              <button
+                type="button"
+                class="btn-secondary text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                data-test="reject-confirm"
+                :disabled="decidingId !== null"
+                @click="submitRejectApplicant(a)"
+              >
+                ยืนยันไม่อนุมัติ
+              </button>
+              <button
+                type="button"
+                class="btn-secondary"
+                @click="rejectingId = null; rejectReason = ''"
+              >
+                ยกเลิก
+              </button>
+            </div>
           </div>
         </div>
       </TransitionGroup>
@@ -516,5 +778,35 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
 
     <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
     <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
+
+    <!-- 2026-09-08 (human: "soft delete เองต้องแจ้งเตือนผู้ใช้ถึงผลกระทบเป็น
+         ภาษาคนเข้าใจ ไม่เอาภาษาระบบ").
+
+         So this says what HAPPENS TO THE PERSON, in the order an admin worries
+         about it, and it names no column, no tab id, no status enum.
+
+         The third line is the one that would otherwise be discovered the hard
+         way: a removed account still holds its email address, so that address
+         cannot be used to sign up again — `unique:users,email` has always seen
+         soft-deleted rows, and RegisterController::checkEmail() deliberately
+         matches it with withTrashed(). The remedy is กู้คืน, not a second
+         registration, and an admin who does not know that will tell somebody
+         to "just sign up again" and then watch it fail. -->
+    <ConfirmDialog
+      :show="pendingRemoveApplicant !== null"
+      variant="danger"
+      :busy="rowActionBusy"
+      title="ลบผู้สมัครรายนี้?"
+      confirm-label="ลบผู้สมัคร"
+      :body="pendingRemoveApplicant
+        ? `จะเกิดอะไรขึ้นกับ ${pendingRemoveApplicant.name}\n\n`
+          + `• ชื่อจะหายไปจากรายชื่อตัวแทนและจากคิวรออนุมัติ\n`
+          + `• เขายังเข้าใช้งานไม่ได้เหมือนเดิม (ตอนนี้ก็ยังเข้าไม่ได้อยู่แล้ว เพราะยังไม่ยืนยัน)\n`
+          + `• อีเมล ${pendingRemoveApplicant.email} จะยังถูกจองไว้กับบัญชีนี้ ถ้าเขาอยากกลับมา ต้องให้คุณกดกู้คืน สมัครใหม่ด้วยอีเมลเดิมไม่ได้\n`
+          + `• ข้อมูลไม่ได้ถูกลบถาวร กดกู้คืนได้ตลอดที่หัวข้อ “ปิดใช้งาน” ด้านบน`
+        : ''"
+      @confirm="confirmRemoveApplicant"
+      @update:show="(v) => { if (!v) pendingRemoveApplicant = null }"
+    />
   </main>
 </template>

@@ -55,6 +55,36 @@ export interface AgentItem {
   company: { id: number; name: string } | null
   has_passed_basic_cert: boolean | null
   is_active: boolean
+  /**
+   * 2026-09-08 — a sign-up that never completed: this account has never been
+   * able to log in, and never could have (pending, rejected, or a
+   * self-registered address that was never confirmed).
+   *
+   * ONE server-computed fact, not something to reassemble here out of
+   * `agent_approval_status` + `email_verified` + `registered_via` + `role`.
+   * The rule lives beside the login gate it mirrors, and it decides which
+   * rows get offered a delete button — re-deriving it on the screen is how
+   * that button ends up over a working agent's name.
+   */
+  is_unconfirmed_applicant?: boolean
+  /**
+   * TASK-259 — what THIS admin may do to THIS row, answered by the Policy
+   * that will actually run. Only present when the request asked for it
+   * (`?with_permissions=1`); absent means "do not offer row actions",
+   * never "allowed".
+   */
+  permissions?: {
+    update: boolean
+    deactivate: boolean
+    restore: boolean
+    move_company: boolean
+    // Two keys, not one. Approve is also open to a team leader over their own
+    // recruits; reject is admin-only and writes a permanent negative record
+    // the registrant is shown by name. The server answers them separately and
+    // so does the screen.
+    approve_registration?: boolean
+    reject_registration?: boolean
+  }
   created_at: string
   // ADR-005/TASK-017..020 — additive, only meaningful for self-registered
   // agents (Admin-created agents default to approved/'email', see

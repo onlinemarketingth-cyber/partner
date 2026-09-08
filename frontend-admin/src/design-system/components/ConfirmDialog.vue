@@ -80,7 +80,13 @@ const confirm = () => emit('confirm')
                 </div>
 
                 <h3 class="text-lg font-bold text-slate-800 mb-2">{{ titleText }}</h3>
-                <p class="text-sm text-slate-500 leading-relaxed mb-6">{{ bodyText }}</p>
+                <!-- 2026-09-08 — `whitespace-pre-line` so a body may lay its
+                     consequences out as lines instead of one paragraph welded
+                     together with "·". Interpolated, never v-html: these
+                     strings carry names and email addresses the admin did not
+                     write. Single-line bodies are unaffected — the class only
+                     stops newlines from collapsing. -->
+                <p class="text-sm text-slate-500 leading-relaxed mb-6 whitespace-pre-line text-left">{{ bodyText }}</p>
 
                 <div class="flex gap-3">
                     <button @click="close"

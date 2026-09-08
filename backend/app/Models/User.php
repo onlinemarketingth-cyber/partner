@@ -493,6 +493,52 @@ class User extends Authenticatable implements MustVerifyEmail
     }
 
     /**
+     * 2026-09-08 (human: "อยากทำ soft delete ในการลบผู้สมัคร ที่ยังไม่ยืนยัน").
+     *
+     * A sign-up that never completed: nobody has ever been able to log in as
+     * this account, and nothing about it depends on anything they did after
+     * registering — no orders, no downline, no commission, because
+     * LoginGateService has refused every attempt since the row was created.
+     *
+     * That is the whole safety argument for offering "remove" next to a name
+     * on the roster. Deactivating a TRADING agent is a different decision with
+     * different consequences, and it keeps its own separate control inside the
+     * edit modal.
+     *
+     * ── WHAT THIS DELIBERATELY DOES NOT INCLUDE ──
+     *
+     * LoginGateService refuses on FOUR grounds; this mirrors only the three
+     * that are about the PERSON. The fourth — `belongsToOperationalCompany()`
+     * — is about the COMPANY, and folding it in would be a genuine disaster:
+     * switching a tenant off would instantly relabel every agent inside it as
+     * an unconfirmed applicant, and the roster would start offering to remove
+     * the entire company's trading team. A company being closed says nothing
+     * about whether the people in it ever signed up properly.
+     *
+     * Reads only columns already on the row, so a list of these costs no
+     * extra queries.
+     */
+    public function isUnconfirmedApplicant(): bool
+    {
+        // Admins are created out-of-band, already approved, and are never
+        // subject to the sign-up gate — see LoginGateService's early return.
+        if (! $this->isAgent()) {
+            return false;
+        }
+
+        if ($this->agent_approval_status === AgentApprovalStatus::Pending
+            || $this->agent_approval_status === AgentApprovalStatus::Rejected) {
+            return true;
+        }
+
+        // Approved, but the address was never confirmed. Scoped to the
+        // self-registration path for the same reason the login gate is: an
+        // Admin-CREATED agent has an unverified address by design and can log
+        // in perfectly well, so they are not an unfinished sign-up.
+        return $this->isSelfRegistered() && ! $this->hasVerifiedEmail();
+    }
+
+    /**
      * BR-1 access gate: "An agent must pass the Basic certification
      * before gaining access to SWS Referral submission and selling
      * features." This is the one check every future Policy gating

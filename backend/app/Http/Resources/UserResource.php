@@ -232,6 +232,21 @@ class UserResource extends JsonResource
                 ? ['id' => $tier->id, 'key' => $tier->key, 'name' => $tier->name]
                 : null,
             'is_active' => $this->deleted_at === null,
+            /*
+             * 2026-09-08 — a sign-up that never completed: this account has
+             * never been able to log in, and never could have (see
+             * User::isUnconfirmedApplicant()).
+             *
+             * Sent as ONE server-computed fact rather than leaving the roster
+             * to assemble it from `agent_approval_status`, `email_verified`,
+             * `registered_via` and the role — which is the same re-derivation
+             * mistake TASK-245 closed, and here it would decide which rows get
+             * offered a delete button. The rule lives beside the login gate it
+             * mirrors; this only reports it.
+             *
+             * Costs no queries: every column it reads is already on the row.
+             */
+            'is_unconfirmed_applicant' => $this->isUnconfirmedApplicant(),
             'created_at' => $this->created_at,
             'deleted_at' => $this->deleted_at,
             /*
@@ -267,6 +282,22 @@ class UserResource extends JsonResource
                     'deactivate' => (bool) $request->user()?->can('delete', $this->resource),
                     'restore' => (bool) $request->user()?->can('restore', $this->resource),
                     'move_company' => (bool) $request->user()?->can('move', $this->resource),
+                    /*
+                     * 2026-09-08 — the roster decides on registrations now, so
+                     * it needs the same two answers the approvals queue has.
+                     *
+                     * They are SEPARATE keys because the server treats them as
+                     * separate questions: approve is also open to a team
+                     * leader over their own recruits (ADR-025 §7), reject is
+                     * admin-only. Collapsing them into one "may decide" flag
+                     * would put a ไม่อนุมัติ button in front of every leader
+                     * who can approve — and rejection writes a permanent
+                     * negative record the registrant is shown by name.
+                     */
+                    'approve_registration' => (bool) $request->user()?->can('approveRegistration', $this->resource),
+                    // AgentApprovalController::reject() authorizes on update(),
+                    // not approveRegistration() — mirrored exactly.
+                    'reject_registration' => (bool) $request->user()?->can('update', $this->resource),
                 ],
             ),
         ];

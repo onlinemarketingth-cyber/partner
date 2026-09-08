@@ -181,11 +181,21 @@ class UserManagementScreenTest extends TestCase
             ->getJson('/api/v1/users?with_permissions=1')
             ->assertOk();
 
+        /*
+         * assertSame on the WHOLE array, deliberately: a screen decides what to
+         * draw from these keys, so a key silently disappearing is a control
+         * silently vanishing for everybody. That is also why adding one has to
+         * come through here — 2026-09-08 added the two registration decisions
+         * when the agent roster started offering อนุมัติ / ไม่อนุมัติ on its own
+         * rows.
+         */
         $this->assertSame([
             'update' => true,
             'deactivate' => true,
             'restore' => true,
             'move_company' => true,
+            'approve_registration' => true,
+            'reject_registration' => true,
         ], $response->json('data.0.permissions'));
     }
 
