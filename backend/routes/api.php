@@ -418,6 +418,13 @@ Route::prefix('v1')->group(function () {
         // Company Admin (own company) / Super Admin inside the
         // Request/controller, which force the target company_id server-side.
         Route::get('/me/theme', [CompanyThemeController::class, 'me']);
+        // 2026-09-08 — the READ that matches the PUT below: the theme of the
+        // company an admin is editing, not of the company they belong to.
+        // Without it the admin console read its own editing surface through
+        // the PUBLIC by-slug endpoint, which is cacheable, 404s for a
+        // deactivated company, and shares the public throttle. See
+        // CompanyThemeController::show().
+        Route::get('/company-theme', [CompanyThemeController::class, 'show']);
         Route::put('/company-theme', [CompanyThemeController::class, 'update']);
         Route::post('/company-theme/asset', [CompanyThemeController::class, 'uploadAsset']);
 

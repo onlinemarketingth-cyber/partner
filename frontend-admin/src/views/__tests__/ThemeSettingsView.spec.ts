@@ -122,7 +122,9 @@ const TAB_OTHER = 'อื่นๆ'
 
 async function mountView() {
   get.mockImplementation((path: string) => {
-    if (path === '/me/theme') return Promise.resolve({ data: structuredClone(LOADED_THEME) })
+    if (path === '/me/theme' || path.startsWith('/company-theme')) {
+      return Promise.resolve({ data: structuredClone(LOADED_THEME) })
+    }
     if (path === '/video-processing-settings') {
       return Promise.resolve({
         data: { max_upload_mb: 200, target_resolution: '720p', target_bitrate_kbps: 2500 },

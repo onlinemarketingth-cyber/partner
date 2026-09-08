@@ -131,7 +131,11 @@ type PresetsResponder = (path: string) => Promise<{ data: unknown[] }>
 async function mountView(presets: unknown[], presetsResponder?: PresetsResponder) {
   get.mockImplementation((path: string) => {
     if (path.startsWith('/companies')) return Promise.resolve({ data: COMPANIES })
-    if (path === '/me/theme') return Promise.resolve({ data: structuredClone(THEME) })
+    // 2026-09-08 — a Super Admin's editor now reads /company-theme (see
+    // loadTheme); a Company Admin still reads /me/theme. Both answer here.
+    if (path === '/me/theme' || path.startsWith('/company-theme')) {
+      return Promise.resolve({ data: structuredClone(THEME) })
+    }
     if (path === '/video-processing-settings') {
       return Promise.resolve({ data: { max_upload_mb: 200, target_resolution: '720p', target_bitrate_kbps: 2500 } })
     }
@@ -241,7 +245,11 @@ describe('ThemeSettingsView — saving a colour set says so', () => {
       if (path === '/theme-presets') {
         return Promise.resolve({ data: [...SYSTEM_SIX, preset(7, 'โทนหลักบริษัท', false)] })
       }
-      if (path === '/me/theme') return Promise.resolve({ data: structuredClone(THEME) })
+      // 2026-09-08 — a Super Admin's editor now reads /company-theme (see
+    // loadTheme); a Company Admin still reads /me/theme. Both answer here.
+    if (path === '/me/theme' || path.startsWith('/company-theme')) {
+      return Promise.resolve({ data: structuredClone(THEME) })
+    }
 
       return Promise.resolve({ data: {} })
     })
@@ -533,5 +541,80 @@ describe('ThemeSettingsView — switching company', () => {
     // honest end state — not the previous company's rows.
     expect(wrapper.text()).toContain('ยังไม่มีชุดสีที่บันทึกไว้')
     expect(wrapper.text()).not.toContain('PALETTE OF COMPANY A')
+  })
+})
+
+/**
+ * 2026-09-08 (human: "ผมเลือกใช้ชุดสี Live to 100 Club แล้วทำไมยังไม่เปลี่ยน").
+ *
+ * Two separate reasons the same click looked like it did nothing.
+ *
+ *  1. THE RE-READ WENT THROUGH A PUBLIC URL. A Super Admin has no company of
+ *     their own, so this screen had no authenticated "the theme I am editing"
+ *     endpoint and fell back to GET /public/theme/{slug} — the unauthenticated
+ *     pre-login branding read. Anything between the browser and PHP may cache
+ *     a public GET, so the one URL used to show the RESULT of the admin's own
+ *     click was the one a cache was entitled to answer from memory.
+ *
+ *  2. NOTHING ON SCREEN SAID ANYTHING. No confirmation, and no mark on the row
+ *     the company is actually wearing — so a successful apply and a stale
+ *     screen looked identical.
+ */
+describe('ThemeSettingsView — applying a set says what happened', () => {
+  it('reads the editing company\'s theme through the authenticated endpoint', async () => {
+    /*
+     * The cache fix, asserted where it is enforceable from here: the URL. The
+     * server sends `Cache-Control: no-store` on /company-theme and cannot on
+     * /public/theme, which exists to be cached by the login page.
+     */
+    role = 'super_admin'
+
+    await mountView(SYSTEM_SIX)
+
+    const paths = get.mock.calls.map(([p]) => String(p))
+    expect(paths.some((p) => p.startsWith('/company-theme?company_id=4'))).toBe(true)
+    expect(paths.some((p) => p.startsWith('/public/theme'))).toBe(false)
+  })
+
+  it('confirms by name after "ใช้ชุดนี้"', async () => {
+    // Before this, applying changed some swatches on the left and said
+    // nothing. Naming the set is what separates "it worked" from "nothing
+    // happened" without asking the reader to compare colours from memory.
+    role = 'super_admin'
+    post.mockResolvedValue({ data: structuredClone(THEME) })
+
+    const wrapper = await mountView([preset(7, 'Live to 100 Club', false)])
+    await wrapper.findAll('button').find((b) => b.text() === 'ใช้ชุดนี้')!.trigger('click')
+    await (wrapper.vm as unknown as { applyPendingPreset: () => Promise<void> }).applyPendingPreset()
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="preset-applied"]').text()).toContain('Live to 100 Club')
+  })
+
+  it('marks the set the company is currently wearing', async () => {
+    /*
+     * Every field a preset carries has to match, not just the swatches — a
+     * chip that says "ใช้อยู่ตอนนี้" over a partial match is a confident
+     * sentence about a guess.
+     */
+    const inUse = {
+      ...preset(7, 'Live to 100 Club', false),
+      colors: { primary_hex: '#1e3a8a', accent_hex: '#f59e0b', nav_bg_type: 'solid' },
+    }
+
+    const wrapper = await mountView([inUse])
+
+    expect(wrapper.find('[data-test="preset-in-use"]').exists()).toBe(true)
+  })
+
+  it('does not mark a set that differs in even one field', async () => {
+    const notInUse = {
+      ...preset(7, 'Live to 100 Club', false),
+      colors: { primary_hex: '#1e3a8a', accent_hex: '#f59e0b', nav_bg_type: 'solid', card_shadow: 'md' },
+    }
+
+    const wrapper = await mountView([notInUse])
+
+    expect(wrapper.find('[data-test="preset-in-use"]').exists()).toBe(false)
   })
 })

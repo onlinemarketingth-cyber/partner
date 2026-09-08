@@ -367,8 +367,6 @@ const icons = reactive<Record<string, string>>(
 // unchanged while the single source of truth moves to the global store.
 const activeCompany = useActiveCompanyStore()
 const selectedCompanyId = computed(() => activeCompany.companyId)
-const selectedCompany = computed(() =>
-  activeCompany.companies.find((c) => c.id === activeCompany.companyId) ?? null)
 
 // Color <input type=color> needs a non-null value; keep the "unset ⇒ null"
 // semantic while still showing a sensible swatch. get() falls back to the
@@ -443,9 +441,24 @@ async function loadTheme(): Promise<void> {
   loadError.value = ''
   try {
     if (isSuperAdmin.value) {
-      const slug = selectedCompany.value?.slug
-      if (!slug) { loading.value = false; return }
-      const res = await api.get<{ data: Theme }>(`/public/theme/${slug}`)
+      /*
+       * 2026-09-08 (human: "ผมเลือกใช้ชุดสี Live to 100 Club แล้วทำไมยังไม่
+       * เปลี่ยน").
+       *
+       * This used to read GET /public/theme/{slug} — the UNAUTHENTICATED
+       * pre-login branding endpoint — because it was the only read that let a
+       * Super Admin name a company. A public GET is cacheable by everything
+       * between the browser and PHP, so the one URL this screen used to show
+       * the result of the admin's own click was the one a cache was entitled
+       * to answer from memory: apply a preset, re-read, see the colours from
+       * before. It also 404s for a deactivated company, which locked a Super
+       * Admin out of the settings of a tenant they had switched off.
+       *
+       * GET /company-theme is the read that matches the PUT: same
+       * company-resolution rule, authenticated, and `Cache-Control: no-store`.
+       */
+      if (!selectedCompanyId.value) { loading.value = false; return }
+      const res = await api.get<{ data: Theme }>(`/company-theme?company_id=${selectedCompanyId.value}`)
       populateForm(res.data)
     } else {
       const res = await api.get<{ data: Theme }>('/me/theme')
@@ -499,9 +512,7 @@ const mintingShortLink = ref(false)
 async function mintShortLoginLink() {
   mintingShortLink.value = true
   try {
-    const res = await api.post<{ data: { login_short_link: string } }>('/company-login-link', {
-      ...(activeCompany.companyId !== null ? { company_id: activeCompany.companyId } : {}),
-    })
+    const res = await api.post<{ data: { login_short_link: string } }>('/company-login-link', (activeCompany.companyId !== null ? { company_id: activeCompany.companyId } : {}))
     mintedShortLoginLink.value = res.data.login_short_link
   } catch (e) {
     shortLinkError.value = e instanceof ApiError ? `ย่อลิงก์ไม่สำเร็จ (${e.status})` : 'ย่อลิงก์ไม่สำเร็จ'
@@ -926,6 +937,8 @@ const presetsError = ref('')
  * So the list is split, own-first, and a save says so by name.
  */
 const presetSaved = ref('')
+/** Same idea for "ใช้ชุดนี้", which used to succeed in silence. */
+const presetApplied = ref('')
 
 /**
  * Two labelled groups, own first.
@@ -1046,6 +1059,51 @@ function presetNavBackground(colors: Record<string, unknown>): string | null {
  * rather than filled with a placeholder colour: showing a hex the preset
  * does not actually contain would misrepresent what "ใช้ชุดนี้" will do.
  */
+/*
+ * 2026-09-08 (human: "ผมเลือกใช้ชุดสี Live to 100 Club แล้วทำไมยังไม่เปลี่ยน").
+ *
+ * Half of that report was a stale read (see loadTheme). The other half was
+ * that this list never said which palette the company is WEARING — every row
+ * looked identical before and after "ใช้ชุดนี้", so a successful apply and a
+ * failed one were indistinguishable at a glance.
+ *
+ * Compared against `theme` — the last SAVED theme — and not against the live
+ * editor state: the question is "what is this company actually wearing", which
+ * unsaved edits have not changed yet. The comparison covers every field a
+ * preset carries (ThemePresetService::COLOR_FIELDS), so the chip means all of
+ * them match, not most of them. A partial match would be the worst of both:
+ * confident wording over a guess.
+ */
+const PRESET_COLOR_FIELDS = [
+  'primary_hex', 'accent_hex',
+  'nav_bg_hex', 'nav_bg_type', 'nav_bg_config', 'nav_text_hex', 'nav_active_hex',
+  'card_bg_hex', 'card_text_hex', 'card_border_hex', 'card_shadow',
+  'background_type', 'background_config',
+] as const
+
+/** Null, undefined and '' all mean "no opinion" and must compare equal. */
+function sameColorValue(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): string =>
+    v === null || v === undefined || v === '' ? '' : JSON.stringify(v).toLowerCase()
+
+  return norm(a) === norm(b)
+}
+
+/** The saved theme's value for a field named the way a PRESET names it. */
+function themeColorValue(t: Theme, field: string): unknown {
+  if (field === 'background_type') return t.background.type
+  if (field === 'background_config') return t.background.config
+
+  return (t as unknown as Record<string, unknown>)[field]
+}
+
+function isPresetInUse(preset: ThemePreset): boolean {
+  const t = theme.value
+  if (!t) return false
+
+  return PRESET_COLOR_FIELDS.every((f) => sameColorValue(preset.colors?.[f], themeColorValue(t, f)))
+}
+
 function presetSwatches(preset: ThemePreset): { key: string; caption: string; background: string }[] {
   const c = preset.colors ?? {}
   const slots: { key: string; caption: string; background: string | null }[] = [
@@ -1130,6 +1188,7 @@ async function savePreset(): Promise<void> {
   savingPreset.value = true
   presetsError.value = ''
   presetSaved.value = ''
+  presetApplied.value = ''
   try {
     /*
      * TASK-163 — SAVE THE FORM FIRST, THEN SNAPSHOT.
@@ -1201,12 +1260,18 @@ async function applyPendingPreset(): Promise<void> {
     // §5.2 — a Super Admin states which company they are acting in; the
     // server refuses if the preset belongs to a different one, so this can
     // never silently theme the wrong tenant.
+    presetApplied.value = ''
     await api.post(`/theme-presets/${preset.id}/apply`, presetCompanyPayload())
     // The apply endpoint writes company_theme_settings in one transaction
     // (§3.2); re-reading the theme is what makes the form + live preview
     // show the applied colours, and it works whatever that endpoint
     // chooses to return.
     await loadTheme()
+    // By NAME, like the save confirmation above it. Before this, applying a
+    // preset changed some colours on the left and said nothing — and when the
+    // re-read was stale (see loadTheme) it changed nothing at all, with no way
+    // on screen to tell those two apart.
+    presetApplied.value = `ใช้ชุดสี "${preset.name}" แล้ว — สีด้านซ้ายและตัวอย่างอัปเดตแล้ว`
     pendingApplyPreset.value = null
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'ใช้ชุดสีไม่สำเร็จ')
@@ -1739,6 +1804,7 @@ onMounted(loadPresets)
                    nothing else; on a list whose visible rows did not change,
                    "nothing happened" was a fair reading. -->
               <p v-if="presetSaved" class="mb-3 text-xs font-bold text-emerald-600" data-test="preset-saved">{{ presetSaved }}</p>
+              <p v-if="presetApplied" class="mb-3 text-xs font-bold text-emerald-600" data-test="preset-applied">{{ presetApplied }}</p>
 
               <!-- Save current colours as a preset -->
               <div class="flex items-center gap-2 mb-4">
@@ -1777,10 +1843,17 @@ onMounted(loadPresets)
                   class="mt-0.5 w-4 h-4 shrink-0 rounded border-slate-300 text-brand-600 focus:ring-brand-200"
                 />
                 <span class="text-xs leading-relaxed">
-                  <span class="font-bold text-slate-700">บันทึกเป็นชุดกลาง — ใช้ร่วมกันทุกบริษัท</span>
+                  <!-- 2026-09-08 — reworded after the human read this as
+                       "ติ๊กเพื่อเลือกใช้ชุดสีนี้". It sits directly above the
+                       list, so "บันทึกเป็นชุดกลาง" read as a switch for the
+                       rows below rather than a modifier on the button above.
+                       It now names the button it belongs to, and says outright
+                       that it does not apply anything. -->
+                  <span class="font-bold text-slate-700">ติ๊กก่อนกด "บันทึกสีปัจจุบันเป็นชุด" เพื่อให้ชุดใหม่เป็นชุดกลาง</span>
                   <span class="block text-slate-400">
+                    ช่องนี้ใช้ตอน "บันทึก" ชุดใหม่เท่านั้น — ไม่ได้เปลี่ยนสีของบริษัทนี้ ·
+                    ถ้าจะใช้ชุดที่มีอยู่แล้ว ให้กด "ใช้ชุดนี้" ที่แถวด้านล่าง ·
                     ชุดกลางจะขึ้นในรายการของทุกบริษัท และกด "ใช้ชุดนี้" ได้ทุกที่ ·
-                    สีที่เก็บยังคงเป็นสีของบริษัทที่เลือกอยู่ตอนนี้ ·
                     เปลี่ยนชื่อหรือลบได้เฉพาะ Super Admin
                   </span>
                 </span>
@@ -1845,6 +1918,21 @@ onMounted(loadPresets)
                     />
                     <div v-else class="flex items-center gap-1.5 min-w-0">
                       <p class="text-sm font-bold text-slate-900 truncate">{{ preset.name }}</p>
+                      <!-- 2026-09-08 — which palette this company is WEARING.
+                           Without it every row looked the same before and
+                           after "ใช้ชุดนี้", so a successful apply and a
+                           silently stale screen were indistinguishable. All
+                           thirteen colour fields must match, so the chip is a
+                           statement and not a guess. -->
+                      <span
+                        v-if="isPresetInUse(preset)"
+                        title="สีของบริษัทนี้ตรงกับชุดนี้ทุกช่อง"
+                        data-test="preset-in-use"
+                        class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-[11px] font-bold"
+                      >
+                        <Icon name="check" :size="11" />
+                        ใช้อยู่ตอนนี้
+                      </span>
                       <!-- TASK-164 §4 — mark a platform preset. A chip, not
                            a disabled bin icon: an action that is visible but
                            always fails is worse than one that is not offered.
