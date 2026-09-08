@@ -196,7 +196,7 @@ function thaiFontSelect(wrapper: Wrapper) {
 
 /** ชื่อแอป — the one label field with no menu and no icon. */
 function appNameBox(wrapper: Wrapper) {
-  const input = card(wrapper, 'ชื่อแอปและเมนู').find('input[placeholder="Sync Vision Agent"]')
+  const input = card(wrapper, 'ชื่อแอปและเมนู').find('input[placeholder="Live to 100 Club"]')
   if (!input.exists()) throw new Error('no ชื่อแอป box in the ชื่อแอปและเมนู card')
   return input
 }

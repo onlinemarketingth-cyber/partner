@@ -1,5 +1,5 @@
 /**
- * Base API client for Sync Vision Agent.
+ * Base API client for Live to 100 Club.
  *
  * Talks to the Laravel API (Sanctum, cookie-based SPA auth) at
  * VITE_API_BASE_URL. All endpoints live under /api/v1 per CLAUDE.md

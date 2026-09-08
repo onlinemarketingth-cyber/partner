@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# scripts/deploy.sh — Sync Vision Agent one-command deploy.
+# scripts/deploy.sh — Live to 100 Club one-command deploy.
 #
 # Run via `npm run deploy` from the repo root. What it does, in order:
 #   1. Git pre-flight, so one command really is one command: offers to

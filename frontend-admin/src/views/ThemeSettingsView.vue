@@ -160,7 +160,7 @@ const DEFAULTS = { primary: '#1e3a8a', accent: '#f59e0b', loadingBg: '#0f172a', 
  *    word to tidy a JSON blob is not a trade worth making.
  */
 const LABEL_FIELDS: { key: string; caption: string; placeholder: string }[] = [
-  { key: 'app_name', caption: 'ชื่อแอป', placeholder: 'Sync Vision Agent' },
+  { key: 'app_name', caption: 'ชื่อแอป', placeholder: 'Live to 100 Club' },
   { key: 'nav_home', caption: 'เมนู: หน้าหลัก', placeholder: 'หน้าหลัก' },
   { key: 'nav_clients', caption: 'เมนู: ลูกค้า', placeholder: 'ลูกค้า' },
   { key: 'nav_products', caption: 'เมนู: สินค้า', placeholder: 'สินค้า' },
@@ -763,7 +763,7 @@ const previewCardBorder = computed(() =>
   cardBorderMode.value === 'none' ? 'transparent' : cardBorderMode.value === 'custom' ? cardBorderColor.value : '#e2e8f0',
 )
 const previewCardShadow = computed(() => (cardShadow.value ? SHADOW_MAP[cardShadow.value] ?? 'none' : 'none'))
-const previewAppName = computed(() => labels.app_name?.trim() || 'Sync Vision')
+const previewAppName = computed(() => labels.app_name?.trim() || 'Live to 100 Club')
 
 const previewBackgroundStyle = computed(() => {
   if (backgroundType.value === 'gradient') {
@@ -1895,7 +1895,7 @@ onMounted(loadPresets)
             <input
               v-model="labels['app_name']"
               type="text"
-              placeholder="Sync Vision Agent"
+              placeholder="Live to 100 Club"
               class="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-200"
             />
           </div>

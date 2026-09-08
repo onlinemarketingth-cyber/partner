@@ -35,7 +35,7 @@ class CompanyThemeSeeder extends Seeder
                 'font_family_thai' => 'Kanit',
                 'font_family_latin' => 'Inter',
                 'font_weights' => [400, 500, 700],
-                'loading_message' => 'กำลังโหลด Sync Vision…',
+                'loading_message' => 'กำลังโหลด Live to 100 Club…',
                 'label_overrides' => [
                     'app_name' => 'Thai Life Agent',
                     'nav_home' => 'หน้าหลัก',

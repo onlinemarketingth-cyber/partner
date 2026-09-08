@@ -8,14 +8,14 @@
  * as theme.navLogo / theme.loginLogo) — but resolving them was left to
  * each CALL SITE, as a `v-if="theme.navLogo" … <img> … <AppLogo v-else>`
  * pair. Only 2 of the 6 places that render this component ever did it, so
- * a tenant that uploaded a logo still saw the built-in Sync Vision mark on
+ * a tenant that uploaded a logo still saw the built-in platform mark on
  * /register, /verify-email, /pay/:token and /l/:token — every one of them
  * a page shown to someone OUTSIDE the company, which is exactly where a
  * white-label mark matters most.
  *
  * The lookup now lives here, so a call site cannot forget it. Same reason
  * the app-name label is resolved here rather than by each caller repeating
- * `:label="appName !== 'Sync Vision Agent' ? appName : undefined"`.
+ * `:label="appName !== PLATFORM_NAME ? appName : undefined"`.
  *
  * `context` picks which uploaded slot to use:
  *   'nav'   — the in-app top bar (small, sits on the nav surface)
@@ -47,8 +47,7 @@ const props = withDefaults(
          * app name (2026-09-07, human: "เอา Sync Vision Agent นี้ออก", looking
          * at a partner's own signup page).
          *
-         *   'builtin' — the Neural Atlas mark and the "Sync Vision Agent"
-         *               wordmark. Right inside the product, where the platform
+         *   'builtin' — the Neural Atlas mark and the platform wordmark. Right inside the product, where the platform
          *               IS the thing you are using.
          *   'hide'    — nothing at all. Right on a page shown to somebody
          *               outside the company: a recruit signing up with GENESENN
@@ -66,6 +65,21 @@ const props = withDefaults(
     { mode: 'icon', size: 28, height: 32, label: undefined, src: undefined, context: 'login', fallback: 'builtin' },
 )
 
+/**
+ * The platform's own name — the fallback for a company that has configured
+ * none of its own.
+ *
+ * A named constant, and split in two for the wordmark, because the 2026-09-08
+ * rename found this literal in four places in this file alone: the default,
+ * the "is it still the default" comparison, the image alt text and the markup.
+ * Four copies of a name is four chances for the next rename to leave one
+ * behind.
+ */
+const PLATFORM_NAME = 'Live to 100 Club'
+/** The two halves of the two-tone wordmark; they must join back to PLATFORM_NAME. */
+const PLATFORM_NAME_LEAD = 'Live to 100'
+const PLATFORM_NAME_TAIL = 'Club'
+
 const theme = useThemeStore()
 
 const logoSrc = computed<string | null>(() => {
@@ -75,13 +89,13 @@ const logoSrc = computed<string | null>(() => {
 
 /**
  * The wordmark text. A company that set app_name gets it verbatim; the
- * default keeps the two-tone "Sync Vision Agent" treatment below, which is
+ * default keeps the two-tone PLATFORM_NAME treatment below, which is
  * why this returns null rather than the default string.
  */
 const wordmarkLabel = computed<string | null>(() => {
     if (props.label) return props.label
-    const configured = theme.label('app_name', 'Sync Vision Agent')
-    return configured && configured !== 'Sync Vision Agent' ? configured : null
+    const configured = theme.label('app_name', PLATFORM_NAME)
+    return configured && configured !== PLATFORM_NAME ? configured : null
 })
 
 /**
@@ -103,7 +117,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
     <img
         v-if="logoSrc && mode === 'icon'"
         :src="logoSrc"
-        :alt="wordmarkLabel ?? 'Sync Vision Agent'"
+        :alt="wordmarkLabel ?? PLATFORM_NAME"
         class="object-contain shrink-0"
         :style="{ width: size + 'px', height: size + 'px' }"
     />
@@ -113,7 +127,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
     <img
         v-else-if="logoSrc"
         :src="logoSrc"
-        :alt="wordmarkLabel ?? 'Sync Vision Agent'"
+        :alt="wordmarkLabel ?? PLATFORM_NAME"
         class="w-auto object-contain shrink-0"
         :style="{ height: height + 'px' }"
     />
@@ -138,7 +152,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
         </div>
         <span class="font-bold text-ink-card tracking-tight" :style="{ fontSize: Math.round(height * 0.45) + 'px' }">
             <template v-if="wordmarkLabel">{{ wordmarkLabel }}</template>
-            <template v-else>Sync Vision <span class="text-ink-brand">Agent</span></template>
+            <template v-else>{{ PLATFORM_NAME_LEAD }} <span class="text-ink-brand">{{ PLATFORM_NAME_TAIL }}</span></template>
         </span>
     </div>
 </template>

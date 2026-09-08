@@ -1,4 +1,4 @@
-# Deployment — Sync Vision Agent
+# Deployment — Live to 100 Club
 
 TASK-205 / ADR-034. One command from the repo root — `npm run deploy` —
 builds both Vue apps, pushes to GitHub, and deploys all three apps

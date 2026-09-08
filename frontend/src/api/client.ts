@@ -1,5 +1,5 @@
 /**
- * Base API client for Sync Vision Agent.
+ * Base API client for Live to 100 Club.
  *
  * ── 2026-08-27: COOKIE SESSION -> BEARER TOKEN ──
  *

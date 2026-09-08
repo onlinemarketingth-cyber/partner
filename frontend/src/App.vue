@@ -115,7 +115,7 @@ const backgroundStyle = computed(() => theme.companyBackgroundStyle)
 // Per-company app name override for the wordmark (falls back to built-in).
 // TASK-121 — the app name is now resolved inside AppLogo, so this local
 // copy is gone. Kept as a comment rather than silently deleted because the
-// old `:label="appName !== 'Sync Vision Agent' ? appName : undefined"`
+// old `:label="appName !== <the platform name> ? appName : undefined"`
 // ternary appeared here and in LoginView, and a future reader looking for
 // where the company name comes from should be pointed at AppLogo.vue.
 </script>

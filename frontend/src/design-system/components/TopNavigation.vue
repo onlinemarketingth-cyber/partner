@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * TopNavigation — app shell top bar for Sync Vision Agent.
+ * TopNavigation — app shell top bar for Live to 100 Club.
  *
  * Visual language ported from the reference UI (sticky, white/90
  * backdrop-blur, icon nav with hover-reveal labels, font-size pill,

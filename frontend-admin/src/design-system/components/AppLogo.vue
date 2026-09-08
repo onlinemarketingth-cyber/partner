@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * AppLogo — brand mark for Sync Vision Agent.
+ * AppLogo — brand mark for Live to 100 Club.
  *
  * Dot-grid mark inspired by the "Neural Atlas" CI reference (see
  * docs/design/CI-001-neural-atlas-reference.md) — a network of nodes
@@ -45,7 +45,7 @@ const dotPositions = [6, 12, 18].flatMap((cy) => [6, 12, 18].map((cx) => ({ cx, 
             </svg>
         </div>
         <span class="font-bold text-slate-900 tracking-tight" :style="{ fontSize: Math.round(height * 0.45) + 'px' }">
-            Sync Vision <span class="text-brand-600">Agent</span>
+            Live to 100 <span class="text-brand-600">Club</span>
         </span>
     </div>
 </template>

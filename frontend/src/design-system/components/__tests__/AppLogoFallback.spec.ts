@@ -4,7 +4,7 @@
  *
  * The mark was not a bug — AppLogo already resolves a company's uploaded logo
  * and its configured app name (TASK-121). GENESENN simply has neither, so the
- * built-in fallback rendered, and the platform vendor's name sat at the top of
+ * built-in fallback rendered, and the platform's own name sat at the top of
  * a page shown to somebody being recruited by GENESENN. That reader has no
  * relationship with the vendor; it is the one piece of branding on the page
  * that belongs to nobody in the conversation.
@@ -20,7 +20,7 @@ import { mount } from '@vue/test-utils'
 
 let navLogo: string | null = null
 let loginLogo: string | null = null
-let appName = 'Sync Vision Agent'
+let appName = 'Live to 100 Club'
 
 vi.mock('@/stores/theme', () => ({
   useThemeStore: () => ({
@@ -43,7 +43,7 @@ function mountLogo(props: Record<string, unknown> = {}) {
 function reset() {
   navLogo = null
   loginLogo = null
-  appName = 'Sync Vision Agent'
+  appName = 'Live to 100 Club'
 }
 
 describe('AppLogo — an unbranded company', () => {
@@ -52,7 +52,7 @@ describe('AppLogo — an unbranded company', () => {
     // would leave the top bar blank for most tenants.
     reset()
 
-    expect(mountLogo().text()).toContain('Sync Vision')
+    expect(mountLogo().text()).toContain('Live to 100 Club')
   })
 
   it('renders nothing at all with fallback="hide"', async () => {
@@ -60,7 +60,7 @@ describe('AppLogo — an unbranded company', () => {
 
     const wrapper = mountLogo({ fallback: 'hide' })
 
-    expect(wrapper.text()).not.toContain('Sync Vision')
+    expect(wrapper.text()).not.toContain('Live to 100 Club')
     expect(wrapper.find('img').exists()).toBe(false)
     expect(wrapper.find('svg').exists()).toBe(false)
   })
@@ -89,6 +89,6 @@ describe('AppLogo — a company with its own branding', () => {
     const wrapper = mountLogo({ fallback: 'hide' })
 
     expect(wrapper.text()).toContain('GENESENN')
-    expect(wrapper.text()).not.toContain('Sync Vision')
+    expect(wrapper.text()).not.toContain('Live to 100 Club')
   })
 })
