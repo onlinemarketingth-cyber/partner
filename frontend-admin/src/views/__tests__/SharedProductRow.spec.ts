@@ -150,6 +150,19 @@ async function mountView(products: unknown[], companyId: number | null = THAI_LI
 
 type Wrapper = Awaited<ReturnType<typeof mountView>>
 
+/**
+ * 2026-09-09 — the sell-here control is a SWITCH now, not a labelled button
+ * (human: "ปรับเมนูเปิด ปิด สินค้าให้เป็นสวิทซ์"), so it has no text to find
+ * it by. What these tests are about is the request it sends, which has not
+ * changed.
+ */
+function clickSellSwitch(wrapper: Wrapper) {
+  const sw = wrapper.find('[data-test="sell-here-switch"]')
+  if (!sw.exists()) throw new Error('ไม่พบสวิตช์เปิด/ปิดขายบนแถวสินค้า')
+
+  return sw.trigger('click')
+}
+
 function clickByText(wrapper: Wrapper, text: string) {
   const button = wrapper.findAll('button').find((b) => b.text().trim() === text)
   if (!button) throw new Error(`ไม่พบปุ่ม "${text}" — ปุ่มที่มี: ${wrapper.findAll('button').map((b) => b.text().trim()).join(' | ')}`)
@@ -281,7 +294,7 @@ describe('ProductCatalogView — changing one company\'s settings', () => {
      */
     const wrapper = await mountView([sharedProduct({ is_sellable_here: false })], AIA.id)
 
-    await clickByText(wrapper, 'เปิดขาย')
+    await clickSellSwitch(wrapper)
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/products/100/company-settings', {
@@ -291,10 +304,10 @@ describe('ProductCatalogView — changing one company\'s settings', () => {
     expect(put.mock.calls[0]![1]).not.toHaveProperty('price_satang')
   })
 
-  it('closes it again from the same button', async () => {
+  it('closes it again from the same switch', async () => {
     const wrapper = await mountView([sharedProduct({ is_sellable_here: true })], AIA.id)
 
-    await clickByText(wrapper, 'ปิดขาย')
+    await clickSellSwitch(wrapper)
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/products/100/company-settings', {

@@ -5,6 +5,7 @@ namespace App\Services\Catalog;
 use App\Models\AuditLog;
 use App\Models\CompanyProductSetting;
 use App\Models\Product;
+use App\Models\ProductRecommendationPin;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -63,6 +64,36 @@ class CompanyProductSettingService
             $setting->company_id = $companyId;
             $setting->product_id = $product->id;
             $setting->save();
+
+            /*
+             * 2026-09-09 (human: "หากมีการปิดขาย การปักหมุดสินค้าจะปิดทันที
+             * โดยอัตโนมัติ").
+             *
+             * A pin is a promise on that company's own storefront: the product
+             * appears FIRST in "แนะนำสำหรับคุณ". Switching the product off for
+             * the company used to leave the pin standing, and the pinned half
+             * of ProductRecommendationService::recommended() never consulted
+             * company_product_settings — so an agent kept being shown, in the
+             * most prominent row on their home screen, a product their company
+             * had stopped selling.
+             *
+             * Switched off HERE rather than only at render time because the
+             * pin is a stored decision, and a decision that has become
+             * impossible should stop existing rather than be filtered out
+             * everywhere it is read, forever.
+             *
+             * Only ever switched OFF. Turning selling back on does NOT restore
+             * the pin: promoting a product to the top of the storefront is a
+             * deliberate act, and quietly resurrecting a months-old one would
+             * be the system making that decision on the admin's behalf.
+             */
+            if (array_key_exists('is_active', $data) && $before['is_active'] && ! $setting->is_active) {
+                ProductRecommendationPin::withoutGlobalScope(TenantScope::class)
+                    ->where('company_id', $companyId)
+                    ->where('product_id', $product->id)
+                    ->where('is_active', true)
+                    ->update(['is_active' => false]);
+            }
 
             $after = ['price_satang' => $setting->price_satang, 'is_active' => $setting->is_active];
 

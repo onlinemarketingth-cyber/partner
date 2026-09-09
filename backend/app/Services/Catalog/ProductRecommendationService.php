@@ -50,7 +50,25 @@ class ProductRecommendationService
             ->with(['product.brand', 'product.category', 'product.company', 'product.media' => fn ($q) => $q->orderByDesc('is_primary')->orderBy('sort_order')])
             ->get()
             ->pluck('product')
-            ->filter(fn (?Product $product) => $product !== null && $product->is_active)
+            /*
+             * 2026-09-09 — active AND sellable by the company reading it.
+             *
+             * `is_active` is the product's own switch; isSellableBy() is the
+             * company's (ADR-040 — permission never inherits). A shared
+             * product a company has switched off used to keep its pin and
+             * therefore its place at the FRONT of that company's storefront:
+             * the most prominent row on the agent's home screen advertising
+             * something they may not sell.
+             *
+             * CompanyProductSettingService now clears the pin when selling is
+             * switched off, so this is the second lock rather than the only
+             * one — but the first can be bypassed by a direct DB edit or a
+             * pin created before that rule existed, and this is the read every
+             * agent performs.
+             */
+            ->filter(fn (?Product $product) => $product !== null
+                && $product->is_active
+                && $product->isSellableBy($actor->company_id))
             ->values();
 
         $remainingSlots = $slotCount - $pinnedProducts->count();

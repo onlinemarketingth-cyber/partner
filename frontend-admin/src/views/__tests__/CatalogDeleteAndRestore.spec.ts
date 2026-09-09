@@ -106,6 +106,7 @@ function mockApi(products: unknown[]) {
   get.mockImplementation(async (path: string) => {
     if (path.includes('deletion-impact')) return { data: impactPayload }
     if (path.startsWith('/catalog-trash')) return { data: trashPayload }
+    if (path.startsWith('/product-recommendation-pins')) return { data: [] }
     if (path.startsWith('/companies')) return { data: [THAI_LIFE, AIA] }
     if (path.startsWith('/brands')) return { data: [] }
     if (path.startsWith('/product-categories')) return { data: [] }
@@ -219,6 +220,111 @@ describe('the primary image is shown on the row', () => {
 
     const box = w.find('.w-\\[52px\\]')
     expect(box.classes()).toContain('h-[52px]')
+  })
+})
+
+describe('a closed product reads as closed, and sinks', () => {
+  /*
+   * 2026-09-09 (human: "ปรับเมนูเปิด ปิด สินค้าให้เป็นสวิทซ์ … เปลี่ยนสีตัว
+   * อักษรทั้งแถวใหม่เป็นสีเทา ปรับตัวรูป Thumbnail เป็นสีขาวดำ และเลื่อน
+   * ตำแหน่งล่างสุด").
+   *
+   * Nothing is hidden or disabled: the reason to look at a closed row is to
+   * change something about it. It is only visibly not part of today's shop —
+   * which the eye sorts far faster than it reads a status word.
+   */
+  const OPEN = { ...SHARED, id: 41, name: 'ขายอยู่', is_sellable_here: true }
+  const CLOSED = { ...SHARED, id: 42, name: 'ปิดขายอยู่', is_sellable_here: false }
+
+  it('puts what is on sale above what is not', async () => {
+    // Passed in closed-first, so a passing assertion means it was sorted, not
+    // that it happened to arrive in the right order.
+    const w = await mountView([CLOSED, OPEN])
+
+    const names = w.findAll('[data-test^="product-row-"]').map((row) => row.text())
+    expect(names[0]).toContain('ขายอยู่')
+    expect(names[1]).toContain('ปิดขายอยู่')
+  })
+
+  it('drains the colour from a closed row', async () => {
+    const w = await mountView([CLOSED])
+
+    expect(w.find('[data-test="product-row-closed"]').exists()).toBe(true)
+    expect(w.find('[data-test="product-row-closed"]').html()).toContain('grayscale')
+  })
+
+  it('leaves an open row alone', async () => {
+    const w = await mountView([OPEN])
+
+    expect(w.find('[data-test="product-row-open"]').exists()).toBe(true)
+    expect(w.find('[data-test="product-row-open"]').html()).not.toContain('grayscale')
+  })
+
+  it('shows the state as a switch rather than an action label', async () => {
+    /*
+     * A button reading "ปิดขาย" states the ACTION; a switch shows the STATE —
+     * and state is what somebody scanning twenty rows is looking for.
+     */
+    const w = await mountView([OPEN])
+
+    expect(w.find('[data-test="sell-here-switch"]').exists()).toBe(true)
+    expect(w.findAll('button').find((b) => b.text().trim() === 'ปิดขาย')).toBeUndefined()
+    expect(w.findAll('button').find((b) => b.text().trim() === 'เปิดขาย')).toBeUndefined()
+  })
+
+  it('puts the switch last, after the delete control', async () => {
+    // Human asked for exactly this position.
+    const w = await mountView([OPEN])
+
+    const buttons = w.find('[data-test="product-row-open"]').findAll('button')
+    expect(buttons[buttons.length - 1]?.attributes('data-test')).toBe('sell-here-switch')
+  })
+})
+
+describe('ปักหมุดแนะนำ from the list', () => {
+  const OPEN = { ...SHARED, id: 51, is_sellable_here: true }
+  const CLOSED = { ...SHARED, id: 52, is_sellable_here: false }
+
+  it('pins without opening the product', async () => {
+    // human: "เพิ่ม icon ดาวปักหมุด ในหน้านี้เลยไม่ต้องเข้าไปข้างใน".
+    const w = await mountView([OPEN])
+
+    await w.find('[data-test="toggle-pin"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/product-recommendation-pins', {
+      product_id: 51,
+      sort_order: 0,
+      company_id: AIA.id,
+    })
+  })
+
+  it('will not let you pin something the company is not selling', async () => {
+    /*
+     * The server refuses it (a pin is a storefront promise and needs the sell
+     * grant), so the star is disabled rather than allowed to 422 — and the
+     * tooltip says why, because a control that simply vanishes teaches nothing.
+     */
+    const w = await mountView([CLOSED])
+
+    const star = w.find('[data-test="toggle-pin"]')
+    expect(star.attributes('disabled')).toBeDefined()
+    expect(star.attributes('title')).toContain('ยังไม่เปิดขาย')
+  })
+
+  it('re-reads the pins after a sale is closed', async () => {
+    /*
+     * Closing a sale switches that company's pin off SERVER-side. Without the
+     * refetch the star would stay lit next to a switch that says closed — the
+     * row contradicting itself until the next reload.
+     */
+    const w = await mountView([OPEN])
+    get.mockClear()
+
+    await w.find('[data-test="sell-here-switch"]').trigger('click')
+    await flushPromises()
+
+    expect(get.mock.calls.some(([path]) => path === '/product-recommendation-pins')).toBe(true)
   })
 })
 

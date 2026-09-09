@@ -316,6 +316,8 @@ async function loadAll() {
     // 2026-09-09 — the bin is a tab on this page, and its count is on the tab
     // itself, so it cannot wait until the tab is opened.
     void loadTrash()
+    // The stars on the package rows.
+    void loadPins()
 
     // TASK-213 Phase 3 — /commission-rules and /commission-override-rules
     // used to be fetched here for two tabs that now live in แผนคอมมิชชั่น.
@@ -1457,7 +1459,13 @@ async function toggleSellHere(product: Product): Promise<void> {
       company_id: companyId,
       is_active: !product.is_sellable_here,
     })
-    await loadProducts()
+    /*
+     * 2026-09-09 — the pins are refetched too, because closing a sale switches
+     * that company's pin off server-side (CompanyProductSettingService). The
+     * star must go dark in the same paint as the switch, or the row would
+     * contradict itself until the next reload.
+     */
+    await Promise.all([loadProducts(), loadPins()])
   } catch (e) {
     errorMessage.value = saveFailureMessage(e)
   } finally {
@@ -1660,6 +1668,84 @@ interface TrashBucket {
   brands: Brand[]
   categories: ProductCategory[]
 }
+/*
+ * ── ปักหมุดแนะนำ, on the row (2026-09-09) ─────────────────────────────
+ *
+ * human: "เพิ่ม icon ดาวปักหมุด ในหน้านี้เลยไม่ต้องเข้าไปข้างใน".
+ *
+ * Pinning has only ever been reachable three clicks in — open the product,
+ * find the section at the bottom of the general tab, toggle, save — which is
+ * a lot of ceremony for a decision that is really "this one, and that one".
+ * The same endpoint, from the list.
+ *
+ * A pin belongs to ONE company (ADR-040), so the star means nothing without a
+ * company scope, and it is hidden in ทุกบริษัท mode rather than guessing.
+ */
+interface PinRow {
+  id: number
+  product_id: number
+  company_id: number
+  sort_order: number
+  is_active: boolean
+}
+const pins = ref<PinRow[]>([])
+const pinningId = ref<number | null>(null)
+
+const pinOf = (product: Product) => pins.value.find((pin) => pin.product_id === product.id) ?? null
+const isPinned = (product: Product) => pinOf(product)?.is_active === true
+
+async function loadPins(): Promise<void> {
+  if (selectedCatalogCompanyId.value === null) {
+    pins.value = []
+
+    return
+  }
+  try {
+    const res = await api.get<{ data: PinRow[] }>('/product-recommendation-pins')
+    pins.value = res.data
+  } catch {
+    // A pin list that will not load must not blank the catalogue: the stars
+    // simply render unlit, and every other control on the row still works.
+    pins.value = []
+  }
+}
+
+/**
+ * Toggle the pin for the scoped company.
+ *
+ * PUT when a row already exists — including a switched-off one, which is what
+ * closing the sale leaves behind — and POST only the first time. Creating a
+ * second row would hit the unique(company_id, product_id) index as a 422 that
+ * reads like a validation mistake the admin made.
+ */
+async function togglePin(product: Product): Promise<void> {
+  const companyId = selectedCatalogCompanyId.value
+  if (companyId === null || pinningId.value !== null) return
+
+  pinningId.value = product.id
+  errorMessage.value = ''
+  try {
+    const existing = pinOf(product)
+    if (existing) {
+      await api.put(`/product-recommendation-pins/${existing.id}`, {
+        sort_order: existing.sort_order,
+        is_active: !existing.is_active,
+      })
+    } else {
+      await api.post('/product-recommendation-pins', {
+        product_id: product.id,
+        sort_order: 0,
+        ...(isSuperAdmin.value ? { company_id: companyId } : {}),
+      })
+    }
+    await loadPins()
+  } catch (e) {
+    errorMessage.value = saveFailureMessage(e)
+  } finally {
+    pinningId.value = null
+  }
+}
+
 const trash = ref<TrashBucket>({ products: [], brands: [], categories: [] })
 const loadingTrash = ref(false)
 const restoringId = ref<string | null>(null)
@@ -1749,6 +1835,26 @@ const filteredProducts = computed(() => {
 
     return true
   })
+    /*
+     * 2026-09-09 (human: "เลื่อนตำแหน่งล่างสุด ให้สินค้าที่เปิดขายอยู่ด้านบน").
+     *
+     * What is on sale is the day-to-day work; what is closed is reference.
+     * Sorted rather than filtered, because a closed product must stay
+     * findable — it is the one somebody wants to switch back on.
+     *
+     * `.slice()` first: this derives from `products`, and sort() mutates in
+     * place — sorting the array a computed returned would reorder the source
+     * ref and make each render depend on the last one.
+     *
+     * Then by name within each half, with 'th', so the two groups are each
+     * ordered the way a Thai reader expects rather than by insertion.
+     */
+    .slice()
+    .sort((a, b) => {
+      if (a.is_sellable_here !== b.is_sellable_here) return a.is_sellable_here ? -1 : 1
+
+      return a.name.localeCompare(b.name, 'th')
+    })
 })
 
 const productFilterCount = computed(
@@ -2626,7 +2732,21 @@ function toggleRefForm(): void {
            in ทุกบริษัท mode neither exists and the row falls back to the
            central price alone. -->
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-        <div v-for="p in filteredProducts" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
+        <!--
+          2026-09-09 — a closed product reads as closed at a glance.
+
+          Not hidden and not disabled: the reason to look at a closed row is to
+          change something about it. It is only visibly not part of today's
+          shop — the text drops to grey and the photograph loses its colour,
+          which the eye sorts far faster than it reads a status word.
+        -->
+        <div
+          v-for="p in filteredProducts"
+          :key="p.id"
+          class="border rounded-xl p-4 flex items-center justify-between gap-3 transition-colors"
+          :class="p.is_sellable_here ? 'bg-white/95 border-slate-200' : 'bg-slate-50/60 border-slate-100'"
+          :data-test="p.is_sellable_here ? 'product-row-open' : 'product-row-closed'"
+        >
           <!--
             2026-09-09 — the primary image, in front of the name.
 
@@ -2641,7 +2761,10 @@ function toggleRefForm(): void {
             would take the space out of the image and leave a sliver.
           -->
           <div class="flex items-center gap-3 min-w-0">
-          <div class="w-[52px] h-[52px] rounded-lg overflow-hidden border border-slate-200 bg-slate-50 shrink-0 flex items-center justify-center">
+          <div
+            class="w-[52px] h-[52px] rounded-lg overflow-hidden border border-slate-200 bg-slate-50 shrink-0 flex items-center justify-center transition-all"
+            :class="p.is_sellable_here ? '' : 'grayscale opacity-60'"
+          >
             <AuthenticatedMedia
               v-if="p.thumbnail_url"
               :src="p.thumbnail_url"
@@ -2655,13 +2778,13 @@ function toggleRefForm(): void {
             <Icon v-else name="image" :size="18" class="text-slate-300" />
           </div>
           <div class="min-w-0">
-            <p class="text-sm font-bold text-slate-900 flex items-center gap-2">
+            <p class="text-sm font-bold flex items-center gap-2" :class="p.is_sellable_here ? 'text-slate-900' : 'text-slate-400'">
               <span class="truncate">{{ p.name }}</span>
               <span v-if="p.is_shared" class="shrink-0 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-bold" title="สินค้ากลาง — ทุกบริษัทใช้รายการเดียวกัน แต่ตั้งราคาและเปิด/ปิดขายเองได้">
                 สินค้ากลาง
               </span>
             </p>
-            <p class="text-xs text-slate-400">
+            <p class="text-xs" :class="p.is_sellable_here ? 'text-slate-400' : 'text-slate-300'">
               {{ p.brand?.name }} · {{ p.category?.name }}
               <!-- Company name only for Super Admin (2026-08-18, human
                    report): they're the only role who sees rows spanning
@@ -2685,7 +2808,7 @@ function toggleRefForm(): void {
             <span v-else-if="!p.is_shared" class="text-xs font-bold text-emerald-600">ใช้งาน</span>
 
             <div class="text-right">
-              <span class="text-sm font-bold text-slate-900">{{ formatSatang(p.is_shared && scopedCompanyLabel ? p.effective_price_satang : p.price_satang) }}</span>
+              <span class="text-sm font-bold" :class="p.is_sellable_here ? 'text-slate-900' : 'text-slate-400'">{{ formatSatang(p.is_shared && scopedCompanyLabel ? p.effective_price_satang : p.price_satang) }}</span>
               <!-- An inherited price is not the same number as a chosen one:
                    it moves the next time the central price is edited. -->
               <p v-if="p.is_shared && scopedCompanyLabel && p.own_price_satang === null" class="text-[10px] text-slate-400 leading-tight">
@@ -2693,24 +2816,42 @@ function toggleRefForm(): void {
               </p>
             </div>
 
-            <template v-if="isSuperAdmin && p.is_shared && scopedCompanyLabel">
-              <button
-                class="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
-                :title="`ตั้งราคาเฉพาะของ ${scopedCompanyLabel}`"
-                @click="openCompanySetting(p)"
-              >
-                ตั้งราคา
-              </button>
-              <button
-                class="px-2.5 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50"
-                :class="p.is_sellable_here ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
-                :disabled="togglingSellHere.includes(p.id)"
-                :title="p.is_sellable_here ? `ปิดขายที่ ${scopedCompanyLabel}` : `เปิดขายที่ ${scopedCompanyLabel}`"
-                @click="toggleSellHere(p)"
-              >
-                {{ p.is_sellable_here ? 'ปิดขาย' : 'เปิดขาย' }}
-              </button>
-            </template>
+            <button
+              v-if="isSuperAdmin && p.is_shared && scopedCompanyLabel"
+              class="px-2.5 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-xs font-bold hover:bg-slate-200"
+              :title="`ตั้งราคาเฉพาะของ ${scopedCompanyLabel}`"
+              @click="openCompanySetting(p)"
+            >
+              ตั้งราคา
+            </button>
+
+            <!--
+              2026-09-09 (human: "เพิ่ม icon ดาวปักหมุด ในหน้านี้เลยไม่ต้อง
+              เข้าไปข้างใน") — the same pin that used to be three clicks in.
+
+              Disabled when the product is not on sale here, because the server
+              refuses it (ValidatesProductOwnership: a pin is a storefront
+              promise and needs the sell grant). Disabled with the REASON in
+              the tooltip, rather than hidden — a star that vanishes teaches
+              nothing, and this is the exact pairing the human asked for: close
+              the sale, the pin goes out.
+            -->
+            <button
+              v-if="canUpdate(p) && scopedCompanyLabel"
+              type="button"
+              data-test="toggle-pin"
+              class="w-8 h-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              :class="isPinned(p) ? 'bg-amber-50 text-amber-500 hover:bg-amber-100' : 'text-slate-300 hover:text-amber-500 hover:bg-slate-100'"
+              :disabled="pinningId !== null || !p.is_sellable_here"
+              :title="!p.is_sellable_here
+                ? 'ปักหมุดไม่ได้ — สินค้านี้ยังไม่เปิดขายที่บริษัทนี้'
+                : (isPinned(p)
+                  ? `เอาออกจากแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`
+                  : `ปักหมุดขึ้นแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`)"
+              @click="togglePin(p)"
+            >
+              <Icon name="star" :size="16" />
+            </button>
 
             <!-- TASK-245 — the server's answer, not `is_shared`.
                  `is_shared` misses a catalog-LINKED product: it still belongs
@@ -2755,6 +2896,37 @@ function toggleRefForm(): void {
             <span v-else-if="p.is_shared" class="text-[11px] text-slate-400 whitespace-nowrap" title="สินค้ากลางจัดการโดยผู้ดูแลระบบ">
               จัดการโดยผู้ดูแลระบบ
             </span>
+
+            <!--
+              2026-09-09 (human: "ปรับเมนูเปิด ปิด สินค้าให้เป็นสวิทซ์ …
+              เลื่อนที่ช่องสุดท้ายต่อจากลบสินค้า").
+
+              Last in the row, and a switch rather than a button. A button
+              labelled "ปิดขาย" states the ACTION it performs; a switch shows
+              the STATE it is in — and the state is what the admin is scanning
+              a list of twenty products for. It is also the one control here
+              that takes effect the moment it is touched, with no dialog: a
+              switch is the shape people already read that way.
+
+              Closing the sale also switches this company's pin off, server
+              side — which is why the star beside it goes dark in the same
+              paint (see toggleSellHere).
+            -->
+            <button
+              v-if="isSuperAdmin && p.is_shared && scopedCompanyLabel"
+              type="button"
+              data-test="sell-here-switch"
+              class="relative w-12 h-6 shrink-0 rounded-full border transition-colors disabled:opacity-50"
+              :class="p.is_sellable_here ? 'bg-brand-600 border-brand-600' : 'bg-white border-slate-300'"
+              :disabled="togglingSellHere.includes(p.id)"
+              :title="p.is_sellable_here ? `กำลังขายที่ ${scopedCompanyLabel} — แตะเพื่อปิดขาย` : `ยังไม่เปิดขายที่ ${scopedCompanyLabel} — แตะเพื่อเปิดขาย`"
+              @click="toggleSellHere(p)"
+            >
+              <span
+                class="absolute top-0.5 bottom-0.5 w-5 rounded-full shadow transition-all duration-200"
+                :class="p.is_sellable_here ? 'translate-x-[26px] bg-white' : 'translate-x-0.5 bg-slate-300'"
+              ></span>
+            </button>
           </div>
         </div>
       </TransitionGroup>
