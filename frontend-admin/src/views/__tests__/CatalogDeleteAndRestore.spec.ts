@@ -260,16 +260,54 @@ describe('a closed product reads as closed, and sinks', () => {
     expect(w.find('[data-test="product-row-open"]').html()).not.toContain('grayscale')
   })
 
-  it('shows the state as a switch rather than an action label', async () => {
+  it('says which state it is in, in words as well as colour', async () => {
     /*
-     * A button reading "ปิดขาย" states the ACTION; a switch shows the STATE —
-     * and state is what somebody scanning twenty rows is looking for.
+     * 2026-09-09 (human: "เพิ่ม copy เปิด หรือ ปิดสินค้าด้วย"). A switch shows
+     * a STATE where the old button announced an ACTION — but a state with no
+     * word beside it has to be inferred from which end a dot sits at, and the
+     * colour alone does not carry for a reader who does not separate the two
+     * blues.
+     */
+    expect((await mountView([OPEN])).find('[data-test="sell-here-label"]').text()).toBe('เปิดขาย')
+    expect((await mountView([CLOSED])).find('[data-test="sell-here-label"]').text()).toBe('ปิดขาย')
+  })
+
+  it('parks the knob on the LEFT when the product is closed', async () => {
+    /*
+     * 2026-09-09 (human: "ปรับเลื่อนสวิตช์ปิดให้มาด้านซ้ายมือ UI ได้เข้าใจว่า
+     * ปิดอยู่").
+     *
+     * On the build the human was looking at, the knob sat right-of-centre in
+     * BOTH states — so "off" looked like "on". The cause was the old markup:
+     * an absolutely positioned span with `top`/`bottom` but no `left`, which
+     * falls back to its STATIC position, and a <button> is text-align:center
+     * by default. The knob was therefore centred, and the translate that was
+     * supposed to move it never compiled.
+     *
+     * Asserted on both states, because a switch whose two ends are not
+     * visibly different is not a switch.
+     */
+    const closed = await mountView([CLOSED])
+    expect(closed.find('[data-test="sell-here-switch"] span.rounded-full.border').classes()).toContain('justify-start')
+
+    const open = await mountView([OPEN])
+    expect(open.find('[data-test="sell-here-switch"] span.rounded-full.border').classes()).toContain('justify-end')
+  })
+
+  it('moves the knob with a utility that actually exists', async () => {
+    /*
+     * The knob was invisible in the ON state on the real build: its travel was
+     * written as the arbitrary value `translate-x-[26px]`, and an arbitrary
+     * value only exists if Tailwind's scanner found that exact literal — it
+     * had not. This asserts the flex approach that replaced it, because the
+     * failure was invisible to every other test: the element WAS in the DOM,
+     * with the right classes, and simply did not move.
      */
     const w = await mountView([OPEN])
+    const track = w.find('[data-test="sell-here-switch"] span.rounded-full.border')
 
-    expect(w.find('[data-test="sell-here-switch"]').exists()).toBe(true)
-    expect(w.findAll('button').find((b) => b.text().trim() === 'ปิดขาย')).toBeUndefined()
-    expect(w.findAll('button').find((b) => b.text().trim() === 'เปิดขาย')).toBeUndefined()
+    expect(track.classes()).toContain('justify-end')
+    expect(w.find('[data-test="sell-here-switch"]').html()).not.toContain('translate-x-[')
   })
 
   it('puts the switch last, after the delete control', async () => {
@@ -297,6 +335,29 @@ describe('ปักหมุดแนะนำ from the list', () => {
       sort_order: 0,
       company_id: AIA.id,
     })
+  })
+
+  it('says in words whether it is being recommended', async () => {
+    /*
+     * 2026-09-09 (human: "ย้ายดาวไปคู่กับปุ่ม switch พร้อม label อธิบาย").
+     *
+     * A gold star rather than a grey one is something a person has to have
+     * been taught. The word means nobody has to be — and it is the same
+     * grammar as the switch beside it, which reads its state out too.
+     */
+    expect((await mountView([{ ...OPEN, id: 61 }])).find('[data-test="pin-label"]').text()).toBe('ยังไม่แนะนำ')
+  })
+
+  it('sits with the sell switch, because closing the sale puts it out', async () => {
+    /*
+     * The two controls that decide what this product does on the STOREFRONT,
+     * and they are chained: closing the sale switches the pin off server-side.
+     * A star four controls away would appear to go dark for no reason.
+     */
+    const w = await mountView([OPEN])
+    const group = w.find('[data-test="toggle-pin"]').element.parentElement
+
+    expect(group?.querySelector('[data-test="sell-here-switch"]')).not.toBeNull()
   })
 
   it('will not let you pin something the company is not selling', async () => {

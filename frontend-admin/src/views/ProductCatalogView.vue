@@ -1446,6 +1446,22 @@ async function saveCompanySetting(): Promise<void> {
   }
 }
 
+/**
+ * Open or close this product for the scoped company.
+ *
+ * ── A NOTE ON THE SWITCH THIS DRIVES ──
+ *
+ * Its knob was first written as an absolutely positioned span moved by an
+ * ARBITRARY Tailwind translate utility. On the real build the knob was
+ * invisible in the ON state: an arbitrary value only exists in the compiled
+ * CSS if Tailwind's scanner found that exact literal, and it had not — so the
+ * element was in the DOM, carrying the right classes, and simply never moved.
+ * A failure no test could see and no type-check could catch.
+ *
+ * It is now a flex child pushed to one end with justify-start/justify-end:
+ * bedrock utilities that cannot go missing, and geometry that no longer
+ * depends on a magic pixel number kept in step with the track width by hand.
+ */
 async function toggleSellHere(product: Product): Promise<void> {
   const companyId = selectedCatalogCompanyId.value
   if (companyId === null || togglingSellHere.value.includes(product.id)) return
@@ -2825,34 +2841,6 @@ function toggleRefForm(): void {
               ตั้งราคา
             </button>
 
-            <!--
-              2026-09-09 (human: "เพิ่ม icon ดาวปักหมุด ในหน้านี้เลยไม่ต้อง
-              เข้าไปข้างใน") — the same pin that used to be three clicks in.
-
-              Disabled when the product is not on sale here, because the server
-              refuses it (ValidatesProductOwnership: a pin is a storefront
-              promise and needs the sell grant). Disabled with the REASON in
-              the tooltip, rather than hidden — a star that vanishes teaches
-              nothing, and this is the exact pairing the human asked for: close
-              the sale, the pin goes out.
-            -->
-            <button
-              v-if="canUpdate(p) && scopedCompanyLabel"
-              type="button"
-              data-test="toggle-pin"
-              class="w-8 h-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              :class="isPinned(p) ? 'bg-amber-50 text-amber-500 hover:bg-amber-100' : 'text-slate-300 hover:text-amber-500 hover:bg-slate-100'"
-              :disabled="pinningId !== null || !p.is_sellable_here"
-              :title="!p.is_sellable_here
-                ? 'ปักหมุดไม่ได้ — สินค้านี้ยังไม่เปิดขายที่บริษัทนี้'
-                : (isPinned(p)
-                  ? `เอาออกจากแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`
-                  : `ปักหมุดขึ้นแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`)"
-              @click="togglePin(p)"
-            >
-              <Icon name="star" :size="16" />
-            </button>
-
             <!-- TASK-245 — the server's answer, not `is_shared`.
                  `is_shared` misses a catalog-LINKED product: it still belongs
                  to this company, and every write to it is still refused
@@ -2912,21 +2900,92 @@ function toggleRefForm(): void {
               side — which is why the star beside it goes dark in the same
               paint (see toggleSellHere).
             -->
+            <!--
+              2026-09-09 (human: "ย้ายดาวไปคู่กับปุ่ม switch พร้อม label อธิบาย").
+
+              The two controls that decide what this product does on the
+              company's STOREFRONT, together at the end of the row and behind
+              one divider — everything to the left of that line edits the
+              product itself.
+
+              They belong side by side because they are one decision in two
+              steps, and because they are chained: closing the sale switches
+              the pin off (CompanyProductSettingService), so a star that lived
+              four controls away would appear to go dark for no reason.
+
+              Both carry a WORD, not just a colour and a shape. A star that is
+              gold rather than grey and a dot at one end rather than the other
+              are two things a person has to have been taught; the labels mean
+              nobody has to be.
+            -->
+            <div
+              v-if="scopedCompanyLabel && (canUpdate(p) || (isSuperAdmin && p.is_shared))"
+              class="shrink-0 flex items-center gap-3 pl-3 ml-1 border-l border-slate-200"
+            >
+              <button
+                v-if="canUpdate(p)"
+                type="button"
+                data-test="toggle-pin"
+                class="inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                :disabled="pinningId !== null || !p.is_sellable_here"
+                :title="!p.is_sellable_here
+                  ? 'ปักหมุดไม่ได้ — สินค้านี้ยังไม่เปิดขายที่บริษัทนี้'
+                  : (isPinned(p)
+                    ? `เอาออกจากแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`
+                    : `ปักหมุดขึ้นแถว “แนะนำสำหรับคุณ” ของ ${scopedCompanyLabel}`)"
+                @click="togglePin(p)"
+              >
+                <span
+                  class="text-xs font-bold whitespace-nowrap"
+                  :class="isPinned(p) ? 'text-amber-600' : 'text-slate-400'"
+                  data-test="pin-label"
+                >
+                  {{ isPinned(p) ? 'แนะนำอยู่' : 'ยังไม่แนะนำ' }}
+                </span>
+                <span
+                  class="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+                  :class="isPinned(p) ? 'bg-amber-50 text-amber-500' : 'text-slate-300'"
+                >
+                  <Icon name="star" :size="16" />
+                </span>
+              </button>
+
             <button
               v-if="isSuperAdmin && p.is_shared && scopedCompanyLabel"
               type="button"
               data-test="sell-here-switch"
-              class="relative w-12 h-6 shrink-0 rounded-full border transition-colors disabled:opacity-50"
-              :class="p.is_sellable_here ? 'bg-brand-600 border-brand-600' : 'bg-white border-slate-300'"
+              class="shrink-0 inline-flex items-center gap-2 disabled:opacity-50"
               :disabled="togglingSellHere.includes(p.id)"
               :title="p.is_sellable_here ? `กำลังขายที่ ${scopedCompanyLabel} — แตะเพื่อปิดขาย` : `ยังไม่เปิดขายที่ ${scopedCompanyLabel} — แตะเพื่อเปิดขาย`"
               @click="toggleSellHere(p)"
             >
+              <!-- 2026-09-09 (human: "เพิ่ม copy เปิด หรือ ปิดสินค้าด้วย") — a
+                   switch shows a state, and a state with no word beside it is
+                   a state somebody has to infer from which end a dot sits at.
+                   The colour and the word say the same thing, which is what
+                   makes it readable at a glance and still readable to someone
+                   who does not separate these two blues. -->
               <span
-                class="absolute top-0.5 bottom-0.5 w-5 rounded-full shadow transition-all duration-200"
-                :class="p.is_sellable_here ? 'translate-x-[26px] bg-white' : 'translate-x-0.5 bg-slate-300'"
-              ></span>
+                class="text-xs font-bold whitespace-nowrap"
+                :class="p.is_sellable_here ? 'text-brand-700' : 'text-slate-400'"
+                data-test="sell-here-label"
+              >
+                {{ p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย' }}
+              </span>
+              <!-- The knob is a FLEX CHILD pushed to one end, not an
+                   absolutely positioned element shifted by a hard-coded
+                   distance — see toggleSellHere() for why that mattered. -->
+              <span
+                class="w-11 h-6 rounded-full border flex items-center p-0.5 transition-colors"
+                :class="p.is_sellable_here ? 'bg-brand-600 border-brand-600 justify-end' : 'bg-white border-slate-300 justify-start'"
+              >
+                <span
+                  class="w-5 h-5 rounded-full shadow-sm transition-colors"
+                  :class="p.is_sellable_here ? 'bg-white' : 'bg-slate-300'"
+                ></span>
+              </span>
             </button>
+            </div>
           </div>
         </div>
       </TransitionGroup>
