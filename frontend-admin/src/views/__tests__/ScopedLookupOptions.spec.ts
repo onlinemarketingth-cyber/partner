@@ -44,6 +44,18 @@ describe('ProductEditView — the brand and category pickers are scoped', () => 
     expect(source).toContain("activeCompany.scopedPath('/product-categories')")
   })
 
+  it('marks a platform row so the remaining pair is not a coin flip', () => {
+    /*
+     * Scoping removes the OTHER companies' copies. What legitimately stays is
+     * the company's own row and the platform's, both named "De La Lita" — and
+     * a form that prints the bare name twice is asking somebody to guess.
+     */
+    expect(source).toContain('function taxonomyLabel')
+    expect(source).toContain('ของกลาง')
+    expect(source).toContain('{{ taxonomyLabel(b) }}')
+    expect(source).toContain('{{ taxonomyLabel(c) }}')
+  })
+
   it('no longer fetches either one unscoped', () => {
     /*
      * The regression this file exists for. Both calls sat one line apart from

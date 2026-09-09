@@ -96,10 +96,14 @@ interface Brand {
   id: number
   name: string
   is_active: boolean
+  /** null = ของกลาง, a brand the platform owns and every company may use. */
+  company_id: number | null
 }
 interface ProductCategory {
   id: number
   name: string
+  /** null = ของกลาง — see Brand above. */
+  company_id: number | null
   sort_order: number
   is_active: boolean
 }
@@ -1826,6 +1830,23 @@ async function deleteRule(ruleId: number) {
   }
 }
 
+/*
+ * 2026-09-09 (human: "หมวดหมู่ แบรนด์ขึ้นซ้อนกัน ต้องมีตัวเดียว").
+ *
+ * After promotion a company owns "De La Lita" and so does the platform, and
+ * the picker offered the word twice with nothing to choose between. Scoping
+ * the fetch removed the OTHER companies' copies; this names the pair that is
+ * legitimately left, so the remaining choice is a choice and not a coin flip.
+ *
+ * `catalog:tidy-taxonomy` clears the company row once nothing uses it, and
+ * then only one option remains — but a form must read correctly before the
+ * cleanup runs, and on the day somebody adds a company brand that happens to
+ * share a platform name.
+ */
+function taxonomyLabel(row: { name: string; company_id: number | null }): string {
+  return row.company_id === null ? `${row.name} · ของกลาง` : row.name
+}
+
 // ── Initial load ──
 async function loadInitialData() {
   loading.value = true
@@ -2100,14 +2121,14 @@ function goToVideoSettings() {
               <label class="text-sm font-bold text-slate-500">แบรนด์</label>
               <select v-model="basicsForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกแบรนด์</option>
-                <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+                <option v-for="b in brands" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
               </select>
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
               <select v-model="basicsForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกหมวดหมู่</option>
-                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                <option v-for="c in categories" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
               </select>
             </div>
           </template>
@@ -3574,14 +3595,14 @@ function goToVideoSettings() {
               <label class="text-xs font-bold text-slate-500">แบรนด์</label>
               <select v-model="unlinkForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="" disabled>เลือกแบรนด์</option>
-                <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+                <option v-for="b in brands" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
               </select>
             </div>
             <div>
               <label class="text-xs font-bold text-slate-500">หมวดหมู่</label>
               <select v-model="unlinkForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="" disabled>เลือกหมวดหมู่</option>
-                <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                <option v-for="c in categories" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
               </select>
             </div>
           </div>
