@@ -1832,8 +1832,26 @@ async function loadInitialData() {
   errorMessage.value = ''
   try {
     const [b, c] = await Promise.all([
-      api.get<{ data: Brand[] }>('/brands'),
-      api.get<{ data: ProductCategory[] }>('/product-categories'),
+      /*
+       * 2026-09-09 (human: "เวลาเพิ่มสินค้า หมวดหมู่ แบรนด์ขึ้นซ้อนกัน
+       * ต้องมีตัวเดียว").
+       *
+       * They were not duplicates. They were one row per company, all with the
+       * same name — "De La Lita" three times, "Anti Aging" three times — and
+       * choosing between them was choosing which company's brand to attach,
+       * a question the form never asked and the labels could not answer.
+       *
+       * scopedPath, exactly as ProductCatalogView already does one screen
+       * away. A Super Admin is exempt from the tenant scope, so without the
+       * company_id these endpoints answer with EVERY company's rows; the
+       * server then narrows to the scoped company plus the platform's shared
+       * ones (BrandController::index, includePlatformWide). The lookup was
+       * simply never scoped when this editor was split out of the catalogue
+       * view, and it only becomes visible once a second company owns a brand
+       * by the same name.
+       */
+      api.get<{ data: Brand[] }>(activeCompany.scopedPath('/brands')),
+      api.get<{ data: ProductCategory[] }>(activeCompany.scopedPath('/product-categories')),
       // ADR-026 — the journey selector's options. Kept in the same
       // parallel batch (not awaited separately) so it costs no extra
       // round-trip; its own failure is swallowed inside the function

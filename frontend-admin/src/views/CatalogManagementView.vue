@@ -396,8 +396,8 @@ async function confirmDeleteItem(): Promise<void> {
     <HeroHeader
       icon="globe"
       title="แคตตาล็อกกลาง"
-      subtitle="แบรนด์ / หมวดหมู่ / รายการสินค้า ที่ใช้ร่วมกันทุกบริษัท (ADR-036)"
-      description="เมื่อสินค้าของบริษัทหนึ่งเชื่อมกับรายการในแคตตาล็อกนี้ ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปคของสินค้านั้นจะดึงมาจากที่นี่เสมอ — ราคาและค่าคอมมิชชั่นยังคงเป็นของแต่ละบริษัทแยกกัน แก้ไขได้เฉพาะ Super Admin เท่านั้น"
+      subtitle="รายการต้นแบบ — ชื่อ แบรนด์ หมวดหมู่ ที่ทุกบริษัทหยิบไปใช้ให้ตรงกันได้"
+      description="ถ้าสินค้าของบริษัทไหนผูกกับรายการในนี้ ชื่อ แบรนด์ หมวดหมู่ และคำอธิบายของสินค้านั้นจะดึงมาจากที่นี่ — แก้ที่เดียว เปลี่ยนพร้อมกันทุกบริษัท ส่วนราคาและค่าคอมยังเป็นของแต่ละบริษัทแยกกันเหมือนเดิม แก้ไขได้เฉพาะ Super Admin"
       accent-color="brand"
       storage-key="catalog-management"
     >
@@ -412,13 +412,54 @@ async function confirmDeleteItem(): Promise<void> {
             @click="activeTab = t.key"
           >
             <Icon :name="t.icon" :size="14" />
-
-    <PlatformScopeBadge reason="แคตตาล็อกกลางใช้ร่วมกันทุกบริษัท (ADR-036)" />
             {{ t.label }}
           </button>
         </div>
       </template>
     </HeroHeader>
+
+    <!--
+      2026-09-09 (human: "เสนอ UI ใหม่มาเลย ไม่เข้าใจ", with a screenshot of
+      three identical grey notices where the tabs should be).
+
+      The badge used to sit INSIDE the tab button, between its icon and its
+      label — so it rendered once per tab, three times, each one a block
+      element inside a button. That is the whole reason this page looked
+      broken: the tabs were not tabs, they were three paragraphs with words
+      stuck to the end of them. Now it is what it always meant to be: one
+      notice, once, under the header.
+    -->
+    <PlatformScopeBadge reason="แก้ที่นี่มีผลกับทุกบริษัทพร้อมกัน" />
+
+    <!--
+      THE SENTENCE THAT WOULD HAVE SAVED AN AFTERNOON.
+
+      Two different things in this system are called "กลาง", and an admin
+      looking for one lands on the other:
+
+        • แคตตาล็อกกลาง (this page) — a master list of NAMES. Nothing here is
+          for sale. Linking a product to a row here only makes its name,
+          brand and category come from one place.
+        • สินค้ากลาง (the สินค้า page) — real products with no owning company,
+          which every company can switch on and sell.
+
+      The human went looking for the second and found the first, and nothing
+      on the screen told them they were in the wrong room. This does, and it
+      offers the door.
+    -->
+    <div class="mt-3 flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200">
+      <Icon name="info" :size="14" class="text-amber-600 shrink-0" />
+      <p class="text-xs text-amber-900 leading-relaxed">
+        กำลังหา<span class="font-bold">สินค้ากลางที่ทุกบริษัทขายได้</span>ใช่ไหม? ไม่ได้อยู่หน้านี้ —
+        หน้านี้เก็บแค่ชื่อ/แบรนด์/หมวดหมู่ ไม่มีของขาย
+      </p>
+      <RouterLink
+        :to="{ name: 'product-catalog' }"
+        class="ml-auto shrink-0 px-3 py-1 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700"
+      >
+        ไปหน้าสินค้า
+      </RouterLink>
+    </div>
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -503,7 +544,12 @@ async function confirmDeleteItem(): Promise<void> {
           </div>
         </div>
 
-        <EmptyState v-if="!items.length" icon="cube" title="ยังไม่มีรายการในแคตตาล็อกกลาง" />
+        <EmptyState
+          v-if="!items.length"
+          icon="cube"
+          title="ยังไม่มีรายการต้นแบบ"
+          message="รายการต้นแบบคือชื่อสินค้าที่อยากให้ทุกบริษัทเรียกเหมือนกัน เพิ่มไว้ที่นี่แล้วค่อยผูกกับสินค้าของแต่ละบริษัท — ไม่ใช่ของขาย และไม่มีราคาของตัวเอง"
+        />
         <div v-else class="space-y-2">
           <div
             v-for="item in items"
@@ -556,7 +602,12 @@ async function confirmDeleteItem(): Promise<void> {
           </div>
           <button type="submit" class="btn-primary">บันทึก</button>
         </form>
-        <EmptyState v-if="!brands.length" icon="tag" title="ยังไม่มีแบรนด์ในแคตตาล็อกกลาง" />
+        <EmptyState
+          v-if="!brands.length"
+          icon="tag"
+          title="ยังไม่มีแบรนด์ต้นแบบ"
+          message="แบรนด์ที่เพิ่มตรงนี้จะเลือกใช้ได้จากทุกบริษัท แก้ชื่อครั้งเดียวเปลี่ยนพร้อมกันหมด"
+        />
         <div v-else class="space-y-2">
           <div v-for="b in brands" :key="b.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
             <template v-if="editingBrandId === b.id && isSuperAdmin">
@@ -615,7 +666,12 @@ async function confirmDeleteItem(): Promise<void> {
             <button type="submit" class="btn-primary">บันทึก</button>
           </div>
         </form>
-        <EmptyState v-if="!categories.length" icon="layers" title="ยังไม่มีหมวดหมู่ในแคตตาล็อกกลาง" />
+        <EmptyState
+          v-if="!categories.length"
+          icon="layers"
+          title="ยังไม่มีหมวดหมู่ต้นแบบ"
+          message="หมวดหมู่ที่เพิ่มตรงนี้จะเลือกใช้ได้จากทุกบริษัท ส่วนหมวดหมู่ที่แต่ละบริษัทตั้งเองยังใช้ได้ตามปกติ"
+        />
         <div v-else class="space-y-2">
           <div v-for="c in categories" :key="c.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
             <template v-if="editingCategoryId === c.id && isSuperAdmin">

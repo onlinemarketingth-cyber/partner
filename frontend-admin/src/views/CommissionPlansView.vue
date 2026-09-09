@@ -224,7 +224,15 @@ interface ProductOption {
   // scope below; category/company-wide scope never reads this.
   commission_rate_type?: RateType | null
 }
-interface ProductCategoryOption { id: number; name: string }
+/*
+ * 2026-09-09 — `company_id` is here so byCompany() can narrow the category
+ * picker the way it already narrows the product one. Without it a Super Admin
+ * scoped to AIA was offered every company's "Anti Aging" as three identical
+ * options, and attaching a rule to the wrong company's category makes a rule
+ * that can never match — a commission that silently falls back to the company
+ * default rate and lands in an immutable ledger (BR-2/BR-4).
+ */
+interface ProductCategoryOption { id: number; name: string; company_id: number | null }
 interface CommissionRuleItem {
   id: number
   company_id: number
@@ -476,6 +484,9 @@ async function loadRulesTabData() {
   const [r, p, pc, o] = await Promise.all([
     api.get<{ data: CommissionRuleItem[] }>('/commission-rules'),
     api.get<{ data: ProductOption[] }>('/products'),
+    // Unscoped on purpose, like every other list on this screen: byCompany()
+    // does the narrowing client-side because it must KEEP the platform rows,
+    // and that needs each row's own company_id.
     api.get<{ data: ProductCategoryOption[] }>('/product-categories'),
     api.get<{ data: CommissionOverrideRuleItem[] }>('/commission-override-rules'),
   ])
@@ -1939,7 +1950,7 @@ onMounted(async () => {
                   <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
                   <select v-model="overrideForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                     <option value="" disabled>เลือกหมวดหมู่</option>
-                    <option v-for="c in productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                    <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
                   </select>
                 </div>
                 <!-- TASK-213 — the field that did not exist. The old form
@@ -2015,7 +2026,7 @@ onMounted(async () => {
                   <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
                   <select v-model="ruleForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                     <option value="" disabled>เลือกหมวดหมู่</option>
-                    <option v-for="c in productCategories" :key="c.id" :value="c.id">{{ c.name }}</option>
+                    <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
                   </select>
                 </div>
                 <!-- TASK-197 §3.4 — product-scope rules use the PRODUCT's

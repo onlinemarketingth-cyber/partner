@@ -13,7 +13,6 @@
  * agent in the company is listed together.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
@@ -121,7 +120,6 @@ type Wrapper = Awaited<ReturnType<typeof mountView>>
 const at = (w: Wrapper, test: string) => w.find(`[data-test="${test}"]`)
 
 beforeEach(() => {
-  setActivePinia(createPinia())
   get.mockReset()
   post.mockReset()
   put.mockReset()

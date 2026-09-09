@@ -16,7 +16,6 @@
  * and the message hid the reason.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
@@ -110,7 +109,6 @@ type Wrapper = Awaited<ReturnType<typeof mountView>>
 const approveBtn = (w: Wrapper) => w.find('[data-test="approve"]')
 
 beforeEach(() => {
-  setActivePinia(createPinia())
   get.mockReset()
   put.mockReset()
   put.mockResolvedValue({ data: {} })
