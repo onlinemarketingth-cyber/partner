@@ -152,6 +152,13 @@ interface Product {
    * rendered through AuthenticatedMedia rather than a bare <img src>.
    */
   thumbnail_url?: string | null
+  /**
+   * 2026-09-09 — a ~20px base64 copy of that same image, inline in this
+   * JSON. It paints before `thumbnail_url` has even been requested, so the
+   * row shows the blurred shape of the product rather than an empty box.
+   * See AuthenticatedMedia's `placeholder` prop.
+   */
+  thumbnail_placeholder?: string | null
 }
 // TASK-068 / ADR-020 row 2.
 // TASK-073 (2026-08-02, human-confirmed) — link_type/external_url/
@@ -2784,6 +2791,7 @@ function toggleRefForm(): void {
             <AuthenticatedMedia
               v-if="p.thumbnail_url"
               :src="p.thumbnail_url"
+              :placeholder="p.thumbnail_placeholder"
               type="image"
               class="w-full h-full object-cover"
               data-test="product-thumbnail"

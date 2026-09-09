@@ -8,7 +8,6 @@ use App\Models\PipelineTemplate;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\Scopes\SharedOrTenantScope;
-use App\Models\Scopes\TenantScope;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
@@ -69,12 +68,18 @@ class PipelineTemplateResolver
     public function resolveForProduct(Product $product, ?int $companyId = null): ?PipelineTemplate
     {
         /*
-         * TASK-253 / ADR-040 — a PLATFORM-owned product (company_id null) has
-         * no journey of its own: a pipeline template belongs to a company, and
-         * the same shared product is sold through several. So the caller says
-         * which company is asking — the referral's, the order's, the viewer's
-         * — and a company-owned product ignores the argument exactly as
-         * before.
+         * TASK-253 / ADR-040 — the caller says which company is asking: the
+         * referral's, the order's, the viewer's. A company-owned product
+         * ignores the argument exactly as before.
+         *
+         * 2026-09-09 — a PLATFORM product now CAN carry a journey of its own,
+         * because a journey can now be platform-owned too (human: "ข้อมูล
+         * พื้นฐานที่ไม่ใช่ราคา กับค่าคอม นั้นต้องไปด้วยกันหมด"). It is still
+         * resolved per company, because the company scopes below it are still
+         * per company — the shared product simply now has a first step that
+         * answers, instead of falling through to whatever the selling company
+         * happened to have configured. That fall-through is what silently
+         * removed the buy button from live share links.
          */
         $companyId ??= $product->company_id;
 
@@ -288,12 +293,24 @@ class PipelineTemplateResolver
             return null;
         }
 
-        $template = PipelineTemplate::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $companyId)
+        /*
+         * 2026-09-09 — the company's own journey, OR a PLATFORM one.
+         *
+         * A journey with no company belongs to the platform and is usable by
+         * every company (ADR-040, the same rule brands and categories already
+         * follow). This is what lets a shared product carry its own journey
+         * instead of having it re-resolved — and re-resolved wrongly — for
+         * each company that sells it.
+         *
+         * BR-6 is untouched: `company_id = :own OR company_id IS NULL` still
+         * cannot reach another tenant's row.
+         */
+        $template = PipelineTemplate::withoutGlobalScopes()
+            ->where(fn ($query) => $query->where('company_id', $companyId)->orWhereNull('company_id'))
             ->find($templateId);
 
         if (! $template) {
-            Log::warning("PipelineTemplateResolver: {$context} references pipeline_template {$templateId}, which does not exist within company {$companyId} — ignoring it and falling through to the next scope (BR-6).");
+            Log::warning("PipelineTemplateResolver: {$context} references pipeline_template {$templateId}, which is neither company {$companyId}'s nor the platform's — ignoring it and falling through to the next scope (BR-6).");
         }
 
         return $template;
@@ -317,9 +334,22 @@ class PipelineTemplateResolver
         return Company::find($companyId)?->default_pipeline_template_id;
     }
 
+    /**
+     * The last resort: the COMPANY'S OWN Medical Package journey.
+     *
+     * 2026-09-09 — deliberately NOT widened to the platform twin, even
+     * though one now exists and the query above was widened. ADR-026 §3.3
+     * makes this chain fail CLOSED: a company with no journeys at all
+     * resolves to null and logs loudly, so a misconfigured tenant is
+     * noticed rather than quietly served a journey nobody chose for them.
+     * Falling back to a platform row here would turn that alarm off, and
+     * nothing in the platform-journey change needs it: a shared product
+     * reaches its platform journey through its OWN pipeline_template_id,
+     * one step above.
+     */
     private function findSystemDefault(int $companyId): ?PipelineTemplate
     {
-        return PipelineTemplate::withoutGlobalScope(TenantScope::class)
+        return PipelineTemplate::withoutGlobalScopes()
             ->where('company_id', $companyId)
             ->where('key', PipelineTemplate::KEY_MEDICAL_PACKAGE_DEFAULT)
             ->first();

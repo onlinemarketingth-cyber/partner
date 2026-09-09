@@ -123,10 +123,22 @@ class ProductMediaService
             return;
         }
 
-        $path = ImageThumbnailer::generate(Storage::disk(self::DISK), $media->file_path);
+        $disk = Storage::disk(self::DISK);
+        $path = ImageThumbnailer::generate($disk, $media->file_path);
 
-        if ($path !== null) {
-            $media->forceFill(['thumbnail_path' => $path])->save();
+        /*
+         * The blur placeholder is made from the THUMBNAIL when there is
+         * one — decoding a 480 px file to produce a 20 px one costs
+         * almost nothing, and gives the same picture as decoding a 12 MP
+         * original for the second time in one request.
+         */
+        $placeholder = ImageThumbnailer::placeholder($disk, $path ?? $media->file_path);
+
+        if ($path !== null || $placeholder !== null) {
+            $media->forceFill(array_filter([
+                'thumbnail_path' => $path,
+                'placeholder' => $placeholder,
+            ], fn ($value) => $value !== null))->save();
         }
     }
 

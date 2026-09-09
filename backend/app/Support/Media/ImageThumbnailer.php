@@ -53,9 +53,27 @@ final class ImageThumbnailer
      */
     public const MAX_EDGE = 480;
 
-    private const JPEG_QUALITY = 78;
+    /**
+     * One number for both encoders. WebP at 76 and JPEG at 76 are not the
+     * same picture, but they are the same JUDGEMENT — visually clean at the
+     * size this file is displayed — and a second constant would only
+     * invite the two to drift apart for no reason anyone could state.
+     */
+    private const QUALITY = 76;
 
-    private const WEBP_QUALITY = 74;
+    /**
+     * The blur placeholder's longest edge.
+     *
+     * 20 px, because it is meant to be UNRECOGNISABLE as detail and
+     * recognisable as shape — the browser stretches it over the whole tile
+     * and blurs it. Larger would cost bytes in a payload that is already
+     * carrying every product on the page, for detail that is thrown away
+     * by the blur anyway.
+     */
+    private const PLACEHOLDER_EDGE = 20;
+
+    /** Aggressive on purpose: at 20 px nobody can see the artefacts. */
+    private const PLACEHOLDER_QUALITY = 45;
 
     /**
      * GD decodes to a full uncompressed bitmap: 4 bytes per pixel, plus a
@@ -86,6 +104,105 @@ final class ImageThumbnailer
             Log::warning("ImageThumbnailer: no thumbnail for {$sourcePath} — original left usable as-is. ".$e->getMessage());
 
             return null;
+        }
+    }
+
+    /**
+     * A ~20 px copy of the picture, as a base64 data URI.
+     *
+     * 2026-09-09 (human: "ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ จนโหลดเสร็จได้หรือไม่").
+     *
+     * ── WHAT IT IS FOR ──
+     *
+     * Every product image in this app is behind an authenticated stream, so
+     * the browser cannot simply point an <img> at it: the app fetches it,
+     * and until that finishes there is a grey box where the photo goes. A
+     * grid of grey boxes that pop into photos one by one is the "โหลดรูปมา
+     * ทีหลัง" the human is describing.
+     *
+     * This is small enough to travel inside the JSON that already lists the
+     * products — a few hundred bytes — so the blurred shape of the photo is
+     * on screen in the FIRST paint, and sharpens into the real picture when
+     * it arrives. Nothing is faster than data you already have.
+     *
+     * ── GENERATED FROM THE THUMBNAIL, WHEN THERE IS ONE ──
+     *
+     * Callers pass the thumbnail's path if it exists, and the original's
+     * otherwise. Decoding a 480 px file to make a 20 px one costs almost
+     * nothing, and gives a result identical to decoding the original a
+     * second time.
+     *
+     * @return string|null a `data:image/…;base64,…` URI, or null if
+     *                     the image could not be read at all
+     */
+    public static function placeholder(FilesystemAdapter $disk, string $sourcePath): ?string
+    {
+        try {
+            return self::attemptPlaceholder($disk, $sourcePath);
+        } catch (\Throwable $e) {
+            Log::warning("ImageThumbnailer: no blur placeholder for {$sourcePath}. ".$e->getMessage());
+
+            return null;
+        }
+    }
+
+    private static function attemptPlaceholder(FilesystemAdapter $disk, string $sourcePath): ?string
+    {
+        $absolute = $disk->path($sourcePath);
+
+        if (! is_file($absolute)) {
+            return null;
+        }
+
+        $size = @getimagesize($absolute);
+
+        if ($size === false) {
+            return null;
+        }
+
+        [$width, $height] = [(int) $size[0], (int) $size[1]];
+        $type = (int) ($size[2] ?? 0);
+
+        if ($width < 1 || $height < 1 || $width * $height > self::MAX_SOURCE_PIXELS) {
+            return null;
+        }
+
+        $source = self::read($absolute, $type);
+
+        if ($source === null) {
+            return null;
+        }
+
+        try {
+            /*
+             * `min(1, …)` — never ENLARGE. An image that is already tiny
+             * (a 12 px spacer, say) would otherwise be blown up to 20 px
+             * and land in the database bigger than it started.
+             */
+            $scale = min(1, self::PLACEHOLDER_EDGE / max($width, $height));
+            $tiny = imagecreatetruecolor(max(1, (int) round($width * $scale)), max(1, (int) round($height * $scale)));
+
+            if ($tiny === false) {
+                return null;
+            }
+
+            try {
+                self::preserveTransparency($tiny);
+                imagecopyresampled($tiny, $source, 0, 0, 0, 0, imagesx($tiny), imagesy($tiny), $width, $height);
+                $tiny = self::applyExifOrientation($tiny, $absolute, $type);
+
+                [$mime, $bytes] = self::encode($tiny, $type !== IMAGETYPE_JPEG, self::PLACEHOLDER_QUALITY);
+
+                if ($bytes === null) {
+                    return null;
+                }
+
+                return 'data:'.$mime.';base64,'.base64_encode($bytes);
+            } finally {
+                imagedestroy($tiny);
+            }
+        } finally {
+            imagedestroy($source);
         }
     }
 
@@ -266,29 +383,17 @@ final class ImageThumbnailer
      */
     private static function write(FilesystemAdapter $disk, string $sourcePath, GdImage $thumbnail, int $type): ?string
     {
-        $mayHaveAlpha = $type !== IMAGETYPE_JPEG;
+        [$mime, $bytes] = self::encode($thumbnail, $type !== IMAGETYPE_JPEG, self::QUALITY);
 
-        [$extension, $encode] = match (true) {
-            function_exists('imagewebp') => ['webp', fn () => imagewebp($thumbnail, null, self::WEBP_QUALITY)],
-            $mayHaveAlpha => ['png', fn () => imagepng($thumbnail, null, 7)],
-            default => ['jpg', fn () => imagejpeg($thumbnail, null, self::JPEG_QUALITY)],
-        };
-
-        ob_start();
-
-        try {
-            if ($encode() === false) {
-                return null;
-            }
-
-            $bytes = ob_get_contents();
-        } finally {
-            ob_end_clean();
-        }
-
-        if (! is_string($bytes) || $bytes === '') {
+        if ($bytes === null) {
             return null;
         }
+
+        $extension = match ($mime) {
+            'image/webp' => 'webp',
+            'image/png' => 'png',
+            default => 'jpg',
+        };
 
         /*
          * Beside the original, with its own random name.
@@ -304,5 +409,43 @@ final class ImageThumbnailer
         $path = ($directory === '.' || $directory === '' ? '' : $directory.'/').Str::uuid()->toString().'.'.$extension;
 
         return $disk->put($path, $bytes) ? $path : null;
+    }
+
+    /**
+     * Turn a GD image into bytes, and say what they are.
+     *
+     * One ladder, used by both the thumbnail and the placeholder, so the
+     * two can never disagree about what this host can encode:
+     *
+     *   WebP — small AND keeps transparency, so it wins whenever the host
+     *          can write it (every PHP 8 build with GD in practice);
+     *   PNG  — the fallback for anything that might have an alpha channel,
+     *          because JPEG would flatten a cut-out packshot onto black;
+     *   JPEG — everything else.
+     *
+     * @return array{0: string, 1: string|null} [mime, bytes] — bytes null on failure
+     */
+    private static function encode(GdImage $image, bool $mayHaveAlpha, int $quality): array
+    {
+        [$mime, $write] = match (true) {
+            function_exists('imagewebp') => ['image/webp', fn () => imagewebp($image, null, $quality)],
+            $mayHaveAlpha => ['image/png', fn () => imagepng($image, null, 7)],
+            default => ['image/jpeg', fn () => imagejpeg($image, null, $quality)],
+        };
+
+        ob_start();
+
+        try {
+            $ok = $write();
+            $bytes = ob_get_contents();
+        } finally {
+            ob_end_clean();
+        }
+
+        if ($ok === false || ! is_string($bytes) || $bytes === '') {
+            return [$mime, null];
+        }
+
+        return [$mime, $bytes];
     }
 }

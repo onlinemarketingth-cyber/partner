@@ -57,4 +57,32 @@ trait ValidatesProductTaxonomy
                     ->orWhereNull('company_id')),
         );
     }
+
+    /**
+     * 2026-09-09 — the same rule for a product's SALES JOURNEY.
+     *
+     * `pipeline_templates` became nullable-company on the same day and for
+     * the same reason (human: "เวลา set เป็นค่า product กลาง ข้อมูลพื้นฐาน
+     * ที่ไม่ใช่ราคา กับค่าคอม นั้นต้องไปด้วยกันหมด"), so a journey is now the
+     * third thing a product points at that may be its company's or the
+     * platform's.
+     *
+     * Separate from taxonomyRule only because this table has no
+     * `deleted_at` — journeys are not soft-deleted — and a rule that
+     * filtered on a column that does not exist would be a driver error, not
+     * a validation failure.
+     *
+     * A NULL $companyId means the product is platform-owned, and both
+     * branches collapse to platform journeys only: exactly the narrowing the
+     * form shows on screen, and the reason a shared product cannot end up
+     * carrying one company's journey for everybody else.
+     */
+    protected function journeyRule(?int $companyId): Exists
+    {
+        return Rule::exists('pipeline_templates', 'id')->where(
+            fn ($query) => $query
+                ->where('company_id', $companyId)
+                ->orWhereNull('company_id'),
+        );
+    }
 }

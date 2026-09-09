@@ -281,6 +281,8 @@ interface ProductMediaItem {
   purpose: 'cover' | 'detail'
   stream_url: string | null
   thumbnail_url: string | null
+  /** 2026-09-09 — the inline blur-up copy; see AuthenticatedMedia. */
+  placeholder: string | null
   embed_url: string | null
   is_primary: boolean
   sort_order: number
@@ -371,8 +373,10 @@ watch(createAsPlatform, (platform) => {
   if (!platform) return
   if (!brandOptions.value.some((b) => b.id === basicsForm.value.brand_id)) basicsForm.value.brand_id = ''
   if (!categoryOptions.value.some((c) => c.id === basicsForm.value.category_id)) basicsForm.value.category_id = ''
-  // ADR-026 §3.3 — a template belongs to one company; this product has none.
-  basicsForm.value.pipeline_template_id = ''
+  // The journey is handled by its own watch on templateOptions below —
+  // switching to สินค้ากลาง is only one of the ways the offered list can
+  // change, and one rule that covers all of them is easier to trust than
+  // three that have to be kept in step.
 })
 
 // ── ADR-036 (TASK-215) — shared cross-company catalog link ──
@@ -662,6 +666,13 @@ const pipelineTemplates = ref<PipelineTemplate[]>([])
  * Keyed on `key`, not on id: ids differ per company (every company gets
  * its own seeded pair), the key does not.
  */
+/**
+ * The journey a new product starts on (see applyDefaultJourney). A key, not
+ * an id: every company has its own row and the platform has another, and the
+ * key is the one thing they all share (§7 — no bare string literals).
+ */
+const DIRECT_SALE_KEY = 'direct_sale_default'
+
 const SYSTEM_TEMPLATE_LABELS_TH: Record<string, string> = {
   medical_package_default: 'แพ็กเกจการแพทย์ (มีขั้นพบแพทย์)',
   direct_sale_default: 'ขายตรง (ลงทะเบียน → ชำระเงิน)',
@@ -671,29 +682,43 @@ function templateLabel(template: PipelineTemplate): string {
 }
 
 /**
- * BR-6 — only ever offer templates belonging to THIS product's company.
- * Both Product Requests validate `pipeline_template_id` with
- * `exists(...)->where('company_id', ...)`, so offering another company's
- * template would be offering a guaranteed 422.
+ * BR-6 — never offer ANOTHER company's journey. Both Product Requests
+ * validate `pipeline_template_id` against "this product's company, or the
+ * platform" (ValidatesProductTaxonomy::journeyRule), so anything else would
+ * be offering a guaranteed 422.
  *
  * A Super Admin's `GET /pipeline-templates` is unscoped (TenantScope
  * exempts them, §5 rule 4) and therefore spans every company — hence the
  * explicit filter here rather than trusting the list. A Company Admin's
- * list is already narrowed to their own company, and `companyScope` is
- * null for them in create mode, so the filter no-ops.
+ * list is already narrowed to their own company plus the platform's, so
+ * the filter agrees with it rather than fighting it.
  */
 const templateCompanyScope = computed<number | null>(
   () => product.value?.company_id ?? (isCreateMode.value && isSuperAdmin.value ? selectedCompanyId.value : null),
 )
 const templateOptions = computed(() => {
-  // A platform product has no company, so there is no template it could
-  // legitimately point at — StoreProductRequest prohibits the field outright.
-  if (isPlatformProduct.value) return []
+  /*
+   * 2026-09-09 — a สินค้ากลาง chooses from เส้นทางกลาง.
+   *
+   * This used to return [] and the selector was replaced by a note saying a
+   * shared product had no journey to choose. That was true of the schema at
+   * the time and it is what removed the buy button from live share links: the
+   * journey was cleared on promotion, fell through to the selling company's
+   * Medical Package fail-safe, and no screen would let anyone put it back.
+   *
+   * Journeys can now be platform-owned, so the narrowing is exactly the one
+   * the brand and category pickers already do a few fields above — สินค้ากลาง
+   * sees เส้นทางกลาง, and a company's product sees its own plus the platform's.
+   */
+  if (isPlatformProduct.value) return pipelineTemplates.value.filter((t) => t.company_id === null)
 
   return templateCompanyScope.value === null
     ? pipelineTemplates.value
-    : pipelineTemplates.value.filter((t) => t.company_id === templateCompanyScope.value)
+    : pipelineTemplates.value.filter(
+        (t) => t.company_id === templateCompanyScope.value || t.company_id === null,
+      )
 })
+
 
 /**
  * The journey the admin is looking at RIGHT NOW: the one they have just
@@ -709,10 +734,32 @@ const previewTemplate = computed<PipelineTemplate | null>(() => {
   return product.value?.effective_pipeline_template ?? null
 })
 
+/**
+ * 2026-09-09 — does the journey on screen leave the share link with a buy
+ * button?
+ *
+ * The server's rule, restated where the choice is made: a customer may check
+ * out from a shared link only when ชำระเงินสำเร็จ is the SECOND step, because
+ * an order cannot be confirmed past a step the journey says comes first
+ * (PipelineTemplateResolver::paymentReachableFromEntry).
+ *
+ * This is not a validation — a journey with a doctor's visit in it is a
+ * perfectly good journey. It is the one consequence of this field that is
+ * invisible from this page and was therefore discovered from a customer's
+ * screen instead.
+ */
+const journeyAllowsCheckout = computed<boolean | null>(() => {
+  const stages = previewTemplate.value?.stages
+  if (!stages?.length) return null
+
+  return stages[1]?.key === PAYMENT_STAGE_KEY
+})
+
 async function loadPipelineTemplates() {
   try {
     const res = await api.get<{ data: PipelineTemplate[] }>('/pipeline-templates')
     pipelineTemplates.value = res.data
+    if (isCreateMode.value) applyDefaultJourney()
   } catch (e) {
     // Non-fatal: the rest of the product form must still work. The
     // selector renders its own "โหลดรายการเส้นทางไม่สำเร็จ" note when the
@@ -720,6 +767,63 @@ async function loadPipelineTemplates() {
     if (import.meta.env.DEV) console.warn('[pipeline-templates]', e)
   }
 }
+
+/**
+ * 2026-09-09 (human: "หากของเก่าปรับเป็น Direct sale หากมีการเพิ่มใหม่ต้อง
+ * แก้ไขได้").
+ *
+ * A NEW product starts on ขายตรง, and the admin can change it.
+ *
+ * ── WHY A DEFAULT AT ALL ──
+ *
+ * Leaving this on "ใช้ค่าจากหมวดสินค้า / บริษัท" is not neutral: the end of
+ * that inheritance chain is the seeded Medical Package journey, whose first
+ * step is an appointment — so a product created without touching this field
+ * came out un-buyable from its own share link, and nothing on this page said
+ * so. Every existing product was just repaired to ขายตรง for that reason;
+ * creating the next one straight back into the same state would undo the
+ * repair one product at a time.
+ *
+ * ── IT IS A DEFAULT, NOT A RULE ──
+ *
+ * The selector is a normal field with every journey in it, "ใช้ค่าเริ่มต้น"
+ * included, and the green/red line underneath says what the current choice
+ * means for the share link. Nothing here overrides a choice the admin has
+ * made — see the guard on the first line.
+ */
+function applyDefaultJourney(): void {
+  if (basicsForm.value.pipeline_template_id !== '') return
+
+  // The company's own ขายตรง when there is one; the platform's otherwise
+  // (which is what a สินค้ากลาง gets, since that is all it may point at).
+  const directSale = templateOptions.value.find((t) => t.key === DIRECT_SALE_KEY && t.company_id !== null)
+    ?? templateOptions.value.find((t) => t.key === DIRECT_SALE_KEY)
+
+  if (directSale) basicsForm.value.pipeline_template_id = directSale.id
+}
+
+/*
+ * 2026-09-09 — keep the chosen journey inside what is actually offered.
+ *
+ * The list narrows whenever the product's owner changes: switching a new
+ * product to สินค้ากลาง drops every company journey, and a Super Admin
+ * switching companies swaps one company's for another's. A selection left
+ * over from the previous list is a guaranteed 422 on save, so it is dropped
+ * and the default re-applied.
+ *
+ * Create mode only. In edit mode the form holds what the server sent for a
+ * product that already exists, and rewriting that from a list that arrived
+ * a moment later would be the page changing a saved value nobody touched.
+ */
+watch(templateOptions, (options) => {
+  if (!isCreateMode.value) return
+
+  if (basicsForm.value.pipeline_template_id !== '' && !options.some((t) => t.id === basicsForm.value.pipeline_template_id)) {
+    basicsForm.value.pipeline_template_id = ''
+  }
+
+  applyDefaultJourney()
+})
 
 // Display-only: shows "20,000" while typing, but basicsForm.price_thb
 // underneath always stays a plain unformatted number — saveBasics()'s
@@ -2371,22 +2475,27 @@ function goToVideoSettings() {
                control: PipelineTemplateResource sends `stages` ORDERED
                precisely so an admin is never asked to pick a customer
                journey by name without seeing the journey. -->
-          <!-- A pipeline template belongs to one company (ADR-026 §3.3) and
-               a platform product belongs to none, so there is nothing here to
-               choose — StoreProductRequest prohibits the field outright. The
-               journey resolves per selling company instead. -->
-          <div v-if="isPlatformProduct" class="sm:col-span-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
-            <span class="font-bold text-slate-600">เส้นทางการขาย (Pipeline):</span>
-            สินค้ากลางใช้เส้นทางการขายของบริษัทที่ขายสินค้านั้น จึงไม่ต้องเลือกที่นี่
-          </div>
-          <div v-else class="sm:col-span-2">
-            <label class="text-sm font-bold text-slate-500">เส้นทางการขายของสินค้านี้ (Pipeline)</label>
-            <select v-model="basicsForm.pipeline_template_id" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="">ใช้ค่าจากหมวดสินค้า / บริษัท (ค่าเริ่มต้น)</option>
+          <!-- 2026-09-09 — ONE selector, for both kinds of product.
+               A สินค้ากลาง used to get a grey note here saying it had no
+               journey to choose, which was true of the schema at the time
+               and is exactly what left a promoted product unable to be
+               bought from links already in customers' hands. Journeys can
+               now be platform-owned, so a สินค้ากลาง picks a เส้นทางกลาง —
+               the same narrowing the brand and category pickers above use. -->
+          <div class="sm:col-span-2">
+            <label class="text-sm font-bold text-slate-500">
+              {{ isPlatformProduct ? 'เส้นทางการขายของสินค้ากลางนี้ (Pipeline)' : 'เส้นทางการขายของสินค้านี้ (Pipeline)' }}
+            </label>
+            <select v-model="basicsForm.pipeline_template_id" data-test="journey-select" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <option value="">{{ isPlatformProduct ? 'ยังไม่กำหนด (ใช้ค่าของบริษัทที่ขาย)' : 'ใช้ค่าจากหมวดสินค้า / บริษัท (ค่าเริ่มต้น)' }}</option>
               <option v-for="t in templateOptions" :key="t.id" :value="t.id">
                 {{ templateLabel(t) }} (กำหนดเฉพาะสินค้านี้)
               </option>
             </select>
+
+            <p v-if="isPlatformProduct" class="mt-1 text-xs text-slate-400">
+              สินค้ากลางเลือกได้เฉพาะเส้นทางกลาง เพราะทุกบริษัทที่ขายสินค้านี้ใช้เส้นทางเดียวกัน
+            </p>
 
             <p v-if="!templateOptions.length" class="mt-1 text-xs text-amber-600">
               ยังไม่มีเส้นทางการขายให้เลือก — ตรวจสอบว่าบริษัทนี้มี pipeline template แล้วหรือยัง
@@ -2423,6 +2532,28 @@ function goToVideoSettings() {
               <!-- BR-4 is untouched by ADR-026: commission fires at
                    Complete Payment and nowhere else, on every template. -->
               <p class="mt-2 text-[11px] text-slate-400">คอมมิชชั่น (BR-4) เกิดขึ้นที่ขั้น “ชำระเงินสำเร็จ” เท่านั้น</p>
+
+              <!-- 2026-09-09 — the consequence of this field that nobody
+                   could see from this page, and therefore found out about
+                   from a customer's screen instead: whether the share link
+                   carries a buy button at all. Stated in both directions, so
+                   it reads as a fact about the journey rather than as an
+                   error the admin has to clear. -->
+              <p
+                v-if="journeyAllowsCheckout === false"
+                data-test="journey-checkout-warning"
+                class="mt-2 px-2.5 py-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-700"
+              >
+                เส้นทางนี้ทำให้ลิงก์แชร์สินค้า “ไม่มีปุ่มชำระเงิน” — ลูกค้าต้องผ่านขั้นก่อนหน้าจนถึงชำระเงินก่อน
+                ถ้าต้องการให้ลูกค้ากดซื้อจากลิงก์ได้เลย ให้เลือกเส้นทางที่ขั้นที่ 2 คือ “ชำระเงินสำเร็จ”
+              </p>
+              <p
+                v-else-if="journeyAllowsCheckout === true"
+                data-test="journey-checkout-ok"
+                class="mt-2 text-[11px] font-bold text-emerald-700"
+              >
+                เส้นทางนี้ลูกค้ากดซื้อและชำระเงินจากลิงก์แชร์ได้ทันที
+              </p>
             </div>
           </div>
 
@@ -2890,7 +3021,7 @@ function goToVideoSettings() {
               :class="m.is_primary ? 'border-amber-400 ring-2 ring-amber-200' : 'border-slate-200'"
             >
               <button type="button" class="block w-full h-full cursor-zoom-in" title="ดูรูปขนาดเต็ม" @click="openMediaPreview(m)">
-                <AuthenticatedMedia :src="tileSrc(m)" type="image" class="w-full h-full object-cover" />
+                <AuthenticatedMedia :src="tileSrc(m)" :placeholder="m.placeholder" type="image" class="w-full h-full object-cover" />
               </button>
 
               <span v-if="m.is_primary" class="absolute top-1.5 right-1.5 bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none">
@@ -3045,6 +3176,7 @@ function goToVideoSettings() {
                     <AuthenticatedMedia
                       v-if="m.source_type !== 'embed'"
                       :src="tileSrc(m)"
+                      :placeholder="m.placeholder"
                       type="image"
                       class="w-full h-full object-cover"
                     />
@@ -3636,6 +3768,7 @@ function goToVideoSettings() {
               <AuthenticatedMedia
                 v-if="m.source_type !== 'embed'"
                 :src="tileSrc(m)"
+                :placeholder="m.placeholder"
                 type="image"
                 class="w-full h-full object-cover"
               />

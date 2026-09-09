@@ -57,10 +57,22 @@ class UpdateProductRequest extends FormRequest
             // "not yet configured" (a fresh commission_rules row for this
             // product would then re-lock the format on next create()).
             'commission_rate_type' => ['sometimes', 'nullable', Rule::enum(CommissionRateType::class)],
-            // ADR-026 §3.3 (TASK-132) — explicit null clears the override
-            // back to "inherit from the category/company". BR-6: same
-            // company only (ADR-026 §4).
-            'pipeline_template_id' => ['sometimes', 'nullable', 'integer', Rule::exists('pipeline_templates', 'id')->where('company_id', $companyId)],
+            /*
+              * ADR-026 §3.3 (TASK-132) — explicit null clears the override
+              * back to "inherit from the category/company".
+              *
+              * 2026-09-09 — its own company's journey OR a platform one, the
+              * same narrowing brand_id and category_id already use. On a
+              * PLATFORM product $companyId is null and the rule collapses to
+              * platform journeys only, which is what the form offers.
+              *
+              * This used to be an exact company match, which meant a promoted
+              * product could not be given a journey at all — its journey was
+              * cleared on promotion and there was nothing it was allowed to
+              * point at. That is what removed the buy button from live share
+              * links.
+              */
+            'pipeline_template_id' => ['sometimes', 'nullable', 'integer', $this->journeyRule($companyId)],
             // ADR-033 (TASK-189) §2.3/§2.5 — same contract as
             // StoreProductRequest: explicit null clears the quota/
             // validity override back to unlimited/never-expires.

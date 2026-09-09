@@ -27,6 +27,15 @@ class PipelineTemplateSeeder extends Seeder
 
     public function run(): void
     {
+        /*
+         * 2026-09-09 — the platform's own pair first, and independently of
+         * whether any company exists yet. These are what a สินค้ากลาง points
+         * at (ADR-040 — journeys joined brands and categories as
+         * platform-ownable), and the resolver's last fall-back for a company
+         * whose own copy has gone missing.
+         */
+        $this->provisioner->provisionPlatform();
+
         Company::query()->each(function (Company $company): void {
             $this->provisioner->provision($company);
         });

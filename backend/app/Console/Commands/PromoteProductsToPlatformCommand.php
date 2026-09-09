@@ -11,6 +11,8 @@ use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
+use App\Services\Pipeline\PipelineTemplateProvisioner;
+use App\Services\Pipeline\PipelineTemplateResolver;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -61,6 +63,13 @@ class PromoteProductsToPlatformCommand extends Command
         {--product= : only promote this one product id}';
 
     protected $description = 'Make existing company products platform-owned, so every company can sell them (TASK-255).';
+
+    public function __construct(
+        private readonly PipelineTemplateResolver $resolver,
+        private readonly PipelineTemplateProvisioner $provisioner,
+    ) {
+        parent::__construct();
+    }
 
     public function handle(): int
     {
@@ -128,7 +137,18 @@ class PromoteProductsToPlatformCommand extends Command
                 continue;
             }
 
-            DB::transaction(function () use ($product, $companyIds) {
+            /*
+             * Resolved BEFORE the row changes: once `company_id` is null the
+             * chain below it (category → company default → fail-safe) answers
+             * for nobody in particular, and the journey that was in force
+             * would be unrecoverable.
+             */
+            $currentJourney = $this->resolver->resolveForProduct($product, (int) $product->company_id);
+            $platformJourneyId = $currentJourney
+                ? $this->provisioner->platformEquivalentOf($currentJourney)->id
+                : null;
+
+            DB::transaction(function () use ($product, $companyIds, $platformJourneyId) {
                 $ownerCompanyId = (int) $product->company_id;
                 $before = [
                     'company_id' => $ownerCompanyId,
@@ -154,13 +174,29 @@ class PromoteProductsToPlatformCommand extends Command
                     'commission_plan_type' => $product->commission_plan_type
                         ?? $product->company?->commission_plan_type,
                     /*
-                     * A pipeline template belongs to ONE company, so a shared
-                     * product cannot carry one. Cleared, which makes the
-                     * journey resolve per company (category → company default,
-                     * ADR-026 §3.3) — the right answer for every company
-                     * including the original.
+                     * 2026-09-09 — THE JOURNEY COMES WITH IT.
+                     *
+                     * This used to be `null`, on the reasoning that a journey
+                     * belongs to one company so a shared product cannot carry
+                     * one. What that actually did was hand the journey back to
+                     * whatever each selling company had configured — and for a
+                     * company that had configured nothing, to the Medical
+                     * Package fail-safe, whose first step is an appointment.
+                     * The public share page only shows a buy button when
+                     * payment is reachable from the entry stage, so promoting a
+                     * Direct Sale product silently turned off the ability to
+                     * buy it from every link already in customers' hands
+                     * (reported from production 2026-09-09: "ระบบจ่ายเงิน
+                     * ชำระเงินทำไมมันหายไปจากหน้านี้").
+                     *
+                     * Journeys can now be platform-owned, so the RESOLVED
+                     * journey — the one that was actually in force a second
+                     * ago, not merely the row's own override — is copied to its
+                     * platform twin and travels with the product. Same
+                     * principle as commission_plan_type above: write down what
+                     * was already true rather than let it dissolve.
                      */
-                    'pipeline_template_id' => null,
+                    'pipeline_template_id' => $platformJourneyId,
                 ])->save();
 
                 foreach ($companyIds as $companyId) {
@@ -191,6 +227,10 @@ class PromoteProductsToPlatformCommand extends Command
                         'brand_id' => $product->brand_id,
                         'category_id' => $product->category_id,
                         'commission_plan_type' => $product->commission_plan_type?->value,
+                        // 2026-09-09 — the platform journey the product now
+                        // carries. Recorded next to the old company one in
+                        // `old_values` so the swap is legible months later.
+                        'pipeline_template_id' => $platformJourneyId,
                         'price_satang' => (int) $product->price_satang,
                         'companies_granted' => count($companyIds),
                         'source' => 'artisan catalog:promote-products',

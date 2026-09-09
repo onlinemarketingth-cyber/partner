@@ -211,6 +211,65 @@ class ImageThumbnailerTest extends TestCase
         $this->assertLessThan(30, $middle['alpha'], 'ตัวสินค้าตรงกลางต้องยังทึบอยู่');
     }
 
+    // ── The blur placeholder ─────────────────────────────────────────
+
+    public function test_the_placeholder_is_a_tiny_inline_data_uri(): void
+    {
+        /*
+         * 2026-09-09 (human: "ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ").
+         *
+         * The size limit IS the feature. This travels inside the JSON that
+         * lists every product on the page, so a "placeholder" of a few
+         * kilobytes would make the list slower to arrive than the images
+         * it was meant to cover for.
+         */
+        $source = $this->putPhoto('hero.jpg', 1600, 1200);
+
+        $placeholder = ImageThumbnailer::placeholder($this->disk(), $source);
+
+        $this->assertNotNull($placeholder);
+        $this->assertMatchesRegularExpression('#^data:image/(webp|png|jpeg);base64,#', $placeholder);
+        $this->assertLessThan(2000, strlen($placeholder), 'ภาพเบลอตัวอย่างต้องเล็กพอที่จะเดินทางมากับ JSON');
+    }
+
+    public function test_the_placeholder_is_a_real_readable_image(): void
+    {
+        // A data URI the browser cannot decode renders as a broken-image
+        // icon — visibly worse than the grey box it replaces.
+        $source = $this->putPhoto('shape.jpg', 1200, 600);
+
+        $placeholder = (string) ImageThumbnailer::placeholder($this->disk(), $source);
+        $bytes = base64_decode(substr($placeholder, (int) strpos($placeholder, ',') + 1), true);
+
+        $this->assertIsString($bytes);
+        $size = getimagesizefromstring($bytes);
+
+        $this->assertNotFalse($size);
+        $this->assertSame([20, 10], [(int) $size[0], (int) $size[1]], 'ต้องคงสัดส่วนภาพเดิมไว้');
+    }
+
+    public function test_the_placeholder_never_enlarges_a_tiny_image(): void
+    {
+        // A 12px image blown up to 20px would land in the database bigger
+        // than the picture it came from.
+        $source = $this->putPhoto('spacer.png', 12, 8, 'png');
+
+        $placeholder = (string) ImageThumbnailer::placeholder($this->disk(), $source);
+        $bytes = (string) base64_decode(substr($placeholder, (int) strpos($placeholder, ',') + 1), true);
+        $size = getimagesizefromstring($bytes);
+
+        $this->assertNotFalse($size);
+        $this->assertSame([12, 8], [(int) $size[0], (int) $size[1]]);
+    }
+
+    public function test_an_unreadable_file_yields_no_placeholder(): void
+    {
+        $this->disk()->put(self::DIRECTORY.'/notes.txt', 'still not a picture');
+
+        $this->assertNull(ImageThumbnailer::placeholder($this->disk(), self::DIRECTORY.'/notes.txt'));
+        $this->assertNull(ImageThumbnailer::placeholder($this->disk(), self::DIRECTORY.'/nowhere.jpg'));
+    }
+
     public function test_a_custom_target_edge_is_honoured(): void
     {
         // Not currently used by the app — but the constant is a default,

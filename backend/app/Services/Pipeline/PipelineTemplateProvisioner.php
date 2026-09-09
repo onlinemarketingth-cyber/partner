@@ -6,7 +6,6 @@ use App\Enums\PipelineStage;
 use App\Models\Company;
 use App\Models\PipelineTemplate;
 use App\Models\PipelineTemplateStage;
-use App\Models\Scopes\TenantScope;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -81,14 +80,74 @@ class PipelineTemplateProvisioner
     public function provision(Company $company): void
     {
         foreach (self::systemTemplates() as $key => $definition) {
-            $this->provisionTemplate($company, $key, $definition['name'], $definition['stages']);
+            $this->provisionTemplate($company->id, $key, $definition['name'], $definition['stages'], true);
         }
     }
 
     /**
+     * 2026-09-09 — the same two journeys, owned by the PLATFORM.
+     *
+     * A journey with no company is usable by every company, exactly like a
+     * platform brand or category (ADR-040). These are what a สินค้ากลาง
+     * points at: one journey that travels with the product, rather than a
+     * different one resolved per company from whatever each had configured.
+     *
+     * Idempotent, and independent of any company — safe to call from the
+     * seeder on every run.
+     */
+    public function provisionPlatform(): void
+    {
+        foreach (self::systemTemplates() as $key => $definition) {
+            $this->provisionTemplate(null, $key, $definition['name'], $definition['stages'], true);
+        }
+    }
+
+    /**
+     * The platform journey that matches a company's one, creating it if
+     * this is the first time anyone has asked.
+     *
+     * Used when a product is promoted to the platform: its journey has to
+     * come with it, and a company-owned template cannot (a shared product
+     * pointing at one company's row would be that company deciding the
+     * journey for everybody else — BR-6 in spirit if not in letter).
+     *
+     * MATCHED BY STAGES, NOT BY NAME. Two journeys called "Direct Sale" that
+     * differ by a step are two journeys; two called different things with the
+     * same ordered stages are one. The `key` is only how the row is found
+     * again cheaply, which is why a clash on it falls back to a suffixed key
+     * rather than quietly reusing a journey that is not the same journey.
+     */
+    public function platformEquivalentOf(PipelineTemplate $template): PipelineTemplate
+    {
+        $stages = $template->stageSequence();
+        $existing = PipelineTemplate::withoutGlobalScopes()
+            ->with('stages')
+            ->whereNull('company_id')
+            ->where('key', $template->key)
+            ->first();
+
+        if ($existing && $existing->stageSequence() == $stages) {
+            return $existing;
+        }
+
+        return $this->provisionTemplate(
+            null,
+            // A different journey already holds this key on the platform, so
+            // this one takes a key of its own rather than overwriting it.
+            $existing ? $template->key.'_'.$template->id : $template->key,
+            $template->name,
+            $stages,
+            // Only the two seeded journeys are `is_system`; a company's own
+            // journey does not become one by being promoted.
+            false,
+        );
+    }
+
+    /**
+     * @param  int|null  $companyId  null = owned by the PLATFORM, usable by every company
      * @param  list<PipelineStage>  $stages
      */
-    private function provisionTemplate(Company $company, string $key, string $name, array $stages): void
+    private function provisionTemplate(?int $companyId, string $key, string $name, array $stages, bool $isSystem): PipelineTemplate
     {
         // §6 "never trust the client" applies to a seeder and to an internal
         // service call too — these are write paths. The invariants (must
@@ -100,7 +159,7 @@ class PipelineTemplateProvisioner
         // invalid, this throws here rather than shipping a broken tenant.
         $this->resolver->assertValidStageSequence($stages);
 
-        DB::transaction(function () use ($company, $key, $name, $stages) {
+        return DB::transaction(function () use ($companyId, $key, $name, $stages, $isSystem) {
             // TenantScope is bypassed EXPLICITLY rather than relied upon:
             // this runs both unauthenticated (seeder, where the scope
             // no-ops) and as a Super Admin creating a company they are not
@@ -108,27 +167,29 @@ class PipelineTemplateProvisioner
             // reason). Depending on two different accidents of context
             // producing the same result is not a guarantee — company_id is
             // always stated outright instead. BR-6.
-            $template = PipelineTemplate::withoutGlobalScope(TenantScope::class)
+            $template = PipelineTemplate::withoutGlobalScopes()
                 ->firstOrCreate(
-                    ['company_id' => $company->id, 'key' => $key],
-                    ['name' => $name, 'is_system' => true],
+                    ['company_id' => $companyId, 'key' => $key],
+                    ['name' => $name, 'is_system' => $isSystem],
                 );
 
             foreach ($stages as $position => $stage) {
-                PipelineTemplateStage::withoutGlobalScope(TenantScope::class)
+                PipelineTemplateStage::withoutGlobalScopes()
                     ->updateOrCreate(
                         ['pipeline_template_id' => $template->id, 'stage' => $stage->value],
-                        ['company_id' => $company->id, 'position' => $position],
+                        ['company_id' => $companyId, 'position' => $position],
                     );
             }
 
             // Prune anything a previous revision of these definitions left
             // behind, so re-running never yields a template that is the
             // UNION of two versions of the same journey.
-            PipelineTemplateStage::withoutGlobalScope(TenantScope::class)
+            PipelineTemplateStage::withoutGlobalScopes()
                 ->where('pipeline_template_id', $template->id)
                 ->whereNotIn('stage', array_map(fn (PipelineStage $stage) => $stage->value, $stages))
                 ->delete();
+
+            return $template->load('stages');
         });
     }
 }

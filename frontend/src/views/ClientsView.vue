@@ -258,6 +258,7 @@ interface ProductMediaItem {
   source_type: 'upload' | 'embed' | null
   stream_url: string | null
   thumbnail_url: string | null
+  placeholder: string | null
   embed_url: string | null
   is_primary: boolean
 }
@@ -1876,6 +1877,7 @@ watch(isListMode, (listMode) => {
                         <AuthenticatedMedia
                           v-if="m.source_type !== 'embed'"
                           :src="m.thumbnail_url ?? m.stream_url"
+                          :placeholder="m.placeholder"
                           type="image"
                           class="w-full h-14 object-cover"
                         />

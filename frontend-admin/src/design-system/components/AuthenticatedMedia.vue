@@ -17,13 +17,48 @@ const props = withDefaults(
     type?: 'image' | 'video'
     controls?: boolean
     class?: string
+    /**
+     * 2026-09-09 (human: "หน้า frontend load รูปมาที่หลังประสบการณ์ไม่ดี
+     * ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ จนโหลดเสร็จได้หรือไม่").
+     *
+     * A ~20px base64 data URI of the same picture, from the API
+     * (`placeholder` / `thumbnail_placeholder` — App\Support\Media\
+     * ImageThumbnailer). It arrives with the list itself, so it needs no
+     * request and no authorisation: it can be painted in the first frame.
+     *
+     * Optional everywhere on purpose. A caller that does not pass it, or
+     * a row that has none (a video, a product with no photos, an image GD
+     * could not read), gets exactly the grey box this component has always
+     * shown.
+     */
+    placeholder?: string | null
   }>(),
-  { type: 'image', controls: true, class: '' },
+  { type: 'image', controls: true, class: '', placeholder: null },
 )
 
 const sourceRef = toRef(props, 'src')
 const { objectUrl, loading, error, retry } = useAuthenticatedMedia(sourceRef)
-const showPlaceholder = computed(() => !props.src || loading.value || error.value)
+
+/*
+ * ── THE BLUR-UP, IN ONE <img> ──
+ *
+ * The obvious build is two stacked elements that cross-fade. This is one
+ * element whose `src` flips from the tiny data URI to the real blob and
+ * whose CSS filter flips from blurred to sharp. The browser swaps the
+ * pixels instantly (the data URI is already decoded) and the `filter`
+ * transition then animates over the NEW pixels — which is precisely
+ * "ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ", and with no absolute positioning it
+ * cannot disturb any caller's layout.
+ *
+ * Videos are excluded: a poster frame is a different question, and the
+ * grey box is the right answer while one loads.
+ */
+const blurSrc = computed(() => (props.type === 'image' ? props.placeholder || null : null))
+const displaySrc = computed(() => objectUrl.value ?? blurSrc.value)
+const isBlurred = computed(() => !objectUrl.value)
+
+/** The old grey box — now only when there is nothing at all to show. */
+const showPlaceholder = computed(() => !props.src || !!error.value || (!objectUrl.value && !blurSrc.value))
 </script>
 
 <template>
@@ -49,5 +84,28 @@ const showPlaceholder = computed(() => !props.src || loading.value || error.valu
     <Icon v-else :name="type === 'video' ? 'play' : 'image'" :size="20" />
   </div>
   <video v-else-if="type === 'video'" :src="objectUrl!" :controls="controls" :class="props.class" />
-  <img v-else :src="objectUrl!" :class="props.class" />
+  <img v-else :src="displaySrc!" :class="[props.class, isBlurred ? 'am-blur' : 'am-sharp']" />
 </template>
+
+<style scoped>
+/*
+ * The sharpening itself. `am-sharp` carries no filter of its own — it is
+ * the absence of the blur, and the transition is what makes the removal
+ * gradual rather than a jump.
+ */
+img {
+  transition: filter 500ms ease-out;
+}
+
+.am-blur {
+  filter: blur(12px);
+}
+
+/* Someone who has asked their system for less movement gets the picture,
+   not the animation. */
+@media (prefers-reduced-motion: reduce) {
+  img {
+    transition: none;
+  }
+}
+</style>

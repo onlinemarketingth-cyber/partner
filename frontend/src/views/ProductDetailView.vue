@@ -55,6 +55,7 @@ interface MediaItem {
   source_type: 'upload' | 'embed'
   stream_url: string | null
   thumbnail_url: string | null
+  placeholder: string | null
   embed_url: string | null
   is_primary: boolean
 }
@@ -230,6 +231,7 @@ onMounted(load)
           >
             <AuthenticatedMedia
               :src="m.thumbnail_url ?? m.stream_url"
+              :placeholder="m.placeholder"
               type="image"
               class="w-full h-full object-cover"
             />

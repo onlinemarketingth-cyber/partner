@@ -170,6 +170,94 @@ class ProductImageThumbnailTest extends TestCase
         Storage::disk('local')->assertMissing((string) $media->file_path);
     }
 
+    // ── The blur-up ──────────────────────────────────────────────────
+
+    public function test_the_card_carries_a_blur_placeholder_inline(): void
+    {
+        /*
+         * 2026-09-09 (human: "หน้า frontend load รูปมาที่หลังประสบการณ์
+         * ไม่ดี ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ").
+         *
+         * `thumbnail_url` is an authenticated stream: the browser cannot
+         * paint it until it has fetched it, which is the gap the human is
+         * describing. This one field travels WITH the list, so the blurred
+         * shape of every product is on screen in the first paint.
+         */
+        $this->upload(1600, 1200);
+
+        $placeholder = $this->actingAs($this->admin)
+            ->getJson('/api/v1/products')
+            ->assertOk()
+            ->json('data.0.thumbnail_placeholder');
+
+        $this->assertIsString($placeholder);
+        $this->assertStringStartsWith('data:image/', $placeholder);
+    }
+
+    public function test_the_blur_and_the_photo_are_always_the_same_picture(): void
+    {
+        /*
+         * Both fields resolve through ProductResource::cardMedia(), so they
+         * cannot pick different rows. A blur that sharpens into a DIFFERENT
+         * photo is more unsettling than no blur at all — and with two
+         * copies of the "cover first, then primary, then first" rule it was
+         * one edit away from happening.
+         */
+        $this->upload(1600, 1200);
+        $second = $this->upload(1500, 1000);
+
+        // Make the SECOND upload the primary cover.
+        $this->actingAs($this->admin)
+            ->putJson("/api/v1/product-media/{$second->id}", ['is_primary' => true])
+            ->assertOk();
+
+        $row = $this->actingAs($this->admin)->getJson('/api/v1/products')->assertOk()->json('data.0');
+
+        $this->assertSame(route('product-media.thumbnail', $second->id), $row['thumbnail_url']);
+        $this->assertSame($second->refresh()->placeholder, $row['thumbnail_placeholder']);
+    }
+
+    public function test_a_gallery_row_carries_its_own_placeholder(): void
+    {
+        // The product page's tile strip reads this one, not the card's.
+        $media = $this->upload(1600, 1200);
+
+        $this->actingAs($this->admin)
+            ->getJson("/api/v1/products/{$this->product->id}/media")
+            ->assertOk()
+            ->assertJsonPath('data.0.placeholder', $media->refresh()->placeholder);
+
+        $this->assertNotNull($media->placeholder);
+    }
+
+    public function test_even_a_photo_too_small_to_need_a_thumbnail_gets_a_blur(): void
+    {
+        /*
+         * The two are independent. A 200px image legitimately never gets a
+         * thumbnail — but it is still fetched through an authenticated
+         * stream, so it still has the grey-box gap the blur is for.
+         */
+        $media = $this->upload(200, 150);
+
+        $this->assertNull($media->thumbnail_path);
+        $this->assertNotNull($media->placeholder);
+    }
+
+    public function test_the_backfill_adds_a_blur_to_rows_that_only_have_a_thumbnail(): void
+    {
+        // The shape of every row after the previous release: a thumbnail
+        // was generated, the placeholder column did not exist yet.
+        $media = $this->upload(1600, 1200);
+        $media->forceFill(['placeholder' => null])->save();
+        $thumbnail = $media->thumbnail_path;
+
+        $this->artisan('media:backfill-thumbnails')->assertSuccessful();
+
+        $media->refresh();
+        $this->assertNotNull($media->placeholder);
+        $this->assertSame($thumbnail, $media->thumbnail_path, 'ไฟล์ย่อเดิมต้องไม่ถูกสร้างใหม่');
+    }
+
     // ── Letting the browser keep it ──────────────────────────────────
 
     public function test_a_photo_may_be_kept_by_the_browser_that_was_allowed_to_see_it(): void

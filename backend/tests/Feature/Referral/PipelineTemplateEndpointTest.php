@@ -78,16 +78,47 @@ class PipelineTemplateEndpointTest extends TestCase
 
         $response = $this->actingAs($admin)->getJson('/api/v1/pipeline-templates')->assertOk();
 
-        $this->assertCount(1, $response->json('data'));
-        $this->assertSame(PipelineTemplate::KEY_DIRECT_SALE_DEFAULT, $response->json('data.0.key'));
-        $this->assertTrue($response->json('data.0.is_system'));
+        /*
+         * 2026-09-09 — the list is no longer only the company's own.
+         *
+         * Journeys became platform-ownable on this date (a สินค้ากลาง has to
+         * carry one, ADR-040), and the two platform journeys are offered to
+         * every company alongside their own. So this asserts on the ROW, not
+         * on the size of the list, which was only ever a proxy for it.
+         */
+        $own = collect($response->json('data'))->firstWhere('company_id', $company->id);
+
+        $this->assertNotNull($own);
+        $this->assertSame(PipelineTemplate::KEY_DIRECT_SALE_DEFAULT, $own['key']);
+        $this->assertTrue($own['is_system']);
         // The stage list is the point of the endpoint — a chooser that
         // only showed names would ask an admin to pick a journey without
         // showing them the journey.
         $this->assertSame(
             ['complete_registered', 'complete_payment'],
-            array_column($response->json('data.0.stages'), 'key'),
+            array_column($own['stages'], 'key'),
         );
+    }
+
+    public function test_a_company_admin_is_offered_the_platform_journeys_too(): void
+    {
+        /*
+         * 2026-09-09 — the reason the counts above changed, stated as its
+         * own guarantee. A shared product's journey is a platform row; an
+         * admin who could not see it in this list could not choose it, and
+         * the product form would show them an empty selector on exactly the
+         * products that need one most.
+         */
+        $company = Company::factory()->create();
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $keys = collect($this->actingAs($admin)->getJson('/api/v1/pipeline-templates')->assertOk()->json('data'))
+            ->where('company_id', null)
+            ->pluck('key')
+            ->all();
+
+        $this->assertContains(PipelineTemplate::KEY_DIRECT_SALE_DEFAULT, $keys);
+        $this->assertContains(PipelineTemplate::KEY_MEDICAL_PACKAGE_DEFAULT, $keys);
     }
 
     public function test_a_company_admin_never_sees_another_companys_templates(): void
@@ -102,8 +133,14 @@ class PipelineTemplateEndpointTest extends TestCase
 
         $response = $this->actingAs($adminA)->getJson('/api/v1/pipeline-templates')->assertOk();
 
-        $this->assertCount(1, $response->json('data'));
-        $this->assertSame($companyA->id, $response->json('data.0.company_id'));
+        // Own rows and platform rows — never another tenant's. Asserted as
+        // the SET of company ids, so adding a platform journey cannot make
+        // this pass for the wrong reason and a leak cannot hide behind a
+        // count.
+        $this->assertSame(
+            [null, $companyA->id],
+            collect($response->json('data'))->pluck('company_id')->unique()->sort()->values()->all(),
+        );
     }
 
     public function test_a_super_admin_sees_templates_across_companies(): void
@@ -116,10 +153,17 @@ class PipelineTemplateEndpointTest extends TestCase
 
         $superAdmin = User::factory()->superAdmin()->create();
 
-        $this->actingAs($superAdmin)
-            ->getJson('/api/v1/pipeline-templates')
-            ->assertOk()
-            ->assertJsonCount(2, 'data');
+        $ids = collect($this->actingAs($superAdmin)->getJson('/api/v1/pipeline-templates')->assertOk()->json('data'))
+            ->pluck('company_id')
+            ->unique()
+            ->all();
+
+        // Both companies AND the platform (null) — the list grew by the two
+        // platform journeys on 2026-09-09, so this asserts on who is
+        // represented rather than on how many rows come back.
+        $this->assertContains($companyA->id, $ids);
+        $this->assertContains($companyB->id, $ids);
+        $this->assertContains(null, $ids);
     }
 
     public function test_an_agent_may_not_list_pipeline_templates(): void

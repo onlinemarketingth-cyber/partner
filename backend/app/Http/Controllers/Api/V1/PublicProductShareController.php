@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\ProductMediaType;
 use App\Enums\TrackedLinkGroup;
 use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
@@ -16,6 +17,7 @@ use App\Services\Catalog\ProductMediaService;
 use App\Services\Catalog\ProductSalesMaterialService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Order\ProductShareCheckoutService;
+use App\Support\Media\RangeFileResponder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 
@@ -110,7 +112,21 @@ class PublicProductShareController extends Controller
         $link = $this->resolveUsableLink($token);
         abort_unless($productMedia->product_id === $link->product_id, 404);
 
-        return Storage::disk($service->disk())->response($productMedia->file_path);
+        /*
+         * 2026-09-09 — cached by the prospect's browser, same terms as the
+         * signed-in app (RangeFileResponder::CACHE_PRODUCT_IMAGE): the URL
+         * addresses one immutable media row, and `private` keeps the copy
+         * out of every shared cache. This page is the one a customer is
+         * looking at while deciding, so a photo that reloads on every tap
+         * costs more here than anywhere else in the product.
+         */
+        return Storage::disk($service->disk())->response(
+            $productMedia->file_path,
+            null,
+            $productMedia->media_type === ProductMediaType::Image
+                ? ['Cache-Control' => RangeFileResponder::CACHE_PRODUCT_IMAGE]
+                : [],
+        );
     }
 
     /** GET /public/product-shares/{token}/media/{productMedia}/thumbnail */
@@ -120,7 +136,11 @@ class PublicProductShareController extends Controller
         abort_unless($productMedia->product_id === $link->product_id, 404);
         abort_unless($productMedia->thumbnail_path, 404);
 
-        return Storage::disk($service->disk())->response($productMedia->thumbnail_path);
+        return Storage::disk($service->disk())->response(
+            $productMedia->thumbnail_path,
+            null,
+            ['Cache-Control' => RangeFileResponder::CACHE_PRODUCT_IMAGE],
+        );
     }
 
     /** GET /public/product-shares/{token}/materials/{salesMaterial}/stream */

@@ -5,6 +5,7 @@ namespace App\Http\Resources;
 use App\Enums\ProductMediaPurpose;
 use App\Enums\ProductMediaType;
 use App\Models\CommissionRule;
+use App\Models\ProductMedia;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use App\Support\CompanyScopeFilter;
@@ -115,12 +116,7 @@ class ProductResource extends JsonResource
             // covers yet. Dropping it would blank the card for every
             // product whose photos still live in the detail gallery.
             'thumbnail_url' => $this->when($this->relationLoaded('media'), function () {
-                $covers = $this->media->where('purpose', ProductMediaPurpose::Cover);
-
-                $primary = $covers->firstWhere('is_primary', true)
-                    ?? $covers->first()
-                    ?? $this->media->firstWhere('is_primary', true)
-                    ?? $this->media->first();
+                $primary = $this->cardMedia();
 
                 if (! $primary) {
                     return null;
@@ -132,6 +128,25 @@ class ProductResource extends JsonResource
 
                 return $primary->media_type === ProductMediaType::Image ? route('product-media.stream', $primary->id) : null;
             }),
+            /*
+             * 2026-09-09 (human: "หน้า frontend load รูปมาที่หลัง
+             * ประสบการณ์ไม่ดี ค่อยทำให้ภาพชัดขึ้นเรื่อยๆ").
+             *
+             * A ~20px base64 copy of the card image, carried INSIDE this
+             * response. `thumbnail_url` above is an authenticated stream:
+             * the browser cannot paint it until it has fetched it, which is
+             * the gap the human is describing. This has nothing to fetch,
+             * so the blurred shape of every product is on screen in the
+             * first paint and sharpens when the real file lands.
+             *
+             * Null is entirely normal (a product with no photos, or one
+             * whose card image is a video) and the frontend falls back to
+             * the plain placeholder box it has always shown.
+             */
+            'thumbnail_placeholder' => $this->when(
+                $this->relationLoaded('media'),
+                fn () => $this->cardMedia()?->placeholder,
+            ),
             // ADR-011/TASK-027 — commission_plan_type is the product's OWN
             // override (null = inheriting); effective_plan_type is always
             // resolved (Product::effectivePlanType()) so ag-ui never has
@@ -242,5 +257,31 @@ class ProductResource extends JsonResource
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];
+    }
+
+    /**
+     * The one media row a product CARD represents.
+     *
+     * TASK-097 — cover-first, in this order:
+     *   1. the primary COVER (รูปสินค้า) — what the admin chose
+     *   2. any cover, if somehow none is flagged primary
+     *   3. the old behaviour (primary anywhere, else first item)
+     *
+     * Step 3 is kept ONLY as a fallback for products that have no covers
+     * yet. Dropping it would blank the card for every product whose photos
+     * still live in the detail gallery.
+     *
+     * Extracted 2026-09-09 so `thumbnail_url` and `thumbnail_placeholder`
+     * cannot pick different rows — a blur that sharpens into a DIFFERENT
+     * photo is more unsettling than no blur at all.
+     */
+    private function cardMedia(): ?ProductMedia
+    {
+        $covers = $this->media->where('purpose', ProductMediaPurpose::Cover);
+
+        return $covers->firstWhere('is_primary', true)
+            ?? $covers->first()
+            ?? $this->media->firstWhere('is_primary', true)
+            ?? $this->media->first();
     }
 }

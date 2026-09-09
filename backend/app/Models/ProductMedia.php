@@ -45,6 +45,7 @@ class ProductMedia extends Model
         'file_path',
         'embed_url',
         'thumbnail_path',
+        'placeholder',
         'is_primary',
         'sort_order',
         'processing_status',

@@ -3,7 +3,7 @@
 namespace App\Models;
 
 use App\Enums\PipelineStage;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -34,9 +34,20 @@ class PipelineTemplate extends Model
 
     public const KEY_DIRECT_SALE_DEFAULT = 'direct_sale_default';
 
+    /*
+     * 2026-09-09 — SharedOrTenantScope, not TenantScope.
+     *
+     * `company_id` is nullable here now: a journey with no company is owned
+     * by the PLATFORM and used by every company, exactly like a platform
+     * brand or category (ADR-040). Plain TenantScope (`where company_id =
+     * :own`) silently excludes NULL, so a Company Admin would have been
+     * offered none of them and a shared product's own journey would have
+     * been invisible to the very screens that must show it. Company A still
+     * cannot see company B's — that guarantee is unchanged.
+     */
     protected static function booted(): void
     {
-        static::addGlobalScope(new TenantScope);
+        static::addGlobalScope(new SharedOrTenantScope);
     }
 
     protected $fillable = [

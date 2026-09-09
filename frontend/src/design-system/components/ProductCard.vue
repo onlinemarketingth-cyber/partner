@@ -30,25 +30,10 @@ import AuthenticatedMedia from './AuthenticatedMedia.vue'
 export interface ProductCardItem {
   id: number
   name: string
-  /**
-   * The product row's own price. For a PLATFORM product (ADR-040) that is the
-   * CENTRAL price — not what this agent's company charges — so it is not what
-   * the card shows.
-   */
   price_satang: number
-  /**
-   * TASK-257 / ADR-040 — what THIS agent's company actually charges: its own
-   * price if it set one, the central price if not, and an active promotion
-   * above either. Resolved server-side by the one service that also prices the
-   * order (ProductPricingService), so the card and the checkout cannot drift.
-   *
-   * Optional and falling back to `price_satang`: every caller of this
-   * component reads /products, which sends it — the fallback exists so a
-   * future caller that does not is wrong by a stale number rather than by
-   * `undefined` rendering as NaN.
-   */
-  effective_price_satang?: number
   thumbnail_url: string | null
+  /** 2026-09-09 — the inline blur-up copy; see AuthenticatedMedia. */
+  thumbnail_placeholder?: string | null
   category?: { id: number; name: string } | null
 }
 
@@ -92,13 +77,18 @@ function formatBaht(satang: number): string {
     :to="{ name: 'product-detail', params: { id: product.id } }"
     class="bg-surface-card/95 border border-line-card rounded-xl overflow-hidden flex flex-col h-full transition hover:border-brand-400 active:scale-[0.99]"
   >
-    <AuthenticatedMedia :src="product.thumbnail_url" type="image" class="w-full aspect-square object-cover" />
+    <AuthenticatedMedia
+      :src="product.thumbnail_url"
+      :placeholder="product.thumbnail_placeholder"
+      type="image"
+      class="w-full aspect-square object-cover"
+    />
     <div class="p-3 flex flex-col flex-1">
       <p v-if="product.category" class="text-[11px] text-ink-card-subtle uppercase tracking-wider font-bold mb-0.5">
         {{ product.category.name }}
       </p>
       <p class="text-sm font-bold text-ink-card leading-tight line-clamp-2">{{ product.name }}</p>
-      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.effective_price_satang ?? product.price_satang) }}</p>
+      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.price_satang) }}</p>
 
       <!-- `.stop.prevent` is load-bearing now that the card is a link:
            without it, every share press would ALSO navigate, and the

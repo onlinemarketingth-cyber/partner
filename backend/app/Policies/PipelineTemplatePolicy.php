@@ -46,7 +46,14 @@ class PipelineTemplatePolicy
      */
     public function view(User $user, PipelineTemplate $pipelineTemplate): bool
     {
+        // 2026-09-09 — a journey with no company is the PLATFORM's, and
+        // every Company Admin may read it: their own shared products point
+        // at one, and a journey they cannot read is a journey the product
+        // form cannot show them.
         return $user->isSuperAdmin()
-            || ($user->isCompanyAdmin() && $user->company_id === $pipelineTemplate->company_id);
+            || ($user->isCompanyAdmin() && (
+                $pipelineTemplate->company_id === null
+                || $user->company_id === $pipelineTemplate->company_id
+            ));
     }
 }

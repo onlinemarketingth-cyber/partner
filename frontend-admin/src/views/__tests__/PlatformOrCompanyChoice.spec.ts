@@ -285,16 +285,29 @@ describe('ProductEditView — whose product is this?', () => {
     expect(w.text()).not.toContain('สืบทอดจากบริษัท (ค่าเริ่มต้น)')
   })
 
-  it('replaces the pipeline picker with the reason there is none', async () => {
-    // ADR-026 §3.3 — a template belongs to one company. Leaving an empty
-    // select on screen would read as "misconfigured", not "not applicable".
+  it('narrows the journey picker to เส้นทางกลาง instead of removing it', async () => {
+    /*
+     * 2026-09-09 — REVERSED, and the reversal is the bug fix.
+     *
+     * This used to assert that switching to สินค้ากลาง REPLACED the journey
+     * picker with a note saying there was nothing to choose (a journey
+     * belonged to one company, so a shared product could hold none). What
+     * that produced in production was a promoted product whose journey fell
+     * back to the selling company's Medical Package, a share link that
+     * silently lost its buy button, and no screen anywhere that could put it
+     * back.
+     *
+     * Journeys are platform-ownable now, so the picker STAYS and narrows —
+     * the same thing the brand and category pickers do two fields above.
+     */
     asSuperAdmin()
     const w = await mountProductForm()
     await w.find('[data-test="owner-platform"]').setValue()
     await flushPromises()
 
-    expect(w.text()).not.toContain('เส้นทางการขายของสินค้านี้ (Pipeline)')
-    expect(w.text()).toContain('สินค้ากลางใช้เส้นทางการขายของบริษัทที่ขายสินค้านั้น')
+    expect(w.find('[data-test="journey-select"]').exists()).toBe(true)
+    expect(w.text()).toContain('เส้นทางการขายของสินค้ากลางนี้ (Pipeline)')
+    expect(w.text()).toContain('สินค้ากลางเลือกได้เฉพาะเส้นทางกลาง')
   })
 })
 

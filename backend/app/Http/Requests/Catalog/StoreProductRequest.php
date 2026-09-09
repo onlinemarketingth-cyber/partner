@@ -104,15 +104,22 @@ class StoreProductRequest extends FormRequest
             // assumed"). PipelineTemplateResolver re-checks this at read
             // time too, since a Request is not the only write path.
             /*
-             * A pipeline template belongs to ONE company, so a shared product
-             * cannot carry one — the journey resolves per company instead
-             * (ADR-026 §3.3), which is the right answer for every company
-             * including the one that first asked for the product. Same
-             * clearing catalog:promote-products does.
-             */
-            'pipeline_template_id' => $platform
-                ? ['sometimes', 'nullable', 'prohibited']
-                : ['sometimes', 'nullable', 'integer', Rule::exists('pipeline_templates', 'id')->where('company_id', $companyId)],
+              * 2026-09-09 — a shared product CARRIES a journey now.
+              *
+              * This was `prohibited` for a platform row, on the reasoning that
+              * a journey belongs to one company so a shared product cannot
+              * hold one. True of the schema at the time; the schema changed
+              * (pipeline_templates.company_id is nullable, ADR-040's third
+              * platform-owned table after brands and categories) because the
+              * consequence was not acceptable: a promoted product had no
+              * journey, fell through to the selling company's Medical Package
+              * fail-safe, and its share links silently lost the buy button.
+              *
+              * $companyId is null for a platform row, so journeyRule() offers
+              * platform journeys only — the same shape as the brand and
+              * category rules directly above.
+              */
+            'pipeline_template_id' => ['sometimes', 'nullable', 'integer', $this->journeyRule($companyId)],
             // ADR-033 (TASK-189) §2.3/§2.5 — BR-7 admin-editable, never
             // hardcoded. Nullable/omitted = unlimited quota / never
             // expires / no shipping needed. Snapshotted onto

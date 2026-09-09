@@ -3,7 +3,7 @@
 namespace App\Models;
 
 use App\Enums\PipelineStage;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -18,7 +18,7 @@ class PipelineTemplateStage extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope(new TenantScope);
+        static::addGlobalScope(new SharedOrTenantScope);
     }
 
     protected $fillable = [

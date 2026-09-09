@@ -26,6 +26,16 @@ class ProductMediaResource extends JsonResource
                 ? route('product-media.stream', $this->id)
                 : null,
             'thumbnail_url' => $this->thumbnail_path ? route('product-media.thumbnail', $this->id) : null,
+            /*
+             * 2026-09-09 — the blur placeholder, inline.
+             *
+             * A ~20px base64 copy of the picture (App\Support\Media\
+             * ImageThumbnailer::placeholder). It rides along in this JSON
+             * rather than behind a URL on purpose: an authenticated stream
+             * cannot be painted until it has been fetched, and the entire
+             * point is to have SOMETHING on screen before that happens.
+             */
+            'placeholder' => $this->placeholder,
             'embed_url' => $this->embed_url,
             'is_primary' => $this->is_primary,
             'sort_order' => $this->sort_order,
