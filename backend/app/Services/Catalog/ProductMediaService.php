@@ -10,6 +10,7 @@ use App\Jobs\CompressUploadedVideo;
 use App\Models\Product;
 use App\Models\ProductMedia;
 use App\Models\User;
+use App\Support\Media\ImageThumbnailer;
 use App\Support\Media\OwnerDirectory;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
@@ -65,7 +66,7 @@ class ProductMediaService
             }
         }
 
-        return DB::transaction(function () use ($product, $attributes) {
+        $media = DB::transaction(function () use ($product, $attributes) {
             $isCover = $attributes['purpose'] === ProductMediaPurpose::Cover->value;
 
             // TASK-097 — the FIRST cover a product ever gets becomes the
@@ -91,6 +92,42 @@ class ProductMediaService
 
             return $media;
         });
+
+        $this->generateImageThumbnail($media);
+
+        return $media;
+    }
+
+    /**
+     * 2026-09-09 (human: "รูปสินค้าไม่มีไฟล์ย่อเลย").
+     *
+     * ── WHY IN-LINE AND NOT A QUEUED JOB ──
+     *
+     * A video goes to the queue because ffmpeg on a 200 MB file takes
+     * minutes. A GD resize of a phone photo takes a fraction of a second,
+     * and running it here means the thumbnail EXISTS the moment the
+     * upload response is written — the admin sees the small file on the
+     * very first render of the row, not after a worker happens to run.
+     *
+     * It also removes a dependency: if the queue worker were ever down,
+     * the queued version would leave every new image thumbnail-less and
+     * silently back to loading full-resolution originals — which is the
+     * bug this is fixing.
+     *
+     * Outside the transaction on purpose: writing a file is not something
+     * a rollback can undo, so it must not run inside one.
+     */
+    private function generateImageThumbnail(ProductMedia $media): void
+    {
+        if ($media->media_type !== ProductMediaType::Image || ! $media->file_path) {
+            return;
+        }
+
+        $path = ImageThumbnailer::generate(Storage::disk(self::DISK), $media->file_path);
+
+        if ($path !== null) {
+            $media->forceFill(['thumbnail_path' => $path])->save();
+        }
     }
 
     /**

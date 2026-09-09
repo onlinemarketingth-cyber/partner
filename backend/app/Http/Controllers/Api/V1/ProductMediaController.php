@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\ProductMediaPurpose;
+use App\Enums\ProductMediaType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreProductMediaRequest;
 use App\Http\Requests\Catalog\UpdateProductMediaRequest;
@@ -92,15 +93,42 @@ class ProductMediaController extends Controller
             $productMedia->file_path,
             $request,
             RangeFileResponder::DISPOSITION_INLINE,
+            null,
+            // 2026-09-09 — a photograph may be kept by the browser that
+            // was already allowed to see it; a video may not. The
+            // difference is not the sensitivity of the file, it is that
+            // an image is re-requested identically on every visit to a
+            // product screen while a video is watched once. See
+            // RangeFileResponder::CACHE_PRODUCT_IMAGE.
+            $productMedia->media_type === ProductMediaType::Image
+                ? RangeFileResponder::CACHE_PRODUCT_IMAGE
+                : RangeFileResponder::CACHE_NONE,
         );
     }
 
+    /**
+     * GET /product-media/{productMedia}/thumbnail — the SMALL copy.
+     *
+     * 2026-09-09 (human: "รูปขนาด 2 MB ถูกโหลดมาทั้งก้อนเพื่อแสดงเป็น
+     * สี่เหลี่ยม 52 พิกเซล"). Until now `thumbnail_path` was written only
+     * for videos, so this route effectively did not exist for images and
+     * every caller fell back to streaming the original — see
+     * ImageThumbnailer for the whole story.
+     *
+     * Cached for the same reason and on the same terms as the image
+     * stream above: the id addresses immutable bytes, and `private`
+     * keeps the copy inside the browser that was already authorised.
+     */
     public function thumbnail(ProductMedia $productMedia, ProductMediaService $service): mixed
     {
         $this->authorize('view', $productMedia->product);
         abort_unless($productMedia->thumbnail_path, 404);
 
-        return Storage::disk($service->disk())->response($productMedia->thumbnail_path);
+        return Storage::disk($service->disk())->response(
+            $productMedia->thumbnail_path,
+            null,
+            ['Cache-Control' => RangeFileResponder::CACHE_PRODUCT_IMAGE],
+        );
     }
 
     /**

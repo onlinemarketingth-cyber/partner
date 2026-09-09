@@ -46,6 +46,37 @@ class RangeFileResponder
     public const DISPOSITION_ATTACHMENT = 'attachment';
 
     /**
+     * The default: nothing is stored anywhere, by anyone.
+     *
+     * §5 rule 6 — a tenant-scoped file must never sit in a cache where a
+     * later request could be served it without passing the Policy again.
+     * This is what course videos and sales collateral get, and it does
+     * not change.
+     */
+    public const CACHE_NONE = 'private, no-store, max-age=0';
+
+    /**
+     * 2026-09-09 — the ONE narrow exception, for product photographs.
+     *
+     * `private` is the load-bearing word: it forbids every SHARED cache
+     * (proxies, CDNs, anything between us and the person), so the only
+     * copy that can exist is inside the browser of the user who was
+     * already authorised for it. §5 rule 6 is about a stranger being
+     * served a tenant's file without a Policy check; this cannot produce
+     * that.
+     *
+     * `immutable` is honest here rather than optimistic: these URLs carry
+     * a media ROW id, and the bytes behind a row never change — replacing
+     * a photo creates a new row with a new id. So a cached copy can never
+     * go stale, only unused.
+     *
+     * Why it matters: the agent product grid asks for the same dozen
+     * photos on every visit, on a phone. Without this, "the pictures load
+     * slowly" is permanent no matter how small the files get.
+     */
+    public const CACHE_PRODUCT_IMAGE = 'private, max-age=604800, immutable';
+
+    /**
      * Typed against the concrete FilesystemAdapter (what Storage::disk()
      * actually returns) rather than the Filesystem contract, because
      * mimeType() lives on the adapter, not on the interface.
@@ -54,6 +85,7 @@ class RangeFileResponder
      * @param  string  $path  path relative to that disk
      * @param  string  $disposition  self::DISPOSITION_* — presentation only, never authorization
      * @param  string|null  $filename  suggested download name; defaults to the stored basename
+     * @param  string  $cacheControl  self::CACHE_* — defaults to storing nothing anywhere
      */
     public static function respond(
         FilesystemAdapter $disk,
@@ -61,6 +93,7 @@ class RangeFileResponder
         Request $request,
         string $disposition = self::DISPOSITION_INLINE,
         ?string $filename = null,
+        string $cacheControl = self::CACHE_NONE,
     ): StreamedResponse {
         abort_unless($disk->exists($path), 404);
 
@@ -74,10 +107,11 @@ class RangeFileResponder
             // the whole file.
             'Accept-Ranges' => 'bytes',
             'Content-Disposition' => self::contentDisposition($disposition, $filename ?? basename($path)),
-            // §5 rule 6 — a tenant-scoped file must never sit in a shared
-            // proxy cache where the next request could be served it
-            // without passing the Policy again.
-            'Cache-Control' => 'private, no-store, max-age=0',
+            // Defaults to CACHE_NONE; only product photographs are ever
+            // handed anything else, and only by their own controller.
+            // See the constants above for why that is not a §5 rule 6
+            // exception.
+            'Cache-Control' => $cacheControl,
         ];
 
         // Unsatisfiable range — RFC 9110 §15.5.17. Answering 200 with the

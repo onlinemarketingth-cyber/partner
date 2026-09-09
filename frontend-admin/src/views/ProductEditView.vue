@@ -1036,6 +1036,28 @@ function openMediaPreview(item: ProductMediaItem) {
   if (idx !== -1) mediaPreviewIndex.value = idx
 }
 
+/**
+ * 2026-09-09 (human: "รูปขนาด 2 MB ถูกโหลดมาทั้งก้อนเพื่อแสดงเป็นสี่เหลี่ยม
+ * 52 พิกเซล").
+ *
+ * A TILE asks for the small file; the full-size preview and the hero
+ * still ask for the original.
+ *
+ * Until today `thumbnail_url` was populated only for videos, so every
+ * image tile on this page deliberately used `stream_url` — there was
+ * nothing else to use. The backend now writes a real thumbnail for
+ * images too (ImageThumbnailer), so the same `?? stream_url` fallback
+ * that video tiles always had is now correct for both, and the branch
+ * on media_type disappears: a 128px tile that could be showing 30 KB
+ * stops downloading 2 MB.
+ *
+ * The fallback still matters. An image that was already small enough
+ * gets no thumbnail on purpose, and the original IS its thumbnail.
+ */
+function tileSrc(item: Pick<ProductMediaItem, 'stream_url' | 'thumbnail_url'>): string | null {
+  return item.thumbnail_url ?? item.stream_url
+}
+
 /** Passed to MediaUploadModal as `uploadFn` — infers media_type from the file's mime type, matching what uploadProductImage/uploadProductVideoFile did per-input before. */
 function uploadMediaFile(file: File, onProgress: (fraction: number) => void) {
   const isVideo = file.type.startsWith('video/')
@@ -2868,7 +2890,7 @@ function goToVideoSettings() {
               :class="m.is_primary ? 'border-amber-400 ring-2 ring-amber-200' : 'border-slate-200'"
             >
               <button type="button" class="block w-full h-full cursor-zoom-in" title="ดูรูปขนาดเต็ม" @click="openMediaPreview(m)">
-                <AuthenticatedMedia :src="m.stream_url" type="image" class="w-full h-full object-cover" />
+                <AuthenticatedMedia :src="tileSrc(m)" type="image" class="w-full h-full object-cover" />
               </button>
 
               <span v-if="m.is_primary" class="absolute top-1.5 right-1.5 bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none">
@@ -3022,7 +3044,7 @@ function goToVideoSettings() {
                   <div v-for="m in visibleGridMedia" :key="m.id" class="relative aspect-square rounded-md overflow-hidden border border-slate-200 group cursor-pointer" @click="openMediaPreview(m)">
                     <AuthenticatedMedia
                       v-if="m.source_type !== 'embed'"
-                      :src="m.media_type === 'image' ? m.stream_url : (m.thumbnail_url ?? m.stream_url)"
+                      :src="tileSrc(m)"
                       type="image"
                       class="w-full h-full object-cover"
                     />
@@ -3613,7 +3635,7 @@ function goToVideoSettings() {
             <div v-for="m in media" :key="m.id" class="relative aspect-square rounded-lg overflow-hidden border border-slate-200 group cursor-pointer" @click="openMediaPreview(m)">
               <AuthenticatedMedia
                 v-if="m.source_type !== 'embed'"
-                :src="m.media_type === 'image' ? m.stream_url : (m.thumbnail_url ?? m.stream_url)"
+                :src="tileSrc(m)"
                 type="image"
                 class="w-full h-full object-cover"
               />

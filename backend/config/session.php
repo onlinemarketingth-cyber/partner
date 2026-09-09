@@ -32,7 +32,10 @@ return [
     |
     */
 
-    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    // 2026-09-09 — 24h, not Laravel's 120 minutes. Idle time (Laravel slides
+    // it on every request), for an admin who did not tick "จดจำฉัน"; that box
+    // is a separate 7 days, set in AppServiceProvider::boot().
+    'lifetime' => (int) env('SESSION_LIFETIME', 1440),
 
     'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
 

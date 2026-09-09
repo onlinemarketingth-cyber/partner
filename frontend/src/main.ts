@@ -38,6 +38,34 @@ setUnauthorizedHandler(() => {
   }
 })
 
+/*
+ * 2026-09-09 (human: "ตอนนี้ session หมดอายุ ไม่เด้งไปที่ login").
+ *
+ * The handler above is REACTIVE: it only learns the token died when a request
+ * fails, so an app left open in a background tab — which on a phone is most of
+ * the time — sits showing yesterday's screen until something is tapped.
+ *
+ * Returning to the app is exactly the moment to check, and it costs one
+ * request at the one instant a person is about to act. fetchUser() clears the
+ * user on failure and client.ts drops the dead token, so there is nothing to
+ * duplicate here.
+ *
+ * Guarded on being signed in already, so it never fires on the login screen —
+ * which would reload the page under the hands of somebody mid-password.
+ */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return
+
+  const authStore = useAuthStore()
+  if (!authStore.isAuthenticated) return
+
+  void authStore.fetchUser().then(() => {
+    if (!authStore.user && router.currentRoute.value.name !== 'login') {
+      router.push(themeStore.loginRouteLocation())
+    }
+  })
+})
+
 // TASK-078 (2026-08-02, human-confirmed via AskUserQuestion) — the splash
 // (logo + progress bar, see index.html) must hold for a minimum of 3000ms
 // regardless of how fast boot actually finishes, and the bar itself should

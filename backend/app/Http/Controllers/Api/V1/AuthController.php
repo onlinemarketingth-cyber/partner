@@ -78,13 +78,41 @@ class AuthController extends Controller
          * The admin console never sends this header and keeps the exact
          * cookie-session behaviour above — nothing here can regress it.
          *
-         * 12h expiry, set explicitly: Sanctum's own default is no
-         * expiration at all, and a token that never dies is the wrong
-         * default for a system that moves money.
+         * 2026-09-09 (human: "ทำให้อายุการ Login นานกว่านี้แบบ Facebook หรือ
+         * YouTube ทำอย่างไร").
+         *
+         * It was a flat 12 hours with no renewal, so an agent using the app
+         * all day was signed out in the middle of using it — and the
+         * "จดจำฉัน" box on the login screen did nothing at all here, because
+         * this app authenticates with a BEARER TOKEN and remember-me is a
+         * cookie mechanism. A control that visibly does nothing is worse than
+         * no control: the agent ticks it, is thrown out anyway, and concludes
+         * the app is broken.
+         *
+         * Now the box decides the length, and the token SLIDES
+         * (ExtendAccessToken), so the clock only runs while nobody is using
+         * it. That is what "like Facebook" actually is — not a long fuse, but
+         * one that resets every time you touch it.
+         *
+         * Sanctum's own default is no expiration at all, which stays the
+         * wrong default for a system that moves money.
          */
         if ($isTokenMode) {
-            $expiresAt = now()->addHours(12);
-            $token = $user->createToken('agent-portal', ['*'], $expiresAt)->plainTextToken;
+            $remember = $request->boolean('remember');
+            /*
+             * The window is recorded in the token's NAME, because the
+             * sliding-renewal middleware has to extend by the window this
+             * token was issued with and `expires_at` stops being able to
+             * answer that the first time it is extended. A name is a column
+             * Sanctum already has, so this needs no migration and no second
+             * source of truth.
+             */
+            $expiresAt = now()->addMinutes(self::tokenLifetimeMinutes($remember));
+            $token = $user->createToken(
+                $remember ? self::TOKEN_NAME_REMEMBER : self::TOKEN_NAME,
+                ['*'],
+                $expiresAt,
+            )->plainTextToken;
 
             return $resource->additional([
                 'token' => $token,
@@ -93,6 +121,31 @@ class AuthController extends Controller
         }
 
         return $resource;
+    }
+
+    /**
+     * How long a portal token survives WITHOUT BEING USED.
+     *
+     * The split exists because "จดจำฉัน" is a real answer to a real question:
+     * an agent on their own phone means one thing, the same agent on a shared
+     * or borrowed device means another. A single number for both would have to
+     * be the short one to stay safe — which is the behaviour being complained
+     * about.
+     *
+     * Public because the sliding-renewal middleware extends by the SAME window
+     * the token was issued with. Two copies of this number would drift, and
+     * the drift would surface as people being signed out early for no visible
+     * reason.
+     */
+    /** The two token names, which are also how the renewal window is recorded. */
+    public const TOKEN_NAME = 'agent-portal';
+
+    public const TOKEN_NAME_REMEMBER = 'agent-portal-remember';
+
+    public static function tokenLifetimeMinutes(bool $remember): int
+    {
+        // 30 days / 1 day — IDLE time, not total time (see ExtendAccessToken).
+        return $remember ? 60 * 24 * 30 : 60 * 24;
     }
 
     public function logout(Request $request): Response

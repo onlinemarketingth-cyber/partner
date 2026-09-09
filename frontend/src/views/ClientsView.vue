@@ -1875,7 +1875,7 @@ watch(isListMode, (listMode) => {
                       <div v-for="m in mediaByProduct[r.product.id]" :key="m.id" class="relative rounded-lg overflow-hidden border border-line-card">
                         <AuthenticatedMedia
                           v-if="m.source_type !== 'embed'"
-                          :src="m.media_type === 'image' ? m.stream_url : m.thumbnail_url ?? m.stream_url"
+                          :src="m.thumbnail_url ?? m.stream_url"
                           type="image"
                           class="w-full h-14 object-cover"
                         />

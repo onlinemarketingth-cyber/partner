@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureCompanyIsOperational;
+use App\Http\Middleware\ExtendAccessToken;
 use App\Http\Middleware\ResolveChunkedUpload;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ServerTiming;
@@ -82,6 +83,19 @@ return Application::configure(basePath: dirname(__DIR__))
          * "all of them", and a list is a list somebody forgets to add to.
          */
         $middleware->append(SecurityHeaders::class);
+
+        /*
+         * 2026-09-09 — sliding token expiry for the agent portal.
+         *
+         * Global and appended, so it sees the resolved user on every
+         * authenticated request rather than only on routes somebody
+         * remembered to list. It is a no-op for the admin console (a cookie
+         * session carries Sanctum's TransientToken, which has no expiry to
+         * extend) and for unauthenticated requests, and it writes at most once
+         * per half-window per device — see the middleware's own docblock for
+         * why it is not once per request.
+         */
+        $middleware->append(ExtendAccessToken::class);
 
         /*
          * 2026-09-07 — Server-Timing, so "why is this slow" is measured on the

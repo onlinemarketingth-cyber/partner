@@ -92,14 +92,21 @@ class ProductResource extends JsonResource
             // (Section 5 rule 6), same controller-served thumbnail route
             // ProductMediaResource already uses.
             // Bug fix (2026-08-01, human-reported: storefront cards showing
-            // placeholder for every product) — thumbnail_path is populated
-            // by CompressUploadedVideo ONLY for video media; plain image
-            // uploads never get one (ProductMediaService::store() only sets
-            // file_path for images), so this fell back to null for the
-            // overwhelming majority of products. Same fallback pattern
-            // already used by ProductShareView.vue/ClientsView.vue on the
-            // frontend: for an image with no thumbnail_path, stream the
-            // image itself instead of showing nothing.
+            // placeholder for every product) — for an image with no
+            // thumbnail_path, stream the image itself instead of showing
+            // nothing. Same fallback pattern already used by
+            // ProductShareView.vue/ClientsView.vue on the frontend.
+            //
+            // 2026-09-09 — that fallback used to be the ONLY branch that
+            // ever ran for an image: thumbnail_path was written by
+            // CompressUploadedVideo and nothing else, so every product card
+            // in the system was quietly serving a full-resolution camera
+            // photo. ImageThumbnailer now fills it at upload (and
+            // `media:backfill-thumbnails` for everything uploaded before),
+            // so the first branch is the normal case and the fallback is
+            // left for the two rows it is genuinely right for: an image
+            // already smaller than the thumbnail size, and one GD could
+            // not read.
             // TASK-097 — resolution order is now cover-first:
             //   1. the primary COVER (รูปสินค้า) — what the admin chose
             //   2. any cover, if somehow none is flagged primary

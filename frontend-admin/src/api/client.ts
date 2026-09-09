@@ -145,8 +145,24 @@ let unauthorizedHandler: (() => void) | null = null
 export function setUnauthorizedHandler(handler: () => void): void {
   unauthorizedHandler = handler
 }
+/**
+ * 2026-09-09 (human: "ตอนนี้ session หมดอายุ ไม่เด้งไปที่ login").
+ *
+ * 419 counts, and it is the one that was actually happening.
+ *
+ * This console authenticates with a Laravel SESSION COOKIE, and the CSRF
+ * token is derived from that session. When the session times out, a GET
+ * answers 401 — handled since the original fix — but a POST/PUT/DELETE
+ * answers **419 CSRF token mismatch** before authentication is even reached.
+ * So browsing after an expiry bounced correctly and SAVING did not: the admin
+ * got a raw "(419)" over a form still full of their work, with no way to tell
+ * that the only thing wrong was that they had been signed out.
+ *
+ * That is also why this was the complaint about saving rather than about
+ * reading, and why it looked intermittent.
+ */
 function notifyIfUnauthorized(path: string, status: number): void {
-  if (status === 401 && path !== '/me') {
+  if ((status === 401 || status === 419) && path !== '/me') {
     unauthorizedHandler?.()
   }
 }

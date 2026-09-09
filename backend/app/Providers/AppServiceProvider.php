@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Services\Academy\LessonAccessGate;
 use App\Services\Authorization\PermissionResolver;
 use App\Services\Platform\MailSettingsService;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
@@ -43,6 +44,24 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        /*
+         * 2026-09-09 (human: "ทำให้อายุการ Login นานกว่านี้แบบ Facebook หรือ
+         * YouTube ทำอย่างไร") — how long "จดจำฉัน" lasts in the ADMIN console.
+         *
+         * Laravel's default remember-me cookie lives five years. That is a
+         * reasonable default for a forum and the wrong one for a console that
+         * can see every company's money and every agent's bank details: a
+         * laptop left in a taxi stays signed in until 2031.
+         *
+         * Seven days, and it slides — Laravel reissues the recaller on each
+         * use — so an admin who works every week never types a password again,
+         * and one who stops is signed out a week later.
+         *
+         * The box left UNTICKED is governed by SESSION_LIFETIME instead
+         * (config/session.php), which is the short, per-sitting number.
+         */
+        Auth::guard('web')->setRememberDuration(60 * 24 * 7);
+
         /*
          * ══ NO LISTENERS ARE REGISTERED HERE ANY MORE (2026-09-05) ══
          *
