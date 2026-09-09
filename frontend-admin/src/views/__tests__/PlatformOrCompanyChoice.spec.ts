@@ -72,6 +72,19 @@ import ProductCatalogView from '../ProductCatalogView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
+/**
+ * `noUncheckedIndexedAccess` makes every findAll()[n] possibly-undefined, and
+ * `!` would trade a compile error for "Cannot read properties of undefined"
+ * somewhere downstream. This names the control that went missing instead —
+ * which is the whole failure message when a selector stops matching.
+ */
+function nth<T>(items: T[], index: number, what: string): T {
+  const item = items[index]
+  if (item === undefined) throw new Error(`ไม่พบ${what}ลำดับที่ ${index + 1} (พบทั้งหมด ${items.length})`)
+
+  return item
+}
+
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 const THAI_LIFE = { id: 1, name: 'Thai Life', slug: 'thai-life' }
 
@@ -157,12 +170,12 @@ type Wrapper = Awaited<ReturnType<typeof mountProductForm>>
  */
 async function fillBasics(w: Wrapper, brandId: number, categoryId: number) {
   const typed = w.findAll('input').filter((i) => !['radio', 'checkbox', 'file'].includes(i.attributes('type') ?? ''))
-  await typed[0].setValue('แพ็กเกจทดสอบ')
-  await typed[1].setValue('8900')
+  await nth(typed, 0, 'ช่องกรอกข้อความ').setValue('แพ็กเกจทดสอบ')
+  await nth(typed, 1, 'ช่องกรอกข้อความ').setValue('8900')
 
   const selects = w.findAll('select')
-  await selects[0].setValue(String(brandId))
-  await selects[1].setValue(String(categoryId))
+  await nth(selects, 0, 'ช่องเลือก').setValue(String(brandId))
+  await nth(selects, 1, 'ช่องเลือก').setValue(String(categoryId))
 }
 
 const submitProduct = async (w: Wrapper) => {
@@ -204,7 +217,7 @@ describe('ProductEditView — whose product is this?', () => {
     await submitProduct(w)
 
     expect(post).toHaveBeenCalledTimes(1)
-    const body = post.mock.calls[0][1] as Record<string, unknown>
+    const [, body] = post.mock.calls[0] as [string, Record<string, unknown>]
     expect(body.company_id).toBe(AIA.id)
     expect(body).not.toHaveProperty('is_platform')
   })
@@ -217,12 +230,11 @@ describe('ProductEditView — whose product is this?', () => {
 
     await fillBasics(w, PLATFORM_BRAND.id, PLATFORM_CATEGORY.id)
     // A platform product has nothing to inherit a plan type from.
-    const planSelect = w.findAll('select')[2]
-    await planSelect.setValue('unilevel')
+    await nth(w.findAll('select'), 2, 'ช่องเลือก').setValue('unilevel')
     await submitProduct(w)
 
     expect(post).toHaveBeenCalledTimes(1)
-    const body = post.mock.calls[0][1] as Record<string, unknown>
+    const [, body] = post.mock.calls[0] as [string, Record<string, unknown>]
     expect(body.is_platform).toBe(true)
     expect(body).not.toHaveProperty('company_id')
   })
@@ -238,11 +250,11 @@ describe('ProductEditView — whose product is this?', () => {
     await w.find('[data-test="owner-platform"]').setValue()
     await flushPromises()
 
-    const brandValues = w.findAll('select')[0].findAll('option').map((o) => o.attributes('value'))
+    const brandValues = nth(w.findAll('select'), 0, 'ช่องเลือก').findAll('option').map((o) => o.attributes('value'))
     expect(brandValues).toContain(String(PLATFORM_BRAND.id))
     expect(brandValues).not.toContain(String(OWN_BRAND.id))
 
-    const categoryValues = w.findAll('select')[1].findAll('option').map((o) => o.attributes('value'))
+    const categoryValues = nth(w.findAll('select'), 1, 'ช่องเลือก').findAll('option').map((o) => o.attributes('value'))
     expect(categoryValues).toContain(String(PLATFORM_CATEGORY.id))
     expect(categoryValues).not.toContain(String(OWN_CATEGORY.id))
   })
@@ -367,7 +379,7 @@ describe('ProductCatalogView — whose brand is this?', () => {
     await submitRefForm(w, 'De La Lita')
 
     expect(postForm).toHaveBeenCalledTimes(1)
-    const fd = postForm.mock.calls[0][1] as FormData
+    const [, fd] = postForm.mock.calls[0] as [string, FormData]
     expect(fd.get('is_platform')).toBe('1')
     expect(fd.get('company_id')).toBeNull()
   })
@@ -380,7 +392,7 @@ describe('ProductCatalogView — whose brand is this?', () => {
     await submitRefForm(w, 'AIA Only')
 
     expect(postForm).toHaveBeenCalledTimes(1)
-    const fd = postForm.mock.calls[0][1] as FormData
+    const [, fd] = postForm.mock.calls[0] as [string, FormData]
     expect(fd.get('company_id')).toBe(String(AIA.id))
     expect(fd.get('is_platform')).toBeNull()
   })
@@ -412,7 +424,7 @@ describe('ProductCatalogView — whose category is this?', () => {
     await submitRefForm(w, 'Life Style')
 
     expect(post).toHaveBeenCalledTimes(1)
-    const body = post.mock.calls[0][1] as Record<string, unknown>
+    const [, body] = post.mock.calls[0] as [string, Record<string, unknown>]
     expect(body.is_platform).toBe(true)
     expect(body).not.toHaveProperty('company_id')
   })
@@ -423,7 +435,7 @@ describe('ProductCatalogView — whose category is this?', () => {
     await submitRefForm(w, 'AIA Cat')
 
     expect(post).toHaveBeenCalledTimes(1)
-    const body = post.mock.calls[0][1] as Record<string, unknown>
+    const [, body] = post.mock.calls[0] as [string, Record<string, unknown>]
     expect(body.company_id).toBe(AIA.id)
     expect(body).not.toHaveProperty('is_platform')
   })
