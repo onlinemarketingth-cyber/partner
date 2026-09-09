@@ -4,12 +4,15 @@ namespace App\Http\Requests\Catalog;
 
 use App\Enums\StorefrontBannerLinkType;
 use App\Enums\StorefrontBannerPlacement;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Support\StorefrontBannerInternalPaths;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateStorefrontBannerRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('update', $this->route('storefront_banner'));
@@ -39,7 +42,7 @@ class UpdateStorefrontBannerRequest extends FormRequest
                 $linkTypeProvided ? Rule::requiredIf(fn () => $linkType === 'product') : 'sometimes',
                 $linkTypeProvided ? Rule::prohibitedIf(fn () => $linkType !== 'product') : 'nullable',
                 'integer',
-                Rule::exists('products', 'id')->where(fn ($query) => $query->where('company_id', $companyId)),
+                $this->sellableProductRule($companyId),
             ],
             'external_url' => [
                 $linkTypeProvided ? Rule::requiredIf(fn () => $linkType === 'url') : 'sometimes',

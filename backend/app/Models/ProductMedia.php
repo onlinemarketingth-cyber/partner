@@ -6,7 +6,7 @@ use App\Enums\MediaProcessingStatus;
 use App\Enums\MediaSourceType;
 use App\Enums\ProductMediaPurpose;
 use App\Enums\ProductMediaType;
-use App\Models\Scopes\TenantScope;
+use App\Models\Scopes\SharedOrTenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -20,9 +20,19 @@ class ProductMedia extends Model
 {
     use HasFactory;
 
+    /*
+     * 2026-09-09 — SharedOrTenantScope, not TenantScope.
+     *
+     * `company_id` is nullable here now: a platform-owned product (ADR-040)
+     * has no company, and neither does its content. Plain TenantScope
+     * (`where company_id = :own`) silently excludes NULL, so a Company Admin
+     * would see the shared product with an empty gallery and every one of its
+     * rows would 404 through route-model binding. Company A still cannot see
+     * company B's — that guarantee is unchanged.
+     */
     protected static function booted(): void
     {
-        static::addGlobalScope(new TenantScope);
+        static::addGlobalScope(new SharedOrTenantScope);
     }
 
     protected $fillable = [

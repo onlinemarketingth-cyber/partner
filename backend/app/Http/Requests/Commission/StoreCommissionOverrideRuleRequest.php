@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Commission;
 
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\CommissionOverrideRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -26,6 +27,8 @@ use Illuminate\Validation\Rule;
 // simply omit it.
 class StoreCommissionOverrideRuleRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('create', CommissionOverrideRule::class);
@@ -48,7 +51,7 @@ class StoreCommissionOverrideRuleRequest extends FormRequest
             'manager_cert_tier_id' => ['nullable', 'integer', 'exists:cert_tiers,id'],
             'product_id' => [
                 'nullable', 'integer',
-                Rule::exists('products', 'id')->where('company_id', $this->effectiveCompanyId()),
+                $this->configurableProductRule($this->effectiveCompanyId()),
                 Rule::prohibitedIf(fn () => $this->filled('product_category_id')),
             ],
             'product_category_id' => [

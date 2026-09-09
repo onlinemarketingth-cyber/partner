@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Referral;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\AffiliateLink;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -12,6 +13,8 @@ use Illuminate\Validation\Rule;
 // Admin may mint on behalf of a different agent.
 class StoreAffiliateLinkRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('create', AffiliateLink::class);
@@ -32,7 +35,7 @@ class StoreAffiliateLinkRequest extends FormRequest
             'product_id' => [
                 'nullable',
                 'integer',
-                Rule::exists('products', 'id')->where('company_id', $this->user()->company_id),
+                $this->sellableProductRule($this->user()->company_id),
             ],
         ];
     }

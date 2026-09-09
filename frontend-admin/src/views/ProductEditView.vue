@@ -114,6 +114,24 @@ const isPlatformProduct = computed(() =>
   isCreateMode.value ? isSuperAdmin.value && createAsPlatform.value : product.value?.company_id === null,
 )
 
+/**
+ * 2026-09-09 — the company a PER-COMPANY decision about this product belongs
+ * to: its recommendation pin, and its commission rates.
+ *
+ * These are not the product's own data. A shared product (ADR-040) has no
+ * company, but a pin and a commission rate always do — each company pins it on
+ * its OWN storefront and pays its OWN rates. Sending `product.company_id` here
+ * worked only while every product had an owner; on a promoted product it sends
+ * null and the save comes back "The company id field is required."
+ *
+ * So: the product's own company when it has one, otherwise whichever company
+ * the header is scoped to — which is the company the admin is looking at, and
+ * the only company these rows could sensibly belong to.
+ */
+const decisionCompanyId = computed<number | null>(
+  () => product.value?.company_id ?? selectedCompanyId.value,
+)
+
 interface Brand {
   id: number
   name: string
@@ -1657,10 +1675,10 @@ async function savePin() {
         is_active: true,
         // StoreProductRecommendationPinRequest requires company_id for
         // Super Admin (prohibited for everyone else) — same shape as
-        // StoreProductRequest/saveBasics() above. product.value.company_id
-        // is always the pin's own target company (this product's owner),
-        // never the actor's — the exact company this pin must belong to.
-        ...(isSuperAdmin.value ? { company_id: product.value.company_id } : {}),
+        // StoreProductRequest/saveBasics() above. A pin belongs to ONE
+        // company's storefront even when the product it points at belongs to
+        // all of them, so this is decisionCompanyId, not the product's own.
+        ...(isSuperAdmin.value ? { company_id: decisionCompanyId.value } : {}),
       })
       recommendationPins.value = [...recommendationPins.value, res.data]
     }
@@ -1780,11 +1798,11 @@ async function submitRule() {
       // (Company Admin's own company is inferred server-side) — same
       // pattern as saveBasics()/savePin() above. Was missing here; a Super
       // Admin saving a rate on the merged commission tab hit "The company
-      // id field is required." because this POST never sent it. This is
-      // the product's OWN company (edit-mode only — Tab 2 doesn't render
-      // in create mode), not selectedCompanyId (that's only meaningful
-      // pre-creation).
-      ...(isSuperAdmin.value ? { company_id: product.value.company_id } : {}),
+      // id field is required." because this POST never sent it — and hit it
+      // again on 2026-09-09 for a different reason, once the product's own
+      // company could legitimately be null. A commission rate is one
+      // company's decision even about a shared product, so decisionCompanyId.
+      ...(isSuperAdmin.value ? { company_id: decisionCompanyId.value } : {}),
     })
     // TASK-197 §2.2 — the FIRST rule for a product sets its
     // commission_rate_type server-side as a side effect. Patch it
@@ -2150,9 +2168,24 @@ function goToVideoSettings() {
                 </span>
               </label>
             </div>
-            <p v-if="createAsPlatform" class="mt-2 text-[11px] font-bold text-amber-700">
-              สินค้ากลางเลือกได้เฉพาะแบรนด์และหมวดหมู่ที่เป็น "ของกลาง" · ต้องระบุรูปแบบค่าคอมมิชชั่นเอง (ไม่มีบริษัทให้สืบทอด) · ไม่ต้องเลือกเส้นทางการขาย
-            </p>
+            <div v-if="createAsPlatform" class="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-200">
+              <p class="text-[11px] font-bold text-amber-800">เลือกแบบนี้แล้ว ช่องข้างล่างจะเปลี่ยนไป 3 อย่าง</p>
+              <ul class="mt-1.5 space-y-1 text-[11px] leading-relaxed text-amber-800">
+                <li>
+                  <span class="font-bold">แบรนด์ และ หมวดหมู่</span> —
+                  จะเหลือให้เลือกเฉพาะรายการที่ทุกบริษัทใช้ร่วมกัน
+                  เพราะถ้าหยิบรายการของบริษัทใดบริษัทหนึ่งมาใส่ บริษัทอื่นจะเห็นชื่อนั้นติดไปด้วย
+                </li>
+                <li>
+                  <span class="font-bold">รูปแบบค่าคอมมิชชั่น</span> —
+                  ต้องเลือกเอง เพราะสินค้านี้ไม่ได้อยู่ใต้บริษัทไหน จึงไม่มีค่าของบริษัทมาเติมให้อัตโนมัติ
+                </li>
+                <li>
+                  <span class="font-bold">เส้นทางการขาย (Pipeline)</span> —
+                  ไม่ต้องเลือก ระบบจะใช้ของบริษัทที่ขายสินค้านั้นให้เอง
+                </li>
+              </ul>
+            </div>
           </div>
           <!-- Edit mode — the same fact, read-only. TASK-208: changing it
                means changing the header scope, which also re-scopes the
@@ -2268,7 +2301,7 @@ function goToVideoSettings() {
               <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }}{{ isPlatformProduct ? '' : ' (กำหนดเฉพาะสินค้านี้)' }}</option>
             </select>
             <p v-if="isPlatformProduct" class="mt-1 text-xs text-amber-600">
-              สินค้ากลางไม่มีบริษัทให้สืบทอดค่า จึงต้องเลือกรูปแบบค่าคอมมิชชั่นเองที่นี่
+              สินค้ากลางต้องเลือกเอง เพราะไม่ได้อยู่ใต้บริษัทไหน จึงไม่มีค่าของบริษัทมาเติมให้อัตโนมัติ
             </p>
             <p v-if="product" class="mt-1 text-xs text-slate-400">
               ค่าที่ใช้จริงตอนนี้: <span class="font-bold text-slate-600">{{ planTypeLabels[product.effective_plan_type] }}</span>

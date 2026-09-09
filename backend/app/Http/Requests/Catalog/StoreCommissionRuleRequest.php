@@ -5,7 +5,9 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\CommissionRateType;
 use App\Http\Requests\Catalog\Concerns\ValidatesCommissionRateCap;
 use App\Http\Requests\Catalog\Concerns\ValidatesCommissionRateTypeConsistency;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\CommissionRule;
+use App\Models\Product;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -35,6 +37,7 @@ class StoreCommissionRuleRequest extends FormRequest
 {
     use ValidatesCommissionRateCap;
     use ValidatesCommissionRateTypeConsistency;
+    use ValidatesProductOwnership;
 
     public function authorize(): bool
     {
@@ -48,7 +51,7 @@ class StoreCommissionRuleRequest extends FormRequest
         // for a product that is linked to a shared catalog item. Company-
         // wide (no product_id) and category-scoped rules are unaffected.
         if (! $this->user()->isSuperAdmin() && $this->filled('product_id')) {
-            $product = \App\Models\Product::find($this->integer('product_id'));
+            $product = Product::find($this->integer('product_id'));
 
             if ($product?->catalog_item_id !== null) {
                 return false;
@@ -77,7 +80,7 @@ class StoreCommissionRuleRequest extends FormRequest
             'cert_tier_id' => ['nullable', 'integer', 'exists:cert_tiers,id'],
             'product_id' => [
                 'nullable', 'integer',
-                Rule::exists('products', 'id')->where('company_id', $companyId),
+                $this->configurableProductRule($companyId),
                 Rule::prohibitedIf(fn () => $this->filled('product_category_id')),
             ],
             'product_category_id' => [

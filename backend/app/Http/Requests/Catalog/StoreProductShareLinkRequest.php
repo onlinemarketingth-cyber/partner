@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\ProductShareLink;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -12,6 +13,8 @@ use Illuminate\Validation\Rule;
 // behalf of a different agent.
 class StoreProductShareLinkRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('create', ProductShareLink::class);
@@ -32,7 +35,7 @@ class StoreProductShareLinkRequest extends FormRequest
             'product_id' => [
                 'required',
                 'integer',
-                Rule::exists('products', 'id')->where('company_id', $this->user()->company_id),
+                $this->sellableProductRule($this->user()->company_id),
             ],
         ];
     }

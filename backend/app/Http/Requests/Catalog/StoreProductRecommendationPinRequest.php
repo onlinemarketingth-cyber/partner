@@ -2,14 +2,18 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Models\ProductRecommendationPin;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class StoreProductRecommendationPinRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\ProductRecommendationPin::class);
+        return $this->user()->can('create', ProductRecommendationPin::class);
     }
 
     /**
@@ -31,7 +35,7 @@ class StoreProductRecommendationPinRequest extends FormRequest
             'product_id' => [
                 'required',
                 'integer',
-                Rule::exists('products', 'id')->where(fn ($query) => $query->where('company_id', $companyId)),
+                $this->sellableProductRule($companyId),
                 // DB-level unique(company_id, product_id) is the real
                 // guard; this mirrors it at the validation layer so a
                 // duplicate pin comes back as a normal 422 rather than a

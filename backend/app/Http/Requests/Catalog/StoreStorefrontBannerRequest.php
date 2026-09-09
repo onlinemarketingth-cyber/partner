@@ -4,15 +4,19 @@ namespace App\Http\Requests\Catalog;
 
 use App\Enums\StorefrontBannerLinkType;
 use App\Enums\StorefrontBannerPlacement;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Models\StorefrontBanner;
 use App\Support\StorefrontBannerInternalPaths;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class StoreStorefrontBannerRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\StorefrontBanner::class);
+        return $this->user()->can('create', StorefrontBanner::class);
     }
 
     /**
@@ -45,7 +49,7 @@ class StoreStorefrontBannerRequest extends FormRequest
                 Rule::requiredIf(fn () => $linkType === 'product'),
                 Rule::prohibitedIf(fn () => $linkType !== 'product'),
                 'integer',
-                Rule::exists('products', 'id')->where(fn ($query) => $query->where('company_id', $companyId)),
+                $this->sellableProductRule($companyId),
             ],
             'external_url' => [
                 Rule::requiredIf(fn () => $linkType === 'url'),

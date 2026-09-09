@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\Academy;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Models\Module;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -10,9 +12,11 @@ use Illuminate\Validation\Rule;
 // URL, etc.) moved to StoreModuleLessonRequest.
 class StoreModuleRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\Module::class);
+        return $this->user()->can('create', Module::class);
     }
 
     protected function effectiveCompanyId(): ?int
@@ -32,7 +36,7 @@ class StoreModuleRequest extends FormRequest
         return [
             'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
             'cert_tier_id' => ['required', 'integer', 'exists:cert_tiers,id'],
-            'product_id' => ['nullable', 'integer', Rule::exists('products', 'id')->where('company_id', $companyId)],
+            'product_id' => ['nullable', 'integer', $this->configurableProductRule($companyId)],
             'title' => ['required', 'string', 'max:255'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_published' => ['sometimes', 'boolean'],

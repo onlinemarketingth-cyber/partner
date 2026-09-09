@@ -9,6 +9,7 @@ use App\Jobs\GeneratePdfThumbnail;
 use App\Models\Product;
 use App\Models\ProductSpecAttachment;
 use App\Models\User;
+use App\Support\Media\OwnerDirectory;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -43,7 +44,7 @@ class ProductSpecAttachmentService
             $attributes['embed_url'] = $data['embed_url'];
         } else {
             $attributes['file_path'] = $file->storeAs(
-                "product-spec-attachments/{$product->company_id}/{$product->id}",
+                'product-spec-attachments/'.OwnerDirectory::for($product->company_id)."/{$product->id}",
                 StoredFileName::random($file),
                 self::DISK,
             );

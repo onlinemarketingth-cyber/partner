@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Referral;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\Client;
+use App\Models\Referral;
 use App\Services\Commission\CommissionSplitSettingService;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
@@ -15,9 +17,11 @@ use Illuminate\Validation\Rule;
 // from the Client/Product records.
 class StoreReferralRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\Referral::class);
+        return $this->user()->can('create', Referral::class);
     }
 
     /**
@@ -34,7 +38,7 @@ class StoreReferralRequest extends FormRequest
             'product_id' => [
                 'required',
                 'integer',
-                Rule::exists('products', 'id')->where('company_id', $this->user()->company_id),
+                $this->sellableProductRule($this->user()->company_id),
             ],
             // OPTIONAL since TASK-211 (human ruling 2026-08-19: "คุณเอา *
             // validate ออกจากสาขา"). This REVERSES the TASK-134a-era note

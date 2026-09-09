@@ -2,13 +2,16 @@
 
 namespace App\Http\Requests\Academy;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Models\Module;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 // ADR-009 — Module is now a "Section": all content-item fields
 // (previously here) moved to UpdateModuleLessonRequest.
 class UpdateModuleRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('update', $this->route('module'));
@@ -19,12 +22,12 @@ class UpdateModuleRequest extends FormRequest
      */
     public function rules(): array
     {
-        /** @var \App\Models\Module $module */
+        /** @var Module $module */
         $module = $this->route('module');
 
         return [
             'cert_tier_id' => ['sometimes', 'required', 'integer', 'exists:cert_tiers,id'],
-            'product_id' => ['nullable', 'integer', Rule::exists('products', 'id')->where('company_id', $module->company_id)],
+            'product_id' => ['nullable', 'integer', $this->configurableProductRule($module->company_id)],
             'title' => ['sometimes', 'required', 'string', 'max:255'],
             'sort_order' => ['sometimes', 'integer', 'min:0'],
             'is_published' => ['sometimes', 'boolean'],

@@ -2,9 +2,9 @@
 
 namespace App\Http\Requests\Public;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\AffiliateLink;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 /**
  * ADR-011 Section 4 (TASK-032) — the FIRST unauthenticated Form Request
@@ -41,6 +41,8 @@ use Illuminate\Validation\Rule;
  */
 class StoreAffiliateLeadRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return true;
@@ -67,7 +69,7 @@ class StoreAffiliateLeadRequest extends FormRequest
             'product_id' => [
                 $link && $link->product_id ? 'nullable' : 'required',
                 'integer',
-                $link ? Rule::exists('products', 'id')->where('company_id', $link->company_id) : 'integer',
+                $link ? $this->sellableProductRule($link->company_id) : 'integer',
             ],
             // PDPA (Section 6) — an anonymous public visitor must
             // explicitly consent before their (potentially health-

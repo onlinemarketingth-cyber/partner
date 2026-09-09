@@ -2,11 +2,14 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateProductRecommendationPinRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('update', $this->route('product_recommendation_pin'));
@@ -26,7 +29,7 @@ class UpdateProductRecommendationPinRequest extends FormRequest
             'product_id' => [
                 'sometimes',
                 'integer',
-                Rule::exists('products', 'id')->where(fn ($query) => $query->where('company_id', $companyId)),
+                $this->sellableProductRule($companyId),
                 Rule::unique('product_recommendation_pins', 'product_id')
                     ->where(fn ($query) => $query->where('company_id', $companyId))
                     ->ignore($pin?->id),

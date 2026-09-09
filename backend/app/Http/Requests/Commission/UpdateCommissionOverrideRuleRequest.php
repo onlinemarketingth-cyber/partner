@@ -3,11 +3,14 @@
 namespace App\Http\Requests\Commission;
 
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateCommissionOverrideRuleRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+
     public function authorize(): bool
     {
         return $this->user()->can('update', $this->route('commission_override_rule'));
@@ -25,7 +28,7 @@ class UpdateCommissionOverrideRuleRequest extends FormRequest
         return [
             'product_id' => [
                 'sometimes', 'nullable', 'integer',
-                Rule::exists('products', 'id')->where('company_id', $companyId),
+                $this->configurableProductRule($companyId),
                 Rule::prohibitedIf(fn () => $this->filled('product_category_id')),
             ],
             'product_category_id' => [
