@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -16,6 +17,8 @@ use Illuminate\Validation\Rule;
 // own docblock).
 class UnlinkProductCatalogRequest extends FormRequest
 {
+    use Concerns\ValidatesProductTaxonomy;
+
     public function authorize(): bool
     {
         $product = $this->route('product');
@@ -30,7 +33,7 @@ class UnlinkProductCatalogRequest extends FormRequest
      */
     public function rules(): array
     {
-        /** @var \App\Models\Product $product */
+        /** @var Product $product */
         $product = $this->route('product');
         $companyId = $product->company_id;
 
@@ -38,8 +41,8 @@ class UnlinkProductCatalogRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             // BR-6 — scoped to the product's own company, exactly like
             // StoreProductRequest's brand_id/category_id rules.
-            'brand_id' => ['required', 'integer', Rule::exists('brands', 'id')->where('company_id', $companyId)],
-            'category_id' => ['required', 'integer', Rule::exists('product_categories', 'id')->where('company_id', $companyId)],
+            'brand_id' => ['required', 'integer', $this->taxonomyRule('brands', $companyId)],
+            'category_id' => ['required', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'description' => ['nullable', 'string'],
             'spec_description' => ['nullable', 'string'],
         ];

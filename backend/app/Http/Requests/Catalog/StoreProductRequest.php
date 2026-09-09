@@ -5,6 +5,7 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -13,9 +14,11 @@ use Illuminate\Validation\Rule;
 // (never trust the client to only submit its own tenant's IDs).
 class StoreProductRequest extends FormRequest
 {
+    use Concerns\ValidatesProductTaxonomy;
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\Product::class);
+        return $this->user()->can('create', Product::class);
     }
 
     /**
@@ -39,8 +42,10 @@ class StoreProductRequest extends FormRequest
 
         return [
             'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
-            'brand_id' => ['required', 'integer', Rule::exists('brands', 'id')->where('company_id', $companyId)],
-            'category_id' => ['required', 'integer', Rule::exists('product_categories', 'id')->where('company_id', $companyId)],
+            // Own or platform-owned — see ValidatesProductTaxonomy for why an
+            // exact company match stopped being the right question (ADR-040).
+            'brand_id' => ['required', 'integer', $this->taxonomyRule('brands', $companyId)],
+            'category_id' => ['required', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['required', 'string', 'max:255'],
             'price_satang' => ['required', 'integer', 'min:0'], // BR-3 — never accept a float
             'description' => ['nullable', 'string'],

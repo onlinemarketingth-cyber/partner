@@ -5,11 +5,14 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateProductRequest extends FormRequest
 {
+    use Concerns\ValidatesProductTaxonomy;
+
     public function authorize(): bool
     {
         return $this->user()->can('update', $this->route('product'));
@@ -20,13 +23,13 @@ class UpdateProductRequest extends FormRequest
      */
     public function rules(): array
     {
-        /** @var \App\Models\Product $product */
+        /** @var Product $product */
         $product = $this->route('product');
         $companyId = $product->company_id;
 
         return [
-            'brand_id' => ['sometimes', 'integer', Rule::exists('brands', 'id')->where('company_id', $companyId)],
-            'category_id' => ['sometimes', 'integer', Rule::exists('product_categories', 'id')->where('company_id', $companyId)],
+            'brand_id' => ['sometimes', 'integer', $this->taxonomyRule('brands', $companyId)],
+            'category_id' => ['sometimes', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'price_satang' => ['sometimes', 'required', 'integer', 'min:0'],
             'description' => ['nullable', 'string'],
