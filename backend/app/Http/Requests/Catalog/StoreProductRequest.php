@@ -14,7 +14,13 @@ use Illuminate\Validation\Rule;
 // (never trust the client to only submit its own tenant's IDs).
 class StoreProductRequest extends FormRequest
 {
+    use Concerns\ChoosesPlatformOrCompany;
     use Concerns\ValidatesProductTaxonomy;
+
+    protected function prepareForValidation(): void
+    {
+        $this->stripPlatformFlagUnlessSuperAdmin();
+    }
 
     public function authorize(): bool
     {
@@ -28,9 +34,7 @@ class StoreProductRequest extends FormRequest
      */
     protected function effectiveCompanyId(): ?int
     {
-        return $this->user()->isSuperAdmin()
-            ? $this->integer('company_id') ?: null
-            : $this->user()->company_id;
+        return $this->ownerCompanyId();
     }
 
     /**
@@ -40,10 +44,18 @@ class StoreProductRequest extends FormRequest
     {
         $companyId = $this->effectiveCompanyId();
 
-        return [
-            'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
-            // Own or platform-owned — see ValidatesProductTaxonomy for why an
-            // exact company match stopped being the right question (ADR-040).
+        $platform = $this->wantsPlatformRow();
+
+        return $this->ownershipRules() + [
+            /*
+             * Own or platform-owned — see ValidatesProductTaxonomy for why an
+             * exact company match stopped being the right question (ADR-040).
+             *
+             * For a PLATFORM product $companyId is null and the same rule
+             * collapses to "platform rows only", which is the invariant a
+             * shared product needs: it belongs to nobody, so it cannot carry
+             * one company's brand.
+             */
             'brand_id' => ['required', 'integer', $this->taxonomyRule('brands', $companyId)],
             'category_id' => ['required', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['required', 'string', 'max:255'],
@@ -54,7 +66,23 @@ class StoreProductRequest extends FormRequest
             // ADR-011/TASK-027 — nullable = inherit the company's plan
             // type (Product::effectivePlanType()). Omitting the field
             // entirely also means "inherit", same as explicit null.
-            'commission_plan_type' => ['nullable', Rule::enum(CommissionPlanType::class)],
+            /*
+             * REQUIRED for a platform product, and only for one.
+             *
+             * A company product with no plan type inherits its company's.
+             * A platform product has no company to inherit from, so
+             * Product::effectivePlanType() throws rather than guess — the plan
+             * type decides HOW commission is calculated, and a wrong guess
+             * lands in an immutable ledger (BR-2/BR-4). Asking here is the
+             * cheapest place to keep that "unreachable" actually unreachable;
+             * catalog:promote-products writes the value down for the same
+             * reason.
+             */
+            'commission_plan_type' => [
+                Rule::requiredIf(fn () => $platform),
+                'nullable',
+                Rule::enum(CommissionPlanType::class),
+            ],
             // TASK-194 §3.1/§3.4 — nullable/omitted = 'additive' at
             // calculation time (Product::effectiveAffiliateOverrideMode()).
             // Only meaningful when effectivePlanType() is Affiliate.
@@ -70,7 +98,16 @@ class StoreProductRequest extends FormRequest
             // at another tenant's journey (ADR-026 §4 "validated, not
             // assumed"). PipelineTemplateResolver re-checks this at read
             // time too, since a Request is not the only write path.
-            'pipeline_template_id' => ['sometimes', 'nullable', 'integer', Rule::exists('pipeline_templates', 'id')->where('company_id', $companyId)],
+            /*
+             * A pipeline template belongs to ONE company, so a shared product
+             * cannot carry one — the journey resolves per company instead
+             * (ADR-026 §3.3), which is the right answer for every company
+             * including the one that first asked for the product. Same
+             * clearing catalog:promote-products does.
+             */
+            'pipeline_template_id' => $platform
+                ? ['sometimes', 'nullable', 'prohibited']
+                : ['sometimes', 'nullable', 'integer', Rule::exists('pipeline_templates', 'id')->where('company_id', $companyId)],
             // ADR-033 (TASK-189) §2.3/§2.5 — BR-7 admin-editable, never
             // hardcoded. Nullable/omitted = unlimited quota / never
             // expires / no shipping needed. Snapshotted onto

@@ -4,7 +4,6 @@ namespace App\Http\Requests\Catalog;
 
 use App\Models\Brand;
 use Illuminate\Foundation\Http\FormRequest;
-use Illuminate\Validation\Rule;
 
 // Section 6: Form Requests validate every input, never trust the client.
 // company_id is deliberately NOT a validated field here — it's injected
@@ -12,6 +11,13 @@ use Illuminate\Validation\Rule;
 // (or, for Super Admin only, an explicit company_id — see the Service).
 class StoreBrandRequest extends FormRequest
 {
+    use Concerns\ChoosesPlatformOrCompany;
+
+    protected function prepareForValidation(): void
+    {
+        $this->stripPlatformFlagUnlessSuperAdmin();
+    }
+
     public function authorize(): bool
     {
         return $this->user()->can('create', Brand::class);
@@ -22,8 +28,7 @@ class StoreBrandRequest extends FormRequest
      */
     public function rules(): array
     {
-        return [
-            'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
+        return $this->ownershipRules() + [
             'name' => ['required', 'string', 'max:255'],
             'logo_path' => ['nullable', 'string', 'max:255'],
             // TASK-205 (human, 2026-08-19: "ผมต้องการเฉพาะแบรนด์มีการ upload

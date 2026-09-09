@@ -317,6 +317,23 @@ const savingBrand = ref(false)
 const brandCompanyIds = ref<number[]>([])
 const categoryCompanyIds = ref<number[]>([])
 
+/*
+ * 2026-09-09 (human: "ทำแบบเดียวกันกับทางแบรนด์ และหมวดหมู่").
+ *
+ * The tick boxes above answer "which companies get a row of their own". They
+ * cannot express the third answer ADR-040 introduced: ONE row, owned by the
+ * platform (`company_id NULL`), that every company may use. Reads have
+ * understood that since TASK-253 — BrandController::index already returns
+ * platform rows to every company — but nothing on any screen could create one,
+ * so the only source of ของกลาง taxonomy was `catalog:promote-products`.
+ *
+ * Deliberately a radio pair rather than an extra "ของกลาง" tick in the company
+ * list: it is not one more company. Ticking it alongside two companies would
+ * mean "shared with everyone AND owned by these two", which is not a thing.
+ */
+const brandCreateAsPlatform = ref(false)
+const categoryCreateAsPlatform = ref(false)
+
 /**
  * ── TASK-205 — brand logo upload (human, 2026-08-19: "ผมต้องการเฉพาะแบรนด์
  * มีการ upload รูปแบรนด์ได้" — brands only, categories keep their icon
@@ -383,11 +400,14 @@ async function onBrandLogoChange(e: Event, which: 'create' | 'edit'): Promise<vo
 }
 
 /** Multipart body for create — brands always post as FormData now, file or not. */
-function buildBrandCreateFormData(companyId: number | null, file: File | null, isActive = true): FormData {
+function buildBrandCreateFormData(companyId: number | null, file: File | null, isActive = true, platform = false): FormData {
   const fd = new FormData()
   fd.append('name', brandForm.value.name)
   fd.append('is_active', isActive ? '1' : '0')
-  if (companyId !== null) fd.append('company_id', String(companyId))
+  // is_platform is sent INSTEAD of company_id, never alongside it —
+  // StoreBrandRequest reads exactly one of them (ChoosesPlatformOrCompany).
+  if (platform) fd.append('is_platform', '1')
+  else if (companyId !== null) fd.append('company_id', String(companyId))
   if (file) fd.append('logo', file)
 
   return fd
@@ -404,9 +424,12 @@ function buildBrandCreateFormData(companyId: number | null, file: File | null, i
 async function createForEachCompany(
   companyIds: number[],
   post: (companyId: number | null) => Promise<unknown>,
+  platform = false,
 ): Promise<string> {
-  // Company Admin: one call, no company_id — the Service infers it.
-  const targets: (number | null)[] = isSuperAdmin.value ? companyIds : [null]
+  // A platform row is ONE row for everybody, so it is one POST with no
+  // company at all — the opposite of the fan-out this function exists for.
+  // Company Admin: also one call, no company_id — the Service infers it.
+  const targets: (number | null)[] = platform || !isSuperAdmin.value ? [null] : companyIds
   const failed: string[] = []
 
   for (const companyId of targets) {
@@ -456,7 +479,9 @@ function saveFailureMessage(e: unknown): string {
 }
 
 async function submitBrand() {
-  if (isSuperAdmin.value && !brandCompanyIds.value.length) {
+  // A แบรนด์กลาง has no companies to tick — the guard only applies to the
+  // per-company branch.
+  if (isSuperAdmin.value && !brandCreateAsPlatform.value && !brandCompanyIds.value.length) {
     brandFormError.value = 'ติ๊กเลือกอย่างน้อย 1 บริษัทก่อนบันทึก'
     return
   }
@@ -466,8 +491,12 @@ async function submitBrand() {
     // TASK-205 — multipart so the same submit can carry the logo file. A
     // fresh FormData per company: the same brand mark is uploaded once per
     // company row, which is what "this brand exists in 3 companies" means.
-    const problem = await createForEachCompany(brandCompanyIds.value, (companyId) =>
-      api.postForm('/brands', buildBrandCreateFormData(companyId, brandLogoFile.value)))
+    const platform = isSuperAdmin.value && brandCreateAsPlatform.value
+    const problem = await createForEachCompany(
+      brandCompanyIds.value,
+      (companyId) => api.postForm('/brands', buildBrandCreateFormData(companyId, brandLogoFile.value, true, platform)),
+      platform,
+    )
 
     // Reload either way: on a partial failure the rows that DID save must
     // appear, or the admin re-creates them.
@@ -481,6 +510,7 @@ async function submitBrand() {
     }
 
     brandForm.value = { name: '' }
+    brandCreateAsPlatform.value = false
     resetBrandLogo('create')
     showBrandForm.value = false
   } finally {
@@ -498,20 +528,26 @@ const categoryForm = ref({ name: '', icon: '', sort_order: 0 })
 const categoryFormError = ref('')
 const savingCategory = ref(false)
 async function submitCategory() {
-  if (isSuperAdmin.value && !categoryCompanyIds.value.length) {
+  if (isSuperAdmin.value && !categoryCreateAsPlatform.value && !categoryCompanyIds.value.length) {
     categoryFormError.value = 'ติ๊กเลือกอย่างน้อย 1 บริษัทก่อนบันทึก'
     return
   }
   categoryFormError.value = ''
   savingCategory.value = true
   try {
-    const problem = await createForEachCompany(categoryCompanyIds.value, (companyId) =>
-      api.post('/product-categories', {
-        name: categoryForm.value.name,
-        sort_order: categoryForm.value.sort_order,
-        ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
-        ...(companyId === null ? {} : { company_id: companyId }),
-      }))
+    const platform = isSuperAdmin.value && categoryCreateAsPlatform.value
+    const problem = await createForEachCompany(
+      categoryCompanyIds.value,
+      (companyId) =>
+        api.post('/product-categories', {
+          name: categoryForm.value.name,
+          sort_order: categoryForm.value.sort_order,
+          ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
+          // Exactly one of the two, same contract as the brand form above.
+          ...(platform ? { is_platform: true } : companyId === null ? {} : { company_id: companyId }),
+        }),
+      platform,
+    )
 
     await loadAll()
 
@@ -521,6 +557,7 @@ async function submitCategory() {
     }
 
     categoryForm.value = { name: '', icon: '', sort_order: 0 }
+    categoryCreateAsPlatform.value = false
     showCategoryForm.value = false
   } finally {
     savingCategory.value = false
@@ -1888,8 +1925,37 @@ function toggleRefForm(): void {
           <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
           <input v-model="brandForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
         </div>
+        <!-- 2026-09-09 (human: "ทำแบบเดียวกันกับทางแบรนด์ และหมวดหมู่") —
+             the tick boxes below can only say WHICH COMPANIES get a row of
+             their own. ของกลาง is a different answer, not one more company,
+             so it is asked first and hides the tick list when chosen. -->
+        <div v-if="isSuperAdmin" class="rounded-lg border border-brand-100 bg-brand-50 p-3">
+          <p class="text-xs font-bold text-brand-700">บันทึกเป็น</p>
+          <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label
+              class="flex items-start gap-2 p-2.5 rounded-lg border bg-white cursor-pointer transition-colors"
+              :class="brandCreateAsPlatform ? 'border-slate-200' : 'border-brand-500 ring-2 ring-brand-100'"
+            >
+              <input v-model="brandCreateAsPlatform" type="radio" :value="false" data-test="brand-owner-company" class="mt-0.5 shrink-0" />
+              <span class="min-w-0">
+                <span class="block text-sm font-bold text-slate-800">แบรนด์ของบริษัท</span>
+                <span class="block mt-0.5 text-[11px] text-slate-500">สร้างแยกให้ทุกบริษัทที่ติ๊กไว้ (บริษัทละ 1 รายการ) · บริษัทอื่นไม่เห็น</span>
+              </span>
+            </label>
+            <label
+              class="flex items-start gap-2 p-2.5 rounded-lg border bg-white cursor-pointer transition-colors"
+              :class="brandCreateAsPlatform ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'"
+            >
+              <input v-model="brandCreateAsPlatform" type="radio" :value="true" data-test="brand-owner-platform" class="mt-0.5 shrink-0" />
+              <span class="min-w-0">
+                <span class="block text-sm font-bold text-slate-800">แบรนด์กลาง (ทุกบริษัทใช้ร่วมกัน)</span>
+                <span class="block mt-0.5 text-[11px] text-slate-500">รายการเดียว ทุกบริษัทเลือกใช้ได้ตอนเพิ่มสินค้า · แก้ชื่อหรือโลโก้ครั้งเดียว เปลี่ยนพร้อมกันทุกบริษัท</span>
+              </span>
+            </label>
+          </div>
+        </div>
         <CompanyMultiSelect
-          v-if="isSuperAdmin"
+          v-if="isSuperAdmin && !brandCreateAsPlatform"
           v-model="brandCompanyIds"
           :options="companyOptions"
           label="สร้างในบริษัท (เลือกได้หลายบริษัท)"
@@ -2045,8 +2111,35 @@ function toggleRefForm(): void {
           <label class="text-xs font-bold text-slate-500">ชื่อหมวดหมู่</label>
           <input v-model="categoryForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
         </div>
+        <!-- Same question, same shape as the brands tab one screen away:
+             two adjacent tabs behaving differently would be its own bug. -->
+        <div v-if="isSuperAdmin" class="rounded-lg border border-brand-100 bg-brand-50 p-3">
+          <p class="text-xs font-bold text-brand-700">บันทึกเป็น</p>
+          <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label
+              class="flex items-start gap-2 p-2.5 rounded-lg border bg-white cursor-pointer transition-colors"
+              :class="categoryCreateAsPlatform ? 'border-slate-200' : 'border-brand-500 ring-2 ring-brand-100'"
+            >
+              <input v-model="categoryCreateAsPlatform" type="radio" :value="false" data-test="category-owner-company" class="mt-0.5 shrink-0" />
+              <span class="min-w-0">
+                <span class="block text-sm font-bold text-slate-800">หมวดหมู่ของบริษัท</span>
+                <span class="block mt-0.5 text-[11px] text-slate-500">สร้างแยกให้ทุกบริษัทที่ติ๊กไว้ (บริษัทละ 1 รายการ) · บริษัทอื่นไม่เห็น</span>
+              </span>
+            </label>
+            <label
+              class="flex items-start gap-2 p-2.5 rounded-lg border bg-white cursor-pointer transition-colors"
+              :class="categoryCreateAsPlatform ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'"
+            >
+              <input v-model="categoryCreateAsPlatform" type="radio" :value="true" data-test="category-owner-platform" class="mt-0.5 shrink-0" />
+              <span class="min-w-0">
+                <span class="block text-sm font-bold text-slate-800">หมวดหมู่กลาง (ทุกบริษัทใช้ร่วมกัน)</span>
+                <span class="block mt-0.5 text-[11px] text-slate-500">รายการเดียว ทุกบริษัทเลือกใช้ได้ตอนเพิ่มสินค้า · แก้ครั้งเดียว เปลี่ยนพร้อมกันทุกบริษัท</span>
+              </span>
+            </label>
+          </div>
+        </div>
         <CompanyMultiSelect
-          v-if="isSuperAdmin"
+          v-if="isSuperAdmin && !categoryCreateAsPlatform"
           v-model="categoryCompanyIds"
           :options="companyOptions"
           label="สร้างในบริษัท (เลือกได้หลายบริษัท)"

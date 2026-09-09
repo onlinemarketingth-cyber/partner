@@ -2,15 +2,23 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Models\ProductCategory;
 use App\Support\CuratedIcons;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class StoreProductCategoryRequest extends FormRequest
 {
+    use Concerns\ChoosesPlatformOrCompany;
+
+    protected function prepareForValidation(): void
+    {
+        $this->stripPlatformFlagUnlessSuperAdmin();
+    }
+
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\ProductCategory::class);
+        return $this->user()->can('create', ProductCategory::class);
     }
 
     /**
@@ -20,9 +28,7 @@ class StoreProductCategoryRequest extends FormRequest
      */
     protected function effectiveCompanyId(): ?int
     {
-        return $this->user()->isSuperAdmin()
-            ? $this->integer('company_id') ?: null
-            : $this->user()->company_id;
+        return $this->ownerCompanyId();
     }
 
     /**
@@ -30,8 +36,7 @@ class StoreProductCategoryRequest extends FormRequest
      */
     public function rules(): array
     {
-        return [
-            'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
+        return $this->ownershipRules() + [
             'name' => ['required', 'string', 'max:255'],
             // TASK-068 / ADR-020 row 3 — same whitelist as UpdateProductCategoryRequest.
             'icon' => ['sometimes', 'nullable', Rule::in(CuratedIcons::WHITELIST)],

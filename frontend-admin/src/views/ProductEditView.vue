@@ -21,7 +21,7 @@
  * spec-attachments/commission/materials) only make sense once a product
  * id exists, so they're hidden entirely in create mode.
  */
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
@@ -91,6 +91,28 @@ const productCompanyName = computed<string | null>(() => {
 // fragile than inspecting route.params.id for the literal string 'new'.
 const isCreateMode = computed(() => !route.params.id)
 const productId = computed(() => (route.params.id ? Number(route.params.id) : null))
+
+/*
+ * 2026-09-09 (human: "Super admin เพิ่มสินค้าแล้วแต่ไม่มี Ui ตรงไหนแจ้งไว้ว่าจะ
+ * บันทึกลงเฉพาะ company หรือ ใช้เป็น product กลาง").
+ *
+ * ADR-040 gave `company_id NULL` a meaning — the platform owns the row and
+ * every company sells the same one — and every READ was taught it. The form
+ * was not: it could only ever make a row for one company, and it never said
+ * which. Until now the only thing on the whole system that could create a
+ * shared product was `catalog:promote-products`, a command run over SSH.
+ *
+ * CREATE ONLY. Moving an existing product between the two is not a form
+ * field: it changes who may sell it and whose ledger its commissions land in
+ * (BR-2/BR-4), so it stays with the command, which does it deliberately and
+ * leaves an audit trail.
+ */
+const createAsPlatform = ref(false)
+
+/** Is the row on screen the platform's, rather than one company's? */
+const isPlatformProduct = computed(() =>
+  isCreateMode.value ? isSuperAdmin.value && createAsPlatform.value : product.value?.company_id === null,
+)
 
 interface Brand {
   id: number
@@ -302,6 +324,34 @@ const savingBasics = ref(false)
 const product = ref<Product | null>(null)
 const brands = ref<Brand[]>([])
 const categories = ref<ProductCategory[]>([])
+
+/*
+ * A platform product cannot wear one company's brand — every other company
+ * would see that name on a product they sell — so the pickers narrow to
+ * ของกลาง rows the moment สินค้ากลาง is chosen. ValidatesProductTaxonomy
+ * enforces exactly this server-side; the point of doing it here too is that
+ * a form must never offer an answer its own save would refuse (which is the
+ * bug this screen shipped a day ago).
+ */
+const brandOptions = computed(() =>
+  isPlatformProduct.value ? brands.value.filter((b) => b.company_id === null) : brands.value,
+)
+const categoryOptions = computed(() =>
+  isPlatformProduct.value ? categories.value.filter((c) => c.company_id === null) : categories.value,
+)
+
+/*
+ * Switching to สินค้ากลาง narrows what the rest of the form may hold, so
+ * anything already picked that has just become impossible is cleared here
+ * rather than left sitting in the form to be refused on save.
+ */
+watch(createAsPlatform, (platform) => {
+  if (!platform) return
+  if (!brandOptions.value.some((b) => b.id === basicsForm.value.brand_id)) basicsForm.value.brand_id = ''
+  if (!categoryOptions.value.some((c) => c.id === basicsForm.value.category_id)) basicsForm.value.category_id = ''
+  // ADR-026 §3.3 — a template belongs to one company; this product has none.
+  basicsForm.value.pipeline_template_id = ''
+})
 
 // ── ADR-036 (TASK-215) — shared cross-company catalog link ──
 // A linked product's name/brand/category/description/spec_description are
@@ -613,11 +663,15 @@ function templateLabel(template: PipelineTemplate): string {
 const templateCompanyScope = computed<number | null>(
   () => product.value?.company_id ?? (isCreateMode.value && isSuperAdmin.value ? selectedCompanyId.value : null),
 )
-const templateOptions = computed(() =>
-  templateCompanyScope.value === null
+const templateOptions = computed(() => {
+  // A platform product has no company, so there is no template it could
+  // legitimately point at — StoreProductRequest prohibits the field outright.
+  if (isPlatformProduct.value) return []
+
+  return templateCompanyScope.value === null
     ? pipelineTemplates.value
-    : pipelineTemplates.value.filter((t) => t.company_id === templateCompanyScope.value),
-)
+    : pipelineTemplates.value.filter((t) => t.company_id === templateCompanyScope.value)
+})
 
 /**
  * The journey the admin is looking at RIGHT NOW: the one they have just
@@ -732,8 +786,17 @@ function stampBasicsSnapshot(): void {
 }
 
 async function saveBasics() {
-  if (isCreateMode.value && activeCompany.requiresCompanyPick) {
+  // A platform product has no company to pick, so the header scope is not a
+  // precondition for it — only for a product being made FOR a company.
+  if (isCreateMode.value && !createAsPlatform.value && activeCompany.requiresCompanyPick) {
     errorMessage.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
+    return
+  }
+  if (isCreateMode.value && createAsPlatform.value && !basicsForm.value.commission_plan_type) {
+    // Product::effectivePlanType() THROWS for a platform product with no plan
+    // type rather than guess — the guess would land in a ledger that cannot be
+    // corrected (BR-2/BR-4). Asked here, and again in StoreProductRequest.
+    errorMessage.value = 'สินค้ากลางต้องเลือกรูปแบบค่าคอมมิชชั่นก่อนบันทึก'
     return
   }
   savingBasics.value = true
@@ -779,10 +842,16 @@ async function saveBasics() {
       voucher_usage_quota: basicsForm.value.voucher_usage_quota === '' ? null : Number(basicsForm.value.voucher_usage_quota),
       voucher_validity_days: basicsForm.value.voucher_validity_days === '' ? null : Number(basicsForm.value.voucher_validity_days),
       requires_shipping: basicsForm.value.requires_shipping,
-      // StoreProductRequest: company_id required for Super Admin only
-      // (Company Admin's own company is inferred server-side) — omit
-      // entirely for Company Admin so we never send a stray null/0.
-      ...(isCreateMode.value && isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+      // Three shapes, not two (2026-09-09). `is_platform: true` is a real
+      // answer — company_id NULL, ADR-040 — and is sent INSTEAD of a
+      // company_id, never alongside it. A Company Admin sends neither and is
+      // stamped with their own company server-side, so we never send a stray
+      // null/0 for them.
+      ...(isCreateMode.value && isSuperAdmin.value
+        ? createAsPlatform.value
+          ? { is_platform: true }
+          : { company_id: selectedCompanyId.value }
+        : {}),
     }
     if (isCreateMode.value) {
       const res = await api.post<{ data: Product }>('/products', payload)
@@ -2043,10 +2112,55 @@ function goToVideoSettings() {
                belongs to (or will be created in). Changing it means changing
                the header scope, which also re-scopes the brand/category
                pickers below — the two must never disagree. -->
-          <div v-if="isSuperAdmin" class="sm:col-span-2 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-brand-50 border border-brand-100">
-            <Icon name="building" :size="14" class="text-brand-600 shrink-0" />
-            <span class="text-xs font-bold text-brand-700">บริษัท: {{ productCompanyName ?? '— ยังไม่ได้เลือก —' }}</span>
-            <span v-if="isCreateMode" class="text-[11px] text-brand-600/70">(เปลี่ยนได้จากปุ่มบริษัทมุมขวาบน)</span>
+          <!-- 2026-09-09 (human: "ไม่มี Ui ตรงไหนแจ้งไว้ว่าจะบันทึกลงเฉพาะ
+               company หรือ ใช้เป็น product กลาง") — whose product is this?
+               First thing on the form, because the answer changes what the
+               rest of it may contain: a platform product may only use ของกลาง
+               brands and categories, must name its own commission plan, and
+               has no pipeline of its own. Consequences are spelled out on the
+               cards themselves, not hidden behind a tooltip. -->
+          <div v-if="isSuperAdmin && isCreateMode" class="sm:col-span-2 rounded-lg border border-brand-100 bg-brand-50 p-3">
+            <p class="text-xs font-bold text-brand-700 flex items-center gap-1.5">
+              <Icon name="building" :size="14" class="shrink-0" /> บันทึกสินค้านี้เป็น
+            </p>
+            <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label
+                class="flex items-start gap-2 p-3 rounded-lg border bg-white cursor-pointer transition-colors"
+                :class="createAsPlatform ? 'border-slate-200' : 'border-brand-500 ring-2 ring-brand-100'"
+              >
+                <input v-model="createAsPlatform" type="radio" :value="false" data-test="owner-company" class="mt-0.5 shrink-0" />
+                <span class="min-w-0">
+                  <span class="block text-sm font-bold text-slate-800">สินค้าของ {{ productCompanyName ?? '— ยังไม่ได้เลือกบริษัท —' }}</span>
+                  <span class="block mt-0.5 text-[11px] text-slate-500">
+                    มีเฉพาะบริษัทนี้บริษัทเดียวที่เห็นและขายได้ · เปลี่ยนบริษัทได้จากปุ่มบริษัทมุมขวาบน
+                  </span>
+                </span>
+              </label>
+              <label
+                class="flex items-start gap-2 p-3 rounded-lg border bg-white cursor-pointer transition-colors"
+                :class="createAsPlatform ? 'border-brand-500 ring-2 ring-brand-100' : 'border-slate-200'"
+              >
+                <input v-model="createAsPlatform" type="radio" :value="true" data-test="owner-platform" class="mt-0.5 shrink-0" />
+                <span class="min-w-0">
+                  <span class="block text-sm font-bold text-slate-800">สินค้ากลาง (ทุกบริษัทใช้ร่วมกัน)</span>
+                  <span class="block mt-0.5 text-[11px] text-slate-500">
+                    เป็นสินค้าตัวเดียว ไม่ได้ copy แยกไปแต่ละบริษัท · แต่ละบริษัทตั้งราคาของตัวเองและเปิด/ปิดขายเองได้ ·
+                    บันทึกแล้วยังไม่มีบริษัทไหนขายได้ จนกว่าคุณจะเปิดให้ทีละบริษัท
+                  </span>
+                </span>
+              </label>
+            </div>
+            <p v-if="createAsPlatform" class="mt-2 text-[11px] font-bold text-amber-700">
+              สินค้ากลางเลือกได้เฉพาะแบรนด์และหมวดหมู่ที่เป็น "ของกลาง" · ต้องระบุรูปแบบค่าคอมมิชชั่นเอง (ไม่มีบริษัทให้สืบทอด) · ไม่ต้องเลือกเส้นทางการขาย
+            </p>
+          </div>
+          <!-- Edit mode — the same fact, read-only. TASK-208: changing it
+               means changing the header scope, which also re-scopes the
+               brand/category pickers below; the two must never disagree. -->
+          <div v-else-if="isSuperAdmin" class="sm:col-span-2 flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-brand-50 border border-brand-100">
+            <Icon :name="isPlatformProduct ? 'globe' : 'building'" :size="14" class="text-brand-600 shrink-0" />
+            <span v-if="isPlatformProduct" class="text-xs font-bold text-brand-700">สินค้ากลาง — ทุกบริษัทใช้สินค้าตัวนี้ร่วมกัน</span>
+            <span v-else class="text-xs font-bold text-brand-700">บริษัท: {{ productCompanyName ?? '— ยังไม่ได้เลือก —' }}</span>
           </div>
           <!-- ADR-036 (TASK-215) — when this product is catalog-linked,
                name/brand/category are RESOLVED from the shared catalog
@@ -2121,14 +2235,14 @@ function goToVideoSettings() {
               <label class="text-sm font-bold text-slate-500">แบรนด์</label>
               <select v-model="basicsForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกแบรนด์</option>
-                <option v-for="b in brands" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
+                <option v-for="b in brandOptions" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
               </select>
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
               <select v-model="basicsForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกหมวดหมู่</option>
-                <option v-for="c in categories" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
+                <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
               </select>
             </div>
           </template>
@@ -2145,10 +2259,17 @@ function goToVideoSettings() {
                applies, never just the raw possibly-null override. -->
           <div class="sm:col-span-2">
             <label class="text-sm font-bold text-slate-500">รูปแบบค่าคอมมิชชั่นของสินค้านี้</label>
-            <select v-model="basicsForm.commission_plan_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="">สืบทอดจากบริษัท (ค่าเริ่มต้น)</option>
-              <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }} (กำหนดเฉพาะสินค้านี้)</option>
+            <select v-model="basicsForm.commission_plan_type" :required="isPlatformProduct" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <!-- "สืบทอดจากบริษัท" is not on offer for a platform product:
+                   there is no company to inherit from, and
+                   Product::effectivePlanType() throws rather than guess. -->
+              <option v-if="isPlatformProduct" value="" disabled>— เลือกรูปแบบค่าคอมมิชชั่น —</option>
+              <option v-else value="">สืบทอดจากบริษัท (ค่าเริ่มต้น)</option>
+              <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }}{{ isPlatformProduct ? '' : ' (กำหนดเฉพาะสินค้านี้)' }}</option>
             </select>
+            <p v-if="isPlatformProduct" class="mt-1 text-xs text-amber-600">
+              สินค้ากลางไม่มีบริษัทให้สืบทอดค่า จึงต้องเลือกรูปแบบค่าคอมมิชชั่นเองที่นี่
+            </p>
             <p v-if="product" class="mt-1 text-xs text-slate-400">
               ค่าที่ใช้จริงตอนนี้: <span class="font-bold text-slate-600">{{ planTypeLabels[product.effective_plan_type] }}</span>
               <RouterLink :to="{ name: 'commission-plan-settings' }" class="ml-1 text-brand-600 hover:underline">ตั้งค่าแผนคอมมิชชั่น →</RouterLink>
@@ -2167,7 +2288,15 @@ function goToVideoSettings() {
                control: PipelineTemplateResource sends `stages` ORDERED
                precisely so an admin is never asked to pick a customer
                journey by name without seeing the journey. -->
-          <div class="sm:col-span-2">
+          <!-- A pipeline template belongs to one company (ADR-026 §3.3) and
+               a platform product belongs to none, so there is nothing here to
+               choose — StoreProductRequest prohibits the field outright. The
+               journey resolves per selling company instead. -->
+          <div v-if="isPlatformProduct" class="sm:col-span-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
+            <span class="font-bold text-slate-600">เส้นทางการขาย (Pipeline):</span>
+            สินค้ากลางใช้เส้นทางการขายของบริษัทที่ขายสินค้านั้น จึงไม่ต้องเลือกที่นี่
+          </div>
+          <div v-else class="sm:col-span-2">
             <label class="text-sm font-bold text-slate-500">เส้นทางการขายของสินค้านี้ (Pipeline)</label>
             <select v-model="basicsForm.pipeline_template_id" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
               <option value="">ใช้ค่าจากหมวดสินค้า / บริษัท (ค่าเริ่มต้น)</option>
