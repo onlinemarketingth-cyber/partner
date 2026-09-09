@@ -32,6 +32,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
+// 2026-09-09 — the catalogue item's two description fields became rich text.
+import RichTextEditor from '@/design-system/components/RichTextEditor.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
@@ -519,11 +521,11 @@ async function confirmDeleteItem(): Promise<void> {
           </div>
           <div>
             <label class="text-xs font-bold text-slate-500">คำอธิบาย (ไม่บังคับ)</label>
-            <textarea v-model="itemForm.description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+            <RichTextEditor v-model="itemForm.description" :min-height="110" class="mt-1" />
           </div>
           <div>
             <label class="text-xs font-bold text-slate-500">คำอธิบายสเปค (ไม่บังคับ)</label>
-            <textarea v-model="itemForm.spec_description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+            <RichTextEditor v-model="itemForm.spec_description" :min-height="110" class="mt-1" />
           </div>
           <label class="flex items-center gap-2 text-xs font-bold text-slate-600 cursor-pointer">
             <input v-model="itemForm.is_active" type="checkbox" class="rounded border-slate-300" /> ใช้งาน

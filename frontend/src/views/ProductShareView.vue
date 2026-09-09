@@ -58,6 +58,10 @@ import { apiErrorMessage } from '@/utils/apiError'
 // (see its header for why a `watch?v=` URL cannot be framed).
 import { toEmbedUrl, youtubeThumbnailUrl } from '@/utils/embedUrl'
 import Icon from '@/design-system/components/Icon.vue'
+// 2026-09-09 — these fields became rich text (sanitised server-side on
+// write, see App\Support\RichText). RichText.vue is the only place this
+// app renders markup from the database.
+import RichText from '@/design-system/components/RichText.vue'
 import AppButton from '@/design-system/components/AppButton.vue'
 import AttachmentLightbox, { type LightboxItem } from '@/design-system/components/AttachmentLightbox.vue'
 // TASK-159 §4.2 — this page carries no company slug (a share link must
@@ -608,17 +612,13 @@ function openLightbox(material: SalesMaterialItem) {
               <span class="px-2 py-0.5 rounded-full bg-rose-50 text-ink-danger text-[11px] font-bold">{{ td('product.promo_price') }}</span>
             </template>
           </div>
-          <p v-if="product.description" class="mt-3 text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">
-            {{ product.description }}
-          </p>
+          <RichText :html="product.description" class="mt-3 text-sm text-ink-card-muted leading-relaxed" />
         </div>
 
         <!-- Specs -->
         <div v-if="groupedSpecs.length || product.spec_description" class="bg-surface-card rounded-3xl shadow-xl border border-line-card/80 p-5">
           <h2 class="text-sm font-bold text-ink-card mb-3">{{ td('product.description') }}</h2>
-          <p v-if="product.spec_description" class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line mb-3">
-            {{ product.spec_description }}
-          </p>
+          <RichText :html="product.spec_description" class="text-sm text-ink-card-muted leading-relaxed mb-3" />
           <div v-for="[group, specs] in groupedSpecs" :key="group" class="mb-3 last:mb-0">
             <p class="text-xs font-bold text-ink-card-subtle uppercase tracking-wider mb-1.5">{{ group }}</p>
             <div class="space-y-1.5">

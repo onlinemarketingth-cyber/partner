@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Catalog;
 
+use App\Http\Requests\Concerns\HandlesRichText;
 use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -17,6 +18,15 @@ use Illuminate\Validation\Rule;
 // own docblock).
 class UnlinkProductCatalogRequest extends FormRequest
 {
+    use HandlesRichText;
+
+    protected function prepareForValidation(): void
+    {
+        // 2026-09-09 — cleaned before any rule sees it, so validation runs
+        // against exactly what will be stored (see App\Support\RichText).
+        $this->sanitizeRichText(['description', 'spec_description']);
+    }
+
     use Concerns\ValidatesProductTaxonomy;
 
     public function authorize(): bool
@@ -43,8 +53,8 @@ class UnlinkProductCatalogRequest extends FormRequest
             // StoreProductRequest's brand_id/category_id rules.
             'brand_id' => ['required', 'integer', $this->taxonomyRule('brands', $companyId)],
             'category_id' => ['required', 'integer', $this->taxonomyRule('product_categories', $companyId)],
-            'description' => ['nullable', 'string'],
-            'spec_description' => ['nullable', 'string'],
+            'description' => $this->richTextRules(15000),
+            'spec_description' => $this->richTextRules(15000),
         ];
     }
 }

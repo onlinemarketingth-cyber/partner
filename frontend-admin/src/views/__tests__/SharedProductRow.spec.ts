@@ -166,6 +166,11 @@ beforeEach(() => {
   auth.user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
 })
 
+/** The little pills on the product rows themselves, not the page chrome. */
+function badgeTexts(wrapper: { findAll: (s: string) => { text: () => string }[] }): string[] {
+  return wrapper.findAll('span.rounded.bg-indigo-50').map((el) => el.text())
+}
+
 describe('ProductCatalogView — a shared product is ONE row', () => {
   it('does not repeat the product once per company', async () => {
     // The rejected design, caught by counting. Two companies, one product.
@@ -177,14 +182,20 @@ describe('ProductCatalogView — a shared product is ONE row', () => {
   it('marks it as central so nobody edits it thinking it is theirs', async () => {
     const wrapper = await mountView([sharedProduct()])
 
-    expect(wrapper.text()).toContain('ของกลาง')
+    expect(badgeTexts(wrapper)).toContain('สินค้ากลาง')
   })
 
   it('keeps showing a company-owned product with no shared badge', async () => {
+    /*
+     * 2026-09-09 — asserted on the BADGES, not on the whole page. The page
+     * gained an "สินค้ากลาง" ownership filter chip, and a page-wide
+     * `not.toContain` would fail on the filter while the badge — the thing
+     * this test is actually about — was behaving perfectly.
+     */
     const wrapper = await mountView([ownProduct()])
 
     expect(wrapper.text()).toContain('Thai Life Only')
-    expect(wrapper.text()).not.toContain('ของกลาง')
+    expect(badgeTexts(wrapper)).not.toContain('สินค้ากลาง')
   })
 
   it('still lists the shared product when a company is scoped', async () => {

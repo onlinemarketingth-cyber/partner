@@ -30,7 +30,12 @@ class ProductCategoryResource extends JsonResource
             'permissions' => [
                 'update' => (bool) $request->user()?->can('update', $this->resource),
                 'delete' => (bool) $request->user()?->can('delete', $this->resource),
+                // 2026-09-09 — the bin tab needs this per row: a Company
+                // Admin sees a platform row they cannot bring back, and a
+                // button that 403s is worse than no button.
+                'restore' => (bool) $request->user()?->can('restore', $this->resource),
             ],
+            'deleted_at' => $this->deleted_at,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

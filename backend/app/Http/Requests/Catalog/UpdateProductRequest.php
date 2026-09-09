@@ -5,12 +5,22 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Concerns\HandlesRichText;
 use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateProductRequest extends FormRequest
 {
+    use HandlesRichText;
+
+    protected function prepareForValidation(): void
+    {
+        // 2026-09-09 — cleaned before any rule sees it, so validation runs
+        // against exactly what will be stored (see App\Support\RichText).
+        $this->sanitizeRichText(['description', 'spec_description']);
+    }
+
     use Concerns\ValidatesProductTaxonomy;
 
     public function authorize(): bool
@@ -32,8 +42,8 @@ class UpdateProductRequest extends FormRequest
             'category_id' => ['sometimes', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'price_satang' => ['sometimes', 'required', 'integer', 'min:0'],
-            'description' => ['nullable', 'string'],
-            'spec_description' => ['nullable', 'string'], // ADR-008 — free-text spec narrative, additive alongside description
+            'description' => $this->richTextRules(15000),
+            'spec_description' => $this->richTextRules(15000), // ADR-008 — free-text spec narrative, additive alongside description
             'is_active' => ['sometimes', 'boolean'],
             // ADR-011/TASK-027 — explicit null clears the override back
             // to "inherit company default" (Product::effectivePlanType()).

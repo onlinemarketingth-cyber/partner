@@ -40,6 +40,10 @@ import { apiErrorMessage, isAbortError } from '@/utils/apiError'
 import { useAuthStore } from '@/stores/auth'
 import { useProductShare } from '@/composables/useProductShare'
 import Icon from '@/design-system/components/Icon.vue'
+// 2026-09-09 — these fields became rich text (sanitised server-side on
+// write, see App\Support\RichText). RichText.vue is the only place this
+// app renders markup from the database.
+import RichText from '@/design-system/components/RichText.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import AuthenticatedMedia from '@/design-system/components/AuthenticatedMedia.vue'
@@ -58,11 +62,7 @@ interface MediaItem {
 interface ProductDetail {
   id: number
   name: string
-  // TASK-257 / ADR-040 — see ProductCardItem: `price_satang` is the row's own
-  // number, which for a shared product is the platform's, and
-  // `effective_price_satang` is what this agent's company charges.
   price_satang: number
-  effective_price_satang?: number
   description: string | null
   spec_description: string | null
   thumbnail_url?: string | null
@@ -242,18 +242,18 @@ onMounted(load)
             <template v-if="product.brand"> · {{ product.brand.name }}</template>
           </p>
           <h1 class="text-xl font-bold text-ink-card leading-tight mt-1">{{ product.name }}</h1>
-          <p class="text-2xl font-bold text-ink-brand mt-2">{{ formatBaht(product.effective_price_satang ?? product.price_satang) }}</p>
+          <p class="text-2xl font-bold text-ink-brand mt-2">{{ formatBaht(product.price_satang) }}</p>
 
           <!-- whitespace-pre-line: an admin types these in a textarea, so the
                line breaks they put in are content, not incidental. -->
           <div v-if="product.description" class="mt-4">
             <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">{{ td('common.details') }}</p>
-            <p class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">{{ product.description }}</p>
+            <RichText :html="product.description" class="text-sm text-ink-card-muted leading-relaxed" />
           </div>
 
           <div v-if="product.spec_description" class="mt-4">
             <p class="text-[11px] font-bold text-ink-card-subtle uppercase tracking-wider mb-1">{{ td('product.specs') }}</p>
-            <p class="text-sm text-ink-card-muted leading-relaxed whitespace-pre-line">{{ product.spec_description }}</p>
+            <RichText :html="product.spec_description" class="text-sm text-ink-card-muted leading-relaxed" />
           </div>
         </div>
       </div>

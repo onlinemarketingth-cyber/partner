@@ -33,6 +33,9 @@
  */
 import { computed, ref, watch } from 'vue'
 import Icon from './Icon.vue'
+// 2026-09-09 — announcement bodies became rich text (sanitised server-side on
+// write, see App\Support\RichText).
+import RichText from './RichText.vue'
 import { toEmbedUrl } from '@/utils/embedUrl'
 
 export interface AnnouncementModalVideo {
@@ -314,7 +317,7 @@ function formatDate(iso: string): string {
             <iframe :src="toEmbedUrl(announcement.video.url)" class="w-full h-full" allowfullscreen frameborder="0"></iframe>
           </div>
 
-          <p class="text-sm text-ink-card whitespace-pre-line leading-relaxed">{{ announcement.content }}</p>
+          <RichText :html="announcement.content" class="text-sm text-ink-card leading-relaxed" />
           </div>
         </div>
       </div>

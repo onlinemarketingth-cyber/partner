@@ -6,12 +6,22 @@ use App\Enums\AnnouncementAudience;
 use App\Enums\AnnouncementBannerPage;
 use App\Enums\CertTierTargetMode;
 use App\Enums\MediaSourceType;
+use App\Http\Requests\Concerns\HandlesRichText;
 use App\Services\Catalog\VideoProcessingSettingService;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateAnnouncementRequest extends FormRequest
 {
+    use HandlesRichText;
+
+    protected function prepareForValidation(): void
+    {
+        // 2026-09-09 — cleaned before any rule sees it, so validation runs
+        // against exactly what will be stored (see App\Support\RichText).
+        $this->sanitizeRichText(['content']);
+    }
+
     public function __construct(private readonly VideoProcessingSettingService $videoProcessingSettingService)
     {
         parent::__construct();
@@ -43,7 +53,7 @@ class UpdateAnnouncementRequest extends FormRequest
 
         return [
             'title' => ['sometimes', 'string', 'max:255'],
-            'content' => ['sometimes', 'string', 'max:5000'],
+            'content' => $this->richTextRules(5000, 'sometimes'),
             'audience' => ['sometimes', Rule::in(array_column(AnnouncementAudience::cases(), 'value'))],
             'target_cert_tier_id' => ['required_if:audience,cert_tier', 'nullable', 'integer', Rule::exists('cert_tiers', 'id')],
             'target_cert_tier_mode' => ['nullable', Rule::in(array_column(CertTierTargetMode::cases(), 'value'))],

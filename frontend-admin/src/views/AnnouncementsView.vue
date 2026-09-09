@@ -11,6 +11,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
+// 2026-09-09 — announcement bodies became rich text.
+import RichTextEditor from '@/design-system/components/RichTextEditor.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
@@ -567,8 +569,32 @@ function bannerPagesLabel(item: AnnouncementItem): string {
 
   return ` · ${labels.join(', ')}`
 }
+/**
+ * 2026-09-09 — strip the markup BEFORE slicing.
+ *
+ * The content became rich text today, and slicing HTML at 140 characters cuts
+ * a tag in half: "<stro" reaches the DOM, the browser repairs it by guessing,
+ * and the rest of the list ends up inside an element nobody opened. Even when
+ * it does not break the layout it is wrong — the reader would be shown a
+ * preview of the MARKUP rather than of the announcement, and "<p>ประก…" is
+ * 140 characters of almost nothing.
+ *
+ * The block-boundary space matters too: without it "<p>ก่อน</p><p>หลัง</p>"
+ * previews as "ก่อนหลัง", two sentences welded into one word. Mirrors
+ * App\Support\RichText::toPlainText() on the server.
+ */
 function contentPreview(content: string): string {
-  return content.length > 140 ? content.slice(0, 140) + '…' : content
+  const text = content
+    .replace(/<(br|\/p|\/li|\/h2|\/h3)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return text.length > 140 ? text.slice(0, 140) + '…' : text
 }
 
 // TASK-209 — every list above is scoped server-side, so a change of the
@@ -691,7 +717,7 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
           </div>
           <div>
             <label class="text-sm font-bold text-slate-500">เนื้อหา</label>
-            <textarea v-model="form.content" rows="4" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
+            <RichTextEditor v-model="form.content" :min-height="150" class="mt-1" />
           </div>
           <div>
             <label class="text-sm font-bold text-slate-500">กลุ่มเป้าหมาย</label>

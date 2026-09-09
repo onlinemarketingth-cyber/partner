@@ -206,7 +206,7 @@ describe('ProductCatalogView — a card holding both rows', () => {
   })
 
   it('counts only what the delete will actually remove', async () => {
-    // The dialog used to say "จาก 2 บริษัท" and name ของกลาง among them.
+    // The dialog used to say "จาก 2 บริษัท" and name the platform among them.
     asCompanyAdmin()
 
     const wrapper = await mountDrawer([PLATFORM_BRAND, OWN_BRAND])
@@ -216,7 +216,7 @@ describe('ProductCatalogView — a card holding both rows', () => {
     const body = wrapper.find('[data-test="confirm"]').text()
     expect(body).toContain('จาก 1 บริษัท')
     expect(body).toContain('AIA')
-    expect(body).toContain('ของกลางจะยังอยู่')
+    expect(body).toContain('แบรนด์กลางจะยังอยู่')
   })
 
   it('and deletes only that row', async () => {

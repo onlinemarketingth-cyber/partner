@@ -6,11 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Catalog\StoreProductCategoryRequest;
 use App\Http\Requests\Catalog\UpdateProductCategoryRequest;
 use App\Http\Resources\ProductCategoryResource;
-use App\Models\CommissionRule;
 use App\Models\ProductCategory;
 use App\Services\Catalog\ProductCategoryService;
+use App\Support\Catalog\DeletionImpact;
 use App\Support\CompanyScopeFilter;
-use App\Support\DeletionGuard;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -83,20 +83,33 @@ class ProductCategoryController extends Controller
         return new ProductCategoryResource($service->update($productCategory, $request->validated()));
     }
 
+    /** GET /product-categories/{productCategory}/deletion-impact. */
+    public function deletionImpact(ProductCategory $productCategory): JsonResponse
+    {
+        $this->authorize('delete', $productCategory);
+
+        return response()->json(['data' => DeletionImpact::forCategory($productCategory)]);
+    }
+
     public function destroy(ProductCategory $productCategory): Response
     {
         // TASK-091 — same reason as BrandController: soft delete bypasses
         // the restrictOnDelete FKs on products.category_id and
         // commission_rules.product_category_id.
-        DeletionGuard::ensureNoDependents([
-            'สินค้า' => $productCategory->products()->count(),
-            'อัตราคอมมิชชั่นที่ผูกกับหมวดหมู่นี้' => CommissionRule::query()
-                ->where('product_category_id', $productCategory->id)
-                ->count(),
-        ]);
+        DeletionImpact::enforce(DeletionImpact::forCategory($productCategory));
 
         $productCategory->delete();
 
         return response()->noContent();
+    }
+
+    /** POST /product-categories/{productCategory}/restore — withTrashed(). */
+    public function restore(ProductCategory $productCategory): ProductCategoryResource
+    {
+        $this->authorize('restore', $productCategory);
+
+        $productCategory->restore();
+
+        return new ProductCategoryResource($productCategory);
     }
 }

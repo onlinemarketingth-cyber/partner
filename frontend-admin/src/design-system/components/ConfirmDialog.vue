@@ -16,7 +16,7 @@
  *                  variant="danger"
  *                  @confirm="onDelete" />
  */
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n, I18N } from '../../composables/useI18n'
 
 const props = defineProps({
@@ -36,6 +36,24 @@ const props = defineProps({
      */
     confirmLabel: { type: String, default: '' },
     cancelLabel:  { type: String, default: '' },
+    /*
+     * 2026-09-09 (human: "ให้พิมพ์ชื่อสินค้ายืนยันไหม? — พิมพ์").
+     *
+     * Non-empty turns the dialog into a type-to-confirm: an input appears and
+     * the confirm button stays disabled until the person types this exact
+     * text. For the one action in the system that hits every company at once
+     * — hiding a platform-owned catalogue row — a click that lands in the
+     * wrong place should not be enough.
+     *
+     * Empty (the default) leaves every existing dialog exactly as it was.
+     */
+    confirmPhrase: { type: String, default: '' },
+    /*
+     * 'sm' is the modal every dialog has used. 'md' exists because a body
+     * that lists the affected companies by name needs the room to list them
+     * on their own lines rather than wrapping into a paragraph.
+     */
+    size: { type: String, default: 'sm' }, // sm | md
 })
 
 const emit = defineEmits(['update:show', 'confirm', 'cancel'])
@@ -57,12 +75,27 @@ const iconBgClass = computed(() => ({
     warning: 'bg-amber-50 text-amber-600',
 }[props.variant] || 'bg-rose-50 text-rose-500'))
 
+const sizeClass = computed(() => (props.size === 'md' ? 'max-w-md' : 'max-w-sm'))
+
+const typed = ref('')
+/** Nothing to type, or typed exactly right. Trimmed — a trailing space from
+ *  copy-paste is not a different answer. */
+const phraseSatisfied = computed(() => props.confirmPhrase === '' || typed.value.trim() === props.confirmPhrase.trim())
+
+// Reopening must never inherit the last dialog's typed value: the gate would
+// already be open on a different, possibly larger, delete.
+watch(() => props.show, (open) => { if (! open) typed.value = '' })
+watch(() => props.confirmPhrase, () => { typed.value = '' })
+
 const close = () => {
     emit('update:show', false)
     emit('cancel')
 }
 
-const confirm = () => emit('confirm')
+const confirm = () => {
+    if (! phraseSatisfied.value) return
+    emit('confirm')
+}
 </script>
 
 <template>
@@ -70,7 +103,7 @@ const confirm = () => emit('confirm')
         <div v-if="show"
              class="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-500/30 backdrop-blur-sm"
              @click.self="close">
-            <div class="w-full max-w-sm rounded-2xl bg-white/95 backdrop-blur-xl border border-white/60 shadow-2xl ring-1 ring-slate-100 p-6 text-center">
+            <div class="w-full rounded-2xl bg-white/95 backdrop-blur-xl border border-white/60 shadow-2xl ring-1 ring-slate-100 p-6 text-center" :class="sizeClass">
                 <!-- Icon -->
                 <div class="w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center" :class="iconBgClass">
                     <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -86,7 +119,22 @@ const confirm = () => emit('confirm')
                      strings carry names and email addresses the admin did not
                      write. Single-line bodies are unaffected — the class only
                      stops newlines from collapsing. -->
-                <p class="text-sm text-slate-500 leading-relaxed mb-6 whitespace-pre-line text-left">{{ bodyText }}</p>
+                <p class="text-sm text-slate-500 leading-relaxed mb-4 whitespace-pre-line text-left">{{ bodyText }}</p>
+
+                <!-- Type-to-confirm. The phrase is shown, not hidden behind a
+                     hint, because the point is deliberateness, not recall. -->
+                <div v-if="confirmPhrase" class="mb-6 text-left">
+                    <label class="block text-xs font-bold text-slate-500 mb-1">
+                        พิมพ์ <span class="font-mono text-slate-800">{{ confirmPhrase }}</span> เพื่อยืนยัน
+                    </label>
+                    <input v-model="typed"
+                           type="text"
+                           autocomplete="off"
+                           data-test="confirm-phrase"
+                           class="w-full px-3 py-2 rounded-lg border text-sm"
+                           :class="phraseSatisfied ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'" />
+                </div>
+                <div v-else class="mb-2"></div>
 
                 <div class="flex gap-3">
                     <button @click="close"
@@ -95,7 +143,7 @@ const confirm = () => emit('confirm')
                         {{ cancelLabel || t('cancel', I18N.cancel.th, I18N.cancel.en) }}
                     </button>
                     <button @click="confirm"
-                            :disabled="busy"
+                            :disabled="busy || ! phraseSatisfied"
                             class="flex-1 px-5 py-2.5 rounded-xl text-sm font-bold text-white shadow transition disabled:opacity-50"
                             :class="variantClass">
                         <span v-if="busy">{{ t('saving', I18N.saving.th, I18N.saving.en) }}</span>

@@ -43,6 +43,11 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 interface RowPermissions {
   update: boolean
   delete: boolean
+  // 2026-09-09 — asked of the server per row, same reason as the two above:
+  // a hidden PLATFORM row is listed for a Company Admin (so the catalogue
+  // does not look as though it simply ceased to exist) but only Super Admin
+  // may bring it back.
+  restore?: boolean
 }
 
 const activeCompany = useActiveCompanyStore()
@@ -67,6 +72,8 @@ interface Brand {
   logo_path?: string | null
   logo_url?: string | null
   permissions?: RowPermissions
+  /** 2026-09-09 — set only on rows fetched from /catalog-trash. */
+  deleted_at?: string | null
 }
 interface ProductCategory {
   id: number
@@ -83,6 +90,8 @@ interface ProductCategory {
   is_active: boolean
   products_count?: number
   permissions?: RowPermissions
+  /** 2026-09-09 — set only on rows fetched from /catalog-trash. */
+  deleted_at?: string | null
 }
 interface Product {
   id: number
@@ -126,6 +135,8 @@ interface Product {
    * touch. Only a catalog-LINKED product refuses both.
    */
   permissions?: RowPermissions & { set_commission_rule: boolean }
+  /** 2026-09-09 — set only on rows fetched from /catalog-trash. */
+  deleted_at?: string | null
 }
 // TASK-068 / ADR-020 row 2.
 // TASK-073 (2026-08-02, human-confirmed) — link_type/external_url/
@@ -188,9 +199,9 @@ interface CertTierRef {
   key: string
   name: string
 }
-type Tab = 'brands' | 'categories' | 'products' | 'banners' | 'commission_rules' | 'override_rules'
+type Tab = 'brands' | 'categories' | 'products' | 'banners' | 'commission_rules' | 'override_rules' | 'trash'
 const route = useRoute()
-const VALID_TABS: Tab[] = ['brands', 'categories', 'products', 'banners', 'commission_rules', 'override_rules']
+const VALID_TABS: Tab[] = ['brands', 'categories', 'products', 'banners', 'commission_rules', 'override_rules', 'trash']
 // Deep-link support — ProductEditView.vue's back button passes
 // ?tab=products so "แก้ไข" → "back" lands on the same tab it came from,
 // instead of always resetting to the first tab (brands).
@@ -222,6 +233,18 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   // TASK-068 / ADR-020 row 2 — storefront carousel banners (Agent Portal
   // row 2), colocated here since every banner links to a product.
   { key: 'banners', label: 'แบนเนอร์', icon: 'image' },
+  /*
+   * 2026-09-09 (human: "ออกแบบ Ui สำหรับปุ่มกู้คืนสินค้าซึ่งจะทำใน tab ใหม่").
+   *
+   * Everything in this catalogue has soft-deleted since TASK-091 — "ลบ" has
+   * always meant "hide" — and until now nothing on any screen could bring a
+   * row back. The rows sat in the database and the only route to them was a
+   * hand-written UPDATE against production, which is the kind of errand that
+   * ends badly. Its own tab rather than a toggle on the package list: a bin
+   * is a different question ("what did I lose") and mixing deleted rows into
+   * a picker is how a deleted product ends up on sale.
+   */
+  { key: 'trash', label: 'ถังขยะ', icon: 'trash' },
   // TASK-213 Phase 3 — 'commission_rules' and 'override_rules' stay VALID
   // (deep links still resolve, and land on the signpost section below) but
   // are no longer offered as tabs: both now live in แผนคอมมิชชั่น.
@@ -232,6 +255,18 @@ const tabs: { key: Tab; label: string; icon: string }[] = [
   // an admin looking for it had to guess "products" for something that
   // is not about products.
 ]
+
+/**
+ * 2026-09-09 (human: "ตอนนี้ไม่มี Ui ลบสินค้ากลาง กับสินค้าจาก company ผู้ใช้
+ * ไม่ทราบ ควรแยกกัน").
+ *
+ * The two kinds of package sit in one list, distinguishable only by a small
+ * badge — and the actions on them are not equivalent at all: hiding a shared
+ * one takes it off every storefront on the system. Being able to look at just
+ * one kind is the cheapest half of telling them apart.
+ */
+type OwnerFilter = 'all' | 'platform' | 'company'
+const ownerFilter = ref<OwnerFilter>('all')
 
 const loading = ref(false)
 const hasLoadedOnce = ref(false)
@@ -263,6 +298,9 @@ async function loadAll() {
     products.value = p.data
     banners.value = sb.data
     certTiers.value = ct.data
+    // 2026-09-09 — the bin is a tab on this page, and its count is on the tab
+    // itself, so it cannot wait until the tab is opened.
+    void loadTrash()
 
     // TASK-213 Phase 3 — /commission-rules and /commission-override-rules
     // used to be fetched here for two tabs that now live in แผนคอมมิชชั่น.
@@ -325,9 +363,9 @@ const categoryCompanyIds = ref<number[]>([])
  * platform (`company_id NULL`), that every company may use. Reads have
  * understood that since TASK-253 — BrandController::index already returns
  * platform rows to every company — but nothing on any screen could create one,
- * so the only source of ของกลาง taxonomy was `catalog:promote-products`.
+ * so the only source of central taxonomy was `catalog:promote-products`.
  *
- * Deliberately a radio pair rather than an extra "ของกลาง" tick in the company
+ * Deliberately a radio pair rather than an extra "กลาง" tick in the company
  * list: it is not one more company. Ticking it alongside two companies would
  * mean "shared with everyone AND owned by these two", which is not a thing.
  */
@@ -678,7 +716,7 @@ async function saveEditBrand(): Promise<void> {
   const tenantRows = rows.filter((r): r is Brand & { company_id: number } => r.company_id !== null)
   const ticked = isSuperAdmin.value ? editBrandCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
-  const label = (companyId: number | null) => `${ownerLabel(companyId)}: `
+  const label = (companyId: number | null) => `${ownerLabel(companyId, 'brand')}: `
 
   try {
     // TASK-205 — multipart, so a logo can be replaced or cleared in the same
@@ -741,6 +779,53 @@ async function saveEditBrand(): Promise<void> {
   }
 }
 
+/**
+ * 2026-09-09 — what deleting a row would actually do, asked of the SERVER
+ * before the dialog is drawn.
+ *
+ * The old confirmation recited the rules from memory ("ถ้ามีการขาย/คอมมิชชั่น
+ * ผูกอยู่ ระบบจะไม่ยอมให้ลบ") — a sentence in a template with nothing keeping
+ * it true, and one that could not name the other companies a shared package
+ * would vanish from, because the row does not carry them. GET
+ * /{resource}/{id}/deletion-impact is computed by the same class that
+ * enforces the refusal, so the dialog and the outcome cannot disagree.
+ */
+interface DeletionImpact {
+  is_shared: boolean
+  /** Thai label → count. Any non-zero entry means the delete will be refused. */
+  blockers: Record<string, number>
+  /** Companies with this switched ON right now — a warning, never a refusal. */
+  selling_companies: string[]
+}
+const deleteImpact = ref<DeletionImpact | null>(null)
+const loadingImpact = ref(false)
+
+async function loadDeletionImpact(path: string): Promise<void> {
+  deleteImpact.value = null
+  loadingImpact.value = true
+  try {
+    const res = await api.get<{ data: DeletionImpact }>(path)
+    deleteImpact.value = res.data
+  } catch {
+    // A dialog that cannot fetch its impact still opens, and simply says
+    // less. Blocking the delete behind a failed GET would be the wrong
+    // trade: the server refuses on its own if there is anything to refuse.
+    deleteImpact.value = null
+  } finally {
+    loadingImpact.value = false
+  }
+}
+
+/** The blocker lines, or '' when nothing is in the way. */
+function blockerLines(impact: DeletionImpact | null): string {
+  if (!impact) return ''
+  const found = Object.entries(impact.blockers).filter(([, n]) => n > 0)
+  if (!found.length) return ''
+
+  return '\n\nลบไม่ได้ตอนนี้ เพราะมีข้อมูลผูกอยู่:\n'
+    + found.map(([label, n]) => `• ${label} ${n} รายการ`).join('\n')
+}
+
 // TASK-066 convention — ConfirmDialog, never native window.confirm().
 // TASK-204 — the unit is the name, so delete removes it from every company
 // that has it; the dialog body says how many.
@@ -757,18 +842,42 @@ function deleteBrand(group: RefNameGroup<Brand>): void {
  * do is worse than no confirmation: it is the sentence the person read before
  * agreeing.
  */
-function refDeleteBody(group: RefNameGroup<{ company_id: number | null, permissions?: RowPermissions }> | null, noun: string, tail: string): string {
+function refDeleteBody(group: RefNameGroup<{ company_id: number | null, permissions?: RowPermissions }> | null, noun: string, tail: string, kind: CatalogKind): string {
   if (!group) return ''
 
   const targets = group.rows.filter(canDelete)
   const kept = group.rows.length - targets.length
-  const owners = targets.map((r) => ownerLabel(r.company_id)).join(', ')
-  const note = kept > 0 ? ` · ${PLATFORM_OWNER_LABEL}จะยังอยู่ (ลบได้เฉพาะ Super Admin)` : ''
+  const owners = targets.map((r) => ownerLabel(r.company_id, kind)).join(', ')
+  const note = kept > 0 ? ` · ${PLATFORM_LABEL[kind]}จะยังอยู่ (ลบได้เฉพาะ Super Admin)` : ''
 
-  return `ซ่อน${noun} "${group.name}" จาก ${targets.length} บริษัท (${owners})?${note} ${tail}`
+  /*
+   * 2026-09-09 — a name card can hold this company's row AND the platform's,
+   * and deleting the platform half is not the same act as deleting the
+   * company half: every other company loses it too. Said on its own line,
+   * because it is the part that is not obvious from the card.
+   */
+  const sharedWarning = targets.some((r) => r.company_id === null)
+    ? `\n\n⚠️ รวมถึง${PLATFORM_LABEL[kind]}ด้วย — ทุกบริษัทจะไม่เห็น${noun}นี้อีก`
+    : ''
+
+  return `ซ่อน${noun} "${group.name}" จาก ${targets.length} บริษัท (${owners})?${note}${sharedWarning}\n\n${tail}`
+    + `\nข้อมูลไม่ได้หายถาวร กู้คืนได้ที่แท็บ "ถังขยะ"`
 }
 
-const deleteBrandBody = computed(() => refDeleteBody(pendingDeleteBrand.value, 'แบรนด์', 'สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ'))
+/**
+ * Type-to-confirm only when a PLATFORM row is among the targets — the same
+ * rule as products. Asking for it on an ordinary company brand would train
+ * people to type past the prompt, which is how the gate stops working on the
+ * one delete it exists for.
+ */
+function refDeletePhrase(group: RefNameGroup<{ company_id: number | null, permissions?: RowPermissions }> | null): string {
+  if (!group) return ''
+
+  return group.rows.filter(canDelete).some((r) => r.company_id === null) ? group.name : ''
+}
+
+const deleteBrandBody = computed(() => refDeleteBody(pendingDeleteBrand.value, 'แบรนด์', 'สินค้าที่ใช้แบรนด์นี้อยู่จะยังทำงานได้ตามปกติ', 'brand'))
+const deleteBrandPhrase = computed(() => refDeletePhrase(pendingDeleteBrand.value))
 async function confirmDeleteBrand(): Promise<void> {
   const group = pendingDeleteBrand.value
   if (!group) return
@@ -781,7 +890,7 @@ async function confirmDeleteBrand(): Promise<void> {
     try {
       await api.delete(`/brands/${row.id}`)
     } catch (e) {
-      failures.push(`${ownerLabel(row.company_id)}: ${deleteFailureMessage(e)}`)
+      failures.push(`${ownerLabel(row.company_id, 'brand')}: ${deleteFailureMessage(e)}`)
     }
   }
 
@@ -840,7 +949,7 @@ async function saveEditCategory(): Promise<void> {
   const tenantRows = rows.filter((r): r is ProductCategory & { company_id: number } => r.company_id !== null)
   const ticked = isSuperAdmin.value ? editCategoryCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
-  const label = (companyId: number | null) => `${ownerLabel(companyId)}: `
+  const label = (companyId: number | null) => `${ownerLabel(companyId, 'category')}: `
   const payload = {
     name: editCategoryForm.value.name,
     // Explicit null (not omitted) so a cleared icon actually clears
@@ -913,7 +1022,8 @@ async function saveEditCategory(): Promise<void> {
  * category still in use would be refused by the database.
  */
 const pendingDeleteCategory = ref<RefNameGroup<ProductCategory> | null>(null)
-const deleteCategoryBody = computed(() => refDeleteBody(pendingDeleteCategory.value, 'หมวดหมู่', 'สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ'))
+const deleteCategoryBody = computed(() => refDeleteBody(pendingDeleteCategory.value, 'หมวดหมู่', 'สินค้าที่อยู่ในหมวดหมู่นี้จะยังทำงานได้ตามปกติ', 'category'))
+const deleteCategoryPhrase = computed(() => refDeletePhrase(pendingDeleteCategory.value))
 function deleteCategory(group: RefNameGroup<ProductCategory>): void {
   pendingDeleteCategory.value = group
 }
@@ -927,7 +1037,7 @@ async function confirmDeleteCategory(): Promise<void> {
     try {
       await api.delete(`/product-categories/${row.id}`)
     } catch (e) {
-      failures.push(`${ownerLabel(row.company_id)}: ${deleteFailureMessage(e)}`)
+      failures.push(`${ownerLabel(row.company_id, 'category')}: ${deleteFailureMessage(e)}`)
     }
   }
 
@@ -1166,13 +1276,58 @@ async function confirmDeleteBanner(): Promise<void> {
 const pendingDeleteProduct = ref<Product | null>(null)
 function deleteProduct(product: Product): void {
   pendingDeleteProduct.value = product
+  void loadDeletionImpact(`/products/${product.id}/deletion-impact`)
 }
+
+/**
+ * 2026-09-09 — two deletes, two dialogs.
+ *
+ * Hiding a company's package takes it off one storefront; hiding a PLATFORM
+ * package takes it off every storefront on the system at once, including
+ * companies nobody on this screen is looking at. The old dialog said the same
+ * sentence for both, so the second one was performed blind.
+ *
+ * The companies are named rather than counted. "3 บริษัท" is a number to
+ * agree with; "AIA · Thai Life · GENESENN Health" is a list to recognise, and
+ * recognising one you did not expect is the whole point of the pause.
+ */
+const deleteProductBody = computed(() => {
+  const product = pendingDeleteProduct.value
+  if (!product) return ''
+
+  const impact = deleteImpact.value
+  const blockers = blockerLines(impact)
+
+  if (!product.is_shared) {
+    return `ซ่อนแพ็กเกจ "${product.name}" ออกจาก ${companyName(product.company_id) ?? 'บริษัทนี้'}?\n\n`
+      + '• Agent ของบริษัทนี้จะไม่เห็นแพ็กเกจนี้บนหน้าร้านทันที\n'
+      + '• บริษัทอื่นไม่ได้รับผลกระทบ\n'
+      + '• ข้อมูลไม่ได้หายถาวร กู้คืนได้ที่แท็บ "ถังขยะ"'
+      + blockers
+  }
+
+  const selling = impact?.selling_companies ?? []
+  const who = selling.length
+    ? `ตอนนี้มี ${selling.length} บริษัทเปิดขายสินค้านี้อยู่\n  ${selling.join(' · ')}\n\n`
+      + `• ทั้ง ${selling.length} บริษัทจะไม่เห็นสินค้านี้บนหน้าร้านทันที\n`
+    : 'ตอนนี้ยังไม่มีบริษัทไหนเปิดขายสินค้านี้\n\n'
+
+  return `สินค้านี้เป็นสินค้ากลาง — ลบแล้วมีผลกับทุกบริษัท\n\n${who}`
+    + '• ราคาที่แต่ละบริษัทตั้งไว้ยังถูกเก็บไว้ ถ้ากู้คืนจะกลับมาเหมือนเดิม\n'
+    + '• ข้อมูลไม่ได้หายถาวร กู้คืนได้ที่แท็บ "ถังขยะ"'
+    + blockers
+})
+
+/** Type-to-confirm, for the one delete that reaches every company at once. */
+const deleteProductPhrase = computed(() => (pendingDeleteProduct.value?.is_shared ? pendingDeleteProduct.value.name : ''))
 async function confirmDeleteProduct(): Promise<void> {
   const product = pendingDeleteProduct.value
   if (!product) return
   try {
     await api.delete(`/products/${product.id}`)
     products.value = products.value.filter((p) => p.id !== product.id)
+    // It is in the bin now, and the bin is a sibling tab on this page.
+    await loadTrash()
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -1476,6 +1631,90 @@ watch(productFilters, (value) => {
  * feed), so a round trip per keystroke would add latency and a loading
  * flash for zero benefit.
  */
+/*
+ * ── ถังขยะ (2026-09-09) ──────────────────────────────────────────────
+ *
+ * GET /catalog-trash answers for all three kinds at once, because a bin is
+ * one question. Each row carries the server's own `permissions.restore`: a
+ * Company Admin sees a hidden PLATFORM row (pretending it never existed
+ * would read as "the product is gone forever") but cannot bring it back, and
+ * a button that 403s is worse than no button.
+ */
+interface TrashBucket {
+  products: Product[]
+  brands: Brand[]
+  categories: ProductCategory[]
+}
+const trash = ref<TrashBucket>({ products: [], brands: [], categories: [] })
+const loadingTrash = ref(false)
+const restoringId = ref<string | null>(null)
+const trashError = ref('')
+
+async function loadTrash(): Promise<void> {
+  loadingTrash.value = true
+  try {
+    const res = await api.get<{ data: Partial<TrashBucket> }>(activeCompany.scopedPath('/catalog-trash'))
+    /*
+     * Read the three buckets out one by one rather than assigning the payload
+     * whole. `trashCount` reads `.length` off each of them on every render,
+     * so a response missing a key — an older backend, a proxy error page,
+     * anything — would not be a wrong number, it would be a blank page and a
+     * TypeError inside a computed.
+     */
+    trash.value = {
+      products: res.data?.products ?? [],
+      brands: res.data?.brands ?? [],
+      categories: res.data?.categories ?? [],
+    }
+  } catch (e) {
+    trashError.value = e instanceof ApiError ? e.message : 'โหลดถังขยะไม่สำเร็จ'
+  } finally {
+    loadingTrash.value = false
+  }
+}
+
+const trashCount = computed(
+  () => trash.value.products.length + trash.value.brands.length + trash.value.categories.length,
+)
+
+/**
+ * Restore is one call and then a full reload, deliberately: the row coming
+ * back changes the package list, the brand picker and the category picker at
+ * once, and patching three client-side arrays to match is how they drift.
+ *
+ * `restoringId` is keyed by "kind:id" rather than id alone — a brand and a
+ * product can share the number 4, and a shared spinner would light up the
+ * wrong row.
+ */
+async function restoreRow(kind: 'products' | 'brands' | 'product-categories', id: number): Promise<void> {
+  const key = `${kind}:${id}`
+  if (restoringId.value) return
+  restoringId.value = key
+  trashError.value = ''
+  try {
+    await api.post(`/${kind}/${id}/restore`, {})
+    await Promise.all([loadAll(), loadTrash()])
+  } catch (e) {
+    trashError.value = e instanceof ApiError ? e.message : 'กู้คืนไม่สำเร็จ'
+  } finally {
+    restoringId.value = null
+  }
+}
+
+function canRestore(row: { permissions?: RowPermissions }): boolean {
+  return row.permissions?.restore === true
+}
+
+/** "2 วันที่แล้ว" is friendlier than a timestamp for a bin. */
+function deletedAgo(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
+  if (days <= 0) return 'ลบวันนี้'
+  if (days === 1) return 'ลบเมื่อวาน'
+
+  return `ลบเมื่อ ${days} วันที่แล้ว`
+}
+
 const filteredProducts = computed(() => {
   const q = productFilters.q.trim().toLowerCase()
 
@@ -1488,6 +1727,9 @@ const filteredProducts = computed(() => {
     // (CompanyScopeFilter includePlatformWide) and dropping it here would hide
     // the shared catalogue from the only screen that can switch it on.
     if (activeCompany.companyId !== null && p.company_id !== null && p.company_id !== activeCompany.companyId) return false
+    // 2026-09-09 — "show me only the shared ones" / "only this company's".
+    if (ownerFilter.value === 'platform' && !p.is_shared) return false
+    if (ownerFilter.value === 'company' && p.is_shared) return false
     if (q && !p.name.toLowerCase().includes(q)) return false
 
     return true
@@ -1518,10 +1760,32 @@ function companyName(companyId: number | null): string | undefined {
  * that prints an owner needs a word, and "#null" or a blank chip would read as
  * a bug. `null` is not a missing company — it is the platform, deliberately.
  */
-const PLATFORM_OWNER_LABEL = 'ของกลาง'
+/*
+ * 2026-09-09 (human: "เปลี่ยนคำว่า ของกลาง เป็น สินค้ากลาง แบรนด์กลาง หมวดกลาง").
+ *
+ * One word was doing three jobs. On a package row "ของกลาง" meant a shared
+ * PACKAGE; on a brand card, a shared BRAND; in the bin, whichever kind that
+ * row happened to be — and the reader had to work out which from the
+ * surroundings. Naming the thing costs the same number of characters and asks
+ * nothing of them.
+ */
+type CatalogKind = 'product' | 'brand' | 'category'
+const PLATFORM_LABEL: Record<CatalogKind, string> = {
+  product: 'สินค้ากลาง',
+  brand: 'แบรนด์กลาง',
+  category: 'หมวดกลาง',
+}
 
-function ownerLabel(companyId: number | null): string {
-  if (companyId === null) return PLATFORM_OWNER_LABEL
+/**
+ * What to CALL an owner, now that `null` is a real one (TASK-256 / ADR-040).
+ *
+ * companyName() answers "which company row is this" and returns undefined for
+ * a platform row, which is right for it: there is no company. But every place
+ * that prints an owner needs a word, and "#null" or a blank chip would read as
+ * a bug. `null` is not a missing company — it is the platform, deliberately.
+ */
+function ownerLabel(companyId: number | null, kind: CatalogKind = 'product'): string {
+  if (companyId === null) return PLATFORM_LABEL[kind]
 
   return companyName(companyId) ?? `#${companyId}`
 }
@@ -1580,7 +1844,9 @@ function groupOptionsByCompany<T extends { id: number, name: string, company_id:
       companyId: id,
       // v-for needs a PropertyKey and `null` is not one — TASK-256.
       key: id === null ? 'platform' : String(id),
-      companyName: id === null ? PLATFORM_OWNER_LABEL : (companyName(id) ?? `บริษัท #${id}`),
+      // A group HEADING over a mixed list, not the name of one row — so it
+      // says what the group is rather than borrowing one kind's noun.
+      companyName: id === null ? 'ใช้ร่วมกันทุกบริษัท' : (companyName(id) ?? `บริษัท #${id}`),
       items: [...list].sort((a, b) => a.name.localeCompare(b.name, 'th')),
     }))
     // TASK-256 — the platform's brands and categories head the list. They are
@@ -1802,6 +2068,11 @@ function toggleRefForm(): void {
           >
             <Icon :name="t.icon" :size="14" />
             {{ t.label }}
+            <!-- The bin is the only tab whose emptiness is the good news, so
+                 it is the only one worth counting on the bar. -->
+            <span v-if="t.key === 'trash' && trashCount" class="ml-0.5 px-1.5 rounded-full bg-slate-200 text-slate-600 text-[10px]">
+              {{ trashCount }}
+            </span>
           </button>
         </div>
       </template>
@@ -1927,7 +2198,7 @@ function toggleRefForm(): void {
         </div>
         <!-- 2026-09-09 (human: "ทำแบบเดียวกันกับทางแบรนด์ และหมวดหมู่") —
              the tick boxes below can only say WHICH COMPANIES get a row of
-             their own. ของกลาง is a different answer, not one more company,
+             their own. แบรนด์กลาง is a different answer, not one more company,
              so it is asked first and hides the tick list when chosen. -->
         <div v-if="isSuperAdmin" class="rounded-lg border border-brand-100 bg-brand-50 p-3">
           <p class="text-xs font-bold text-brand-700">บันทึกเป็น</p>
@@ -2003,7 +2274,7 @@ function toggleRefForm(): void {
                    Company Admin editing a name that also exists centrally
                    changes only their own row. -->
               <p v-if="g.hasPlatformRow && !isSuperAdmin" class="text-[11px] text-amber-600">
-                ชื่อนี้มี{{ PLATFORM_OWNER_LABEL }}อยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะแบรนด์ของบริษัทคุณ ส่วนของกลางแก้ไขได้เฉพาะ Super Admin
+                ชื่อนี้มีแบรนด์กลางอยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะแบรนด์ของบริษัทคุณ ส่วนแบรนด์กลางแก้ไขได้เฉพาะ Super Admin
               </p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
@@ -2071,7 +2342,7 @@ function toggleRefForm(): void {
                     ? 'bg-brand-600 text-white border-brand-600'
                     : 'bg-brand-50 text-brand-700 border-brand-100'"
                   :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
-                >{{ ownerLabel(row.company_id) }}<template v-if="!row.is_active"> (ปิด)</template></span>
+                >{{ ownerLabel(row.company_id, 'brand') }}<template v-if="!row.is_active"> (ปิด)</template></span>
               </div>
             </div>
             <div class="flex items-center gap-3 shrink-0">
@@ -2132,7 +2403,7 @@ function toggleRefForm(): void {
             >
               <input v-model="categoryCreateAsPlatform" type="radio" :value="true" data-test="category-owner-platform" class="mt-0.5 shrink-0" />
               <span class="min-w-0">
-                <span class="block text-sm font-bold text-slate-800">หมวดหมู่กลาง (ทุกบริษัทใช้ร่วมกัน)</span>
+                <span class="block text-sm font-bold text-slate-800">หมวดกลาง (ทุกบริษัทใช้ร่วมกัน)</span>
                 <span class="block mt-0.5 text-[11px] text-slate-500">รายการเดียว ทุกบริษัทเลือกใช้ได้ตอนเพิ่มสินค้า · แก้ครั้งเดียว เปลี่ยนพร้อมกันทุกบริษัท</span>
               </span>
             </label>
@@ -2168,7 +2439,7 @@ function toggleRefForm(): void {
               <p class="text-[11px] font-bold text-brand-700">กำลังแก้ไข · {{ g.name }}</p>
               <!-- TASK-245 — see the brand form above. -->
               <p v-if="g.hasPlatformRow && !isSuperAdmin" class="text-[11px] text-amber-600">
-                ชื่อนี้มี{{ PLATFORM_OWNER_LABEL }}อยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะหมวดหมู่ของบริษัทคุณ ส่วนของกลางแก้ไขได้เฉพาะ Super Admin
+                ชื่อนี้มีหมวดกลางอยู่ด้วย — การแก้ไขนี้จะมีผลเฉพาะหมวดหมู่ของบริษัทคุณ ส่วนหมวดกลางแก้ไขได้เฉพาะ Super Admin
               </p>
               <div>
                 <label class="text-xs font-bold text-slate-500">ชื่อหมวดหมู่</label>
@@ -2219,7 +2490,7 @@ function toggleRefForm(): void {
                       ? 'bg-brand-600 text-white border-brand-600'
                       : 'bg-brand-50 text-brand-700 border-brand-100'"
                     :title="row.is_active ? 'ใช้งาน' : 'ปิดใช้งานในบริษัทนี้'"
-                  >{{ ownerLabel(row.company_id) }}<template v-if="!row.is_active"> (ปิด)</template></span>
+                  >{{ ownerLabel(row.company_id, 'category') }}<template v-if="!row.is_active"> (ปิด)</template></span>
                 </div>
               </div>
             </div>
@@ -2251,6 +2522,27 @@ function toggleRefForm(): void {
            narrowing the list is what an admin actually wanted from them
            day to day; the gear opens the drawer for the rare edit. The
            package list had no filter at all before this. -->
+      <!-- 2026-09-09 — the two kinds of package live in one list and the
+           actions on them are not equivalent. Being able to look at one kind
+           at a time is the cheapest half of telling them apart; the badge and
+           the delete button are the other half. -->
+      <div v-if="isSuperAdmin" class="mb-2 inline-flex rounded-lg bg-slate-100 p-0.5">
+        <button
+          v-for="opt in [
+            { key: 'all', label: 'ทั้งหมด' },
+            { key: 'platform', label: 'สินค้ากลาง' },
+            { key: 'company', label: 'ของบริษัทนี้' },
+          ]"
+          :key="opt.key"
+          type="button"
+          :data-test="`owner-filter-${opt.key}`"
+          class="px-3 py-1.5 rounded-md text-xs font-bold transition-colors"
+          :class="ownerFilter === opt.key ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+          @click="ownerFilter = opt.key as OwnerFilter"
+        >
+          {{ opt.label }}
+        </button>
+      </div>
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <div class="relative flex-1 min-w-[180px]">
           <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -2324,7 +2616,7 @@ function toggleRefForm(): void {
             <p class="text-sm font-bold text-slate-900 flex items-center gap-2">
               <span class="truncate">{{ p.name }}</span>
               <span v-if="p.is_shared" class="shrink-0 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-bold" title="สินค้ากลาง — ทุกบริษัทใช้รายการเดียวกัน แต่ตั้งราคาและเปิด/ปิดขายเองได้">
-                ของกลาง
+                สินค้ากลาง
               </span>
             </p>
             <p class="text-xs text-slate-400">
@@ -2391,9 +2683,35 @@ function toggleRefForm(): void {
             >
               <Icon :name="canUpdate(p) ? 'pencil' : 'search'" :size="12" /> {{ canUpdate(p) ? 'แก้ไข' : 'ดู' }}
             </RouterLink>
-            <button v-if="canDelete(p)" class="text-slate-400 hover:text-rose-600" title="ลบ" @click="deleteProduct(p)">
+            <!-- 2026-09-09 (human: "ผู้ใช้ไม่ทราบ ควรแยกกัน") — a bare grey
+                 trash icon cannot say "ทุกบริษัท", and for a shared package
+                 that is the entire difference between the two acts. So the
+                 shared one is a labelled, outlined button and the ordinary
+                 one stays exactly the icon it has always been. -->
+            <button
+              v-if="canDelete(p) && p.is_shared"
+              data-test="delete-platform-product"
+              class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-200 text-rose-600 text-xs font-bold hover:bg-rose-50 whitespace-nowrap"
+              title="ลบสินค้ากลาง — หายจากทุกบริษัทพร้อมกัน"
+              @click="deleteProduct(p)"
+            >
+              <Icon name="trash" :size="12" /> ลบสินค้ากลาง
+            </button>
+            <button
+              v-else-if="canDelete(p)"
+              data-test="delete-company-product"
+              class="text-slate-400 hover:text-rose-600"
+              title="ลบ"
+              @click="deleteProduct(p)"
+            >
               <Icon name="trash" :size="14" />
             </button>
+            <!-- A Company Admin looking at a shared package has no delete, no
+                 price control and no on/off switch — by design (ADR-040), but
+                 an empty row reads as a broken screen rather than a rule. -->
+            <span v-else-if="p.is_shared" class="text-[11px] text-slate-400 whitespace-nowrap" title="สินค้ากลางจัดการโดยผู้ดูแลระบบ">
+              จัดการโดยผู้ดูแลระบบ
+            </span>
           </div>
         </div>
       </TransitionGroup>
@@ -2439,6 +2757,81 @@ function toggleRefForm(): void {
     </section>
 
     <!-- Banners (TASK-068 / ADR-020 row 2) -->
+    <!-- ── ถังขยะ (2026-09-09) ─────────────────────────────────────────
+         One list per kind, newest deletion first, each row saying when it
+         went and offering the one action a bin has. Restore is per row
+         rather than a bulk "undo everything": what got hidden by mistake is
+         usually one thing, and un-hiding the rest silently would be its own
+         surprise. -->
+    <section v-if="activeTab === 'trash'" class="mt-4">
+      <div class="mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 leading-relaxed">
+        รายการที่ลบไปจะถูก<span class="font-bold text-slate-700">ซ่อน</span> ไม่ได้ถูกลบถาวร —
+        กู้คืนกลับมาใช้งานได้ทุกเมื่อ ราคาและการตั้งค่าของแต่ละบริษัทยังอยู่ครบ
+      </div>
+
+      <p v-if="trashError" class="mb-3 text-xs font-bold text-rose-600">{{ trashError }}</p>
+      <LoadingSkeleton v-if="loadingTrash" type="list" />
+      <EmptyState v-else-if="!trashCount" icon="trash" title="ถังขยะว่าง" description="ยังไม่มีสินค้า แบรนด์ หรือหมวดหมู่ที่ถูกลบ" />
+
+      <template v-else>
+        <template
+          v-for="bucket in [
+            { key: 'products', title: 'แพ็กเกจ', icon: 'cube', rows: trash.products, endpoint: 'products', kind: 'product' },
+            { key: 'brands', title: 'แบรนด์', icon: 'tag', rows: trash.brands, endpoint: 'brands', kind: 'brand' },
+            { key: 'categories', title: 'หมวดหมู่', icon: 'layers', rows: trash.categories, endpoint: 'product-categories', kind: 'category' },
+          ]"
+          :key="bucket.key"
+        >
+          <div v-if="bucket.rows.length" class="mb-5">
+            <p class="mb-2 text-xs font-bold text-slate-500 flex items-center gap-1.5">
+              <Icon :name="bucket.icon" :size="13" /> {{ bucket.title }} ({{ bucket.rows.length }})
+            </p>
+            <div class="space-y-2">
+              <div
+                v-for="row in bucket.rows"
+                :key="row.id"
+                class="bg-white/95 border border-slate-200 rounded-xl p-3 flex items-center justify-between gap-3"
+                :data-test="`trash-${bucket.key}-row`"
+              >
+                <div class="min-w-0">
+                  <p class="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <span class="truncate">{{ row.name }}</span>
+                    <!-- The bin holds all three kinds, so the badge names
+                         the one this row actually is. -->
+                    <span v-if="row.company_id === null" class="shrink-0 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 text-[10px] font-bold">
+                      {{ PLATFORM_LABEL[bucket.kind as CatalogKind] }}
+                    </span>
+                  </p>
+                  <p class="text-[11px] text-slate-400">
+                    {{ deletedAgo(row.deleted_at) }}
+                    <template v-if="isSuperAdmin && companyName(row.company_id)"> · {{ companyName(row.company_id) }}</template>
+                  </p>
+                </div>
+                <button
+                  v-if="canRestore(row)"
+                  type="button"
+                  data-test="restore-row"
+                  :disabled="restoringId !== null"
+                  class="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold hover:bg-emerald-100 disabled:opacity-50"
+                  @click="restoreRow(bucket.endpoint as 'products' | 'brands' | 'product-categories', row.id)"
+                >
+                  <Icon name="refresh" :size="12" />
+                  {{ restoringId === `${bucket.endpoint}:${row.id}` ? 'กำลังกู้คืน…' : 'กู้คืน' }}
+                </button>
+                <!-- A platform row is listed for a Company Admin on purpose —
+                     hiding it would make the catalogue look as though the
+                     product simply ceased to exist — but the button that
+                     would 403 is replaced by the reason. -->
+                <span v-else class="shrink-0 text-[11px] text-slate-400 whitespace-nowrap">
+                  กู้คืนได้เฉพาะผู้ดูแลระบบ
+                </span>
+              </div>
+            </div>
+          </div>
+        </template>
+      </template>
+    </section>
+
     <section v-if="activeTab === 'banners'" class="mt-4">
       <p class="text-xs text-slate-400 mb-2">
         แบนเนอร์หน้าร้าน Agent Portal (สไลด์ได้ 3 ตำแหน่ง) — คลิกแล้วพาไปหน้าสินค้า, URL ภายนอก, หรือหน้าภายในระบบ ตามที่ตั้งค่าไว้ · เลือกหลายรูปพร้อมกันเพื่อสร้างหลายแบนเนอร์ในครั้งเดียว
@@ -2652,7 +3045,9 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteBrand !== null"
       variant="danger"
+      :size="deleteBrandPhrase ? 'md' : 'sm'"
       :body="deleteBrandBody"
+      :confirm-phrase="deleteBrandPhrase"
       @confirm="confirmDeleteBrand"
       @update:show="(v) => { if (!v) pendingDeleteBrand = null }"
     />
@@ -2661,7 +3056,9 @@ function toggleRefForm(): void {
     <ConfirmDialog
       :show="pendingDeleteCategory !== null"
       variant="danger"
+      :size="deleteCategoryPhrase ? 'md' : 'sm'"
       :body="deleteCategoryBody"
+      :confirm-phrase="deleteCategoryPhrase"
       @confirm="confirmDeleteCategory"
       @update:show="(v) => { if (!v) pendingDeleteCategory = null }"
     />
@@ -2669,12 +3066,21 @@ function toggleRefForm(): void {
     <!-- TASK-091 — the remaining three tabs. Product copy warns about the
          Agent Portal because a hidden package disappears from the
          storefront immediately. -->
+    <!-- 2026-09-09 — one dialog, two shapes. The body is built from the
+         server's own deletion-impact answer (see deleteProductBody), so it
+         can name the other companies and can never promise a delete the
+         server then refuses. A shared package additionally asks for its name
+         to be typed. -->
     <ConfirmDialog
       :show="pendingDeleteProduct !== null"
       variant="danger"
-      :body='pendingDeleteProduct ? `ซ่อนแพ็กเกจ "${pendingDeleteProduct.name}" จากรายการ? Agent จะไม่เห็นแพ็กเกจนี้บนหน้าร้านอีก (ถ้ามีการขาย/คอมมิชชั่นผูกอยู่ ระบบจะไม่ยอมให้ลบ)` : ""'
+      :size="pendingDeleteProduct?.is_shared ? 'md' : 'sm'"
+      :title="pendingDeleteProduct?.is_shared ? 'ลบสินค้ากลาง' : 'ซ่อนแพ็กเกจ'"
+      :body="loadingImpact ? 'กำลังตรวจสอบผลกระทบ…' : deleteProductBody"
+      :confirm-phrase="deleteProductPhrase"
+      :busy="loadingImpact"
       @confirm="confirmDeleteProduct"
-      @update:show="(v) => { if (!v) pendingDeleteProduct = null }"
+      @update:show="(v) => { if (!v) { pendingDeleteProduct = null; deleteImpact = null } }"
     />
   </main>
 </template>

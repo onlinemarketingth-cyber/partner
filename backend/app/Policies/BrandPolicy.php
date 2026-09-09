@@ -51,4 +51,15 @@ class BrandPolicy
     {
         return $this->update($user, $brand);
     }
+
+    /**
+     * 2026-09-09 — bringing a hidden row back is the same authority as
+     * hiding it, deliberately: anyone who could not delete it has no
+     * business un-deleting it either, and for a platform-owned row that
+     * means Super Admin alone (see update()).
+     */
+    public function restore(User $user, Brand $brand): bool
+    {
+        return $this->delete($user, $brand);
+    }
 }

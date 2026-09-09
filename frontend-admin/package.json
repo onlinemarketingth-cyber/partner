@@ -16,6 +16,8 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@tiptap/starter-kit": "^3.31.3",
+    "@tiptap/vue-3": "^3.31.3",
     "apexcharts": "^6.5.0",
     "pdfjs-dist": "^6.2.108",
     "pinia": "^3.0.4",

@@ -239,7 +239,7 @@ describe('ProductEditView — whose product is this?', () => {
     expect(body).not.toHaveProperty('company_id')
   })
 
-  it('narrows the brand and category pickers to ของกลาง rows', async () => {
+  it('narrows the brand and category pickers to แบรนด์กลาง / หมวดกลาง rows', async () => {
     /*
      * ValidatesProductTaxonomy refuses a company brand on a platform product
      * server-side. Offering one here would reproduce exactly the bug reported
@@ -349,7 +349,7 @@ async function submitRefForm(w: Awaited<ReturnType<typeof mountRefDrawer>>, name
 }
 
 describe('ProductCatalogView — whose brand is this?', () => {
-  it('asks before the company tick boxes, because ของกลาง is not one more company', async () => {
+  it('asks before the company tick boxes, because แบรนด์กลาง is not one more company', async () => {
     asSuperAdmin()
     const w = await mountRefDrawer('brands')
 
@@ -360,7 +360,7 @@ describe('ProductCatalogView — whose brand is this?', () => {
 
   it('hides the tick boxes once the brand belongs to nobody in particular', async () => {
     /*
-     * Ticking companies AND ของกลาง would mean "shared with everyone and owned
+     * Ticking companies AND แบรนด์กลาง would mean "shared with everyone and owned
      * by these two", which is not a state the schema has.
      */
     asSuperAdmin()

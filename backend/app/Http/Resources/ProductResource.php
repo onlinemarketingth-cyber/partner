@@ -226,7 +226,12 @@ class ProductResource extends JsonResource
                 'delete' => (bool) $request->user()?->can('delete', $this->resource),
                 'set_commission_rule' => (bool) $request->user()?->can('create', CommissionRule::class)
                     && ((bool) $request->user()?->isSuperAdmin() || $this->catalog_item_id === null),
+                // 2026-09-09 — the bin tab needs this per row: a Company
+                // Admin sees a platform row they cannot bring back, and a
+                // button that 403s is worse than no button.
+                'restore' => (bool) $request->user()?->can('restore', $this->resource),
             ],
+            'deleted_at' => $this->deleted_at,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];

@@ -47,6 +47,10 @@ import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import { useCommissionRateCapGuard } from '@/composables/useCommissionRateCap'
 import { useCompanySwitchGuard } from '@/composables/useCompanySwitchGuard'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+// 2026-09-09 — the description fields became rich text; the editor and the
+// read-only renderer are one pair (see either component's docblock).
+import RichTextEditor from '@/design-system/components/RichTextEditor.vue'
+import RichText from '@/design-system/components/RichText.vue'
 // ADR-026 — Thai stage wording lives in the UI layer, never in the enum
 // (PipelineStage::label() is English by §7). One map per app.
 import { PAYMENT_STAGE_KEY, stageLabelTh, type PipelineStageRef } from '@/utils/pipelineStages'
@@ -136,13 +140,13 @@ interface Brand {
   id: number
   name: string
   is_active: boolean
-  /** null = ของกลาง, a brand the platform owns and every company may use. */
+  /** null = แบรนด์กลาง, a brand the platform owns and every company may use. */
   company_id: number | null
 }
 interface ProductCategory {
   id: number
   name: string
-  /** null = ของกลาง — see Brand above. */
+  /** null = หมวดกลาง — see Brand above. */
   company_id: number | null
   sort_order: number
   is_active: boolean
@@ -346,7 +350,7 @@ const categories = ref<ProductCategory[]>([])
 /*
  * A platform product cannot wear one company's brand — every other company
  * would see that name on a product they sell — so the pickers narrow to
- * ของกลาง rows the moment สินค้ากลาง is chosen. ValidatesProductTaxonomy
+ * แบรนด์กลาง / หมวดกลาง rows the moment สินค้ากลาง is chosen. ValidatesProductTaxonomy
  * enforces exactly this server-side; the point of doing it here too is that
  * a form must never offer an answer its own save would refuse (which is the
  * bug this screen shipped a day ago).
@@ -1120,12 +1124,28 @@ async function onCoverFilesSelected(event: Event) {
   }
 }
 
+/**
+ * 2026-09-09 — an in-flight marker so the strip can say "กำลังตั้ง…".
+ *
+ * The reload afterwards is a round trip, and without it the tile looks
+ * inert for the whole of it — which on a slow connection reads as "the
+ * button does nothing", the exact complaint this change is answering.
+ * It also stops a double-tap becoming two writes racing to clear each
+ * other's primary flag.
+ */
+const settingPrimaryId = ref<number | null>(null)
+
 async function setPrimaryMedia(item: ProductMediaItem) {
+  if (settingPrimaryId.value !== null) return
+  settingPrimaryId.value = item.id
+  mediaError.value = ''
   try {
     await api.put(`/product-media/${item.id}`, { is_primary: true })
     await loadMedia()
   } catch (e) {
     mediaError.value = apiErrorMessage(e, 'ตั้งรูปหลักไม่สำเร็จ')
+  } finally {
+    settingPrimaryId.value = null
   }
 }
 
@@ -1930,8 +1950,16 @@ async function deleteRule(ruleId: number) {
  * cleanup runs, and on the day somebody adds a company brand that happens to
  * share a platform name.
  */
-function taxonomyLabel(row: { name: string; company_id: number | null }): string {
-  return row.company_id === null ? `${row.name} · ของกลาง` : row.name
+/*
+ * 2026-09-09 (human: "เปลี่ยนคำว่า ของกลาง เป็น สินค้ากลาง แบรนด์กลาง หมวดกลาง")
+ * — the suffix names WHICH kind of central row it is. One word for all three
+ * left the reader working out from the surroundings whether "ของกลาง" meant a
+ * package, a brand or a category.
+ */
+function taxonomyLabel(row: { name: string; company_id: number | null }, kind: 'brand' | 'category'): string {
+  const label = kind === 'brand' ? 'แบรนด์กลาง' : 'หมวดกลาง'
+
+  return row.company_id === null ? `${row.name} · ${label}` : row.name
 }
 
 // ── Initial load ──
@@ -2133,7 +2161,7 @@ function goToVideoSettings() {
           <!-- 2026-09-09 (human: "ไม่มี Ui ตรงไหนแจ้งไว้ว่าจะบันทึกลงเฉพาะ
                company หรือ ใช้เป็น product กลาง") — whose product is this?
                First thing on the form, because the answer changes what the
-               rest of it may contain: a platform product may only use ของกลาง
+               rest of it may contain: a platform product may only use central
                brands and categories, must name its own commission plan, and
                has no pipeline of its own. Consequences are spelled out on the
                cards themselves, not hidden behind a tooltip. -->
@@ -2173,7 +2201,7 @@ function goToVideoSettings() {
               <ul class="mt-1.5 space-y-1 text-[11px] leading-relaxed text-amber-800">
                 <li>
                   <span class="font-bold">แบรนด์ และ หมวดหมู่</span> —
-                  จะเหลือให้เลือกเฉพาะรายการที่ทุกบริษัทใช้ร่วมกัน
+                  จะเหลือให้เลือกเฉพาะ <span class="font-bold">แบรนด์กลาง</span> และ <span class="font-bold">หมวดกลาง</span>
                   เพราะถ้าหยิบรายการของบริษัทใดบริษัทหนึ่งมาใส่ บริษัทอื่นจะเห็นชื่อนั้นติดไปด้วย
                 </li>
                 <li>
@@ -2268,14 +2296,14 @@ function goToVideoSettings() {
               <label class="text-sm font-bold text-slate-500">แบรนด์</label>
               <select v-model="basicsForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกแบรนด์</option>
-                <option v-for="b in brandOptions" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
+                <option v-for="b in brandOptions" :key="b.id" :value="b.id">{{ taxonomyLabel(b, 'brand') }}</option>
               </select>
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
               <select v-model="basicsForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
                 <option value="" disabled>เลือกหมวดหมู่</option>
-                <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
+                <option v-for="c in categoryOptions" :key="c.id" :value="c.id">{{ taxonomyLabel(c, 'category') }}</option>
               </select>
             </div>
           </template>
@@ -2819,25 +2847,60 @@ function goToVideoSettings() {
           </p>
 
           <div class="flex flex-wrap gap-3">
+            <!-- 2026-09-09 (human: "แก้ไขรูปให้เปลี่ยนเป็นรูปหลักได้").
+                 setPrimaryMedia() and its endpoint have existed since
+                 TASK-096; what did not exist was any way to FIND them. The
+                 two actions lived in an `opacity-0 group-hover:opacity-100`
+                 overlay, so:
+                   · nothing on screen suggested the tile did anything;
+                   · on a phone or tablet there is no hover at all, which made
+                     the primary image impossible to change on a touch device
+                     rather than merely hard;
+                   · the whole tile carried @click="openMediaPreview", so a tap
+                     opened the preview — the one interaction a touch user
+                     could perform was the one they did not want.
+                 The actions are now a permanent strip along the bottom of the
+                 tile, and only the image area opens the preview. -->
             <div
               v-for="m in coverMedia"
               :key="m.id"
-              class="relative w-32 h-32 rounded-xl overflow-hidden border group cursor-pointer"
+              class="relative w-32 h-32 rounded-xl overflow-hidden border"
               :class="m.is_primary ? 'border-amber-400 ring-2 ring-amber-200' : 'border-slate-200'"
-              @click="openMediaPreview(m)"
             >
-              <AuthenticatedMedia :src="m.stream_url" type="image" class="w-full h-full object-cover" />
+              <button type="button" class="block w-full h-full cursor-zoom-in" title="ดูรูปขนาดเต็ม" @click="openMediaPreview(m)">
+                <AuthenticatedMedia :src="m.stream_url" type="image" class="w-full h-full object-cover" />
+              </button>
 
-              <span v-if="m.is_primary" class="absolute top-1.5 right-1.5 bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded">
+              <span v-if="m.is_primary" class="absolute top-1.5 right-1.5 bg-amber-500 text-white text-[10px] font-bold px-2 py-0.5 rounded pointer-events-none">
                 หลัก
               </span>
 
-              <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                <button v-if="!m.is_primary" class="text-white hover:text-amber-300" title="ตั้งเป็นรูปหลัก" @click.stop="setPrimaryMedia(m)">
-                  <Icon name="star" :size="18" />
+              <!-- Always visible. A 28px-tall strip is enough for a fingertip
+                   and costs a fifth of a 128px tile. -->
+              <div class="absolute inset-x-0 bottom-0 h-7 bg-black/60 flex items-stretch">
+                <button
+                  v-if="!m.is_primary"
+                  type="button"
+                  data-test="set-primary-media"
+                  class="flex-1 flex items-center justify-center gap-1 text-white text-[10px] font-bold hover:bg-amber-500/80 disabled:opacity-50"
+                  :disabled="settingPrimaryId !== null"
+                  title="ตั้งเป็นรูปหลัก — รูปนี้จะขึ้นบนการ์ดสินค้า"
+                  @click.stop="setPrimaryMedia(m)"
+                >
+                  <Icon name="star" :size="12" />
+                  {{ settingPrimaryId === m.id ? 'กำลังตั้ง…' : 'ตั้งเป็นหลัก' }}
                 </button>
-                <button class="text-white hover:text-rose-300" title="ลบ" @click.stop="deleteMedia(m.id)">
-                  <Icon name="trash" :size="18" />
+                <span v-else class="flex-1 flex items-center justify-center gap-1 text-amber-300 text-[10px] font-bold">
+                  <Icon name="star" :size="12" /> รูปหลัก
+                </span>
+                <button
+                  type="button"
+                  data-test="delete-media"
+                  class="w-8 flex items-center justify-center text-white hover:bg-rose-500/80"
+                  title="ลบรูปนี้"
+                  @click.stop="deleteMedia(m.id)"
+                >
+                  <Icon name="trash" :size="12" />
                 </button>
               </div>
             </div>
@@ -3034,7 +3097,7 @@ function goToVideoSettings() {
                 </button>
               </div>
               <template v-if="editingDescription && !isCatalogLinked">
-                <textarea v-model="descriptionDraft" rows="8" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="คำอธิบายสินค้า..." />
+                <RichTextEditor v-model="descriptionDraft" placeholder="คำอธิบายสินค้า..." :min-height="200" />
                 <div class="flex justify-end gap-2 mt-2">
                   <button class="text-xs font-bold text-slate-500" @click="cancelEditDescription">ยกเลิก</button>
                   <button class="btn-primary" :disabled="savingDescription" @click="saveDescription">
@@ -3042,7 +3105,7 @@ function goToVideoSettings() {
                   </button>
                 </div>
               </template>
-              <p v-else-if="product?.description" class="text-sm text-slate-600 whitespace-pre-line">{{ product.description }}</p>
+              <RichText v-else-if="product?.description" :html="product.description" class="text-sm text-slate-600" />
               <p v-else class="text-sm text-slate-400">ยังไม่มีคำอธิบายสินค้า</p>
             </div>
           </div>
@@ -3185,7 +3248,7 @@ function goToVideoSettings() {
                 </button>
               </div>
               <template v-if="editingSpecDescription && !isCatalogLinked">
-                <textarea v-model="specDescriptionDraft" rows="8" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="คำอธิบายสเปคสินค้า..." />
+                <RichTextEditor v-model="specDescriptionDraft" placeholder="คำอธิบายสเปคสินค้า..." :min-height="200" />
                 <div class="flex justify-end gap-2 mt-2">
                   <button class="text-xs font-bold text-slate-500" @click="cancelEditSpecDescription">ยกเลิก</button>
                   <button class="btn-primary" :disabled="savingSpecDescription" @click="saveSpecDescription">
@@ -3193,7 +3256,7 @@ function goToVideoSettings() {
                   </button>
                 </div>
               </template>
-              <p v-else-if="product?.spec_description" class="text-sm text-slate-600 whitespace-pre-line">{{ product.spec_description }}</p>
+              <RichText v-else-if="product?.spec_description" :html="product.spec_description" class="text-sm text-slate-600" />
               <p v-else class="text-sm text-slate-400">ยังไม่มีคำอธิบายสเปคสินค้า</p>
             </div>
 
@@ -3757,24 +3820,24 @@ function goToVideoSettings() {
               <label class="text-xs font-bold text-slate-500">แบรนด์</label>
               <select v-model="unlinkForm.brand_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="" disabled>เลือกแบรนด์</option>
-                <option v-for="b in brands" :key="b.id" :value="b.id">{{ taxonomyLabel(b) }}</option>
+                <option v-for="b in brands" :key="b.id" :value="b.id">{{ taxonomyLabel(b, 'brand') }}</option>
               </select>
             </div>
             <div>
               <label class="text-xs font-bold text-slate-500">หมวดหมู่</label>
               <select v-model="unlinkForm.category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="" disabled>เลือกหมวดหมู่</option>
-                <option v-for="c in categories" :key="c.id" :value="c.id">{{ taxonomyLabel(c) }}</option>
+                <option v-for="c in categories" :key="c.id" :value="c.id">{{ taxonomyLabel(c, 'category') }}</option>
               </select>
             </div>
           </div>
           <div>
             <label class="text-xs font-bold text-slate-500">คำอธิบาย (ไม่บังคับ)</label>
-            <textarea v-model="unlinkForm.description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+            <RichTextEditor v-model="unlinkForm.description" :min-height="110" class="mt-1" />
           </div>
           <div>
             <label class="text-xs font-bold text-slate-500">คำอธิบายสเปค (ไม่บังคับ)</label>
-            <textarea v-model="unlinkForm.spec_description" rows="3" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm resize-y" />
+            <RichTextEditor v-model="unlinkForm.spec_description" :min-height="110" class="mt-1" />
           </div>
           <p v-if="unlinkError" class="text-xs font-bold text-rose-600">{{ unlinkError }}</p>
         </div>

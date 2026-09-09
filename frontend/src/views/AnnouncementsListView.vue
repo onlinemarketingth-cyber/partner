@@ -130,6 +130,29 @@ function openAnnouncement(a: Announcement) {
 function closeAnnouncementModal() {
   showAnnouncementModal.value = false
 }
+
+/**
+ * 2026-09-09 — announcement content became rich text, and this is a ONE-LINE
+ * preview. Left as raw HTML inside `{{ }}` it would show the reader "<p>ประ…"
+ * — a line of markup where a sentence should be. Rendering it as HTML instead
+ * is not the answer either: a preview clamped to one line must not be able to
+ * open a heading or a list that then styles the row.
+ *
+ * So: the words only, with a space where each block ended (otherwise
+ * "<p>ก่อน</p><p>หลัง</p>" reads as "ก่อนหลัง"). Mirrors
+ * App\Support\RichText::toPlainText() on the server.
+ */
+function contentPreview(content: string): string {
+  return content
+    .replace(/<(br|\/p|\/li|\/h2|\/h3)\b[^>]*>/gi, ' ')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 </script>
 
 <template>
@@ -228,7 +251,7 @@ function closeAnnouncementModal() {
                 <Icon v-if="a.is_pinned" name="star" :size="14" class="text-ink-warning shrink-0" />
                 <p class="text-sm font-bold text-ink-card truncate">{{ a.title }}</p>
               </div>
-              <p v-if="a.content" class="text-xs text-ink-card-muted line-clamp-1 mt-0.5">{{ a.content }}</p>
+              <p v-if="a.content" class="text-xs text-ink-card-muted line-clamp-1 mt-0.5">{{ contentPreview(a.content) }}</p>
               <p v-if="a.published_at" class="text-[11px] text-ink-card-subtle mt-0.5">{{ formatDate(a.published_at) }}</p>
             </div>
           </AppCard>

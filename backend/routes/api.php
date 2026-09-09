@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\V1\BinaryMatchingCycleController;
 use App\Http\Controllers\Api\V1\BrandController;
 use App\Http\Controllers\Api\V1\CatalogBrandController;
 use App\Http\Controllers\Api\V1\CatalogCategoryController;
+use App\Http\Controllers\Api\V1\CatalogTrashController;
 use App\Http\Controllers\Api\V1\CertTierController;
 use App\Http\Controllers\Api\V1\ChunkedUploadController;
 use App\Http\Controllers\Api\V1\ClientActivityController;
@@ -443,7 +444,26 @@ Route::prefix('v1')->group(function () {
         // Product Catalog — ERD-001 §"Product Catalog". Every action is
         // gated by its Policy inside the controller (authorizeResource);
         // TenantScope handles the query-level tenant filter (BR-6).
+        /*
+         * 2026-09-09 (human: "ตอนนี้ไม่มี Ui ลบสินค้ากลาง กับสินค้าจาก company
+         * ผู้ใช้ไม่ทราบ ควรแยกกัน" / "ออกแบบ Ui สำหรับปุ่มกู้คืน").
+         *
+         * Registered BEFORE each apiResource so the literal
+         * 'deletion-impact' / 'restore' segments are matched ahead of the
+         * {brand} / {product} wildcards — the same collision this file
+         * already avoids for 'recommended' below.
+         *
+         * The bin listing is one endpoint for one tab; see
+         * CatalogTrashController for why it is not a flag on three lists.
+         */
+        Route::get('/catalog-trash', [CatalogTrashController::class, 'index']);
+
+        Route::get('/brands/{brand}/deletion-impact', [BrandController::class, 'deletionImpact']);
+        Route::post('/brands/{brand}/restore', [BrandController::class, 'restore'])->withTrashed();
         Route::apiResource('brands', BrandController::class);
+
+        Route::get('/product-categories/{product_category}/deletion-impact', [ProductCategoryController::class, 'deletionImpact']);
+        Route::post('/product-categories/{product_category}/restore', [ProductCategoryController::class, 'restore'])->withTrashed();
         Route::apiResource('product-categories', ProductCategoryController::class)
             ->parameters(['product-categories' => 'product_category']);
         // TASK-068 / ADR-020 row 4 — registered BEFORE apiResource('products')
@@ -454,6 +474,8 @@ Route::prefix('v1')->group(function () {
         // GET /products/recommended shape instead, so route ORDER is what
         // prevents the collision this time).
         Route::get('/products/recommended', [ProductController::class, 'recommended']);
+        Route::get('/products/{product}/deletion-impact', [ProductController::class, 'deletionImpact']);
+        Route::post('/products/{product}/restore', [ProductController::class, 'restore'])->withTrashed();
         Route::apiResource('products', ProductController::class);
         // Product-view IA item 2.2 — flat path (not nested under
         // /products/{id}) so it isn't swallowed by the apiResource

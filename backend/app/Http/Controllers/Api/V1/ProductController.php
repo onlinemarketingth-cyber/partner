@@ -8,15 +8,13 @@ use App\Http\Requests\Catalog\UpdateCompanyProductSettingRequest;
 use App\Http\Requests\Catalog\UpdateProductRequest;
 use App\Http\Resources\CompanyProductSettingResource;
 use App\Http\Resources\ProductResource;
-use App\Models\CommissionLedger;
 use App\Models\Product;
-use App\Models\Referral;
 use App\Services\Catalog\CompanyProductSettingService;
 use App\Services\Catalog\ProductGradingService;
 use App\Services\Catalog\ProductRecommendationService;
 use App\Services\Catalog\ProductService;
+use App\Support\Catalog\DeletionImpact;
 use App\Support\CompanyScopeFilter;
-use App\Support\DeletionGuard;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -204,22 +202,52 @@ class ProductController extends Controller
         return new ProductResource($product->load(['brand', 'category', 'company', 'catalogItem.catalogBrand', 'catalogItem.catalogCategory']));
     }
 
+    /**
+     * GET /products/{product}/deletion-impact — what deleting this would do,
+     * asked before the confirmation dialog is drawn (2026-09-09).
+     *
+     * The dialog used to state the rules from memory ("ถ้ามีการขาย/คอมมิชชั่น
+     * ผูกอยู่ ระบบจะไม่ยอมให้ลบ") — a sentence in a template with nothing
+     * keeping it true, and one that could not name the OTHER companies a
+     * shared product would vanish from. Now it prints this.
+     *
+     * Authorized as 'delete': asking what a delete would cost is only for
+     * somebody who could perform it, and for a shared product that is Super
+     * Admin alone.
+     */
+    public function deletionImpact(Product $product): JsonResponse
+    {
+        $this->authorize('delete', $product);
+
+        return response()->json(['data' => DeletionImpact::forProduct($product)]);
+    }
+
     public function destroy(Product $product): Response
     {
         // TASK-091 — a product is the most-referenced row in the catalogue.
-        // Referrals and the commission ledger are listed first because they
-        // are BR-4 money records: hiding the product they point at would
-        // leave a paid commission describing a package no report can name.
-        DeletionGuard::ensureNoDependents([
-            'Referral / การขาย' => Referral::query()->where('product_id', $product->id)->count(),
-            'รายการคอมมิชชั่น' => CommissionLedger::query()->where('product_id', $product->id)->count(),
-            'อัตราคอมมิชชั่น' => $product->commissionRules()->count(),
-            'บทเรียน Academy' => $product->modules()->count(),
-        ]);
+        // The same computation the dialog was drawn from, so the two can
+        // never drift apart (see DeletionImpact's own docblock).
+        DeletionImpact::enforce(DeletionImpact::forProduct($product));
 
         $product->delete();
 
         return response()->noContent();
+    }
+
+    /**
+     * POST /products/{product}/restore — TASK-091 always soft-deleted, and
+     * until now nothing on any screen could bring a row back: the data was
+     * still there and the only way to reach it was the database.
+     *
+     * Route binds withTrashed(), same shape as users.restore.
+     */
+    public function restore(Product $product): ProductResource
+    {
+        $this->authorize('restore', $product);
+
+        $product->restore();
+
+        return new ProductResource($product->load(['brand', 'category', 'company']));
     }
 
     /**

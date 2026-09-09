@@ -51,9 +51,12 @@ describe('ProductEditView — the brand and category pickers are scoped', () => 
      * a form that prints the bare name twice is asking somebody to guess.
      */
     expect(source).toContain('function taxonomyLabel')
-    expect(source).toContain('ของกลาง')
-    expect(source).toContain('{{ taxonomyLabel(b) }}')
-    expect(source).toContain('{{ taxonomyLabel(c) }}')
+    // 2026-09-09 — the suffix names WHICH kind of central row it is, so the
+    // helper takes the kind and both call sites pass it.
+    expect(source).toContain('แบรนด์กลาง')
+    expect(source).toContain('หมวดกลาง')
+    expect(source).toContain("{{ taxonomyLabel(b, 'brand') }}")
+    expect(source).toContain("{{ taxonomyLabel(c, 'category') }}")
   })
 
   it('no longer fetches either one unscoped', () => {

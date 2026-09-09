@@ -127,6 +127,16 @@ const PATHS: Record<string, string> = {
     play:      'M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
     rotate_ccw:'M3 4v5h5M3.05 12.95a9 9 0 102.55-6.36L3 9',
     list:      'M4 6h16M4 10h16M4 14h16M4 18h16',
+
+    // ━━━ 2026-09-09 — RichTextEditor's toolbar ━━━
+    // An unknown name falls back to the alert triangle (see `path` below), so
+    // without these every formatting button would render as a warning sign.
+    bold:          'M7 5h6a3.5 3.5 0 010 7H7zm0 7h7.5a3.5 3.5 0 010 7H7z',
+    italic:        'M19 5h-7M12 19H5M15 5l-4 14',
+    underline:     'M7 4v6a5 5 0 0010 0V4M5 20h14',
+    strikethrough: 'M4 12h16M8 8.5A3.5 3.5 0 0111.5 5h2A3.5 3.5 0 0117 8.5M7 15.5A3.5 3.5 0 0010.5 19h3a3.5 3.5 0 003.5-3.5',
+    list_bullet:   'M9 6h12M9 12h12M9 18h12M4.5 6h.01M4.5 12h.01M4.5 18h.01',
+    list_numbered: 'M10 6h11M10 12h11M10 18h11M4 5h1.5v4M3.5 9h3M3.5 14.5h3l-3 3.5h3',
     dots:      'M5 12a1 1 0 102 0 1 1 0 00-2 0zm6 0a1 1 0 102 0 1 1 0 00-2 0zm6 0a1 1 0 102 0 1 1 0 00-2 0z',
     dot:       'M12 12h.01',
     note:      'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4',

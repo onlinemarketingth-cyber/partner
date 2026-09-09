@@ -8,8 +8,9 @@ use App\Http\Requests\Catalog\UpdateBrandRequest;
 use App\Http\Resources\BrandResource;
 use App\Models\Brand;
 use App\Services\Catalog\BrandService;
+use App\Support\Catalog\DeletionImpact;
 use App\Support\CompanyScopeFilter;
-use App\Support\DeletionGuard;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -100,16 +101,33 @@ class BrandController extends Controller
         return new BrandResource($service->update($brand, $request->validated(), $request->file('logo')));
     }
 
+    /** GET /brands/{brand}/deletion-impact — see ProductController's own. */
+    public function deletionImpact(Brand $brand): JsonResponse
+    {
+        $this->authorize('delete', $brand);
+
+        return response()->json(['data' => DeletionImpact::forBrand($brand)]);
+    }
+
     public function destroy(Brand $brand): Response
     {
         // TASK-091 — soft delete never trips products.brand_id's
-        // restrictOnDelete FK, so the check has to live here.
-        DeletionGuard::ensureNoDependents([
-            'สินค้า' => $brand->products()->count(),
-        ]);
+        // restrictOnDelete FK, so the check has to live here. Same
+        // computation the confirmation dialog was drawn from.
+        DeletionImpact::enforce(DeletionImpact::forBrand($brand));
 
         $brand->delete();
 
         return response()->noContent();
+    }
+
+    /** POST /brands/{brand}/restore — route binds withTrashed(). */
+    public function restore(Brand $brand): BrandResource
+    {
+        $this->authorize('restore', $brand);
+
+        $brand->restore();
+
+        return new BrandResource($brand);
     }
 }
