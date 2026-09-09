@@ -188,6 +188,40 @@ beforeEach(() => {
 
 // ── The control, before any dialog opens ─────────────────────────────
 
+describe('the primary image is shown on the row', () => {
+  it('renders the thumbnail the server resolved', async () => {
+    /*
+     * 2026-09-09 (human: "นำรูปสินค้าหลักมาแสดงเป็น thumbnail หน้าชื่อสินค้า").
+     *
+     * `thumbnail_url` has been in every /products response since TASK-056 —
+     * resolved server-side as the PRIMARY cover first, so it is the same
+     * image the star button on the product's images tab controls. This list
+     * simply never read it.
+     */
+    const w = await mountView([{ ...SHARED, thumbnail_url: '/api/v1/product-media/9/stream' }])
+
+    expect(w.find('[data-test="product-thumbnail"]').exists()).toBe(true)
+  })
+
+  it('keeps the box when a product has no photo yet', async () => {
+    // Not a collapsed gap: names starting at two different x positions read
+    // as two lists rather than one.
+    const w = await mountView([{ ...SHARED, thumbnail_url: null }])
+
+    expect(w.find('[data-test="product-thumbnail"]').exists()).toBe(false)
+    expect(w.find('.w-\\[52px\\]').exists()).toBe(true)
+  })
+
+  it('is as tall as the three lines beside it', async () => {
+    // The human asked for exactly this, and a Tailwind step (h-14 = 56px)
+    // would have dragged every row taller.
+    const w = await mountView()
+
+    const box = w.find('.w-\\[52px\\]')
+    expect(box.classes()).toContain('h-[52px]')
+  })
+})
+
 describe('the two deletes do not look alike', () => {
   it('gives a platform package a labelled button, not a bare icon', async () => {
     // By the time a dialog is open the person has already decided. The

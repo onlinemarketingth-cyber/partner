@@ -18,6 +18,9 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
+// 2026-09-09 — product thumbnails on the package rows; the stream URL is
+// Sanctum-protected, so a bare <img src> would render a broken image.
+import AuthenticatedMedia from '@/design-system/components/AuthenticatedMedia.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
@@ -137,6 +140,18 @@ interface Product {
   permissions?: RowPermissions & { set_commission_rule: boolean }
   /** 2026-09-09 — set only on rows fetched from /catalog-trash. */
   deleted_at?: string | null
+  /**
+   * 2026-09-09 (human: "นำรูปสินค้าหลักมาแสดงเป็น thumbnail หน้าชื่อสินค้า").
+   *
+   * Already sent by ProductResource whenever `media` is eager-loaded, which
+   * GET /products does — this list simply never read it. Resolved server-side
+   * as the PRIMARY cover first, so it is the same image the star button on the
+   * product's images tab controls; the two cannot disagree.
+   *
+   * A Sanctum-protected route, not a public file (Section 5 rule 6), so it is
+   * rendered through AuthenticatedMedia rather than a bare <img src>.
+   */
+  thumbnail_url?: string | null
 }
 // TASK-068 / ADR-020 row 2.
 // TASK-073 (2026-08-02, human-confirmed) — link_type/external_url/
@@ -2612,6 +2627,33 @@ function toggleRefForm(): void {
            central price alone. -->
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
         <div v-for="p in filteredProducts" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
+          <!--
+            2026-09-09 — the primary image, in front of the name.
+
+            52px is the height of the three lines beside it, measured rather
+            than guessed: the name (text-sm, 20px line box) + brand · category
+            (text-xs, 16px) + the sell-status line (text-xs, 16px). A square at
+            exactly that height sits flush with the text block instead of
+            dragging every row taller, which either of Tailwind's neighbouring
+            h-14 / h-16 steps would have done.
+
+            `shrink-0` because the name beside it can be long: without it flex
+            would take the space out of the image and leave a sliver.
+          -->
+          <div class="flex items-center gap-3 min-w-0">
+          <div class="w-[52px] h-[52px] rounded-lg overflow-hidden border border-slate-200 bg-slate-50 shrink-0 flex items-center justify-center">
+            <AuthenticatedMedia
+              v-if="p.thumbnail_url"
+              :src="p.thumbnail_url"
+              type="image"
+              class="w-full h-full object-cover"
+              data-test="product-thumbnail"
+            />
+            <!-- A product with no photo yet keeps the same 52px box rather
+                 than collapsing it: names starting at two different x
+                 positions read as two lists instead of one. -->
+            <Icon v-else name="image" :size="18" class="text-slate-300" />
+          </div>
           <div class="min-w-0">
             <p class="text-sm font-bold text-slate-900 flex items-center gap-2">
               <span class="truncate">{{ p.name }}</span>
@@ -2633,6 +2675,7 @@ function toggleRefForm(): void {
             <p v-if="p.is_shared && scopedCompanyLabel" class="mt-0.5 text-xs" :class="p.is_sellable_here ? 'text-emerald-600' : 'text-slate-400'">
               {{ p.is_sellable_here ? `ขายอยู่ที่ ${scopedCompanyLabel}` : `ยังไม่เปิดขายที่ ${scopedCompanyLabel}` }}
             </p>
+          </div>
           </div>
           <div class="flex items-center gap-3 shrink-0">
             <!-- A shared product that the platform switched off is off
