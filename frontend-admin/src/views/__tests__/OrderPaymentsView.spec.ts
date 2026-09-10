@@ -28,16 +28,34 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 const get = vi.fn()
+const post = vi.fn()
 const download = vi.fn()
+
+/**
+ * The api client's own error type, mirrored — and HOISTED with the mock.
+ *
+ * The screen decides what to show by `instanceof ApiError`, so a rejection
+ * thrown as a plain Error would take the generic branch and this file would
+ * pass while the real refusal message was being dropped. `vi.mock` factories
+ * run above every other statement in the module, so the class they hand back
+ * has to be created inside `vi.hoisted` — a plain `class` above the mock is
+ * still in its temporal dead zone when the factory runs.
+ */
+const { ApiErrorStub } = vi.hoisted(() => ({
+  ApiErrorStub: class extends Error {
+    status = 422
+  },
+}))
 
 vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
     put: vi.fn(),
-    post: vi.fn(),
+    post: (...args: unknown[]) => post(...args),
+    getBlob: vi.fn(),
     download: (...args: unknown[]) => download(...args),
   },
-  ApiError: class extends Error {},
+  ApiError: ApiErrorStub,
 }))
 
 import OrderPaymentsView from '../OrderPaymentsView.vue'
@@ -81,6 +99,7 @@ const ORDER: {
   paid_at: string | null
   verified_by: { id: number; name: string } | null
   created_at: string
+  permissions: { confirm: boolean }
 } = {
   id: 1,
   order_number: 'ORD-0001',
@@ -103,6 +122,7 @@ const ORDER: {
   paid_at: null,
   verified_by: null,
   created_at: '2026-08-20T03:00:00Z',
+  permissions: { confirm: false },
 }
 
 function mockApi(orders = [ORDER]) {
@@ -183,6 +203,8 @@ describe('OrderPaymentsView — the tab actually filters', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     get.mockReset()
+    post.mockReset()
+    post.mockResolvedValue({ data: {} })
     download.mockReset()
     mockApi()
   })
@@ -227,6 +249,8 @@ describe('OrderPaymentsView — the counts come from the server', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     get.mockReset()
+    post.mockReset()
+    post.mockResolvedValue({ data: {} })
     download.mockReset()
     mockApi()
   })
@@ -278,6 +302,8 @@ describe('OrderPaymentsView — acting on a row', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     get.mockReset()
+    post.mockReset()
+    post.mockResolvedValue({ data: {} })
     download.mockReset()
     mockApi()
   })
@@ -295,14 +321,80 @@ describe('OrderPaymentsView — acting on a row', () => {
     expect(noSlip.findAll('button').some((b) => b.text().includes('ดูสลิป'))).toBe(false)
   })
 
-  it('downloads the slip named after its order', async () => {
+  it('opens the slip in a modal instead of putting a file in Downloads', async () => {
+    /*
+     * 2026-09-10 — REVERSED, and the reversal is the fix. This used to
+     * assert a download, which is what the button did while saying ดูสลิป:
+     * the admin then had to find the file, open it elsewhere, compare it
+     * against a row they could no longer see, and delete it afterwards.
+     *
+     * The download still exists — inside the modal, as a secondary action —
+     * so nothing was taken away from whoever genuinely wants the file.
+     */
     const wrapper = await mountView()
 
-    const slipButton = wrapper.findAll('button').find((b) => b.text().includes('ดูสลิป'))
-    await slipButton?.trigger('click')
+    await wrapper.find('[data-test="view-slip"]').trigger('click')
     await flushPromises()
 
-    expect(download).toHaveBeenCalledWith('/orders/1/slip', 'slip-ORD-0001.jpg')
+    expect(download).not.toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'SlipViewerModal' }).props('orderId')).toBe(1)
+  })
+
+  it('offers approve only when the server says this user may, on this row', async () => {
+    /*
+     * 2026-09-10 (human: "ตอนนี้ผมหา UI สำหรับอนุมัติไม่เจอ"). The endpoint
+     * and the Policy have existed since ADR-017; the button never did.
+     *
+     * `permissions.confirm` is the SERVER's answer to both halves — may I,
+     * and is there anything to confirm — so this screen never re-derives
+     * half a Policy and meets the other half as a 403.
+     */
+    get.mockReset()
+    mockApi([
+      { ...ORDER, id: 1, permissions: { confirm: true } },
+      { ...ORDER, id: 2, order_number: 'ORD-0002', permissions: { confirm: false } },
+    ])
+    const wrapper = await mountView()
+
+    expect(wrapper.findAll('[data-test="confirm-payment"]')).toHaveLength(1)
+  })
+
+  it('confirms, then refreshes the counts as well as the rows', async () => {
+    // The tab would otherwise keep saying 4 over three rows — the exact
+    // count/list disagreement the shared server-side scope prevents.
+    get.mockReset()
+    mockApi([{ ...ORDER, permissions: { confirm: true } }])
+    const wrapper = await mountView()
+
+    get.mockClear()
+    await wrapper.find('[data-test="confirm-payment"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/orders/1/confirm')
+    expect(requestedPaths().some((p) => p.startsWith('/orders/summary'))).toBe(true)
+    expect(requestedPaths().some((p) => p.startsWith('/orders?'))).toBe(true)
+  })
+
+  it('shows a refusal in full, because it names the step that is missing', async () => {
+    /*
+     * confirmPayment() can refuse after the button is pressed: the journey
+     * rule requires the referral to have reached the step before ชำระเงิน,
+     * and its message says WHICH step. Flattening that to "ไม่สำเร็จ" throws
+     * away the only sentence that says what to do next — which is how
+     * ORD-MWJTV2QV sat unexplained.
+     */
+    get.mockReset()
+    mockApi([{ ...ORDER, permissions: { confirm: true } }])
+    const wrapper = await mountView()
+
+    post.mockRejectedValueOnce(
+      Object.assign(new ApiErrorStub('ต้องผ่านขั้น "พบแพทย์ครั้งแรก" ก่อน'), { status: 422 }),
+    )
+
+    await wrapper.find('[data-test="confirm-payment"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('พบแพทย์ครั้งแรก')
   })
 })
 
@@ -320,6 +412,8 @@ describe('OrderPaymentsView — the table', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     get.mockReset()
+    post.mockReset()
+    post.mockResolvedValue({ data: {} })
     download.mockReset()
     mockApi()
   })

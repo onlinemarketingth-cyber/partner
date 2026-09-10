@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\OrderStatus;
 use App\Models\Order;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -139,6 +140,38 @@ class OrderResource extends JsonResource
                 'name' => $this->verifiedBy->name,
             ]),
             'created_at' => $this->created_at,
+            /*
+             * TASK-245 — computed by the SERVER for this row and this user.
+             *
+             * 2026-09-10 (human: "ปุ่มอนุมัติโดย Super Admin และ Admin
+             * company ทำไว้ที่หน้านี้ด้วย ตอนนี้ผมหา UI สำหรับอนุมัติไม่เจอ").
+             * The endpoint and the Policy have both existed since ADR-017;
+             * the button never did. Rather than have the screen re-derive
+             * "may I, and is there anything to confirm", both halves are
+             * answered here — the same lesson as the shared-product form,
+             * where a client-side copy of half a Policy produced a 403 the
+             * person only met after filling the form in.
+             *
+             * BOTH halves, deliberately:
+             *
+             *   WHO   — OrderPolicy::confirm (Super Admin, or a Company
+             *           Admin of this order's own company).
+             *   WHAT  — there is something to confirm. An order that is
+             *           already paid, cancelled or refunded has nothing, and
+             *           one with no proof on file cannot be confirmed by
+             *           anybody: OrderService::confirmPayment() requires a
+             *           slip (AwaitingVerification) or a gateway charge id.
+             *
+             * What this deliberately does NOT promise is that pressing it
+             * will succeed — the journey rule (ADR-026 §3.7) can still
+             * refuse, and that refusal names the missing step, which is
+             * information the person needs rather than a button to hide.
+             */
+            'permissions' => [
+                'confirm' => (bool) $request->user()?->can('confirm', $this->resource)
+                    && $this->isPayable()
+                    && ($this->status === OrderStatus::AwaitingVerification || $this->hasGatewayPayment()),
+            ],
         ];
     }
 }

@@ -19,6 +19,7 @@ use App\Models\UserCertification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 // ADR-017 (TASK-054) — Order & Payment Collection. Covers order creation
@@ -63,6 +64,105 @@ class OrderTest extends TestCase
             'meeting_number' => null,
             'submitted_at' => now(),
         ]);
+    }
+
+    // ── Who the screen may offer an approve button to ────────────────
+
+    /**
+     * 2026-09-10 (human: "ปุ่มอนุมัติโดย Super Admin และ Admin company
+     * ทำไว้ที่หน้านี้ด้วย ตอนนี้ผมหา UI สำหรับอนุมัติไม่เจอ").
+     *
+     * The endpoint and the Policy have both existed since ADR-017. What did
+     * not exist was any way to reach them from the payments screen, so an
+     * admin with a slip in front of them had nothing to press.
+     *
+     * `permissions.confirm` answers BOTH halves — may I, and is there
+     * anything to confirm — so no screen has to re-derive half a Policy and
+     * discover the other half as a 403 (which is exactly how the shared
+     * product form went wrong the day before).
+     */
+    private function orderAwaitingVerification(Company $company, User $agent): Order
+    {
+        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+
+        return Order::create([
+            'company_id' => $company->id,
+            'referral_id' => $referral->id,
+            'client_id' => $referral->client_id,
+            'agent_id' => $agent->id,
+            'product_id' => $referral->product_id,
+            'order_number' => 'ORD-CONFIRM1',
+            'public_token' => Str::random(40),
+            'amount_satang' => 890000,
+            'payment_method' => 'bank_transfer',
+            'status' => OrderStatus::AwaitingVerification,
+            'slip_path' => 'slips/x.jpg',
+        ]);
+    }
+
+    public function test_the_screen_may_offer_confirm_to_a_super_admin_and_to_the_owning_company_admin(): void
+    {
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+
+        foreach ([
+            User::factory()->superAdmin()->create(),
+            User::factory()->companyAdmin()->create(['company_id' => $company->id]),
+        ] as $actor) {
+            $this->actingAs($actor)
+                ->getJson("/api/v1/orders/{$order->id}")
+                ->assertOk()
+                ->assertJsonPath('data.permissions.confirm', true);
+        }
+    }
+
+    public function test_the_screen_never_offers_confirm_on_somebody_elses_order(): void
+    {
+        // BR-6, and the reason this is computed per row per user rather than
+        // once per screen.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+
+        $outsider = User::factory()->companyAdmin()->create([
+            'company_id' => Company::factory()->create()->id,
+        ]);
+
+        $this->actingAs($outsider)->getJson("/api/v1/orders/{$order->id}")->assertNotFound();
+    }
+
+    public function test_the_screen_offers_no_confirm_when_there_is_nothing_to_confirm(): void
+    {
+        /*
+         * An order with no proof on file cannot be confirmed by ANYBODY —
+         * confirmPayment() requires a slip or a gateway charge id (the D2
+         * ruling: nobody may attest that money arrived with nothing on file
+         * saying it did). A button offered here would be a button that always
+         * fails.
+         */
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+        $order->forceFill(['status' => OrderStatus::Pending, 'slip_path' => null])->save();
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->getJson("/api/v1/orders/{$order->id}")
+            ->assertOk()
+            ->assertJsonPath('data.permissions.confirm', false);
+    }
+
+    public function test_the_screen_offers_no_confirm_on_an_order_already_paid(): void
+    {
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+        $order->forceFill(['status' => OrderStatus::Paid, 'paid_at' => now()])->save();
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->getJson("/api/v1/orders/{$order->id}")
+            ->assertOk()
+            ->assertJsonPath('data.permissions.confirm', false);
     }
 
     public function test_agent_can_create_an_order_for_their_own_referral(): void

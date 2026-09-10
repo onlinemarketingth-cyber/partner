@@ -35,6 +35,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ShareLinkModal from '@/design-system/components/ShareLinkModal.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import SlipViewerModal from '@/design-system/components/SlipViewerModal.vue'
 
 type OrderStatus = 'pending' | 'awaiting_verification' | 'paid' | 'cancelled'
 type PaymentMethod = 'bank_transfer' | 'promptpay'
@@ -236,35 +237,51 @@ function openShare(order: Order) {
   showShareModal.value = true
 }
 
-async function viewSlip(order: Order) {
-  try {
-    await api.download(`/orders/${order.id}/slip`, `slip-${order.order_number}.jpg`)
-  } catch (e) {
-    actionError.value = { id: order.id, message: apiErrorMessage(e, 'ดาวน์โหลดสลิปไม่สำเร็จ') }
-  }
-}
+/**
+ * 2026-09-10 (human: "ดูสลิปยังเป็นแบบ Download แก้เป็นดูแบบ Modal").
+ *
+ * The button said ดูสลิป and did something else — it put a file in Downloads,
+ * which on a phone means several taps through a file manager, a comparison
+ * made against a card no longer on screen, and a customer's bank slip left
+ * on the device afterwards. The download is still there, inside the modal,
+ * for whoever genuinely wants the file.
+ */
+const slipOrder = ref<Order | null>(null)
 
 const actionError = ref<{ id: number; message: string } | null>(null)
 const busyId = ref<number | null>(null)
 
-async function confirmPayment(order: Order) {
-  if (busyId.value) return
-  busyId.value = order.id
-  actionError.value = null
-  try {
-    await api.post(`/orders/${order.id}/confirm`)
-    await loadOrders()
-    // Confirming is the money moment (BR-4 commission triggers server-side
-    // off this) — the audit flagged it as the highest-stakes action in the
-    // app with zero acknowledgement. Failures still use the per-order
-    // inline banner below, which is right next to the button.
-    toast.success('ยืนยันการชำระเงินแล้ว')
-  } catch (e) {
-    actionError.value = { id: order.id, message: apiErrorMessage(e, 'ยืนยันการชำระเงินไม่สำเร็จ') }
-  } finally {
-    busyId.value = null
-  }
-}
+/*
+ * 2026-09-10 (human: "ใน Frontend มีการกดยืนยันชำระเงินเองอยู่ นำออก") —
+ * THE CONFIRM BUTTON IS GONE FROM THIS APP.
+ *
+ * ── IT NEVER WORKED HERE ──
+ *
+ * OrderPolicy::confirm allows a Super Admin or a Company Admin of the
+ * order's own company, and nobody else. An agent tapping this got a 403 —
+ * this screen offered it on status alone, without ever asking whether the
+ * person could do it, so the only thing the button reliably produced was an
+ * error message under their own sale.
+ *
+ * ── AND IT MUST NOT BE PUT BACK ──
+ *
+ * The refusal is not an oversight to route around. It was a real hole,
+ * closed in the 2026-08-21 security audit and pinned by a test that also
+ * asserts zero commission rows: an agent could create a client, submit a
+ * referral, walk their own pipeline, mint the order, confirm it, and hold
+ * an immutable BR-4 commission row (which may never be edited or deleted)
+ * for a sale nobody paid for — every step reachable by one person alone.
+ *
+ * Whoever earns from a sale must not also be the one who attests that the
+ * money arrived. Standard separation of duties, and the reason confirming
+ * lives in the admin console's payments screen, where the person pressing
+ * it is not the person being paid.
+ *
+ * The agent loses nothing they could actually do: a slip the customer
+ * uploads already lands in the admin's "รอตรวจสลิป" queue by itself, which
+ * is what the note in the card now says. Cancel stays — that one is theirs
+ * (OrderPolicy::cancel includes the order's own agent).
+ */
 
 // TASK-079 Phase 2 (UX audit) — cancel used to fire native window.confirm(),
 // the last one left in this app. Native dialogs are unthemed, unreadable on
@@ -301,8 +318,28 @@ async function confirmCancelOrder() {
   }
 }
 
-function canConfirmOrCancel(order: Order): boolean {
+/**
+ * Cancel is the agent's OWN action — OrderPolicy::cancel includes the
+ * order's agent, unlike confirm, which deliberately does not.
+ *
+ * 2026-09-10 — this used to be `canConfirmOrCancel`, gating both buttons
+ * with one predicate. Two buttons side by side, one of which worked and one
+ * of which always answered 403, because the predicate asked about the ORDER
+ * and never about the person.
+ */
+function canCancel(order: Order): boolean {
   return order.status === 'pending' || order.status === 'awaiting_verification'
+}
+
+/**
+ * What the agent is actually waiting for once a slip is in.
+ *
+ * Replaces the button they could not press. "Nothing here" would read as
+ * the app having forgotten the order; this says who has it and what happens
+ * next, which is the honest answer.
+ */
+function isAwaitingAdminCheck(order: Order): boolean {
+  return order.status === 'awaiting_verification'
 }
 
 const hasOrders = computed(() => orders.value.length > 0)
@@ -507,6 +544,15 @@ const hasOrders = computed(() => orders.value.length > 0)
             </AppButton>
           </div>
 
+          <p
+            v-if="isAwaitingAdminCheck(order)"
+            data-test="awaiting-admin-note"
+            class="flex items-start gap-2 rounded-lg bg-surface-chip border border-line-card px-3 py-2 text-xs text-ink-card-muted"
+          >
+            <Icon name="clock" :size="14" class="mt-0.5 shrink-0" />
+            <span>ส่งสลิปแล้ว — อยู่ในคิวรอผู้ดูแลตรวจสอบและยืนยันการชำระเงิน</span>
+          </p>
+
           <div v-if="actionError && actionError.id === order.id" class="flex items-start gap-2 rounded-lg bg-surface-danger border border-rose-100 px-3 py-2 text-xs text-ink-danger">
             <Icon name="alert" :size="14" class="mt-0.5 shrink-0" />
             <span>{{ actionError.message }}</span>
@@ -520,22 +566,17 @@ const hasOrders = computed(() => orders.value.length > 0)
                either into the primitive would mean inventing one-off
                variants for a single call site each. -->
           <div class="flex flex-wrap items-center gap-2">
-            <AppButton v-if="order.has_slip" variant="secondary" size="sm" @click="viewSlip(order)">
-              <Icon name="download" :size="14" />
+            <AppButton v-if="order.has_slip" variant="secondary" size="sm" data-test="view-slip" @click="slipOrder = order">
+              <Icon name="image" :size="14" />
               {{ td('order.view_slip') }}
             </AppButton>
+            <!-- 2026-09-10 — the ยืนยันการชำระเงิน button used to sit here.
+                 It answered 403 for every agent who pressed it, and the
+                 refusal behind that 403 is deliberate (see the block comment
+                 in the script above). What replaces it is the truth: the
+                 slip is already in the admin's queue. -->
             <button
-              v-if="canConfirmOrCancel(order)"
-              type="button"
-              :disabled="busyId === order.id"
-              class="min-h-[44px] px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 active:scale-95 transition-transform disabled:opacity-60 inline-flex items-center justify-center gap-1"
-              @click="confirmPayment(order)"
-            >
-              <Icon name="check" :size="14" />
-              {{ td('order.confirm_payment') }}
-            </button>
-            <button
-              v-if="canConfirmOrCancel(order)"
+              v-if="canCancel(order)"
               type="button"
               :disabled="busyId === order.id"
               class="min-h-[44px] px-3 py-1.5 rounded-lg border border-line-card text-ink-danger text-xs font-bold hover:bg-surface-danger active:scale-95 transition-transform disabled:opacity-60 inline-flex items-center justify-center gap-1"
@@ -570,6 +611,12 @@ const hasOrders = computed(() => orders.value.length > 0)
       variant="danger"
       :busy="busyId !== null"
       @confirm="confirmCancelOrder"
+    />
+
+    <SlipViewerModal
+      :order-id="slipOrder?.id ?? null"
+      :order-number="slipOrder?.order_number ?? null"
+      @close="slipOrder = null"
     />
   </main>
 </template>

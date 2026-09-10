@@ -39,6 +39,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ClientDetailModal from '@/design-system/components/ClientDetailModal.vue'
 import OrderDetailModal from '@/design-system/components/OrderDetailModal.vue'
+import SlipViewerModal from '@/design-system/components/SlipViewerModal.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
@@ -88,6 +89,19 @@ interface OrderRow {
   paid_at: string | null
   verified_by?: { id: number; name: string } | null
   created_at: string
+  /**
+   * TASK-245 — computed by the SERVER for this row and this user.
+   *
+   * 2026-09-10 — `confirm` answers BOTH "may I" (OrderPolicy: Super Admin,
+   * or a Company Admin of this order's own company) and "is there anything
+   * to confirm" (payable, and with a slip or a gateway charge id on file).
+   * Re-deriving either here is how the shared-product form ended up
+   * offering an edit that came back 403.
+   *
+   * Missing permissions read as NO, matching every other screen: failing
+   * closed costs a button, failing open ships a 403.
+   */
+  permissions?: { confirm: boolean }
 }
 
 interface SummaryRow {
@@ -293,11 +307,61 @@ const kpis = computed(() => [
   { label: 'ชำระแล้ว', value: countFor('paid') },
 ])
 
-async function viewSlip(order: OrderRow): Promise<void> {
+/**
+ * 2026-09-10 (human: "แก้ปุ่มดูสลิป ตอนนี้เป็นการ download เปลี่ยนเป็น Modal
+ * ดูสลิป").
+ *
+ * The button said ดูสลิป and did something else — it put a file in the
+ * Downloads folder, which the admin then had to find, open elsewhere,
+ * compare against a row they could no longer see, and afterwards delete.
+ * Checking a slip is the most common thing anyone does on this screen.
+ *
+ * The download is still there, inside the modal, for the times somebody
+ * genuinely wants the file.
+ */
+const slipOrder = ref<OrderRow | null>(null)
+
+/**
+ * Approve the payment, from the row.
+ *
+ * ── WHY THIS BUTTON DID NOT EXIST ──
+ *
+ * `POST /orders/{id}/confirm` and OrderPolicy::confirm have both been here
+ * since ADR-017. The screen never offered them, so an admin looking at a
+ * slip had nothing to press and no way to close the sale from the queue
+ * built for exactly that (human, 2026-09-10: "ตอนนี้ผมหา UI สำหรับอนุมัติ
+ * ไม่เจอ").
+ *
+ * ── WHY A REFUSAL IS SHOWN IN FULL ──
+ *
+ * confirmPayment() can still refuse after the button is pressed: the
+ * journey rule (ADR-026 §3.7) requires the referral to have reached the
+ * step before ชำระเงิน, and its message NAMES the missing step. Flattening
+ * that to "ยืนยันไม่สำเร็จ" would throw away the only sentence that says
+ * what to do next — which is how ORD-MWJTV2QV sat unexplained.
+ */
+const confirmingId = ref<number | null>(null)
+
+function canConfirm(order: OrderRow): boolean {
+  return order.permissions?.confirm === true
+}
+
+async function confirmPayment(order: OrderRow): Promise<void> {
+  confirmingId.value = order.id
+  errorMessage.value = ''
+
   try {
-    await api.download(`/orders/${order.id}/slip`, `slip-${order.order_number}.jpg`)
+    await api.post(`/orders/${order.id}/confirm`)
+    // BOTH, not just the list: the tab would otherwise keep saying 4 over
+    // three rows — the count/list disagreement the server-side scope exists
+    // to prevent, reintroduced on the client.
+    await refreshAll()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `เปิดสลิปไม่สำเร็จ (${e.status})` : 'เปิดสลิปไม่สำเร็จ'
+    errorMessage.value = e instanceof ApiError
+      ? `ยืนยันการชำระเงินไม่สำเร็จ: ${e.message}`
+      : 'ยืนยันการชำระเงินไม่สำเร็จ'
+  } finally {
+    confirmingId.value = null
   }
 }
 
@@ -501,10 +565,28 @@ function badgeClasses(tone: string): string {
                   <button
                     v-if="order.has_slip"
                     type="button"
+                    data-test="view-slip"
                     class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-                    @click="viewSlip(order)"
+                    @click="slipOrder = order"
                   >
                     <Icon name="image" :size="14" /> ดูสลิป
+                  </button>
+
+                  <!-- Primary, and last in the row: the action you take AFTER
+                       looking at the slip. Hidden rather than disabled when
+                       there is nothing to confirm or this user may not — a
+                       greyed approve button on somebody else's order reads
+                       as "ask for permission", which is not the situation. -->
+                  <button
+                    v-if="canConfirm(order)"
+                    type="button"
+                    data-test="confirm-payment"
+                    :disabled="confirmingId !== null"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 disabled:opacity-60 transition"
+                    @click="confirmPayment(order)"
+                  >
+                    <Icon name="check" :size="14" />
+                    {{ confirmingId === order.id ? 'กำลังยืนยัน...' : 'อนุมัติการชำระเงิน' }}
                   </button>
                   <button
                     v-if="order.client_id"
@@ -541,6 +623,12 @@ function badgeClasses(tone: string): string {
     </div>
 
     <OrderDetailModal :order-id="openOrderId" @close="openOrderId = null" />
+
+    <SlipViewerModal
+      :order-id="slipOrder?.id ?? null"
+      :order-number="slipOrder?.order_number ?? null"
+      @close="slipOrder = null"
+    />
 
     <!-- Same modal the client list uses — one client detail surface, not a
          second copy that drifts. -->
