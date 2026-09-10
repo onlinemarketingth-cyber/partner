@@ -20,7 +20,7 @@ const { td } = useI18n()
  *   - GET  /pay/{token}       — on mount (404 → dead-link state).
  *   - POST /pay/{token}/slip  — multipart slip upload (api.postForm).
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import QRCode from 'qrcode'
 import { api, ApiError } from '@/api/client'
@@ -470,6 +470,73 @@ async function uploadSlip() {
   }
 }
 
+/*
+ * 2026-09-10 (human, from a live payment: "เมื่อชำระแล้วไม่มีปุ่มไปไหนเลย
+ * ต้องมีปุ่มกลับหน้า Frontend ตั้งเวลา 90 วินาทีกลับอัตโนมัติ").
+ *
+ * ── THE DEAD END ──
+ *
+ * This page is the last thing a customer sees. Once the money is in there is
+ * nothing left to do on it and — until now — nothing to press: no link, no
+ * button, no way onward. The person is simply left on a receipt with a back
+ * button that returns them to a payment provider.
+ *
+ * ── WHY THE COUNTDOWN STOPS WHEN THEY TOUCH THE PAGE ──
+ *
+ * A paid order can carry a VOUCHER: a redemption code and a QR the customer
+ * is meant to keep. Yanking that off the screen mid-photograph would be a
+ * worse failure than the dead end it fixes. So the 90 seconds run only while
+ * nobody is doing anything; the first tap, scroll or keypress cancels the
+ * timer for good and leaves the button, which is the whole point of having
+ * one.
+ */
+const RETURN_AFTER_SECONDS = 90
+
+const secondsUntilReturn = ref(RETURN_AFTER_SECONDS)
+const autoReturnStopped = ref(false)
+let returnTimer: ReturnType<typeof setInterval> | null = null
+
+/** The site root, on whatever host this page is being served from. */
+function goHome(): void {
+  stopAutoReturn()
+  window.location.assign('/')
+}
+
+function stopAutoReturn(): void {
+  if (returnTimer !== null) {
+    clearInterval(returnTimer)
+    returnTimer = null
+  }
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    window.removeEventListener(event, cancelAutoReturn)
+  }
+}
+
+function cancelAutoReturn(): void {
+  if (returnTimer === null) return
+  autoReturnStopped.value = true
+  stopAutoReturn()
+}
+
+function startAutoReturn(): void {
+  if (returnTimer !== null || autoReturnStopped.value) return
+
+  secondsUntilReturn.value = RETURN_AFTER_SECONDS
+
+  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
+    // passive: this only ever cancels a timer, and a non-passive touch
+    // listener on a page people scroll is a jank complaint waiting to happen.
+    window.addEventListener(event, cancelAutoReturn, { passive: true })
+  }
+
+  returnTimer = setInterval(() => {
+    secondsUntilReturn.value -= 1
+    if (secondsUntilReturn.value <= 0) goHome()
+  }, 1000)
+}
+
+onUnmounted(stopAutoReturn)
+
 const isPaid = computed(() => order.value?.status === 'paid')
 const isCancelled = computed(() => order.value?.status === 'cancelled')
 // Awaiting verification means a slip is already in — either just uploaded or
@@ -491,6 +558,18 @@ const charging = ref(false)
 
 /** True the moment money has arrived, even before the order says 'paid'. */
 const paymentReceived = computed(() => order.value?.gateway.payment_received === true)
+
+/**
+ * The page is finished with the customer once the money is in — whether the
+ * order has been marked paid yet or not. `payment_received` is the earlier of
+ * the two and is exactly the state the dead end was reported from: charged,
+ * waiting for confirmation, nothing to press.
+ */
+const isFinished = computed(() => isPaid.value || paymentReceived.value)
+
+watch(isFinished, (finished) => {
+  if (finished) startAutoReturn()
+}, { immediate: true })
 
 /** The card form is offered only when the SERVER says a charge is possible. */
 const cardIntent = computed(() => {
@@ -757,6 +836,7 @@ async function payByCard() {
               {{ voucherCardGenerating ? td('pay.voucher_generating') : td('pay.voucher_download') }}
             </button>
           </div>
+
         </div>
 
         <!-- Cancelled state -->
@@ -896,11 +976,12 @@ async function payByCard() {
             </div>
           </div>
 
+
           <!-- PromptPay QR — shown whenever the company HAS a PromptPay id,
                no longer only when the agent happened to tick "promptpay" when
                they created the order. Both settle into the same account, and
                the customer is the one holding the phone. -->
-          <div v-if="qrDataUrl" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
+          <div v-if="qrDataUrl && !paymentReceived" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
             <p class="text-sm font-bold text-ink-card">{{ td('pay.scan_promptpay') }}</p>
             <img :src="qrDataUrl" alt="PromptPay QR" class="w-52 h-52" />
             <p v-if="order.company_payment.promptpay_id" class="text-xs text-ink-card-subtle">
@@ -908,8 +989,15 @@ async function payByCard() {
             </p>
           </div>
 
-          <!-- Bank details -->
-          <div class="rounded-2xl border border-line-card p-4 space-y-3">
+          <!-- Bank details.
+               2026-09-10 (human, from a live card payment: "ผมชำระเงินผ่าน
+               บัตรเครดิต เลข stripe ที่โอนเงินไม่ควรแสดง ควรแสดงเฉพาะโอนเงิน").
+               These are instructions for a payment that has not happened.
+               Once the gateway says the money is in, showing an account
+               number to transfer to is at best noise and at worst an
+               invitation to pay a second time — which is precisely what the
+               notice directly above is pleading with them not to do. -->
+          <div v-if="!paymentReceived" class="rounded-2xl border border-line-card p-4 space-y-3">
             <div class="flex items-center gap-2">
               <Icon name="money" :size="16" class="text-ink-brand" />
               <p class="text-sm font-bold text-ink-card">{{ td('pay.bank_transfer') }}</p>
@@ -1034,6 +1122,41 @@ async function payByCard() {
             </button>
           </div>
         </template>
+
+        <!-- 2026-09-10 (human, from a live payment: "เมื่อชำระแล้วไม่มีปุ่ม
+             ไปไหนเลย ต้องมีปุ่มกลับหน้า Frontend ตั้งเวลา 90 วินาทีกลับ
+             อัตโนมัติ").
+
+             ONE instance, outside the paid / cancelled / awaiting chain,
+             because this belongs to the PAGE having finished with the
+             customer rather than to which of the two finished states they
+             are in — `payment_received` (charged, confirmation pending) is
+             the state it was reported from, and `paid` is the one with a
+             voucher on screen.
+
+             The countdown line disappears the moment they touch the page;
+             the button never does. -->
+        <div v-if="isFinished" class="pt-2 space-y-2">
+          <button
+            type="button"
+            data-test="back-home"
+            class="w-full min-h-[44px] py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 inline-flex items-center justify-center gap-1.5"
+            @click="goHome"
+          >
+            <Icon name="home" :size="16" />
+            {{ td('pay.back_home') }}
+          </button>
+          <p
+            v-if="!autoReturnStopped"
+            data-test="auto-return-countdown"
+            class="text-center text-xs text-ink-card-subtle"
+          >
+            {{ td('pay.auto_return', '', { seconds: String(secondsUntilReturn) }) }}
+          </p>
+          <p v-else class="text-center text-xs text-ink-card-subtle">
+            {{ td('pay.auto_return_stopped') }}
+          </p>
+        </div>
       </div>
     </div>
   </div>

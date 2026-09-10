@@ -38,6 +38,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ClientDetailModal from '@/design-system/components/ClientDetailModal.vue'
+import OrderDetailModal from '@/design-system/components/OrderDetailModal.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
@@ -134,6 +135,54 @@ const TABS = [
 ] as const
 
 type TabStatus = (typeof TABS)[number]['status']
+
+const openOrderId = ref<number | null>(null)
+
+/**
+ * The one sentence a row needs beyond its own columns, or nothing.
+ *
+ * 2026-09-10 — these used to be four separate paragraphs stacked inside a
+ * card. In a table they get one spanning row, so the ranking has to be
+ * explicit rather than implied by source order:
+ *
+ *   1. money in, sale not closed — somebody has been charged and the system
+ *      could not finish. Nothing else on this screen outranks that.
+ *   2. the gateway says it refunded — a claim from outside that a person
+ *      still has to act on; this company's books have NOT moved.
+ *   3. a failed attempt — nothing is broken and nobody has lost money; the
+ *      order is still open and the same link still works.
+ *
+ * Only the top one shows. A row carrying three warnings tells the reader
+ * nothing about which to do first.
+ */
+function rowNotice(order: OrderRow): { text: string; tone: 'rose' | 'amber' } | null {
+  if (order.gateway_payment_received && order.status !== 'paid') {
+    return {
+      tone: 'rose',
+      text: 'ลูกค้าชำระเงินเรียบร้อยแล้ว แต่ระบบปิดการขายอัตโนมัติไม่สำเร็จ — กรุณาตรวจสอบขั้นตอนของรายการอ้างอิงนี้แล้วยืนยันด้วยตนเอง',
+    }
+  }
+
+  if (order.refund_reported_at) {
+    const amount = order.refund_reported_satang ? ` ฿${formatMoney(order.refund_reported_satang)}` : ''
+
+    return {
+      tone: 'rose',
+      text: `ผู้ให้บริการแจ้งว่ามีการคืนเงิน${amount} เมื่อ ${formatDateTime(order.refund_reported_at)} — ระบบยังไม่ได้กลับรายการขายหรือค่าคอมมิชชั่นให้ กรุณาตรวจสอบและตัดสินใจด้วยตนเอง`,
+    }
+  }
+
+  if (order.last_payment_error) {
+    const when = order.last_payment_error_at ? ` · ล่าสุดเมื่อ ${formatDateTime(order.last_payment_error_at)}` : ''
+
+    return {
+      tone: 'amber',
+      text: `${order.last_payment_error}${when} — ลิงก์ชำระเงินเดิมยังใช้ได้ ลูกค้าลองใหม่ได้เลย`,
+    }
+  }
+
+  return null
+}
 
 const activeStatus = ref<TabStatus>('awaiting_verification')
 const orders = ref<OrderRow[]>([])
@@ -380,122 +429,118 @@ function badgeClasses(tone: string): string {
       class="mt-6"
     />
 
-    <div v-else class="mt-4 space-y-2">
-      <div
-        v-for="order in orders"
-        :key="order.id"
-        class="bg-white/95 border border-slate-200 rounded-xl p-4"
-      >
-        <div class="flex items-start gap-3 flex-wrap">
-          <div class="min-w-0 flex-1">
-            <p class="font-bold text-slate-900 truncate">
-              {{ order.client_name ?? 'ไม่ระบุลูกค้า' }}
-            </p>
-            <p class="text-xs text-slate-400 truncate mt-0.5">
-              {{ order.order_number }}
-              <template v-if="order.product_name"> · {{ order.product_name }}</template>
-              <template v-if="order.agent?.name"> · Agent: {{ order.agent.name }}</template>
-            </p>
-          </div>
+    <!--
+      2026-09-10 (human: "แก้ Ui ปรับจาก card เป็น table เรียงแบบนี้ วันที่
+      เวลา, เลขที่ order, ชื่อสินค้า, ยอด, ชื่อผู้ซื้อ, ชื่อ Agent, สถานะ,
+      ช่องทางชำระเงิน, ปุ่มดูรายละเอียด").
 
-          <div class="text-right shrink-0">
-            <p class="font-bold text-slate-900">฿{{ formatMoney(order.amount_satang) }}</p>
-            <p class="text-xs text-slate-400">{{ formatDateTime(order.created_at) }}</p>
-          </div>
-        </div>
+      A CARD PER ORDER ANSWERED THE WRONG QUESTION. Cards are for browsing
+      one thing at a time; this screen is read by someone scanning a day's
+      takings, and the same fact sat at a different height in every card, so
+      comparing two rows meant reading two paragraphs. A table puts every
+      order number in one column and every amount in another, which is the
+      whole reason to have one.
 
-        <!-- ADR-027 (TASK-139) — how this order was collected. A test-mode
-             charge looks exactly like revenue everywhere else in this
-             product unless the row itself says otherwise. -->
-        <div class="mt-2 flex items-center gap-2 flex-wrap text-[11px] font-bold">
-          <span
-            v-if="order.payment_provider && order.payment_provider !== 'manual'"
-            class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600"
-          >{{ order.payment_provider_label }}</span>
-          <span
-            v-if="order.gateway_mode === 'test'"
-            class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-700"
-          >โหมดทดสอบ</span>
-          <span
-            v-if="order.gateway_payment_received"
-            class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700"
-          >ตัดบัตรสำเร็จแล้ว</span>
-        </div>
+      The four columns the human marked bold are the ones you scan BY —
+      when, which order, what, how much. The rest identify and qualify it.
 
-        <p
-          v-if="order.gateway_payment_received && order.status !== 'paid'"
-          class="mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700"
-        >
-          ลูกค้าชำระเงินเรียบร้อยแล้ว แต่ระบบปิดการขายอัตโนมัติไม่สำเร็จ — กรุณาตรวจสอบขั้นตอนของรายการอ้างอิงนี้แล้วยืนยันด้วยตนเอง
-        </p>
+      One horizontal scroller, not a responsive re-stack: a table that turns
+      back into cards on a narrow screen is the layout this replaced.
+    -->
+    <div v-else class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-x-auto">
+      <table class="w-full text-sm border-collapse" data-test="orders-table">
+        <thead>
+          <tr class="text-left text-xs font-bold text-slate-500 border-b border-slate-200">
+            <th class="px-4 py-3 whitespace-nowrap">วันที่ / เวลา</th>
+            <th class="px-4 py-3 whitespace-nowrap">เลขที่คำสั่งซื้อ</th>
+            <th class="px-4 py-3">สินค้า</th>
+            <th class="px-4 py-3 text-right whitespace-nowrap">ยอด</th>
+            <th class="px-4 py-3 whitespace-nowrap">ผู้ซื้อ</th>
+            <th class="px-4 py-3 whitespace-nowrap">ตัวแทน</th>
+            <th class="px-4 py-3 whitespace-nowrap">สถานะ</th>
+            <th class="px-4 py-3 whitespace-nowrap">ช่องทางชำระเงิน</th>
+            <th class="px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-for="order in orders" :key="order.id">
+            <tr class="border-b border-slate-100 last:border-0 hover:bg-slate-50/70 align-top">
+              <td class="px-4 py-3 font-bold text-slate-900 whitespace-nowrap">{{ formatDateTime(order.created_at) }}</td>
+              <td class="px-4 py-3 font-bold text-slate-900 whitespace-nowrap">{{ order.order_number }}</td>
+              <td class="px-4 py-3 font-bold text-slate-900 min-w-[14rem]">{{ order.product_name ?? '—' }}</td>
+              <td class="px-4 py-3 font-bold text-slate-900 text-right whitespace-nowrap">฿{{ formatMoney(order.amount_satang) }}</td>
+              <td class="px-4 py-3 text-slate-600 whitespace-nowrap">{{ order.client_name ?? 'ไม่ระบุลูกค้า' }}</td>
+              <td class="px-4 py-3 text-slate-600 whitespace-nowrap">{{ order.agent?.name ?? '—' }}</td>
+              <td class="px-4 py-3 whitespace-nowrap">
+                <span class="text-slate-600">{{ order.status_label }}</span>
+                <!-- ADR-027 (TASK-139) — a test-mode charge looks exactly
+                     like revenue everywhere else in this product unless the
+                     row itself says otherwise. -->
+                <span
+                  v-if="order.gateway_mode === 'test'"
+                  class="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
+                >ทดสอบ</span>
+              </td>
+              <td class="px-4 py-3 text-slate-600 whitespace-nowrap">
+                {{ order.payment_provider && order.payment_provider !== 'manual' ? order.payment_provider_label : '—' }}
+                <span
+                  v-if="order.gateway_payment_received"
+                  class="ml-1.5 px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-bold"
+                >ตัดบัตรแล้ว</span>
+              </td>
+              <td class="px-4 py-3 whitespace-nowrap">
+                <div class="flex items-center gap-2 justify-end">
+                  <button
+                    type="button"
+                    data-test="view-order"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    @click="openOrderId = order.id"
+                  >
+                    <Icon name="document" :size="14" /> ดูรายละเอียด
+                  </button>
+                  <button
+                    v-if="order.has_slip"
+                    type="button"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    @click="viewSlip(order)"
+                  >
+                    <Icon name="image" :size="14" /> ดูสลิป
+                  </button>
+                  <button
+                    v-if="order.client_id"
+                    type="button"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
+                    @click="openClientId = order.client_id"
+                  >
+                    <Icon name="user" :size="14" /> ดูลูกค้า
+                  </button>
+                </div>
+              </td>
+            </tr>
 
-        <!--
-          2026-09-03 — the gateway said money went back.
+            <!--
+              THE WARNINGS KEEP THEIR OWN ROW, spanning the table.
 
-          Rose, above the amber failure line, and worded as a claim awaiting a
-          decision rather than a fact about this company's books: the order is
-          NOT marked refunded and no commission has moved. Doing either from a
-          webhook would take money out of an agent's balance on an event
-          nobody here reviewed.
-        -->
-        <p
-          v-if="order.refund_reported_at"
-          class="mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700"
-        >
-          ผู้ให้บริการแจ้งว่ามีการคืนเงิน
-          <template v-if="order.refund_reported_satang">
-            ฿{{ formatMoney(order.refund_reported_satang) }}
+              Squeezing them into the status cell would truncate the one
+              sentence on this screen that tells somebody money is sitting
+              unaccounted for. A second row costs a line and stays readable.
+            -->
+            <tr v-if="rowNotice(order)" :key="`${order.id}-notice`" class="border-b border-slate-100 last:border-0">
+              <td colspan="9" class="px-4 pb-3">
+                <p
+                  class="px-3 py-2 rounded-lg text-xs"
+                  :class="rowNotice(order)!.tone === 'rose'
+                    ? 'bg-rose-50 border border-rose-200 text-rose-700'
+                    : 'bg-amber-50 border border-amber-200 text-amber-800'"
+                >{{ rowNotice(order)!.text }}</p>
+              </td>
+            </tr>
           </template>
-          เมื่อ {{ formatDateTime(order.refund_reported_at) }} — ระบบยังไม่ได้กลับรายการขายหรือค่าคอมมิชชั่นให้
-          กรุณาตรวจสอบและตัดสินใจด้วยตนเอง
-        </p>
-
-        <!--
-          A failed or expired attempt. Amber, not rose: nothing is broken and
-          nobody has lost money — the order is still open and the customer can
-          pay on the same link. It is here so that "ยังไม่จ่าย" stops being one
-          undifferentiated state.
-        -->
-        <p
-          v-if="order.last_payment_error"
-          class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800"
-        >
-          {{ order.last_payment_error }}
-          <template v-if="order.last_payment_error_at">
-            · ล่าสุดเมื่อ {{ formatDateTime(order.last_payment_error_at) }}
-          </template>
-          <span class="font-bold"> — ลิงก์ชำระเงินเดิมยังใช้ได้ ลูกค้าลองใหม่ได้เลย</span>
-        </p>
-
-        <p v-if="order.paid_at" class="mt-2 text-xs text-emerald-700">
-          ชำระเมื่อ {{ formatDateTime(order.paid_at) }}
-          <template v-if="order.verified_by"> · ตรวจสอบโดย {{ order.verified_by.name }}</template>
-          <!-- Never a fabricated name: verified_by is null both when nobody
-               has confirmed and when the confirming user has been removed. -->
-          <template v-else> · ตรวจสอบโดยไม่ทราบ</template>
-        </p>
-
-        <div class="mt-3 flex items-center gap-2 flex-wrap">
-          <button
-            v-if="order.has_slip"
-            type="button"
-            class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-            @click="viewSlip(order)"
-          >
-            <Icon name="document" :size="14" /> ดูสลิป
-          </button>
-
-          <button
-            v-if="order.client_id"
-            type="button"
-            class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 transition"
-            @click="openClientId = order.client_id"
-          >
-            <Icon name="user" :size="14" /> ดูลูกค้า
-          </button>
-        </div>
-      </div>
+        </tbody>
+      </table>
     </div>
+
+    <OrderDetailModal :order-id="openOrderId" @close="openOrderId = null" />
 
     <!-- Same modal the client list uses — one client detail surface, not a
          second copy that drifts. -->

@@ -52,7 +52,36 @@ const SUMMARY = [
   { status: 'refunded', status_label: 'คืนเงินแล้ว', count: 0, total_satang: 0 },
 ]
 
-const ORDER = {
+/**
+ * One order as OrderResource sends it. The gateway fields are declared here
+ * even though they are null in the happy case — a test that spreads
+ * `{ ...ORDER, gateway_payment_received: true }` onto an object literal that
+ * never mentions them is a type error, and widening it at the spread site
+ * would only hide the next field that goes missing.
+ */
+const ORDER: {
+  id: number
+  order_number: string
+  status: string
+  status_label: string
+  amount_satang: number
+  client_id: number
+  client_name: string
+  product_name: string
+  agent: { id: number; name: string }
+  has_slip: boolean
+  gateway_payment_received: boolean
+  gateway_mode: string | null
+  payment_provider: string | null
+  payment_provider_label: string | null
+  refund_reported_at: string | null
+  refund_reported_satang: number | null
+  last_payment_error: string | null
+  last_payment_error_at: string | null
+  paid_at: string | null
+  verified_by: { id: number; name: string } | null
+  created_at: string
+} = {
   id: 1,
   order_number: 'ORD-0001',
   status: 'awaiting_verification',
@@ -63,6 +92,14 @@ const ORDER = {
   product_name: 'Vital Blueprint',
   agent: { id: 3, name: 'เกรียงยศ' },
   has_slip: true,
+  gateway_payment_received: false,
+  gateway_mode: null,
+  payment_provider: null,
+  payment_provider_label: null,
+  refund_reported_at: null,
+  refund_reported_satang: null,
+  last_payment_error: null,
+  last_payment_error_at: null,
   paid_at: null,
   verified_by: null,
   created_at: '2026-08-20T03:00:00Z',
@@ -88,6 +125,7 @@ async function mountView() {
         Icon: true,
         LoadingSkeleton: true,
         ClientDetailModal: true,
+        OrderDetailModal: true,
       },
     },
   })
@@ -265,5 +303,107 @@ describe('OrderPaymentsView — acting on a row', () => {
     await flushPromises()
 
     expect(download).toHaveBeenCalledWith('/orders/1/slip', 'slip-ORD-0001.jpg')
+  })
+})
+
+/**
+ * 2026-09-10 (human: "แก้ Ui ปรับจาก card เป็น table เรียงแบบนี้ วันที่ เวลา,
+ * เลขที่ order, ชื่อสินค้า, ยอด, ชื่อผู้ซื้อ, ชื่อ Agent, สถานะ,
+ * ช่องทางชำระเงิน, ปุ่มดูรายละเอียด").
+ *
+ * The column ORDER is the request, not an implementation detail: this screen
+ * is read by someone scanning a day's takings, and the four leading columns
+ * are the ones they scan by. A later tidy-up that reorders them — or drops
+ * one into a tooltip — would quietly undo the reason the cards were replaced.
+ */
+describe('OrderPaymentsView — the table', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    get.mockReset()
+    download.mockReset()
+    mockApi()
+  })
+
+  it('lays the columns out in the order that was asked for', async () => {
+    const wrapper = await mountView()
+
+    expect(
+      wrapper.find('[data-test="orders-table"]').findAll('th').map((th) => th.text()),
+    ).toEqual([
+      'วันที่ / เวลา',
+      'เลขที่คำสั่งซื้อ',
+      'สินค้า',
+      'ยอด',
+      'ผู้ซื้อ',
+      'ตัวแทน',
+      'สถานะ',
+      'ช่องทางชำระเงิน',
+      '',
+    ])
+  })
+
+  it('puts every order on one row, with the four scanning columns in bold', async () => {
+    const wrapper = await mountView()
+    const cells = wrapper.find('[data-test="orders-table"] tbody tr').findAll('td')
+
+    expect(cells[1]?.text()).toBe('ORD-0001')
+    expect(cells[2]?.text()).toBe('Vital Blueprint')
+    expect(cells[4]?.text()).toBe('ลูกค้า 2')
+    expect(cells[5]?.text()).toBe('เกรียงยศ')
+
+    // The human marked these four bold; the other columns identify the row,
+    // these are the ones the eye runs down.
+    for (const index of [0, 1, 2, 3]) {
+      expect(cells[index]?.classes()).toContain('font-bold')
+    }
+  })
+
+  it('opens the order sheet from the row', async () => {
+    const wrapper = await mountView()
+
+    const button = wrapper.find('[data-test="view-order"]')
+    expect(button.exists()).toBe(true)
+
+    await button.trigger('click')
+    expect(wrapper.findComponent({ name: 'OrderDetailModal' }).props('orderId')).toBe(1)
+  })
+
+  it('gives "money in, sale not closed" its own row rather than a cell', async () => {
+    /*
+     * The single most important sentence on this screen — somebody has been
+     * charged and the system could not finish. Squeezed into the status
+     * cell it would be truncated; it gets a spanning row instead.
+     */
+    get.mockReset()
+    mockApi([{ ...ORDER, status: 'pending', gateway_payment_received: true }])
+    const wrapper = await mountView()
+
+    const noticeRow = wrapper.findAll('[data-test="orders-table"] tbody tr')
+      .find((tr) => tr.text().includes('ปิดการขายอัตโนมัติไม่สำเร็จ'))
+
+    expect(noticeRow).toBeDefined()
+    expect(noticeRow!.find('td').attributes('colspan')).toBe('9')
+  })
+
+  it('shows only the most urgent notice when a row has several', async () => {
+    /*
+     * A row carrying three warnings tells the reader nothing about which to
+     * act on first. Money-in-sale-not-closed outranks a reported refund,
+     * which outranks a declined card.
+     */
+    get.mockReset()
+    mockApi([{
+      ...ORDER,
+      status: 'pending',
+      gateway_payment_received: true,
+      refund_reported_at: '2026-09-01T03:00:00Z',
+      last_payment_error: 'บัตรถูกปฏิเสธ',
+    }])
+    const wrapper = await mountView()
+    const text = wrapper.text()
+
+    expect(text).toContain('ปิดการขายอัตโนมัติไม่สำเร็จ')
+    expect(text).not.toContain('บัตรถูกปฏิเสธ')
+    expect(text).not.toContain('ผู้ให้บริการแจ้งว่ามีการคืนเงิน')
   })
 })

@@ -398,7 +398,10 @@
     "online_failed": "Could not open card payment. Please try again, or transfer using the details below",
     "online_or": "or",
     "transfer_title": "Bank transfer / PromptPay",
-    "transfer_help": "Transfer using the details below, then upload your slip — we will check and confirm it"
+    "transfer_help": "Transfer using the details below, then upload your slip — we will check and confirm it",
+    "back_home": "Back to home",
+    "auto_return": "Returning to home in {seconds}s",
+    "auto_return_stopped": "Countdown stopped — tap the button above when you are ready"
   },
   "bank": {
     "name": "Bank",

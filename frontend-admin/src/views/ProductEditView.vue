@@ -229,6 +229,24 @@ interface Product {
   // rendered as editable selects bound to THIS company's /brands and
   // /product-categories lists while linked (see isCatalogLinked below).
   catalog_item_id: number | null
+  /**
+   * TASK-245 — computed by the SERVER for this row and this user, never
+   * re-derived here. Two different questions, deliberately:
+   *
+   *   update              may I edit the product ROW? False for a Company
+   *                       Admin on a สินค้ากลาง (every company shares it, so
+   *                       ProductPolicy makes it Super-Admin-only) and on a
+   *                       catalog-linked product.
+   *   set_commission_rule may I set MY OWN company's rates on it? True on a
+   *                       shared product even when `update` is false —
+   *                       commission stays per company (ADR-040).
+   */
+  permissions?: {
+    update: boolean
+    delete: boolean
+    restore: boolean
+    set_commission_rule: boolean
+  }
   created_at: string
   updated_at: string
 }
@@ -392,7 +410,58 @@ watch(createAsPlatform, (platform) => {
 //     ProductPolicy::update() (403 for Company Admin on any linked
 //     product) — Super Admin keeps full edit rights there.
 const isCatalogLinked = computed(() => product.value?.catalog_item_id != null)
-const readOnlyForCompanyAdmin = computed(() => isCatalogLinked.value && !isSuperAdmin.value)
+
+/**
+ * 2026-09-09 (human: "อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน ไม่ใช่ให้
+ * error 403").
+ *
+ * May I edit this product's ROW at all?
+ *
+ * ── WHY THE SERVER ANSWERS THIS AND NOT THIS FILE ──
+ *
+ * It used to be `isCatalogLinked && !isSuperAdmin` — a copy of one of
+ * ProductPolicy::update()'s two refusals, written out here by hand. The
+ * other refusal (a สินค้ากลาง is Super-Admin-only, because every company
+ * shares the row) had no copy, so a Company Admin opening a shared product
+ * got a fully editable form, filled it in, pressed บันทึก and was answered
+ * 403 — the exact "let them try, then refuse" this instruction is about.
+ *
+ * `permissions.update` is that Policy's own answer, computed per row per
+ * user (TASK-245). One rule, one place; a third refusal added to the Policy
+ * tomorrow reaches this screen without anyone remembering to come here.
+ *
+ * MISSING PERMISSIONS READ AS NO, matching ProductCatalogView's canUpdate():
+ * failing closed costs a button, failing open ships a 403.
+ */
+const readOnlyForCompanyAdmin = computed(
+  () => !isCreateMode.value && product.value?.permissions?.update !== true,
+)
+
+/**
+ * Commission is the exception, and it is the whole reason this is a separate
+ * flag rather than `!readOnlyForCompanyAdmin`.
+ *
+ * ADR-040: a Company Admin absolutely may set their OWN rates on a shared
+ * product — what they may not do is edit the product itself. The server
+ * already draws exactly that line (`set_commission_rule` is false only for a
+ * catalog-LINKED product), so this reads its answer rather than guessing.
+ */
+const canSetCommissionRule = computed(
+  () => isCreateMode.value || product.value?.permissions?.set_commission_rule === true,
+)
+
+/**
+ * So is the recommendation pin: it is one company's decision about its own
+ * storefront, stored per company, and a Company Admin keeps it on a shared
+ * product even though the row itself is locked.
+ *
+ * No server flag for this one — ProductRecommendationPinPolicy asks about
+ * the PIN, not the product, so there is nothing per-product for
+ * ProductResource to report. The rule below is therefore the one this screen
+ * has always applied, unchanged: locked on a catalog-linked product
+ * (ADR-036 §5 hands that whole product to Super Admin), open otherwise.
+ */
+const canPin = computed(() => !isCreateMode.value && (isSuperAdmin.value || !isCatalogLinked.value))
 
 const showCatalogLinkPicker = ref(false)
 const catalogItemOptions = ref<ProductCatalogItemOption[]>([])
@@ -1006,10 +1075,18 @@ async function saveBasics() {
 // into edit mode on a fresh create (see saveBasics()'s isCreateMode branch
 // above), so there is nothing to pin yet on that first submit.
 async function saveBasicsAndPin() {
-  await saveBasics()
-  if (!isCreateMode.value) {
-    await savePin()
-  }
+  /*
+   * 2026-09-09 — the two halves are now separately permitted.
+   *
+   * A Company Admin looking at a สินค้ากลาง may not touch the product row,
+   * but the recommendation pin below it is their own company's decision.
+   * The single บันทึก button therefore saves whichever half they are
+   * allowed to save; calling saveBasics() unconditionally would send a PUT
+   * that comes back 403 and put an error on screen for a change the person
+   * never made.
+   */
+  if (!readOnlyForCompanyAdmin.value) await saveBasics()
+  if (!isCreateMode.value && canPin.value) await savePin()
 }
 
 // ── Section C — description (pencil-edit toggle) ──
@@ -2268,6 +2345,26 @@ function goToVideoSettings() {
       </span>
     </div>
 
+    <!-- 2026-09-09 (human: "อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน ไม่ใช่
+         ให้ error 403"). The same top-of-page notice for the OTHER lock: a
+         สินค้ากลาง is one row every company shares, so its content is
+         Super-Admin-only. Says what is still theirs and where, because
+         "read-only" on its own reads as "you have lost this product". -->
+    <div
+      v-else-if="readOnlyForCompanyAdmin"
+      data-test="shared-read-only-notice"
+      class="mt-4 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-700 flex items-start gap-2"
+    >
+      <Icon name="globe" :size="16" class="mt-0.5 shrink-0" />
+      <span>
+        <span class="font-bold">สินค้ากลาง</span> — ทุกบริษัทใช้สินค้าตัวนี้ร่วมกัน ข้อมูลสินค้าจึงแก้ไขได้เฉพาะ Super Admin
+        <span class="block mt-1">
+          สิ่งที่บริษัทของคุณตั้งเองได้: <span class="font-bold">ราคาของบริษัท</span> และ <span class="font-bold">เปิด/ปิดขาย</span> (ที่หน้ารายการสินค้า) ·
+          <span class="font-bold">อัตราคอมมิชชั่น</span> · <span class="font-bold">การปักหมุดแนะนำ</span>
+        </span>
+      </span>
+    </div>
+
     <LoadingSkeleton v-if="loading" type="detail" class="mt-4" />
     <template v-else>
       <!-- Tab 1 — ทั่วไป (General). Available pre-save — the only tab
@@ -2557,6 +2654,13 @@ function goToVideoSettings() {
             </div>
           </div>
 
+          </fieldset>
+
+          <!-- 2026-09-09 — the pin sits OUTSIDE the row lock on purpose.
+               It is one company's decision about its own storefront, stored
+               per company, so a Company Admin keeps it on a สินค้ากลาง whose
+               row they may not touch. Its own fieldset, its own rule. -->
+          <fieldset class="contents" :disabled="!canPin">
           <!-- Recommendation pin (TASK-068 / ADR-020 row 4) — folded into
                this tab as a compact subsection per TASK-195 §2 Tab 1
                (it's a 2-field toggle, doesn't need its own tab). Needs an
@@ -2596,13 +2700,16 @@ function goToVideoSettings() {
             </p>
             <p v-if="pinError" class="mt-2 text-xs font-bold text-rose-600">{{ pinError }}</p>
           </div>
+          </fieldset>
 
-          <div class="sm:col-span-2 flex justify-end">
-            <button type="submit" :disabled="savingBasics || savingPin || readOnlyForCompanyAdmin" class="btn-primary">
+          <!-- Hidden, not disabled, when there is nothing on this tab the
+               person may save — a greyed button still reads as "you could
+               do this if you tried harder". -->
+          <div v-if="!readOnlyForCompanyAdmin || canPin" class="sm:col-span-2 flex justify-end">
+            <button type="submit" :disabled="savingBasics || savingPin" data-test="save-basics" class="btn-primary">
               {{ savingBasics || savingPin ? 'กำลังบันทึก...' : isCreateMode ? 'บันทึกและดำเนินการต่อ' : 'บันทึก' }}
             </button>
           </div>
-          </fieldset>
         </form>
       </section>
 
@@ -2627,9 +2734,13 @@ function goToVideoSettings() {
                `display: contents` so the existing grid/flex layout is
                untouched, native `disabled` cascade covers every input/
                select/textarea/button inside regardless of which block it's
-               in. Super Admin is unaffected (readOnlyForCompanyAdmin is
-               always false for them). -->
-          <fieldset class="contents" :disabled="readOnlyForCompanyAdmin">
+               in. Super Admin is unaffected.
+               2026-09-09 — gated on `set_commission_rule`, not on the row
+               lock: a Company Admin keeps their own rates on a สินค้ากลาง
+               (ADR-040 — commission is per company), and loses them only on
+               a catalog-linked product. The server draws that line; this
+               reads it. -->
+          <fieldset class="contents" :disabled="!canSetCommissionRule">
           <!-- 2026-08-18 — human request: one "บันทึก" button for the whole
                คอมมิชชั่น tab instead of two stacked ones. This single outer
                <form> now wraps BOTH the "การตั้งค่าคอมมิชชั่นของสินค้านี้"
@@ -2962,7 +3073,7 @@ function goToVideoSettings() {
               </button>
             </div>
             <div class="flex justify-end">
-              <button type="submit" :disabled="savingBasics || readOnlyForCompanyAdmin" class="btn-primary">
+              <button v-if="!readOnlyForCompanyAdmin" type="submit" :disabled="savingBasics" class="btn-primary">
                 {{ savingBasics ? 'กำลังบันทึก...' : 'บันทึก' }}
               </button>
             </div>
@@ -3111,6 +3222,7 @@ function goToVideoSettings() {
                 <Icon name="image" :size="28" class="text-slate-300" />
                 <p class="text-sm font-bold text-slate-500">ยังไม่มีรูป/วิดีโอสินค้า</p>
                 <button
+                  v-if="!readOnlyForCompanyAdmin"
                   class="px-4 py-2 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center gap-1.5"
                   @click="showMediaUploadModal = true"
                 >
@@ -3215,6 +3327,7 @@ function goToVideoSettings() {
               <!-- Row 2 — upload button, 20% height -->
               <div class="h-[20%]">
                 <button
+                  v-if="!readOnlyForCompanyAdmin"
                   class="w-full h-full px-2 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
                   @click="showMediaUploadModal = true"
                 >
@@ -3293,6 +3406,7 @@ function goToVideoSettings() {
               <template v-else-if="!specAttachments.length">
                 <EmptyState icon="document" title="ยังไม่มีไฟล์แนบสเปค" class="mb-2" />
                 <button
+                  v-if="!readOnlyForCompanyAdmin"
                   class="w-full px-2 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
                   @click="showSpecAttachmentUploadModal = true"
                 >
@@ -3369,6 +3483,7 @@ function goToVideoSettings() {
                   </div>
                   <div class="h-[20%]">
                     <button
+                      v-if="!readOnlyForCompanyAdmin"
                       class="w-full h-full px-2 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
                       @click="showSpecAttachmentUploadModal = true"
                     >
@@ -3504,6 +3619,7 @@ function goToVideoSettings() {
                 </div>
                 <div class="flex justify-end mt-2">
                   <button
+                    v-if="!readOnlyForCompanyAdmin"
                     class="btn-primary"
                     :disabled="addingSpec || !specForm.spec_key || !specForm.spec_value"
                     @click="addSpec"
@@ -3612,6 +3728,7 @@ function goToVideoSettings() {
 
                 <!-- Human-requested 2026-07-20: upload scoped to THIS group, not one shared button -->
                 <button
+                  v-if="!readOnlyForCompanyAdmin"
                   class="w-full px-2 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center justify-center gap-1.5"
                   @click="openMaterialUpload(group.label || null)"
                 >
@@ -3634,6 +3751,7 @@ function goToVideoSettings() {
                 />
               </div>
               <button
+                v-if="!readOnlyForCompanyAdmin"
                 class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold flex items-center gap-1.5 shrink-0"
                 @click="openMaterialUpload(newMaterialGroupDraft)"
               >

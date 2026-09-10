@@ -2,17 +2,21 @@
 
 namespace Tests\Feature\Catalog;
 
+use App\Enums\PipelineStage;
 use App\Models\CertTier;
 use App\Models\Company;
 use App\Models\PipelineTemplate;
 use App\Models\Product;
 use App\Models\ProductShareLink;
+use App\Models\Referral;
 use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\User;
 use App\Models\UserCertification;
 use App\Services\Pipeline\PipelineTemplateProvisioner;
 use App\Services\Pipeline\PipelineTemplateResolver;
+use App\Services\Referral\PipelineService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 /**
@@ -306,6 +310,62 @@ class PlatformProductJourneyTest extends TestCase
             array_map(fn ($stage) => $stage->value, $custom->stageSequence()),
             array_map(fn ($stage) => $stage->value, $journey->stageSequence()),
         );
+    }
+
+    // ── The journey has to survive being snapshotted ─────────────────
+
+    public function test_a_referral_can_walk_a_platform_journey(): void
+    {
+        /*
+         * 2026-09-10 — the failure this test exists to have caught.
+         *
+         * ReferralService snapshots whichever journey the resolver returns
+         * onto `referrals.pipeline_template_id`, and from yesterday's change
+         * that is a PLATFORM row for a สินค้ากลาง. PipelineService then read
+         * the snapshot back with an exact `company_id` match, found nothing,
+         * and threw — so the referral could not advance and every card
+         * payment on a shared product would have landed in the "ได้รับเงิน
+         * แล้วแต่ยืนยันไม่สำเร็จ" queue.
+         *
+         * Nothing in the catalogue tests would have noticed: the product was
+         * perfectly configured. The break was one lookup away, in the code
+         * that walks the journey rather than the code that chooses it.
+         */
+        $product = $this->sharedProduct($this->platformJourney(PipelineTemplate::KEY_DIRECT_SALE_DEFAULT)->id);
+        $agent = User::factory()->agent()->create(['company_id' => $this->aia->id]);
+
+        $referral = Referral::factory()->create([
+            'company_id' => $this->aia->id,
+            'agent_id' => $agent->id,
+            'product_id' => $product->id,
+            'pipeline_template_id' => $product->pipeline_template_id,
+            'current_stage' => PipelineStage::CompleteRegistered->value,
+        ]);
+
+        $pipeline = app(PipelineService::class);
+
+        $this->assertSame(
+            PipelineStage::CompletePayment,
+            $pipeline->nextStageFor($referral),
+            'รายการอ้างอิงที่ใช้เส้นทางกลางต้องเดินต่อไปขั้นชำระเงินได้',
+        );
+    }
+
+    public function test_a_referral_still_cannot_borrow_another_tenants_journey(): void
+    {
+        // The guarantee the exact-company match existed for. Widening it to
+        // "own OR platform" must not have widened it to "anyone's" (BR-6).
+        $thaiLife = Company::factory()->create(['name' => 'Thai Life']);
+        $theirs = $this->companyJourney($thaiLife, PipelineTemplate::KEY_DIRECT_SALE_DEFAULT);
+
+        $referral = Referral::factory()->create([
+            'company_id' => $this->aia->id,
+            'pipeline_template_id' => $theirs->id,
+            'current_stage' => PipelineStage::CompleteRegistered->value,
+        ]);
+
+        $this->expectException(ValidationException::class);
+        app(PipelineService::class)->nextStageFor($referral);
     }
 
     // ── Every product says which journey it sells under ──────────────

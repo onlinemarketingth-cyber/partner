@@ -7,7 +7,6 @@ use App\Enums\PipelineStage;
 use App\Models\PipelineStageLog;
 use App\Models\PipelineTemplate;
 use App\Models\Referral;
-use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Commission\CommissionService;
 use App\Services\Engagement\PromotionBonusService;
@@ -386,14 +385,15 @@ class PipelineService
      *   legacy rows keep advancing exactly as they always have.
      *
      * BR-6: the template is re-read filtered on the REFERRAL's own
-     * company_id rather than relying on TenantScope — identical
-     * reasoning to PipelineTemplateResolver::findInCompany(). TenantScope
+     * company_id — or the PLATFORM's, since 2026-09-10 — rather than
+     * relying on TenantScope. Identical reasoning, and identical filter,
+     * to PipelineTemplateResolver::findInCompany(). TenantScope
      * is exempt for Super Admin and a no-op on unauthenticated public
      * routes (the pay page, TASK-136's checkout, TASK-139's webhook),
      * i.e. it is absent in exactly the contexts that matter most.
      *
-     * FAIL-CLOSED (§6): a snapshot that does not resolve inside the
-     * referral's own company, or a template whose stages have been
+     * FAIL-CLOSED (§6): a snapshot that resolves to neither the referral's
+     * own company nor the platform, or a template whose stages have been
      * emptied, throws instead of quietly falling back to the default
      * journey. Falling back would silently move a customer onto a
      * different journey — and, for a template edited down to nothing,
@@ -415,12 +415,28 @@ class PipelineService
             return $this->sequenceCache[$cacheKey] = PipelineStage::defaultSequence();
         }
 
-        $template = PipelineTemplate::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $referral->company_id)
+        /*
+         * 2026-09-10 — the company's own journey, OR a PLATFORM one.
+         *
+         * THIS WOULD HAVE BROKEN EVERY SHARED PRODUCT'S SALE. Journeys became
+         * platform-ownable yesterday, and ReferralService snapshots whatever
+         * PipelineTemplateResolver returns — so from the next deploy a
+         * referral for a สินค้ากลาง carries a template whose `company_id` is
+         * NULL. This lookup demanded an exact company match, found nothing,
+         * and threw: the referral could not advance, and every gateway
+         * payment on one would have landed in the "money in, sale not closed"
+         * queue that this very question came from.
+         *
+         * Same widening as PipelineTemplateResolver::findInCompany(), and BR-6
+         * is untouched: `company_id = :own OR company_id IS NULL` still cannot
+         * reach another tenant's journey.
+         */
+        $template = PipelineTemplate::withoutGlobalScopes()
+            ->where(fn ($query) => $query->where('company_id', $referral->company_id)->orWhereNull('company_id'))
             ->find($referral->pipeline_template_id);
 
         if (! $template) {
-            Log::warning("PipelineService: referral {$referral->id} is snapshotted with pipeline_template {$referral->pipeline_template_id}, which does not exist within company {$referral->company_id} (BR-6). Refusing to advance rather than falling back to another journey.");
+            Log::warning("PipelineService: referral {$referral->id} is snapshotted with pipeline_template {$referral->pipeline_template_id}, which is neither company {$referral->company_id}'s nor the platform's (BR-6). Refusing to advance rather than falling back to another journey.");
 
             throw ValidationException::withMessages([
                 'referral' => 'ไม่พบแม่แบบเส้นทางการขาย (pipeline template) ของรายการนี้ จึงไม่สามารถเปลี่ยนสถานะได้ กรุณาติดต่อผู้ดูแลระบบ',
