@@ -113,7 +113,8 @@ class PaymentWebhookController extends Controller
              * 2026-09-03 — an ignored event used to return 200 and leave no
              * trace whatsoever.
              *
-             * This system subscribes to five event types. A sixth arriving
+             * This system subscribes to a fixed, short list of event types
+             * (see StripeGateway::interpret). One outside it arriving
              * means the endpoint was edited in the provider's dashboard or
              * the provider changed something — both of which somebody should
              * be able to find out, and neither of which is an error worth
@@ -155,6 +156,31 @@ class PaymentWebhookController extends Controller
          * deliberately does NOT do (none of them changes the order's status,
          * and a refund never touches the commission ledger).
          */
+        /*
+         * 2026-09-10 — ONE LINE PER ACTED-UPON EVENT, before it is acted on.
+         *
+         * Prompted by a question this system could not answer: a card was
+         * declined in testing and the order looked paid, and there was no way
+         * to tell from the outside WHICH event had done it — a real
+         * `checkout.session.completed`, a replay, or a person pressing approve
+         * in the console. The failure paths each logged something; the success
+         * path logged nothing at all, because nothing had gone wrong.
+         *
+         * "Nothing went wrong" is not the same as "nobody will ever ask". This
+         * is the money path; it should always be possible to say which event
+         * moved an order, and at info, so it costs nothing to leave on.
+         */
+        Log::info('Payment webhook applied', [
+            'provider' => $paymentProvider->value,
+            'company_id' => $tenant->id,
+            'order_id' => $order->id,
+            'order_number' => $order->order_number,
+            'event_type' => $outcome->eventType,
+            'result' => $outcome->result->value,
+            'charge_id' => $outcome->chargeId,
+            'amount_satang' => $outcome->amountSatang,
+        ]);
+
         match ($outcome->result) {
             WebhookResult::Paid => $payments->applyPaid($order, $outcome),
             WebhookResult::Failed => $payments->applyFailed($order, $outcome),

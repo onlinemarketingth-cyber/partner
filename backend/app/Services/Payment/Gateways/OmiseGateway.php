@@ -315,6 +315,9 @@ class OmiseGateway implements PaymentGateway
                 amountSatang: $amount,
                 orderToken: $orderToken,
                 failureMessage: $status === 'successful' ? null : (string) ($charge['failure_message'] ?? $status),
+                // 2026-09-10 — named, for the same reason as Stripe's: the
+                // webhook log must be able to say WHICH event moved an order.
+                eventType: $key,
             );
         }
 
@@ -324,9 +327,10 @@ class OmiseGateway implements PaymentGateway
                 chargeId: $chargeId,
                 amountSatang: $amount,
                 orderToken: $orderToken,
+                eventType: $key,
             );
         }
 
-        return WebhookOutcome::ignore();
+        return WebhookOutcome::ignore($key);
     }
 }

@@ -426,6 +426,25 @@ class StripeGateway implements PaymentGateway
     /**
      * Stripe's event vocabulary, translated into ours.
      *
+     * ── THE EVENTS THIS ENDPOINT MUST BE SUBSCRIBED TO ──
+     *
+     * Stripe only delivers what the endpoint asks for, so this list is also a
+     * SETUP INSTRUCTION — an event nobody ticked in the dashboard is not a
+     * quiet default, it is silence:
+     *
+     *   checkout.session.completed              paid (card, and PromptPay's
+     *                                           first half)
+     *   checkout.session.async_payment_succeeded  PromptPay settled
+     *   checkout.session.async_payment_failed   PromptPay refused
+     *   checkout.session.expired                nobody paid in time
+     *   payment_intent.payment_failed           CARD REFUSED  ← 2026-09-10
+     *   charge.failed                           card refused, other half
+     *   charge.refunded                         money given back
+     *
+     * The two added on 2026-09-10 are the ones a declined card actually
+     * sends: a card refused inside Checkout never completes the session, so
+     * none of the `checkout.session.*` events fire at all.
+     *
      * `checkout.session.completed` alone does NOT mean paid — it means the
      * customer finished the page. PromptPay settles asynchronously, so a
      * session can complete while payment is still pending; only
@@ -475,7 +494,14 @@ class StripeGateway implements PaymentGateway
                 chargeId: $this->chargeIdFrom($object),
                 amountSatang: isset($object['amount_total']) ? (int) $object['amount_total'] : null,
                 orderToken: $orderToken,
-                failureMessage: $status === 'paid' ? null : $status,
+                // 2026-09-10 — the human wording, not the raw `payment_status`
+                // string. This message is shown to the customer on the pay
+                // page; "card_declined" is a value, not a sentence.
+                failureMessage: $status === 'paid' ? null : $this->declineMessage($object),
+                // 2026-09-10 — every outcome now names its event. Without it
+                // the webhook log could say an order had been marked paid but
+                // not by WHAT, which is the first question anybody asks.
+                eventType: $type,
             );
         }
 
@@ -486,6 +512,7 @@ class StripeGateway implements PaymentGateway
                 amountSatang: isset($object['amount_total']) ? (int) $object['amount_total'] : null,
                 orderToken: $orderToken,
                 failureMessage: 'ลูกค้าไม่ได้ชำระเงินภายในเวลาที่กำหนด',
+                eventType: $type,
             );
         }
 
@@ -496,6 +523,50 @@ class StripeGateway implements PaymentGateway
                 amountSatang: isset($object['amount_total']) ? (int) $object['amount_total'] : null,
                 orderToken: $orderToken,
                 failureMessage: 'ชำระเงินไม่สำเร็จ',
+                eventType: $type,
+            );
+        }
+
+        /*
+         * ── 2026-09-10: THE EVENTS A DECLINED CARD ACTUALLY EMITS ──
+         *
+         * Human, testing with 4000000000000002 (generic_decline): "ต้องขึ้นว่า
+         * ชำระไม่สำเร็จ แต่ระบบ stripe คือค่ามาไม่สำเร็จ ของเรายังจ่ายสำเร็จอยู่เลย".
+         *
+         * The webhook translation above reads `payment_status` rather than the
+         * event name, so it cannot mark a refused payment paid — that part was
+         * correct and has tests. What it could not do was NOTICE.
+         *
+         * A card refused inside Checkout never completes the session, so
+         * `checkout.session.completed` — the only failure route this method
+         * knew — is never sent. Stripe emits `payment_intent.payment_failed`
+         * and `charge.failed` instead, and BOTH fell through to Ignore. The
+         * result: the order was untouched, the agent was never told, the
+         * customer's page looked exactly as it had before, and the obvious
+         * next move was to try the same card again.
+         *
+         * `checkout.session.async_payment_failed` above is the PromptPay
+         * equivalent and stays; these two are the card ones.
+         *
+         * NEITHER CLAIMS A CHARGE ID. A Failed outcome never reaches
+         * applyPaid(), so a refused attempt cannot occupy the id a later
+         * successful one needs.
+         */
+        if ($type === 'payment_intent.payment_failed' || $type === 'charge.failed') {
+            return new WebhookOutcome(
+                result: WebhookResult::Failed,
+                chargeId: $this->chargeIdFrom($object),
+                /*
+                 * Amount deliberately NOT reported.
+                 *
+                 * applyPaid()'s amount guard is the only reader, and a failed
+                 * attempt has no amount to reconcile — a PaymentIntent's
+                 * `amount` is what was ASKED for, not what moved.
+                 */
+                amountSatang: null,
+                orderToken: $orderToken,
+                failureMessage: $this->declineMessage($object),
+                eventType: $type,
             );
         }
 
@@ -505,6 +576,7 @@ class StripeGateway implements PaymentGateway
                 chargeId: isset($object['payment_intent']) ? (string) $object['payment_intent'] : null,
                 amountSatang: isset($object['amount_refunded']) ? (int) $object['amount_refunded'] : null,
                 orderToken: $orderToken,
+                eventType: $type,
             );
         }
 
@@ -528,6 +600,63 @@ class StripeGateway implements PaymentGateway
         }
 
         return isset($object['id']) ? (string) $object['id'] : null;
+    }
+
+    /**
+     * Why the card was refused, in words the customer can act on.
+     *
+     * ── WHERE THE REASON LIVES, WHICH DEPENDS ON THE EVENT ──
+     *
+     * A PaymentIntent carries `last_payment_error.decline_code` (the issuer's
+     * reason) and `.code` (Stripe's category). A Charge carries
+     * `outcome.reason` and `failure_code`. Read in that order of specificity,
+     * because "insufficient funds" is actionable and "card_declined" is not.
+     *
+     * ── WHY NOT JUST PASS STRIPE'S OWN MESSAGE THROUGH ──
+     *
+     * It is English, and it is written for a US cardholder. This message is
+     * shown to a Thai customer on the pay page and to the agent chasing the
+     * sale, so it is mapped rather than forwarded.
+     *
+     * ── THE LOST/STOLEN RULE ──
+     *
+     * `lost_card` and `stolen_card` are deliberately given the SAME generic
+     * wording as an ordinary decline. Stripe's own guidance is not to tell the
+     * person holding the card that the issuer reported it lost or stolen: if
+     * they are the thief it is a warning, and if they are not it is a false
+     * accusation from a shop. The issuer tells the real cardholder.
+     *
+     * @param  array<string, mixed>  $object
+     */
+    private function declineMessage(array $object): string
+    {
+        $generic = 'บัตรถูกปฏิเสธโดยธนาคารผู้ออกบัตร — กรุณาลองบัตรใบอื่น หรือติดต่อธนาคารของคุณ';
+
+        $error = is_array($object['last_payment_error'] ?? null) ? $object['last_payment_error'] : [];
+        $outcome = is_array($object['outcome'] ?? null) ? $object['outcome'] : [];
+
+        $reason = (string) (
+            $error['decline_code']
+            ?? $outcome['reason']
+            ?? $error['code']
+            ?? $object['failure_code']
+            ?? ''
+        );
+
+        return match ($reason) {
+            'insufficient_funds' => 'ยอดเงินในบัตรไม่พอสำหรับรายการนี้',
+            'expired_card' => 'บัตรหมดอายุแล้ว กรุณาใช้บัตรใบอื่น',
+            'incorrect_cvc', 'invalid_cvc' => 'รหัส CVC หลังบัตรไม่ถูกต้อง',
+            'incorrect_number', 'invalid_number' => 'เลขบัตรไม่ถูกต้อง',
+            'incorrect_zip' => 'รหัสไปรษณีย์ที่ผูกกับบัตรไม่ถูกต้อง',
+            'card_not_supported', 'currency_not_supported' => 'บัตรใบนี้ใช้ชำระเป็นเงินบาทไม่ได้ กรุณาใช้บัตรใบอื่น',
+            'authentication_required' => 'ธนาคารขอให้ยืนยันตัวตนเพิ่มเติม (OTP / 3-D Secure) กรุณาลองใหม่และยืนยันให้ครบขั้นตอน',
+            'processing_error' => 'เกิดข้อผิดพลาดระหว่างประมวลผล กรุณาลองใหม่อีกครั้ง',
+            'withdrawal_count_limit_exceeded' => 'บัตรใบนี้ใช้เกินวงเงินที่ธนาคารกำหนดไว้แล้ว',
+            // 'card_declined', 'generic_decline', 'do_not_honor', 'lost_card',
+            // 'stolen_card', 'fraudulent' and everything unknown: one wording.
+            default => $generic,
+        };
     }
 
     /**

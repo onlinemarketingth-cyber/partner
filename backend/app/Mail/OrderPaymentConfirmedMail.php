@@ -4,6 +4,7 @@ namespace App\Mail;
 
 use App\Models\Order;
 use App\Support\PortalOrigin;
+use App\Support\VoucherCode;
 use Illuminate\Bus\Queueable;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
@@ -101,10 +102,18 @@ class OrderPaymentConfirmedMail extends Mailable
             return '';
         }
 
+        /*
+         * 2026-09-10 — the code is six characters now, so it is set large and
+         * spaced, in the ABC-123 grouping it is printed in everywhere else.
+         * Somebody reads this off a phone at a counter, or over the phone to
+         * a member of staff; `word-break: break-all` and 16px were sized for
+         * the 40-character token this replaced (which older orders still
+         * carry, and VoucherCode::format leaves alone).
+         */
         $lines = '<p style="margin:0 0 6px 0">รหัสเข้ารับบริการของคุณ</p>'
-            .'<p style="margin:0 0 10px 0;font-family:monospace;font-size:16px;'
-            .'word-break:break-all;padding:10px;background:#f1f5f9;border-radius:8px">'
-            .e($voucher->code).'</p>';
+            .'<p style="margin:0 0 10px 0;font-family:monospace;font-size:28px;font-weight:bold;'
+            .'letter-spacing:3px;word-break:break-all;padding:14px;background:#f1f5f9;border-radius:8px">'
+            .e(VoucherCode::format($voucher->code)).'</p>';
 
         if (filled($this->order->product?->name)) {
             $lines .= '<p style="margin:0 0 4px 0">ใช้สำหรับ: <strong>'.e($this->order->product->name).'</strong></p>';

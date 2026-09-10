@@ -9,6 +9,7 @@ import App from './App.vue'
 import router from './router'
 import { setUnauthorizedHandler } from './api/client'
 import { useAuthStore } from './stores/auth'
+import { installStaleAssetRecovery } from './utils/staleAssets'
 
 const app = createApp(App)
 
@@ -59,5 +60,16 @@ document.addEventListener('visibilitychange', () => {
     }
   })
 })
+
+/*
+ * 2026-09-10 (human: "ปิดหน้า admin ค้างไว้ ... กดปุ่มทำงานอะไรไม่ได้ ต้องกดปุ่ม
+ * refresh ถึงกลับมาทำงานได้").
+ *
+ * A tab that was open when a deploy landed is asking for chunk filenames the
+ * server deleted, so every menu click fails silently. See utils/staleAssets —
+ * installed before mount so a failure during the very first navigation is
+ * caught too.
+ */
+installStaleAssetRecovery(router)
 
 app.mount('#app')

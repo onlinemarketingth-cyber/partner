@@ -1,5 +1,5 @@
 /**
- * Base API client for Live to 100 Club.
+ * Base API client for Sync Vision Agent.
  *
  * ── 2026-08-27: COOKIE SESSION -> BEARER TOKEN ──
  *
@@ -138,42 +138,109 @@ export function authHeaders(headers: Headers): Headers {
   return headers
 }
 
-export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public body: unknown,
-    /**
-     * Seconds until the caller may retry, from the response's `Retry-After`
-     * header. Only ever set on a 429.
-     *
-     * It is on the error rather than left in the response because of a
-     * production report (2026-09-07): a visitor filling in the sign-up form
-     * hit `throttle:10,1` and the page told them
-     * "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" — the server was answering perfectly, it
-     * was refusing. Without the number the only honest thing a screen can say
-     * is "later", which is what made the message useless enough to be replaced
-     * by a wrong one.
-     */
-    public retryAfterSeconds: number | null = null,
-  ) {
-    super(`API error ${status}`)
+/**
+ * 2026-09-10 (human, reported on the Admin console but true of every screen
+ * here: "ค้างไว้ ... กดปุ่มทำงานอะไรไม่ได้ ต้องกดปุ่ม refresh ถึงกลับมาทำงานได้").
+ *
+ * `fetch()` HAS NO TIMEOUT. A request issued over a connection that has since
+ * died — the phone left the building, the laptop slept, the Wi-Fi changed — is
+ * not refused and does not fail; it never settles at all.
+ *
+ * Every view awaits that promise, so `loading` stays true and every button
+ * bound to `:disabled="saving"` stays dead, with nothing shown and nothing
+ * logged. The page looks like a working page that has stopped caring, and the
+ * only way out is a reload.
+ *
+ * 30s for JSON, 120s for transfers — an upload on a bad connection
+ * legitimately takes minutes, and cutting a real one off would be a new bug
+ * rather than a fix. Kept in step with frontend-admin/src/api/client.ts
+ * (ADR-003: the two clients are duplicated, not shared).
+ */
+const REQUEST_TIMEOUT_MS = 30_000
+const TRANSFER_TIMEOUT_MS = 120_000
+
+interface Deadline {
+  signal: AbortSignal
+  /** True once the deadline itself fired — see transportError(). */
+  timedOut: () => boolean
+  done: () => void
+}
+
+/**
+ * The deadline stays armed until the BODY has been read, not just until the
+ * headers arrive — a response whose stream stalls half way through hangs the
+ * caller exactly as thoroughly as one that never starts.
+ *
+ * `external` is the CALLER's own signal (TASK-079 Phase 4: heavy views abort
+ * their loads on unmount). It is chained rather than replaced — a deadline
+ * that silently disabled view-level cancellation would trade one bug for
+ * another.
+ */
+function withDeadline(timeoutMs: number, external?: AbortSignal | null): Deadline {
+  const controller = new AbortController()
+  let timedOut = false
+
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  const forward = () => controller.abort()
+  if (external?.aborted) forward()
+  external?.addEventListener('abort', forward)
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    done: () => {
+      clearTimeout(timer)
+      external?.removeEventListener('abort', forward)
+    },
   }
 }
 
 /**
- * `Retry-After` as a number of seconds, or null.
+ * Turn "the request never happened" into something the UI can show.
  *
- * Laravel's ThrottleRequests always sends it as a delta-seconds integer; the
- * HTTP-date form the RFC also allows is not parsed, because nothing in this
- * API emits it and a half-supported parse is worse than an honest null.
+ * ── THE DISTINCTION THAT MATTERS ──
+ *
+ * A deadline firing and a view cancelling its own load both arrive here as an
+ * AbortError, and they mean opposite things. A cancellation is not a failure
+ * and must stay silent (isAbortError() in utils/apiError). A timeout is the
+ * failure this whole change exists to make visible — passed through as an
+ * AbortError it would be swallowed by that same guard, which is the original
+ * silence with extra steps.
+ *
+ * Status 0 on purpose: it is not an HTTP answer and must never be mistaken for
+ * one — notifyIfUnauthorized() reacts only to 401, so a dropped connection can
+ * never sign somebody out.
  */
-function retryAfterSeconds(res: Response): number | null {
-  const raw = res.headers.get('Retry-After')
-  if (raw === null) return null
+function transportError(error: unknown, timedOut: boolean): unknown {
+  if (error instanceof ApiError) return error
 
-  const seconds = Number(raw)
+  // `name`, not `instanceof Error`: a browser's AbortError is a DOMException,
+  // which does NOT inherit from Error — checking the prototype here would
+  // quietly turn every deliberate cancellation into a "connection failed"
+  // banner on every screen change.
+  const aborted = typeof error === 'object' && error !== null && (error as { name?: string }).name === 'AbortError'
+  if (aborted && !timedOut) return error
 
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+
+  return new ApiError(0, {
+    message: offline
+      ? 'อุปกรณ์นี้ไม่ได้เชื่อมต่ออินเทอร์เน็ตอยู่ — เชื่อมต่อแล้วลองใหม่อีกครั้ง'
+      : 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จหรือใช้เวลานานเกินไป — กรุณาลองใหม่อีกครั้ง',
+  })
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: unknown,
+  ) {
+    super(`API error ${status}`)
+  }
 }
 
 // Bug fix: the router guard only calls authStore.fetchUser() ONCE per
@@ -214,18 +281,30 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (options.body) headers.set('Content-Type', 'application/json')
   authHeaders(headers)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    ...options,
-    headers,
-  })
+  // The caller's signal is CHAINED, not replaced: a view that aborts its own
+  // load on unmount must keep working (TASK-079 Phase 4).
+  const deadline = withDeadline(REQUEST_TIMEOUT_MS, options.signal)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      ...options,
+      headers,
+      signal: deadline.signal,
+    })
 
-  const isJson = res.headers.get('content-type')?.includes('application/json')
-  const body = isJson ? await res.json() : await res.text()
+    notifyIfUnauthorized(path, res.status)
 
-  if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
-  return body as T
+    const isJson = res.headers.get('content-type')?.includes('application/json')
+    const body = isJson ? await res.json() : await res.text()
+
+    if (!res.ok) throw new ApiError(res.status, body)
+
+    return body as T
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
+  }
 }
 
 /** multipart/form-data POST (file uploads) — never JSON.stringify a FormData body, and never set Content-Type manually (the browser must add the multipart boundary itself). */
@@ -234,19 +313,30 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   headers.set('Accept', 'application/json')
   authHeaders(headers)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'POST',
-    headers,
-    body: formData,
-  })
+  // The longer window: this one carries files.
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal: deadline.signal,
+    })
 
-  const isJson = res.headers.get('content-type')?.includes('application/json')
-  const body = isJson ? await res.json() : await res.text()
+    notifyIfUnauthorized(path, res.status)
 
-  if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
-  return body as T
+    const isJson = res.headers.get('content-type')?.includes('application/json')
+    const body = isJson ? await res.json() : await res.text()
+
+    if (!res.ok) throw new ApiError(res.status, body)
+
+    return body as T
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
+  }
 }
 
 /**
@@ -259,16 +349,26 @@ async function requestDownload(path: string, filename: string): Promise<void> {
   const headers = new Headers()
   authHeaders(headers)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'GET',
-    headers,
-  })
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'GET',
+      headers,
+      signal: deadline.signal,
+    })
 
-  if (!res.ok) {
-    const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
+    notifyIfUnauthorized(path, res.status)
+
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    }
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
   }
 
   const blob = await res.blob()
@@ -303,11 +403,20 @@ async function requestDownloadAbsolute(url: string, filename?: string): Promise<
   const headers = new Headers()
   authHeaders(headers)
 
-  const res = await fetch(url, { method: 'GET', headers })
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  if (!res.ok) {
-    const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'GET', headers, signal: deadline.signal })
+
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    }
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
   }
 
   const header = res.headers.get('content-disposition') ?? ''
@@ -340,19 +449,28 @@ async function requestBlob(path: string): Promise<Blob> {
   const headers = new Headers()
   authHeaders(headers)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'GET',
-    headers,
-  })
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'GET',
+      headers,
+      signal: deadline.signal,
+    })
 
-  if (!res.ok) {
-    const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
+    notifyIfUnauthorized(path, res.status)
+
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    }
+
+    return await res.blob()
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
   }
-
-  return res.blob()
 }
 
 /**

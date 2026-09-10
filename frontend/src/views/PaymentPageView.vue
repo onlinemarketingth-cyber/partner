@@ -32,6 +32,7 @@ import { compressImageToFit } from '@/utils/imageCompression'
 // rather than a second inline QRCode.toDataURL() call (the PromptPay QR
 // above predates this util and is left as-is — out of scope here).
 import { generateQrDataUrl } from '@/utils/qrCode'
+import { formatVoucherCode, isShortVoucherCode } from '@/utils/voucherCode'
 // TASK-159 §4.2 — /pay/{token} carries no company slug, so boot's
 // loadPublic() bails at resolveSlug(). The theme now rides along on the
 // order payload instead; see the `theme` field on PublicOrder.
@@ -114,6 +115,18 @@ interface PublicGateway {
    * charge somebody twice.
    */
   payment_received: boolean
+  /*
+   * 2026-09-10 (human, testing Stripe's card_declined number: "ผมทดสอบ stripe
+   * แบบ card_declined ให้ผิด แต่หน้า frontend ยังขึ้นให้บัตรอยู่").
+   *
+   * The refusal WAS recorded — the webhook wrote it onto the order and told
+   * the agent — and then never reached the one person it was about. The
+   * customer came back to a page that looked exactly as it had before, still
+   * offering the card button, with nothing anywhere saying an attempt had
+   * been made. The obvious next move is to try the same card again.
+   */
+  last_error: string | null
+  last_error_at: string | null
   intent: PaymentIntent | null
 }
 interface PublicOrder {
@@ -199,7 +212,9 @@ async function renderQr() {
 
 async function renderVoucherQr() {
   const code = order.value?.voucher?.code
-  voucherQrDataUrl.value = code ? await generateQrDataUrl(code, 220) : ''
+  // Level H and a real quiet zone: this QR is scanned off a cracked screen, a
+  // twice-forwarded screenshot, or an office laser print — see generateQrDataUrl.
+  voucherQrDataUrl.value = code ? await generateQrDataUrl(code, 220, { level: 'H', margin: 2 }) : ''
 }
 
 // ── Downloadable voucher card (TASK-192) ────────────────────────────────────
@@ -325,14 +340,23 @@ async function downloadVoucherCard() {
       }
     }
 
-    // Voucher code — wrapped, see wrapTextToLines() for why (40-char
-    // no-spaces string overshoots a fixed fillText call).
+    /*
+     * Voucher code. Still wrapped, still via wrapTextToLines(): a legacy
+     * 40-character code overshoots a fixed fillText call, and those cards are
+     * still being downloaded by customers who bought before 2026-09-10.
+     *
+     * A short code gets the larger type and the grouping, because on a card
+     * somebody holds up at a counter it is the ONLY thing that matters — the
+     * QR is a convenience, the code is the fallback when the screen is cracked
+     * or the photo is a screenshot in a chat.
+     */
     ctx.fillStyle = '#ffffff'
-    ctx.font = 'bold 26px "Kanit", monospace'
-    const codeLines = wrapTextToLines(ctx, voucher.code, width - 80)
+    const shortCode = isShortVoucherCode(voucher.code)
+    ctx.font = shortCode ? 'bold 46px "Kanit", monospace' : 'bold 26px "Kanit", monospace'
+    const codeLines = wrapTextToLines(ctx, formatVoucherCode(voucher.code), width - 80)
     for (const line of codeLines) {
       ctx.fillText(line, width / 2, y)
-      y += 32
+      y += shortCode ? 54 : 32
     }
     y += 24
 
@@ -542,22 +566,57 @@ const isCancelled = computed(() => order.value?.status === 'cancelled')
 // Awaiting verification means a slip is already in — either just uploaded or
 // previously submitted. Hide the upload form and show the "waiting" notice.
 const awaitingVerification = computed(() => uploaded.value || order.value?.status === 'awaiting_verification')
-const showUploadForm = computed(
-  () => !isPaid.value && !isCancelled.value && !awaitingVerification.value && !paymentReceived.value,
-)
+/*
+ * 2026-09-10 — `showUploadForm` is gone.
+ *
+ * It existed because the slip picker was rendered unconditionally on any
+ * unpaid order, so it needed its own "is this order still payable" test. The
+ * picker now lives inside the transfer panels, which only open when a
+ * transfer method has been chosen — and the chooser itself already answers
+ * paid/cancelled/slip-received. One condition, in one place.
+ */
 
 // ── Card payment (ADR-027 / TASK-139) ───────────────────────────────────────
 //
-// The bank-transfer path below is UNTOUCHED and stays on screen alongside
-// this. A customer without a card, or one whose card is declined, still has
-// the account number and the slip upload they have always had — removing
-// that to make room for a card form would take away the only method that
-// works for most people on this platform today.
+// A customer without a card, or one whose card is declined, still has the
+// account number and the slip upload they have always had — the card is one
+// row in a list of methods, not a replacement for the rail most people on
+// this platform actually use.
 const cardError = ref('')
 const charging = ref(false)
 
 /** True the moment money has arrived, even before the order says 'paid'. */
 const paymentReceived = computed(() => order.value?.gateway.payment_received === true)
+
+/**
+ * The last card attempt was refused, and this customer still owes money.
+ *
+ * 2026-09-10. Guarded on the order NOT being settled: a failed attempt
+ * followed by a successful one leaves the old message on the row, and showing
+ * "your card was declined" above a paid order would be worse than showing
+ * nothing at all.
+ */
+const lastPaymentError = computed(() => {
+  if (isFinished.value) return ''
+
+  return order.value?.gateway.last_error ?? ''
+})
+
+/*
+ * Back from the gateway without paying.
+ *
+ * Stripe sends the customer to `cancel_url` when they leave its page — which
+ * is what a person does after their card is refused, since Checkout keeps them
+ * there with an error rather than redirecting. In that case NO webhook fires
+ * at all, so `last_error` above is empty and this query parameter is the only
+ * evidence the attempt ever happened.
+ *
+ * Deliberately worded as "not paid", not as "declined": leaving a payment page
+ * and being refused by a bank are different facts, and this parameter cannot
+ * tell them apart. It says what is certainly true and names the two ways
+ * forward.
+ */
+const returnedUnpaid = computed(() => route.query.stripe === 'cancelled' && !isFinished.value)
 
 /**
  * The page is finished with the customer once the money is in — whether the
@@ -620,8 +679,210 @@ const onlineGateway = computed(() => order.value?.gateway.online ?? null)
 
 /** Neither the card form nor the redirect has been opened yet. */
 const showMethodChooser = computed(
-  () => !!onlineGateway.value && !cardIntent.value && !redirectIntent.value && !paymentReceived.value,
+  () => !cardIntent.value
+    && !redirectIntent.value
+    && !paymentReceived.value
+    // 2026-09-10 — and not once a slip is in. The customer has done their
+    // part and somebody is looking at it; re-offering the payment methods
+    // reads as "that did not work, try again".
+    && !awaitingVerification.value,
 )
+
+/*
+ * ────────────────────────────────────────────────────────────────────────
+ * 2026-09-10 — ONE CHOICE, THEN ONE PANEL (human: "Ui หน้านี้ไม่สากลเลย
+ * ปรับให้เป็นมาตรฐานการชำระเงิน ให้เลือกวิธีชำระ หรือโอนผ่าน qr code").
+ *
+ * The page used to render every payment path at once: the chooser, the
+ * PromptPay QR, the bank account, and the slip upload, stacked down the
+ * screen whether or not the customer wanted any of them. Nothing said where
+ * to start, and the two options were not even the same shape — the card was
+ * a button and "transfer" was a paragraph, so only one of them looked like a
+ * choice.
+ *
+ * Now it is the shape every checkout uses: pick a method, and only that
+ * method's panel opens. Three equal rows, and a method the company has not
+ * configured is not shown at all — an account number rendered as "—" is a
+ * page that asks for money and will not say where to send it.
+ * ────────────────────────────────────────────────────────────────────────
+ */
+type PaymentMethodKey = 'card' | 'promptpay' | 'bank'
+
+/** The card rail, only when the company has a live gateway for it. */
+const cardAvailable = computed(() => !!onlineGateway.value)
+
+/** PromptPay, only when there is a payload to turn into a QR. */
+const promptPayAvailable = computed(() => !!order.value?.promptpay_payload)
+
+/**
+ * Bank transfer, only when there is genuinely an account to transfer to.
+ *
+ * The account NUMBER is the test, not the bank name: a row that names a bank
+ * and shows a dash where the number goes is worse than no row at all.
+ */
+const bankAvailable = computed(() => !!order.value?.company_payment.bank_account_number)
+
+const availableMethods = computed<PaymentMethodKey[]>(() => {
+  const methods: PaymentMethodKey[] = []
+  if (cardAvailable.value) methods.push('card')
+  if (promptPayAvailable.value) methods.push('promptpay')
+  if (bankAvailable.value) methods.push('bank')
+
+  return methods
+})
+
+/**
+ * Nothing to offer. Said out loud rather than rendered as an empty card: the
+ * customer cannot fix it and should be told to contact the seller, and the
+ * seller finds out because their customer tells them.
+ */
+const noMethodAvailable = computed(() => availableMethods.value.length === 0)
+
+const selectedMethod = ref<PaymentMethodKey | null>(null)
+
+function chooseMethod(method: PaymentMethodKey): void {
+  selectedMethod.value = method
+  cardError.value = ''
+  uploadError.value = ''
+}
+
+/*
+ * Pre-select ONLY when there is exactly one method.
+ *
+ * With a real choice, nothing is chosen for the customer: a pre-ticked
+ * payment method is a decision made on somebody's behalf about their money,
+ * and the one the page happens to list first is not the one they want often
+ * enough to be worth it. With a single method there is no choice to make, and
+ * an unopened accordion would just be an extra tap.
+ */
+watch(availableMethods, (methods) => {
+  if (methods.length === 1 && selectedMethod.value === null) {
+    selectedMethod.value = methods[0] ?? null
+  }
+}, { immediate: true })
+
+/** Both transfer rails end the same way: the customer sends money, then a slip. */
+const transferChosen = computed(() => selectedMethod.value === 'promptpay' || selectedMethod.value === 'bank')
+
+/*
+ * ── ONE ACTION, PINNED TO THE BOTTOM ─────────────────────────────────────
+ *
+ * Every checkout worth copying ends in a single primary button that is always
+ * reachable. This page had two — a card button half way up and a slip button
+ * at the very bottom — and on a phone the second one was below the fold
+ * behind an account number and a file picker, so the last step of a purchase
+ * was the one you had to go looking for.
+ *
+ * The bar shows only while there is something to press: not on a paid order,
+ * not while a slip is being checked, and not when there is no method to
+ * choose.
+ */
+const showActionBar = computed(
+  () => showMethodChooser.value && !noMethodAvailable.value && selectedMethod.value !== null,
+)
+
+const actionLabel = computed(() => {
+  if (transferChosen.value) {
+    return uploading.value ? td('pay.sending_slip') : td('pay.send_slip')
+  }
+
+  return startingOnline.value
+    ? td('pay.online_starting')
+    : td('pay.pay_amount', '', { amount: formatBaht(order.value?.amount_baht ?? 0) })
+})
+
+/**
+ * Disabled says WHY, by never being the only signal: the reasons are also
+ * written on screen (the address step, the slip picker), so a greyed-out
+ * button is a confirmation rather than a puzzle.
+ */
+const actionDisabled = computed(() => {
+  if (!shippingValid.value) return true
+  if (transferChosen.value) return !selectedFile.value || uploading.value
+
+  return startingOnline.value || charging.value
+})
+
+function runPrimaryAction(): void {
+  if (transferChosen.value) {
+    void uploadSlip()
+
+    return
+  }
+
+  void startOnlinePayment()
+}
+
+const methodLabels: Record<PaymentMethodKey, { title: string; hint: string; icon: string }> = {
+  card: { title: 'pay.method_card', hint: 'pay.method_card_hint', icon: 'credit_card' },
+  promptpay: { title: 'pay.method_promptpay', hint: 'pay.method_promptpay_hint', icon: 'qr_code' },
+  bank: { title: 'pay.method_bank', hint: 'pay.method_bank_hint', icon: 'money' },
+}
+
+/**
+ * The address is asked for FIRST now, not folded into the slip upload.
+ *
+ * It has to be, once a card is payable: the card path never touches the slip
+ * form, so a physical product bought with a card was never given an address
+ * at all (see StartOnlinePaymentRequest). Asking before the method is chosen
+ * is also simply where every checkout asks.
+ */
+const showShippingStep = computed(
+  () => order.value?.requires_shipping === true && !isFinished.value && !awaitingVerification.value,
+)
+
+/** @returns the shipping fields that have been filled in, ready to send. */
+function shippingPayload(): Record<string, string> {
+  const payload: Record<string, string> = {}
+  if (shippingRecipientName.value.trim()) payload.shipping_recipient_name = shippingRecipientName.value.trim()
+  if (shippingPhone.value.trim()) payload.shipping_phone = shippingPhone.value.trim()
+  if (shippingAddress.value.trim()) payload.shipping_address = shippingAddress.value.trim()
+
+  return payload
+}
+
+/**
+ * Copy the amount.
+ *
+ * Small, and the single most-mistyped thing on this page: a transfer for
+ * 2,990 instead of 29,900 is a refund, a phone call and a re-payment. Digits
+ * only — a banking app will not take "฿29,900.00".
+ */
+const amountCopied = ref(false)
+async function copyAmount(): Promise<void> {
+  const satang = order.value?.amount_satang
+  if (satang === undefined) return
+
+  const plain = (satang / 100).toFixed(2).replace(/\.00$/, '')
+  try {
+    await navigator.clipboard.writeText(plain)
+    amountCopied.value = true
+    window.setTimeout(() => { amountCopied.value = false }, 2000)
+  } catch {
+    // Clipboard blocked (insecure context, or a browser that asks). The
+    // number is on screen and selectable; a red error for a convenience
+    // would be worse than the convenience is good.
+  }
+}
+
+/**
+ * Save the PromptPay QR as an image.
+ *
+ * Scanning a QR from the same phone that is showing it is impossible, and
+ * that is the common case: the customer is on their phone and the banking app
+ * is on the same phone. Every Thai banking app can open a QR from the photo
+ * library, so the way through is to save it there.
+ */
+function saveQrImage(): void {
+  if (!qrDataUrl.value || !order.value) return
+
+  const link = document.createElement('a')
+  link.href = qrDataUrl.value
+  link.download = `promptpay-${order.value.order_number}.png`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
 
 /**
  * Test mode, read from the GATEWAY before a charge exists.
@@ -653,10 +914,26 @@ const startingOnline = ref(false)
 async function startOnlinePayment() {
   if (startingOnline.value || charging.value) return
 
+  /*
+   * 2026-09-10 — refuse before leaving, not after coming back.
+   *
+   * The gateway takes the customer to another site. If the address were
+   * missing, the server would refuse this request and the message would land
+   * on a page the customer has already left behind.
+   */
+  if (!shippingValid.value) {
+    cardError.value = td('pay.shipping_required')
+
+    return
+  }
+
   cardError.value = ''
   startingOnline.value = true
   try {
-    const res = await api.post<{ data: PublicOrder }>(`/pay/${token}/intent`, {})
+    // The address travels with the request that opens the payment — the card
+    // path never touches the slip form, which is where it used to be
+    // collected (see StartOnlinePaymentRequest).
+    const res = await api.post<{ data: PublicOrder }>(`/pay/${token}/intent`, shippingPayload())
     order.value = res.data
 
     // Leave straight away. The button the customer already pressed IS the
@@ -740,7 +1017,7 @@ async function payByCard() {
          loading line is the cheaper trade. -->
     <p v-if="pageState === 'loading'" class="text-sm text-ink-app-muted">{{ td('common.loading2') }}</p>
 
-    <div v-else class="w-full max-w-md rounded-[28px] bg-surface-card shadow-xl border border-line-card/80 overflow-hidden p-6 sm:p-8">
+    <div v-else class="w-full max-w-md rounded-[28px] bg-surface-card shadow-xl border border-line-card/80 overflow-hidden p-6 sm:p-8" :class="showActionBar ? 'mb-24' : ''">
       <div class="flex items-center justify-between">
         <AppLogo mode="wordmark" :height="28" />
         <span class="inline-flex items-center gap-1 text-xs font-bold text-ink-card-subtle">
@@ -768,10 +1045,23 @@ async function payByCard() {
 
       <!-- Ready -->
       <div v-else-if="order" class="mt-6 space-y-5">
-        <!-- Amount summary -->
+        <!-- Amount summary.
+             2026-09-10 — the amount gained a copy button. It is the single
+             most-mistyped thing on this page, and 2,990 typed instead of
+             29,900 is a refund, a phone call and a second payment. -->
         <div class="text-center">
           <p class="text-sm text-ink-card-muted">{{ order.product_name ?? td('pay.title') }}</p>
           <p class="mt-1 text-3xl font-bold text-ink-card">{{ formatBaht(order.amount_baht) }}</p>
+          <button
+            v-if="!isFinished"
+            type="button"
+            class="mt-1 text-xs font-bold text-ink-brand inline-flex items-center gap-1"
+            data-test="copy-amount"
+            @click="copyAmount"
+          >
+            <Icon name="copy" :size="13" />
+            {{ amountCopied ? td('common.copied') : td('pay.copy_amount') }}
+          </button>
           <p class="mt-1 text-xs text-ink-card-subtle">{{ td('order.number', '', { number: order.order_number }) }}</p>
         </div>
 
@@ -802,13 +1092,24 @@ async function payByCard() {
               <Icon name="qr_code" :size="20" class="text-ink-brand" /> {{ td('pay.voucher') }}
             </p>
             <img v-if="voucherQrDataUrl" :src="voucherQrDataUrl" :alt="td('pay.voucher_code')" class="w-48 h-48" />
-            <!-- 2026-08-17 bugfix: the redemption code is a 40-char random
-                 string (Str::random(40), OrderVoucherService::generateCode())
-                 — at text-lg + tracking-widest on one line it overflows the
-                 max-w-md card on any viewport narrower than the string
-                 itself. break-all + a smaller monospace size lets it wrap
-                 inside the card instead of bleeding past the border. -->
-            <p class="w-full text-sm font-bold font-mono tracking-wide text-ink-card break-all">{{ order.voucher.code }}</p>
+            <!-- 2026-09-10 — the code is now SIX characters (human: staff key
+                 it in by hand), so it is finally allowed to be the largest
+                 thing on the card: big, spaced, and grouped ABC-123 so it can
+                 be copied in one glance or read down a phone line.
+                 2026-08-17's break-all + small monospace stays as the branch
+                 below, because a voucher issued before the change still
+                 carries a 40-character token that overflows the card
+                 otherwise. -->
+            <p
+              v-if="isShortVoucherCode(order.voucher.code)"
+              class="w-full text-3xl font-bold font-mono tracking-[0.2em] text-ink-card"
+              data-test="voucher-code"
+            >{{ formatVoucherCode(order.voucher.code) }}</p>
+            <p
+              v-else
+              class="w-full text-sm font-bold font-mono tracking-wide text-ink-card break-all"
+              data-test="voucher-code"
+            >{{ order.voucher.code }}</p>
             <div class="w-full grid grid-cols-2 gap-2 text-xs">
               <div class="rounded-xl bg-surface-chip p-2">
                 <p class="text-ink-card-subtle">{{ td('pay.entitlement') }}</p>
@@ -848,51 +1149,251 @@ async function payByCard() {
           <p class="mt-1 text-sm text-ink-card-muted">{{ td('public.ask_member') }}</p>
         </div>
 
-        <template v-else>
-          <!-- 2026-09-03 — THE CUSTOMER CHOOSES, ON THIS SCREEN.
-               Only shown when the company actually has a card gateway
-               switched on; otherwise the page is exactly the transfer page it
-               has always been, with no dead button on it. The transfer
-               details below are never hidden or collapsed — they are the
-               method that works for everyone, and burying them behind a
-               choice would cost sales from customers with no card. -->
-          <div v-if="showMethodChooser" class="rounded-2xl border border-line-card p-4 space-y-3">
-            <p class="text-sm font-bold text-ink-card">{{ td('pay.choose_method') }}</p>
+<template v-else>
+          <!-- 2026-09-10 — the card was refused, said where the customer is
+               standing. Above everything, because it is the reason they are
+               looking at this page a second time. -->
+          <div
+            v-if="lastPaymentError || returnedUnpaid"
+            class="rounded-2xl border border-rose-200 bg-surface-danger p-4 flex items-start gap-3"
+            data-test="payment-failed-notice"
+          >
+            <Icon name="alert" :size="20" class="text-ink-danger shrink-0 mt-0.5" />
+            <div>
+              <p class="text-sm font-bold text-ink-danger">{{ td('pay.attempt_failed') }}</p>
+              <p v-if="lastPaymentError" class="mt-0.5 text-xs text-ink-card-muted" data-test="payment-failed-reason">
+                {{ lastPaymentError }}
+              </p>
+              <p class="mt-1 text-xs text-ink-card-muted">{{ td('pay.attempt_failed_help') }}</p>
+            </div>
+          </div>
 
-            <!-- A test-mode charge is not a purchase, and the person about to
-                 type a card number is entitled to know which one this is. -->
-            <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
-              {{ td('pay.test_mode') }}
-            </p>
+          <!-- Money has arrived but the order is not marked paid yet. Rare,
+               and deliberately visible rather than hidden: the alternative is
+               a customer who has been charged looking at a payment form. -->
+          <div
+            v-if="paymentReceived && !isPaid"
+            class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-start gap-3"
+          >
+            <Icon name="check" :size="20" class="text-ink-brand shrink-0 mt-0.5" />
+            <div>
+              <p class="text-sm font-bold text-ink-brand">{{ td('pay.received') }}</p>
+              <p class="text-xs text-ink-card-muted">{{ td('pay.received_help') }}</p>
+              <!-- 2026-09-10 (human: "ลูกค้าจะได้รหัสยืนยันใช้บริการได้อย่างไร").
+                   The voucher is minted when staff CONFIRM the payment, not
+                   when the money lands (ADR-033 §2.2/B1) — so there is a real
+                   window where the customer has paid and there is genuinely
+                   no code to show. Saying where it will appear is the only
+                   honest thing to put in that gap. -->
+              <p class="mt-1 text-xs text-ink-card-muted" data-test="voucher-pending-note">
+                {{ td('pay.voucher_pending') }}
+              </p>
+            </div>
+          </div>
 
-            <div v-if="cardError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
-              <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-              <span>{{ cardError }}</span>
+          <!-- The slip is in and somebody is looking at it. -->
+          <div v-if="awaitingVerification" class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-center gap-3">
+            <Icon name="clock" :size="20" class="text-ink-brand shrink-0" />
+            <div>
+              <p class="text-sm font-bold text-ink-brand">{{ td('pay.slip_received') }}</p>
+              <p class="text-xs text-ink-card-muted">{{ td('pay.slip_help') }}</p>
+            </div>
+          </div>
+
+          <!-- ── STEP 1 — WHERE IT GOES ───────────────────────────────────
+               2026-09-10 — moved OUT of the slip form and up here.
+               ADR-033 §2.5/E2 collected this together with the slip ("one
+               door"), which left a customer paying by card never asked for it
+               at all: the order came back paid with nowhere to send the
+               goods. It is also simply where a checkout asks — before the
+               method, not after it. -->
+          <div v-if="showShippingStep" class="rounded-2xl border border-line-card p-4 space-y-3" data-test="shipping-step">
+            <div class="flex items-center gap-2">
+              <span class="w-6 h-6 rounded-full bg-brand-600 text-ink-primary text-xs font-bold inline-flex items-center justify-center shrink-0">1</span>
+              <p class="text-sm font-bold text-ink-card">{{ td('ship.title') }}</p>
+            </div>
+            <div>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient') }}</label>
+              <input
+                v-model="shippingRecipientName"
+                type="text"
+                required
+                autocomplete="name"
+                data-test="ship-name"
+                class="mt-1 w-full min-h-[44px] px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card"
+              />
+            </div>
+            <div>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient_phone') }}</label>
+              <input
+                v-model="shippingPhone"
+                type="tel"
+                inputmode="tel"
+                required
+                autocomplete="tel"
+                class="mt-1 w-full min-h-[44px] px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card"
+              />
+            </div>
+            <div>
+              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.address') }}</label>
+              <textarea
+                v-model="shippingAddress"
+                required
+                rows="3"
+                autocomplete="street-address"
+                class="mt-1 w-full px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card resize-none"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- ── STEP 2 — HOW IT IS PAID ──────────────────────────────────
+               Three equal rows; only the chosen one opens. A method the
+               company has not configured is not listed at all. -->
+          <div v-if="showMethodChooser" class="rounded-2xl border border-line-card p-4 space-y-3" data-test="method-chooser">
+            <div class="flex items-center gap-2">
+              <span
+                v-if="showShippingStep"
+                class="w-6 h-6 rounded-full bg-brand-600 text-ink-primary text-xs font-bold inline-flex items-center justify-center shrink-0"
+              >2</span>
+              <p class="text-sm font-bold text-ink-card">{{ td('pay.choose_method') }}</p>
             </div>
 
-            <button
-              type="button"
-              :disabled="startingOnline"
-              class="w-full min-h-[44px] py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed inline-flex items-center justify-center gap-1.5"
-              @click="startOnlinePayment"
+            <!-- Nothing to offer. Said out loud: the customer cannot fix it,
+                 and a page that asks for money without saying how to send it
+                 is worse than one that admits the problem. -->
+            <div
+              v-if="noMethodAvailable"
+              class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-3 text-xs font-bold text-ink-warning"
+              data-test="no-method"
             >
-              <Icon name="credit_card" :size="16" />
-              {{ startingOnline ? td('pay.online_starting') : td('pay.card') }}
-            </button>
-            <p class="text-xs text-ink-card-subtle text-center">{{ td('pay.online_help') }}</p>
-
-            <div class="flex items-center gap-3">
-              <span class="h-px flex-1 bg-line-card"></span>
-              <span class="text-xs text-ink-card-subtle">{{ td('pay.online_or') }}</span>
-              <span class="h-px flex-1 bg-line-card"></span>
+              {{ td('pay.no_method') }}
             </div>
 
-            <!-- Not a button: the transfer flow IS the rest of this page, so
-                 this line points down to it rather than opening anything. -->
-            <div class="rounded-xl border border-line-card px-3 py-2.5">
-              <p class="text-sm font-bold text-ink-card">{{ td('pay.transfer_title') }}</p>
-              <p class="mt-0.5 text-xs text-ink-card-muted">{{ td('pay.transfer_help') }}</p>
-            </div>
+            <template v-else>
+              <div v-if="cardError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
+                <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+                <span>{{ cardError }}</span>
+              </div>
+
+              <div v-for="method in availableMethods" :key="method" class="rounded-xl border transition-colors" :class="selectedMethod === method ? 'border-brand-600 bg-surface-chip' : 'border-line-card'">
+                <!-- The whole row is the control, not a button hidden inside
+                     it. The old page made the card a button and the transfer
+                     option a paragraph, so only one of them read as a
+                     choice. -->
+                <button
+                  type="button"
+                  class="w-full min-h-[56px] px-3 py-3 flex items-center gap-3 text-left"
+                  :data-test="`method-${method}`"
+                  @click="chooseMethod(method)"
+                >
+                  <span
+                    class="w-5 h-5 rounded-full border-2 shrink-0 inline-flex items-center justify-center"
+                    :class="selectedMethod === method ? 'border-brand-600' : 'border-line-input'"
+                  >
+                    <span v-if="selectedMethod === method" class="w-2.5 h-2.5 rounded-full bg-brand-600"></span>
+                  </span>
+                  <Icon :name="methodLabels[method].icon" :size="20" class="text-ink-brand shrink-0" />
+                  <span class="min-w-0">
+                    <span class="block text-sm font-bold text-ink-card">{{ td(methodLabels[method].title) }}</span>
+                    <span class="block text-xs text-ink-card-muted">{{ td(methodLabels[method].hint) }}</span>
+                  </span>
+                </button>
+
+                <!-- CARD -->
+                <div v-if="selectedMethod === 'card' && method === 'card'" class="px-3 pb-3 space-y-2" data-test="panel-card">
+                  <!-- A test-mode charge is not a purchase, and the person
+                       about to type a card number is entitled to know which
+                       one this is. -->
+                  <p v-if="isTestMode" class="rounded-xl bg-surface-warning border border-amber-200 px-3 py-2 text-xs font-bold text-ink-warning">
+                    {{ td('pay.test_mode') }}
+                  </p>
+                  <p class="text-xs text-ink-card-muted">{{ td('pay.online_help') }}</p>
+                </div>
+
+                <!-- PROMPTPAY -->
+                <div v-if="selectedMethod === 'promptpay' && method === 'promptpay'" class="px-3 pb-3 space-y-3" data-test="panel-promptpay">
+                  <div class="rounded-xl bg-white p-3 flex flex-col items-center gap-2">
+                    <img v-if="qrDataUrl" :src="qrDataUrl" alt="PromptPay QR" class="w-56 h-56" />
+                    <p v-if="order.company_payment.promptpay_id" class="text-xs text-slate-500">
+                      PromptPay: {{ order.company_payment.promptpay_id }}
+                    </p>
+                  </div>
+                  <!-- Scanning a QR from the same phone that is showing it is
+                       impossible, and that is the common case. Every Thai
+                       banking app can open one from the photo library. -->
+                  <button
+                    type="button"
+                    class="w-full min-h-[44px] rounded-xl border border-line-card text-sm font-bold text-ink-card hover:bg-surface-chip inline-flex items-center justify-center gap-2"
+                    data-test="save-qr"
+                    @click="saveQrImage"
+                  >
+                    <Icon name="download" :size="16" />
+                    {{ td('pay.save_qr') }}
+                  </button>
+                  <p class="text-xs text-ink-card-muted text-center">{{ td('pay.after_transfer') }}</p>
+                </div>
+
+                <!-- BANK TRANSFER -->
+                <div v-if="selectedMethod === 'bank' && method === 'bank'" class="px-3 pb-3 space-y-2 text-sm" data-test="panel-bank">
+                  <div class="flex justify-between gap-3">
+                    <span class="text-ink-card-muted">{{ td('bank.name') }}</span>
+                    <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_name }}</span>
+                  </div>
+                  <div class="flex justify-between gap-3">
+                    <span class="text-ink-card-muted">{{ td('bank.account_name') }}</span>
+                    <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_account_name }}</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-ink-card-muted">{{ td('bank.account_number') }}</span>
+                    <span class="inline-flex items-center gap-2">
+                      <span class="font-bold text-ink-card">{{ order.company_payment.bank_account_number }}</span>
+                      <button
+                        type="button"
+                        class="text-ink-brand inline-flex items-center gap-0.5 text-xs font-bold"
+                        @click="copyAccount"
+                      >
+                        <Icon name="copy" :size="14" />
+                        {{ copied ? td('common.copied') : td('common.copy') }}
+                      </button>
+                    </span>
+                  </div>
+                  <p class="text-xs text-ink-card-muted pt-1">{{ td('pay.after_transfer') }}</p>
+                </div>
+              </div>
+
+              <!-- The slip, once a transfer rail is chosen. Never shown to a
+                   card payer, who has nothing to upload. -->
+              <div v-if="transferChosen" class="rounded-xl border border-line-card p-3 space-y-3" data-test="slip-step">
+                <div class="flex items-center gap-2">
+                  <Icon name="upload" :size="16" class="text-ink-brand" />
+                  <p class="text-sm font-bold text-ink-card">{{ td('pay.upload_slip') }}</p>
+                </div>
+
+                <div v-if="uploadError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
+                  <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
+                  <span>{{ uploadError }}</span>
+                </div>
+
+                <input
+                  ref="fileInputEl"
+                  type="file"
+                  accept="image/*"
+                  class="hidden"
+                  @change="onFilePicked"
+                />
+                <button
+                  type="button"
+                  class="w-full min-h-[44px] py-3 rounded-xl border border-dashed border-line-card text-sm font-bold text-ink-card-muted hover:bg-surface-chip inline-flex items-center justify-center gap-2"
+                  data-test="pick-slip"
+                  @click="fileInputEl?.click()"
+                >
+                  <Icon name="image" :size="18" />
+                  {{ selectedFile ? td('pay.change_slip') : td('pay.pick_slip') }}
+                </button>
+
+                <img v-if="previewUrl" :src="previewUrl" :alt="td('order.slip')" class="w-full rounded-xl border border-line-card object-contain max-h-72" />
+              </div>
+            </template>
           </div>
 
           <!-- ADR-027 (TASK-139) — CARD PAYMENT.
@@ -959,178 +1460,6 @@ async function payByCard() {
               {{ td('pay.omise_note') }}
             </p>
           </div>
-
-          <!-- Money has arrived but the order is not marked paid yet. Rare,
-               and deliberately visible rather than hidden: the alternative is
-               a customer who has been charged looking at a payment form. -->
-          <div
-            v-if="paymentReceived && !isPaid"
-            class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-center gap-3"
-          >
-            <Icon name="check" :size="20" class="text-ink-brand shrink-0" />
-            <div>
-              <p class="text-sm font-bold text-ink-brand">{{ td('pay.received') }}</p>
-              <p class="text-xs text-ink-card-muted">
-                {{ td('pay.received_help') }}
-              </p>
-              <!-- 2026-09-10 (human: "ลูกค้าจะได้รหัสยืนยันใช้บริการได้อย่างไร").
-                   The voucher is minted when staff CONFIRM the payment, not
-                   when the money lands (ADR-033 §2.2/B1) — so there is a real
-                   window where the customer has paid and there is genuinely
-                   no code to show. Saying where it will appear is the only
-                   honest thing to put in that gap; anything else reads as the
-                   code having been lost. -->
-              <p class="mt-1 text-xs text-ink-card-muted" data-test="voucher-pending-note">
-                {{ td('pay.voucher_pending') }}
-              </p>
-            </div>
-          </div>
-
-
-          <!-- PromptPay QR — shown whenever the company HAS a PromptPay id,
-               no longer only when the agent happened to tick "promptpay" when
-               they created the order. Both settle into the same account, and
-               the customer is the one holding the phone. -->
-          <div v-if="qrDataUrl && !paymentReceived" class="rounded-2xl border border-line-card p-4 flex flex-col items-center gap-2">
-            <p class="text-sm font-bold text-ink-card">{{ td('pay.scan_promptpay') }}</p>
-            <img :src="qrDataUrl" alt="PromptPay QR" class="w-52 h-52" />
-            <p v-if="order.company_payment.promptpay_id" class="text-xs text-ink-card-subtle">
-              PromptPay: {{ order.company_payment.promptpay_id }}
-            </p>
-          </div>
-
-          <!-- Bank details.
-               2026-09-10 (human, from a live card payment: "ผมชำระเงินผ่าน
-               บัตรเครดิต เลข stripe ที่โอนเงินไม่ควรแสดง ควรแสดงเฉพาะโอนเงิน").
-               These are instructions for a payment that has not happened.
-               Once the gateway says the money is in, showing an account
-               number to transfer to is at best noise and at worst an
-               invitation to pay a second time — which is precisely what the
-               notice directly above is pleading with them not to do. -->
-          <div v-if="!paymentReceived" class="rounded-2xl border border-line-card p-4 space-y-3">
-            <div class="flex items-center gap-2">
-              <Icon name="money" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">{{ td('pay.bank_transfer') }}</p>
-            </div>
-            <div class="space-y-2 text-sm">
-              <div class="flex justify-between gap-3">
-                <span class="text-ink-card-muted">{{ td('bank.name') }}</span>
-                <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_name ?? '—' }}</span>
-              </div>
-              <div class="flex justify-between gap-3">
-                <span class="text-ink-card-muted">{{ td('bank.account_name') }}</span>
-                <span class="font-bold text-ink-card text-right">{{ order.company_payment.bank_account_name ?? '—' }}</span>
-              </div>
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-ink-card-muted">{{ td('bank.account_number') }}</span>
-                <span class="inline-flex items-center gap-2">
-                  <span class="font-bold text-ink-card">{{ order.company_payment.bank_account_number ?? '—' }}</span>
-                  <button
-                    v-if="order.company_payment.bank_account_number"
-                    type="button"
-                    class="text-ink-brand hover:text-ink-brand inline-flex items-center gap-0.5 text-xs font-bold"
-                    @click="copyAccount"
-                  >
-                    <Icon name="copy" :size="14" />
-                    {{ copied ? 'คัดลอกแล้ว' : 'คัดลอก' }}
-                  </button>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Awaiting verification notice -->
-          <div v-if="awaitingVerification" class="rounded-2xl border border-brand-200 bg-brand-50 p-4 flex items-center gap-3">
-            <Icon name="clock" :size="20" class="text-ink-brand shrink-0" />
-            <div>
-              <p class="text-sm font-bold text-ink-brand">{{ td('pay.slip_received') }}</p>
-              <p class="text-xs text-ink-card-muted">{{ td('pay.slip_help') }}</p>
-            </div>
-          </div>
-
-          <!-- ADR-033 (TASK-189) §2.5/E2 — shipping-address form, shown
-               alongside the slip-upload card below (same "not yet paid"
-               gate, showUploadForm) and submitted together in ONE
-               request (uploadSlip()) — the "one door" ADR-033 §2.5
-               describes, not a second checkout step. Only rendered when
-               THIS product actually requires physical delivery. -->
-          <div v-if="showUploadForm && order.requires_shipping" class="rounded-2xl border border-line-card p-4 space-y-3">
-            <div class="flex items-center gap-2">
-              <Icon name="map_pin" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">{{ td('ship.title') }}</p>
-            </div>
-            <div>
-              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient') }}</label>
-              <input
-                v-model="shippingRecipientName"
-                type="text"
-                required
-                class="mt-1 w-full px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card"
-              />
-            </div>
-            <div>
-              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.recipient_phone') }}</label>
-              <input
-                v-model="shippingPhone"
-                type="tel"
-                required
-                class="mt-1 w-full px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card"
-              />
-            </div>
-            <div>
-              <label class="text-xs font-bold text-ink-card-muted">{{ td('ship.address') }}</label>
-              <textarea
-                v-model="shippingAddress"
-                required
-                rows="3"
-                class="mt-1 w-full px-3 py-2 rounded-xl border border-line-card text-sm bg-surface-input text-ink-card resize-none"
-              ></textarea>
-            </div>
-          </div>
-
-          <!-- Slip upload -->
-          <div v-if="showUploadForm" class="rounded-2xl border border-line-card p-4 space-y-3">
-            <div class="flex items-center gap-2">
-              <Icon name="upload" :size="16" class="text-ink-brand" />
-              <p class="text-sm font-bold text-ink-card">{{ td('pay.upload_slip') }}</p>
-            </div>
-
-            <div v-if="uploadError" class="flex items-start gap-2 rounded-xl bg-surface-danger border border-rose-100 px-3 py-2 text-sm text-ink-danger">
-              <Icon name="alert" :size="16" class="mt-0.5 shrink-0" />
-              <span>{{ uploadError }}</span>
-            </div>
-
-            <input
-              ref="fileInputEl"
-              type="file"
-              accept="image/*"
-              class="hidden"
-              @change="onFilePicked"
-            />
-            <button
-              type="button"
-              class="w-full py-3 rounded-xl border border-dashed border-line-card text-sm font-bold text-ink-card-muted hover:bg-surface-chip inline-flex items-center justify-center gap-2"
-              @click="fileInputEl?.click()"
-            >
-              <Icon name="image" :size="18" />
-              {{ selectedFile ? 'เปลี่ยนรูปสลิป' : 'เลือกรูปสลิป' }}
-            </button>
-
-            <img v-if="previewUrl" :src="previewUrl" :alt="td('order.slip')" class="w-full rounded-xl border border-line-card object-contain max-h-72" />
-
-            <p v-if="order.requires_shipping && !shippingValid" class="text-xs text-ink-danger">
-              {{ td('ship.required_first') }}
-            </p>
-
-            <button
-              type="button"
-              :disabled="!selectedFile || uploading || !shippingValid"
-              class="w-full py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
-              @click="uploadSlip"
-            >
-              {{ uploading ? 'กำลังอัปโหลด...' : 'ส่งสลิปการโอนเงิน' }}
-            </button>
-          </div>
         </template>
 
         <!-- 2026-09-10 (human, from a live payment: "เมื่อชำระแล้วไม่มีปุ่ม
@@ -1167,6 +1496,32 @@ async function payByCard() {
             {{ td('pay.auto_return_stopped') }}
           </p>
         </div>
+      </div>
+    </div>
+
+    <!-- 2026-09-10 — the single primary action, always reachable.
+         Fixed to the viewport, not to the card: on a phone the old slip
+         button sat below an account number and a file picker, so the last
+         step of a purchase was the one you had to scroll to find. -->
+    <div
+      v-if="showActionBar"
+      class="fixed inset-x-0 bottom-0 z-20 border-t border-line-card bg-surface-card/95 backdrop-blur px-4 py-3"
+      data-test="action-bar"
+    >
+      <div class="mx-auto w-full max-w-md flex items-center gap-3">
+        <div class="min-w-0">
+          <p class="text-[11px] text-ink-card-subtle leading-none">{{ td('pay.title') }}</p>
+          <p class="text-base font-bold text-ink-card leading-tight">{{ formatBaht(order?.amount_baht ?? 0) }}</p>
+        </div>
+        <button
+          type="button"
+          :disabled="actionDisabled"
+          class="flex-1 min-h-[48px] rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 disabled:opacity-60 disabled:cursor-not-allowed"
+          data-test="primary-action"
+          @click="runPrimaryAction"
+        >
+          {{ actionLabel }}
+        </button>
       </div>
     </div>
   </div>

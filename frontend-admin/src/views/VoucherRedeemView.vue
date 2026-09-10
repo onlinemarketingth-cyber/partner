@@ -23,6 +23,7 @@ import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { formatVoucherCode, isShortVoucherCode, tidyVoucherCodeInput } from '@/utils/voucherCode'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -50,12 +51,34 @@ const voucher = ref<Voucher | null>(null)
 const lookupError = ref('')
 const lookingUp = ref(false)
 
-// A fresh code typed after a lookup must not keep showing a stale result
-// (and stale result must not look redeemable via an old confirm click).
+/*
+ * 2026-09-10 (human: "Admin ที่ใช้บัตร voucher นั้นต้องใช้วิธี Key
+ * ทำให้รหัสสั้นลงไม่เกิน 6 ตัวได้หรือไม่").
+ *
+ * The code is now six characters, and this field is where they are typed —
+ * usually one-handed, at a counter, off a customer's phone. So it corrects as
+ * it goes: upper case, the dash off the printed card dropped, and O/I/L mapped
+ * onto the 0/1 they are always mistaken for (the alphabet has no I, L, O or U
+ * precisely so this mapping is unambiguous).
+ *
+ * A pasted 40-character legacy code is left exactly as typed — it is
+ * case-sensitive and may contain those very letters. The server does the same
+ * two-step; this is a courtesy so staff SEE the code they are sending, not a
+ * substitute for the check.
+ *
+ * A fresh code typed after a lookup must not keep showing a stale result (and
+ * a stale result must not look redeemable via an old confirm click).
+ */
 function onCodeInput() {
+  codeInput.value = tidyVoucherCodeInput(codeInput.value)
   voucher.value = null
   lookupError.value = ''
   redeemResult.value = null
+}
+
+/** The code as it is printed on the customer's card: ABC-123. */
+function displayCode(code: string): string {
+  return formatVoucherCode(code)
 }
 
 async function lookupVoucher() {
@@ -145,8 +168,13 @@ async function confirmRedeem() {
         <input
           v-model="codeInput"
           type="text"
-          placeholder="กรอกรหัสบัตรกำนัล"
-          class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono tracking-wide"
+          inputmode="text"
+          autocapitalize="characters"
+          autocomplete="off"
+          spellcheck="false"
+          data-test="code-input"
+          placeholder="เช่น AB1-234"
+          class="flex-1 px-3 py-2.5 rounded-lg border border-slate-200 text-xl font-bold font-mono tracking-[0.2em] uppercase"
           @input="onCodeInput"
         />
         <button type="submit" :disabled="!codeInput.trim() || lookingUp" class="btn-primary shrink-0">
@@ -174,7 +202,13 @@ async function confirmRedeem() {
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
         <div>
           <p class="text-xs font-bold text-slate-400">รหัสบัตรกำนัล</p>
-          <p class="mt-0.5 font-mono font-bold text-slate-700">{{ voucher.code }}</p>
+          <!-- Shown as it is printed on the customer's card, so staff can
+               check character for character against what they are holding. -->
+          <p
+            class="mt-0.5 font-mono font-bold text-slate-700"
+            :class="isShortVoucherCode(voucher.code) ? 'text-lg tracking-[0.2em]' : 'break-all'"
+            data-test="found-code"
+          >{{ displayCode(voucher.code) }}</p>
         </div>
         <div>
           <p class="text-xs font-bold text-slate-400">เลขที่คำสั่งซื้อ</p>
@@ -230,7 +264,7 @@ async function confirmRedeem() {
       :show="showConfirm"
       variant="primary"
       title="ยืนยันการตัดสิทธิ์บัตรกำนัล"
-      :body="voucher ? `ยืนยันตัดสิทธิ์บัตรกำนัลรหัส ${voucher.code}${branchInput.trim() ? ` ที่ ${branchInput.trim()}` : ''}? การกระทำนี้ไม่สามารถย้อนกลับได้` : ''"
+      :body="voucher ? `ยืนยันตัดสิทธิ์บัตรกำนัลรหัส ${displayCode(voucher.code)}${branchInput.trim() ? ` ที่ ${branchInput.trim()}` : ''}? การกระทำนี้ไม่สามารถย้อนกลับได้` : ''"
       :busy="redeeming"
       @confirm="confirmRedeem"
       @cancel="showConfirm = false"

@@ -208,3 +208,76 @@ The origin is accepted **only if this deployment already declares it**, read fro
 CORS enforces. A public checkout's `Origin` header is attacker-controlled: written through
 unchecked, it would let anyone have this system email a customer — from our address, about their
 real order — a link to their own copy of our payment page.
+
+### 6.4 The code is six characters, not forty
+
+§2.2 minted the code as `Str::random(40)`, the same treatment as
+`orders.public_token`. That is right for a token nobody types — it lives in a
+URL and a QR, and length is free.
+
+It is the wrong shape for what this code turned out to be. Staff at a counter
+read it off a customer's phone and **key it in** (human: "Admin ที่ใช้บัตร
+voucher นั้นต้องใช้วิธี Key ทำให้รหัสสั้นลงไม่เกิน 6 ตัวได้หรือไม่"), and forty
+mixed-case characters cannot be typed, read down a phone line, or written on a
+form. The QR was carrying the entire feature; a cracked screen, a flat battery,
+or a code that arrived as a screenshot in a chat left no way to redeem at all.
+
+New codes are **six characters of Crockford base32 — the digits and letters
+minus I, L, O and U** (`App\Support\VoucherCode`). The exclusions are the other
+half of the fix: I/L/O because a person cannot reliably tell them from 1 and 0,
+which is how a "wrong code" that is really a correct code happens; U because
+leaving it out stops a random six-character string occasionally spelling
+something staff must read aloud to a customer.
+
+**Why six is safe here, when the pay-page token stays at forty.** 32^6 ≈ 1.07
+billion codes, and guessing one is not a public attack: both endpoints require
+a signed-in account holding a *granted* `Ability::VoucherRedeem` (§6.1), both
+are throttled at 30 attempts per minute per user, a voucher outside the actor's
+company answers 404 either way, and every redemption writes an audit row naming
+who did it. The threat is a colleague with an account, and against that the
+throttle makes an expected search take centuries while the audit log makes the
+attempt obvious. The pay-page token faces the open internet with none of those
+controls, which is why it is not shortened.
+
+**Nothing rewrites the codes already issued.** A voucher minted before today
+keeps its 40-character code and keeps working: the lookup tries the raw input
+first and only then the normalised form, because normalisation (upper case,
+dash and space stripped, O→0, I/L→1) is lossy and a legacy token may
+legitimately contain those characters. A customer holding a card printed last
+week must not be turned away because the format changed.
+
+Everything that shows the code — the pay page, the downloadable card, the
+confirmation email, the redemption screen — prints it grouped as `ABC-123`, and
+the redemption field corrects as it is typed. The voucher QR moved to error
+correction level H with a real quiet zone: the payload is now tiny, so the
+redundancy is free, and what gets scanned is a cracked screen or an office
+laser print.
+
+### 6.5 The shipping address left the "one door"
+
+§2.5/D1 collected the delivery address in the **same request as the slip** —
+one door, not a second checkout step — and that was right for as long as the
+slip was the only way to pay.
+
+It stopped being right the moment ADR-027's card button appeared beside it. A
+customer buying a physical product with a card went straight to the gateway and
+was **never asked where to send it**: the order came back paid, with no address
+on it, and nothing anywhere said one was missing. The door was still there; the
+customer simply walked past it.
+
+So the address moved to where every checkout asks for it — **before the payment
+method, on every path**:
+
+- `POST /pay/{token}/intent` now carries the same three fields under the same
+  rule (`StartOnlinePaymentRequest`: required only when the product actually
+  ships), and saves them **before** opening the gateway session. An address
+  with no payment is recoverable; a payment with no address is a phone call.
+- `POST /pay/{token}/slip` is unchanged — a customer who transfers never
+  touches the card endpoint, so it keeps its own copy of the rule.
+- Both write through `OrderService::saveShippingDetails()`, so the "present vs.
+  not sent" distinction D2 describes lives in one place.
+
+The pay page asks for it as step 1 and refuses to open the gateway until it is
+complete — refused *there* rather than by the server, because the gateway takes
+the customer to another site and a refusal that arrives after they leave lands
+on a page they can no longer see.

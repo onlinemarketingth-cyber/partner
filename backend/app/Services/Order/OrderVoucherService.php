@@ -4,6 +4,7 @@ namespace App\Services\Order;
 
 use App\Models\Order;
 use App\Models\OrderVoucher;
+use App\Support\VoucherCode;
 use Illuminate\Support\Str;
 
 /**
@@ -37,13 +38,36 @@ class OrderVoucherService
         ]);
     }
 
-    /** Unguessable 40-char redemption code — same Str::random treatment as orders.public_token. */
+    /**
+     * The code a person types at the counter.
+     *
+     * 2026-09-10 — six characters, not the original 40 (human: "Admin ที่ใช้
+     * บัตร voucher นั้นต้องใช้วิธี Key ทำให้รหัสสั้นลงไม่เกิน 6 ตัวได้หรือไม่").
+     * App\Support\VoucherCode's docblock carries the reasoning, including why
+     * six is safe for THIS code and not for the pay-page token beside it.
+     *
+     * Vouchers issued before today keep their 40-character codes and keep
+     * working: nothing rewrites them, and the lookup accepts both. A customer
+     * holding a card printed last week must not find it refused because the
+     * format changed.
+     */
     private function generateCode(): string
     {
-        do {
-            $code = Str::random(40);
-        } while (OrderVoucher::where('code', $code)->exists());
+        // 1.07 billion codes against a few thousand vouchers, so a collision is
+        // vanishingly unlikely — but it is a UNIQUE column, and "vanishingly
+        // unlikely" becomes a failed sale at the till rather than a retry if
+        // nobody checks. The cap stops a broken generator spinning forever.
+        for ($attempt = 0; $attempt < 20; $attempt++) {
+            $code = VoucherCode::generate();
 
-        return $code;
+            if (! OrderVoucher::where('code', $code)->exists()) {
+                return $code;
+            }
+        }
+
+        // Twenty collisions in a row is not luck, it is a bug (a generator
+        // returning a constant, say). Falling back to a long random code keeps
+        // the sale working and leaves evidence in the data that this happened.
+        return Str::random(40);
     }
 }

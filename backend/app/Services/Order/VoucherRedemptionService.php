@@ -6,6 +6,7 @@ use App\Enums\VoucherStatus;
 use App\Models\OrderVoucher;
 use App\Models\User;
 use App\Models\VoucherRedemption;
+use App\Support\VoucherCode;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -40,15 +41,28 @@ class VoucherRedemptionService
         // silently come back null and make assertSameTenant() below blow
         // up on a null->company_id instead of refusing with 404 — the
         // exact bug this comment is here to stop someone reintroducing.
-        $voucher = OrderVoucher::query()
-            ->where('code', $code)
-            ->with([
-                'order' => fn ($q) => $q->withoutGlobalScopes(),
-                'order.product' => fn ($q) => $q->withoutGlobalScopes(),
-                'order.client' => fn ($q) => $q->withoutGlobalScopes(),
-                'order.company',
-            ])
-            ->first();
+        /*
+         * 2026-09-10 — RAW FIRST, then normalised.
+         *
+         * New codes are six characters from a deliberately unambiguous
+         * alphabet, and VoucherCode::normalize() forgives what people actually
+         * type: lower case, the dash from the printed card, and O/I/L where
+         * 0/1 were meant.
+         *
+         * That normalisation is lossy, which is exactly why it is second. A
+         * voucher issued before today carries a 40-character mixed-case token
+         * that may legitimately contain those characters — normalising it
+         * would turn a valid code into "ไม่พบรหัสบัตรกำนัลนี้ในระบบ" for a
+         * customer holding a card that was printed last week.
+         *
+         * Two indexed lookups on a unique column, only when the first misses.
+         */
+        $voucher = $this->lookup($code);
+
+        $normalized = VoucherCode::normalize($code);
+        if ($voucher === null && $normalized !== $code && $normalized !== '') {
+            $voucher = $this->lookup($normalized);
+        }
 
         if ($voucher === null) {
             throw ValidationException::withMessages([
@@ -96,6 +110,23 @@ class VoucherRedemptionService
 
             return $voucher->fresh(['order.product', 'order.client', 'order.company']);
         });
+    }
+
+    /**
+     * One exact-match read, with every tenant-scoped relation unscoped for the
+     * reason the caller's comment gives.
+     */
+    private function lookup(string $code): ?OrderVoucher
+    {
+        return OrderVoucher::query()
+            ->where('code', $code)
+            ->with([
+                'order' => fn ($q) => $q->withoutGlobalScopes(),
+                'order.product' => fn ($q) => $q->withoutGlobalScopes(),
+                'order.client' => fn ($q) => $q->withoutGlobalScopes(),
+                'order.company',
+            ])
+            ->first();
     }
 
     /**

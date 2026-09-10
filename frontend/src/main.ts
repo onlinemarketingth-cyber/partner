@@ -8,6 +8,7 @@ import router from './router'
 import { setUnauthorizedHandler } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useThemeStore } from './stores/theme'
+import { installStaleAssetRecovery } from './utils/staleAssets'
 
 const app = createApp(App)
 
@@ -142,6 +143,14 @@ const remainingMs = SPLASH_MIN_MS - (performance.now() - bootStartedAt)
 if (remainingMs > 0) await new Promise((resolve) => window.setTimeout(resolve, remainingMs))
 window.clearInterval(splashTicker)
 if (splashBar) splashBar.style.width = '100%'
+
+/*
+ * 2026-09-10 — a tab open when a deploy landed is asking for chunk filenames
+ * the server deleted (deploy.sh rsyncs with --delete), so every navigation
+ * fails silently and the menu just stops working. See utils/staleAssets;
+ * installed before mount so a failure on the very first navigation counts too.
+ */
+installStaleAssetRecovery(router)
 
 app.mount('#app')
 

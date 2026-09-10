@@ -6,6 +6,7 @@ use App\Enums\TrackedLinkGroup;
 use App\Http\Controllers\Api\V1\Concerns\ResolvesTrackedLink;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Order\ChargeOrderRequest;
+use App\Http\Requests\Order\StartOnlinePaymentRequest;
 use App\Http\Requests\Order\SubmitSlipRequest;
 use App\Http\Resources\PublicOrderResource;
 use App\Models\Company;
@@ -76,9 +77,28 @@ class PublicPaymentController extends Controller
      * customer-facing reason ("ร้านค้ายังไม่เปิดรับชำระด้วยบัตร") — the
      * transfer instructions are still on their screen either way.
      */
-    public function intent(string $token, GatewayPaymentService $payments): PublicOrderResource
-    {
+    public function intent(
+        string $token,
+        StartOnlinePaymentRequest $request,
+        GatewayPaymentService $payments,
+        OrderService $orders,
+    ): PublicOrderResource {
         $order = $this->resolve($token);
+
+        /*
+         * 2026-09-10 — the address, BEFORE the gateway session opens.
+         *
+         * ADR-033 §2.5/D1 collected it with the slip, which left a customer
+         * paying by card never asked for it at all: the order came back paid
+         * with nowhere to send the goods. Saved first, so it survives a
+         * customer who opens the gateway and then abandons it — an address
+         * with no payment is recoverable, a payment with no address is a
+         * phone call.
+         */
+        $order = $orders->saveShippingDetails(
+            $order,
+            $request->only(['shipping_recipient_name', 'shipping_phone', 'shipping_address']),
+        );
 
         try {
             [$order, $intent] = $payments->beginOnlinePayment($order);

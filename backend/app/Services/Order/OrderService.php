@@ -232,15 +232,60 @@ class OrderService
             'slip_uploaded_by_user_id' => $uploadedBy?->id,
         ];
 
+        $order->update($update + $this->shippingUpdate($shipping));
+
+        return $order->fresh();
+    }
+
+    /**
+     * Save a delivery address on its own, with no slip attached.
+     *
+     * 2026-09-10 — ADR-033 §2.5/D1 collected this in the same request as the
+     * slip ("one door"), which was right while the slip was the only way to
+     * pay. It stopped being right when the card button appeared beside it: a
+     * customer buying a physical product with a card went to the gateway and
+     * was never asked where to send it, and the paid order carried no address.
+     *
+     * Called from the card path before the gateway session opens, so the
+     * address is recorded whether or not the customer completes the payment —
+     * which is the useful direction to be wrong in.
+     *
+     * @param  array{shipping_recipient_name?: ?string, shipping_phone?: ?string, shipping_address?: ?string}  $shipping
+     */
+    public function saveShippingDetails(Order $order, array $shipping): Order
+    {
+        $update = $this->shippingUpdate($shipping);
+
+        if ($update === []) {
+            return $order;
+        }
+
+        $order->update($update);
+
+        return $order->fresh();
+    }
+
+    /**
+     * The shipping columns PRESENT in the payload, and only those.
+     *
+     * array_key_exists rather than a null check (ADR-033 §2.5/D2): "sent as
+     * empty" and "not sent at all" are different, and a non-shipping order
+     * omits the keys entirely rather than sending three blank strings.
+     *
+     * @param  array<string, mixed>  $shipping
+     * @return array<string, mixed>
+     */
+    private function shippingUpdate(array $shipping): array
+    {
+        $update = [];
+
         foreach (['shipping_recipient_name', 'shipping_phone', 'shipping_address'] as $field) {
             if (array_key_exists($field, $shipping)) {
                 $update[$field] = $shipping[$field];
             }
         }
 
-        $order->update($update);
-
-        return $order->fresh();
+        return $update;
     }
 
     /**

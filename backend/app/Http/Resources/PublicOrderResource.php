@@ -179,6 +179,25 @@ class PublicOrderResource extends JsonResource
             // is entitled to know which one they are about to make.
             'mode' => $order->gateway_mode,
             'payment_received' => $order->hasGatewayPayment(),
+            /*
+             * 2026-09-10 (human, testing Stripe's card_declined number: "ผม
+             * ทดสอบ stripe แบบ card_declined ให้ผิด แต่หน้า frontend ยังขึ้นให้
+             * บัตรอยู่").
+             *
+             * The failure was recorded — applyFailed() writes it onto the
+             * order and tells the agent — and then never reached the one
+             * person it was about. A customer whose card was refused came back
+             * to a page that looked exactly as it had before, still offering
+             * the card button, with nothing anywhere saying the attempt had
+             * happened at all. Trying the same card again is the obvious next
+             * move, and it fails the same way.
+             *
+             * Their own order, reached by a token only they hold, and their own
+             * attempt — nothing here is another party's data. The message is
+             * the one the gateway gave us; it is already written for a person.
+             */
+            'last_error' => $order->last_payment_error,
+            'last_error_at' => $order->last_payment_error_at,
             'transfer_available' => $open,
             'online' => null,
             'intent' => $this->intentBlock(),

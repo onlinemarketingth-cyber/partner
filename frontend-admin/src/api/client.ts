@@ -86,10 +86,127 @@ function purgeDuplicateXsrfCookies(): void {
 
 purgeDuplicateXsrfCookies()
 
-/** Must be called once (e.g. before login) to obtain the XSRF-TOKEN cookie. */
+/**
+ * Must be called once (e.g. before login) to obtain the XSRF-TOKEN cookie.
+ *
+ * 2026-09-10 — under the same deadline as everything else. This one is the
+ * first request of a login, so a hang here is a login button that spins
+ * forever with nothing to click.
+ */
 export async function ensureCsrfCookie(): Promise<void> {
-  await fetch(`${API_BASE_URL}/sanctum/csrf-cookie`, {
-    credentials: 'include',
+  const deadline = withDeadline(REQUEST_TIMEOUT_MS)
+
+  try {
+    await fetch(`${API_BASE_URL}/sanctum/csrf-cookie`, {
+      credentials: 'include',
+      signal: deadline.signal,
+    })
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
+  }
+}
+
+/**
+ * 2026-09-10 (human: "ปิดหน้า admin ค้างไว้ ... กดปุ่มทำงานอะไรไม่ได้
+ * ต้องกดปุ่ม refresh ถึงกลับมาทำงานได้").
+ *
+ * ── WHY A TIMEOUT AT ALL ──
+ *
+ * `fetch()` HAS NO TIMEOUT. A request issued over a connection that has
+ * since died — the laptop slept, the Wi-Fi changed, the phone left the
+ * building — is not refused and does not fail; it simply never settles.
+ *
+ * Every screen in this console awaits that promise: `loading` stays true,
+ * `saving` stays true, and every button bound to `:disabled="saving"` stays
+ * dead. Nothing is logged, nothing is shown, and the page looks exactly like
+ * a working page that has stopped caring. The only way out is a reload, which
+ * is precisely what was reported.
+ *
+ * With a deadline the same situation surfaces as an error message the screen
+ * already knows how to render, and the buttons come back.
+ *
+ * ── TWO NUMBERS ──
+ *
+ * 30s for JSON. Long enough that a slow report never trips it (the slowest
+ * endpoint in this app answers well inside a second), short enough that a
+ * person has not yet decided the app is broken.
+ *
+ * 120s for transfers. Uploads and media streams legitimately take minutes on
+ * a bad connection, and cutting off a real upload at 30 seconds would be a
+ * new bug rather than a fix.
+ */
+const REQUEST_TIMEOUT_MS = 30_000
+const TRANSFER_TIMEOUT_MS = 120_000
+
+interface Deadline {
+  signal: AbortSignal
+  /** True once the deadline itself fired — see transportError(). */
+  timedOut: () => boolean
+  done: () => void
+}
+
+/**
+ * The deadline stays armed until the BODY has been read, not just until the
+ * headers arrive — a response whose stream stalls half way through hangs the
+ * caller exactly as thoroughly as one that never starts.
+ *
+ * `external` is a caller's own signal. Nothing in THIS app passes one today
+ * (the Agent Portal's copy of this file does, for views that abort their loads
+ * on unmount), but it is chained rather than replaced so the first caller to
+ * want cancellation does not have to discover that the deadline silently
+ * disabled it.
+ */
+function withDeadline(timeoutMs: number, external?: AbortSignal | null): Deadline {
+  const controller = new AbortController()
+  let timedOut = false
+
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  const forward = () => controller.abort()
+  if (external?.aborted) forward()
+  external?.addEventListener('abort', forward)
+
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    done: () => {
+      clearTimeout(timer)
+      external?.removeEventListener('abort', forward)
+    },
+  }
+}
+
+/**
+ * Turn "the request never happened" into something the UI can show.
+ *
+ * A deadline firing and a caller cancelling both arrive here as an AbortError
+ * and mean opposite things: a cancellation is not a failure and is handed back
+ * untouched, while a timeout is the failure this whole change exists to make
+ * visible.
+ *
+ * Status 0 on purpose: it is not an HTTP answer, and it must never be
+ * mistaken for one — notifyIfUnauthorized() only reacts to 401/419, so a
+ * dropped connection can never sign somebody out.
+ */
+function transportError(error: unknown, timedOut: boolean): unknown {
+  if (error instanceof ApiError) return error
+
+  // `name`, not `instanceof Error`: a browser's AbortError is a DOMException,
+  // which does NOT inherit from Error.
+  const aborted = typeof error === 'object' && error !== null && (error as { name?: string }).name === 'AbortError'
+  if (aborted && !timedOut) return error
+
+  const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+
+  return new ApiError(0, {
+    message: offline
+      ? 'อุปกรณ์นี้ไม่ได้เชื่อมต่ออินเทอร์เน็ตอยู่ — เชื่อมต่อแล้วลองใหม่อีกครั้ง'
+      : 'เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จหรือใช้เวลานานเกินไป — กรุณาลองใหม่อีกครั้ง',
   })
 }
 
@@ -175,19 +292,29 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const xsrfToken = getCookie('XSRF-TOKEN')
   if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    ...options,
-    headers,
-    credentials: 'include',
-  })
+  const deadline = withDeadline(REQUEST_TIMEOUT_MS, options.signal)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+      signal: deadline.signal,
+    })
 
-  const isJson = res.headers.get('content-type')?.includes('application/json')
-  const body = isJson ? await res.json() : await res.text()
+    notifyIfUnauthorized(path, res.status)
 
-  if (!res.ok) throw new ApiError(res.status, body)
-  return body as T
+    const isJson = res.headers.get('content-type')?.includes('application/json')
+    const body = isJson ? await res.json() : await res.text()
+
+    if (!res.ok) throw new ApiError(res.status, body)
+
+    return body as T
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
+  }
 }
 
 /** multipart/form-data POST (file uploads) — never JSON.stringify a FormData body, and never set Content-Type manually (the browser must add the multipart boundary itself). Ported from frontend/src/api/client.ts — profile avatar/background-image uploads need this here too. */
@@ -198,20 +325,32 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
   const xsrfToken = getCookie('XSRF-TOKEN')
   if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'POST',
-    headers,
-    body: formData,
-    credentials: 'include',
-  })
+  // TRANSFER_TIMEOUT_MS, not the JSON one: a real upload on a bad connection
+  // legitimately takes minutes.
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+      credentials: 'include',
+      signal: deadline.signal,
+    })
 
-  const isJson = res.headers.get('content-type')?.includes('application/json')
-  const body = isJson ? await res.json() : await res.text()
+    notifyIfUnauthorized(path, res.status)
 
-  if (!res.ok) throw new ApiError(res.status, body)
-  return body as T
+    const isJson = res.headers.get('content-type')?.includes('application/json')
+    const body = isJson ? await res.json() : await res.text()
+
+    if (!res.ok) throw new ApiError(res.status, body)
+
+    return body as T
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
+  }
 }
 
 function filenameFromContentDisposition(res: Response): string {
@@ -240,21 +379,34 @@ async function requestDownload(path: string, filename?: string): Promise<void> {
   const xsrfToken = getCookie('XSRF-TOKEN')
   if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-  })
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  let res: Response
+  let blob: Blob
+  let resolvedFilename: string
+  try {
+    res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+      signal: deadline.signal,
+    })
 
-  if (!res.ok) {
-    const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    notifyIfUnauthorized(path, res.status)
+
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    }
+
+    resolvedFilename = filename ?? filenameFromContentDisposition(res)
+    blob = await res.blob()
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
   }
 
-  const resolvedFilename = filename ?? filenameFromContentDisposition(res)
-  const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -279,20 +431,29 @@ async function requestBlob(path: string): Promise<Blob> {
   const xsrfToken = getCookie('XSRF-TOKEN')
   if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
-  const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-  })
+  const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
-  notifyIfUnauthorized(path, res.status)
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+      signal: deadline.signal,
+    })
 
-  if (!res.ok) {
-    const isJson = res.headers.get('content-type')?.includes('application/json')
-    throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    notifyIfUnauthorized(path, res.status)
+
+    if (!res.ok) {
+      const isJson = res.headers.get('content-type')?.includes('application/json')
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+    }
+
+    return await res.blob()
+  } catch (error) {
+    throw transportError(error, deadline.timedOut())
+  } finally {
+    deadline.done()
   }
-
-  return res.blob()
 }
 
 /**

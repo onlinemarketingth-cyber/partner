@@ -1098,8 +1098,22 @@ Route::prefix('v1')->group(function () {
         // No {voucher} route-model binding — VoucherRedemptionService
         // resolves by code, not id (OrderVoucher has no company_id column
         // of its own for implicit binding to scope against).
-        Route::get('/vouchers/{code}', [VoucherController::class, 'show']);
-        Route::post('/vouchers/redeem', [VoucherController::class, 'redeem']);
+        /*
+         * 2026-09-10 — THROTTLED, and that is now load-bearing.
+         *
+         * The redemption code shrank from 40 characters to six so a person can
+         * type it (App\Support\VoucherCode). Six characters over that alphabet
+         * is ~1.07 billion codes, which is only safe while nobody may sit and
+         * try them: 30 attempts a minute turns an expected search into
+         * centuries, while being far more than any counter works through.
+         *
+         * Keyed per authenticated user by Laravel's throttle middleware, which
+         * is the right key here — every caller must already be signed in and
+         * hold a granted Ability::VoucherRedeem, so the actor, not the IP, is
+         * the thing that would have to do the guessing.
+         */
+        Route::get('/vouchers/{code}', [VoucherController::class, 'show'])->middleware('throttle:30,1');
+        Route::post('/vouchers/redeem', [VoucherController::class, 'redeem'])->middleware('throttle:30,1');
 
         // TASK-190 §3.4 — platform-wide SMTP settings (one global row, no
         // company_id — see PlatformMailSetting's own docblock). Gated by

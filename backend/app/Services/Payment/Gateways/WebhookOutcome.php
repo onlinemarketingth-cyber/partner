@@ -52,10 +52,10 @@ class WebhookOutcome
          * SAY what it ignored without knowing any gateway's payload shape.
          *
          * 2026-09-03 — an ignored event used to return HTTP 200 and vanish
-         * without a trace of any kind. This system subscribes to five event
-         * types, so a sixth one arriving means somebody edited the endpoint
-         * or the provider changed something, and neither should be
-         * undiscoverable.
+         * without a trace of any kind. This system subscribes to a fixed,
+         * short list of event types, so one outside it arriving means somebody
+         * edited the endpoint or the provider changed something, and neither
+         * should be undiscoverable.
          */
         public readonly ?string $eventType = null,
     ) {}

@@ -20,6 +20,7 @@ use App\Models\User;
 use App\Models\UserCertification;
 use App\Services\Platform\PlatformMailSettingService;
 use App\Support\PortalOrigin;
+use App\Support\VoucherCode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Mail;
@@ -123,7 +124,11 @@ class CustomerVoucherDeliveryTest extends TestCase
             ->postJson("/api/v1/orders/{$order->id}/confirm")
             ->assertOk();
 
-        $code = $order->fresh()->voucher->code;
+        // The code AS PRINTED (ABC-123). 2026-09-10 shortened it to six
+        // characters so staff can key it; the email shows the same grouping
+        // the card and the pay page do, so a customer reading it out and a
+        // person typing it are looking at the same thing.
+        $code = VoucherCode::format($order->fresh()->voucher->code);
 
         Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($code, $order) {
             $html = $mail->render();
