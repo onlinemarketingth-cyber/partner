@@ -97,6 +97,7 @@ use App\Http\Controllers\Api\V1\StorefrontBannerController;
 use App\Http\Controllers\Api\V1\TeamVisibilitySettingController;
 use App\Http\Controllers\Api\V1\ThemePresetController;
 use App\Http\Controllers\Api\V1\TrackedLinkController;
+use App\Http\Controllers\Api\V1\UserAbilityController;
 use App\Http\Controllers\Api\V1\UserBadgeController;
 use App\Http\Controllers\Api\V1\UserCertificationController;
 use App\Http\Controllers\Api\V1\UserController;
@@ -337,7 +338,7 @@ Route::prefix('v1')->group(function () {
      * App\Http\Middleware\EnsureCompanyIsOperational for the reasoning and for
      * why a Super Admin (company_id = null) is never refused by it.
      */
-    Route::middleware(['auth:sanctum', 'company.operational'])->group(function () {
+    Route::middleware(['auth:sanctum', 'company.operational', 'restrict.voucher-staff'])->group(function () {
         /*
          * THE ONE DELIBERATE EXCLUSION (TASK-183 §3.3).
          *
@@ -1259,6 +1260,12 @@ Route::prefix('v1')->group(function () {
         Route::apiResource('users', UserController::class)->parameters(['users' => 'user']);
         Route::post('/users/{user}/restore', [UserController::class, 'restore'])->withTrashed();
         Route::post('/users/{user}/reset-password', [UserController::class, 'resetPassword']);
+        /*
+         * 2026-09-10 — per-user ability grants (ADR-032 §2.2/Phase 3).
+         * Registered next to the other per-user admin actions because it is
+         * one: who a person is allowed to be, decided by their manager.
+         */
+        Route::put('/users/{user}/abilities', [UserAbilityController::class, 'update']);
         // Phase 11 — Super-Admin-only, see UserPolicy::move(). Historical
         // ledger/audit rows keep their own independent company_id
         // (BR-4/BR-5) — moving a user does not rewrite the past.

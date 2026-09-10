@@ -58,6 +58,26 @@ interface RowPermissions {
   restore: boolean
   move_company: boolean
 }
+/*
+ * 2026-09-10 — `voucher_staff` (human: "การกระจายสิทธิ์ให้ Company Admin และ
+ * Admin ที่ได้สิทธิ์ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+ *
+ * TWO WAYS to hold the redemption right, because they answer two different
+ * questions:
+ *   • the ROLE, for somebody whose whole job is the counter — they sign in and
+ *     see that one screen and nothing else;
+ *   • the GRANT, for a Company Admin who also works the counter — they keep
+ *     everything else they had.
+ *
+ * Being a Company Admin no longer carries it by itself. That is the point: it
+ * was a permission nobody chose to give and nobody could take away.
+ */
+type ManageableRole = 'agent' | 'company_admin' | 'voucher_staff'
+
+/** Ability::VoucherRedeem — the only ability this screen may hand out today
+ *  (UserAbilityController::GRANTABLE holds the authoritative list). */
+const VOUCHER_REDEEM = 'voucher.redeem'
+
 interface UserRow {
   id: number
   name: string
@@ -68,7 +88,11 @@ interface UserRow {
   last_name: string
   phone: string | null
   email: string
-  role: 'agent' | 'company_admin'
+  role: ManageableRole
+  // Abilities granted to this PERSON by name, separate from what the role
+  // holds — see the type comment above. Optional because only a caller that
+  // asks for them (`with_abilities=1`) receives the key at all.
+  granted_abilities?: string[]
   company: { id: number; name: string } | null
   is_active: boolean
   is_team_leader: boolean
@@ -89,7 +113,7 @@ const loadedOnce = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 
-const filters = ref({ role: '' as '' | 'agent' | 'company_admin', q: '', include_inactive: true })
+const filters = ref({ role: '' as '' | ManageableRole, q: '', include_inactive: true })
 
 /**
  * `include_inactive` defaults ON, unlike the agent roster.
@@ -103,6 +127,9 @@ function queryString(): string {
   const params = new URLSearchParams()
   params.set('with_permissions', '1')
   params.set('with_last_login', '1')
+  // "Who may redeem a voucher?" has to be answerable at a glance. One extra
+  // eager load for the page, not one query per row — see UserController.
+  params.set('with_abilities', '1')
   if (filters.value.include_inactive) params.set('include_inactive', '1')
   if (filters.value.role) params.set('role', filters.value.role)
   if (filters.value.q.trim()) params.set('q', filters.value.q.trim())
@@ -126,10 +153,22 @@ async function load() {
 }
 
 // ── Role change ────────────────────────────────────────────────────────
-const pendingRoleChange = ref<{ user: UserRow; role: 'agent' | 'company_admin' } | null>(null)
+const pendingRoleChange = ref<{ user: UserRow; role: ManageableRole } | null>(null)
 
-function askRoleChange(user: UserRow, role: 'agent' | 'company_admin') {
+function askRoleChange(user: UserRow, role: ManageableRole) {
   pendingRoleChange.value = { user, role }
+}
+
+/** What the confirm dialog has to say BEFORE the click, per target role. */
+function roleChangeWarning(user: UserRow, role: ManageableRole): string {
+  if (role === 'company_admin') {
+    return `${user.name} จะเข้าถึงข้อมูลทั้งบริษัทได้ — ลูกค้า คำสั่งซื้อ ค่าคอมมิชชั่น และการจัดการผู้ใช้ · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด เขาต้องเข้าสู่ระบบใหม่`
+  }
+  if (role === 'voucher_staff') {
+    return `${user.name} จะเข้าได้เฉพาะหน้า "ตัดสิทธิ์บัตรกำนัล" หน้าเดียว — คำสั่งซื้อ ลูกค้า ค่าคอมมิชชั่น และรายชื่อผู้ใช้จะเข้าไม่ได้ทั้งหมด · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
+  }
+
+  return `${user.name} จะกลับไปเห็นเฉพาะข้อมูลของตัวเอง และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที`
 }
 
 /**
@@ -146,9 +185,7 @@ async function confirmRoleChange() {
 
   try {
     await api.put(`/users/${pending.user.id}`, { role: pending.role })
-    successMessage.value = pending.role === 'company_admin'
-      ? `${pending.user.name} เป็นผู้ดูแลบริษัทแล้ว`
-      : `${pending.user.name} กลับเป็นตัวแทนแล้ว`
+    successMessage.value = `${pending.user.name} เป็น${roleLabel(pending.role)}แล้ว`
     await load()
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'เปลี่ยนบทบาทไม่สำเร็จ')
@@ -235,7 +272,7 @@ async function submitReset() {
  * would be a value nobody chose, shown once in a toast and gone.
  */
 const showCreate = ref(false)
-const createForm = ref({ first_name: '', last_name: '', email: '', password: '', role: 'company_admin' as 'agent' | 'company_admin' })
+const createForm = ref({ first_name: '', last_name: '', email: '', password: '', role: 'company_admin' as ManageableRole })
 const createError = ref('')
 const creating = ref(false)
 
@@ -390,9 +427,63 @@ function formatDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-const roleLabel = (role: string) => (role === 'company_admin' ? 'ผู้ดูแลบริษัท' : 'ตัวแทน')
+function roleLabel(role: string): string {
+  if (role === 'company_admin') return 'ผู้ดูแลบริษัท'
+  if (role === 'voucher_staff') return 'พนักงานหน้าร้าน'
+
+  return 'ตัวแทน'
+}
+
+// ── Redemption right, granted per person ───────────────────────────────
+/*
+ * 2026-09-10. The grant is edited as the WHOLE set the person holds, not as
+ * "add this one": the endpoint replaces it, so two admins toggling at once
+ * cannot leave somebody with a combination neither of them chose.
+ *
+ * The role's own abilities are deliberately not folded in here. A front-desk
+ * account holds the right by role and has no grant row — showing it as a
+ * ticked box would offer to revoke something this screen cannot revoke.
+ */
+function holdsRedemption(user: UserRow): boolean {
+  return user.role === 'voucher_staff' || (user.granted_abilities ?? []).includes(VOUCHER_REDEEM)
+}
+
+const grantingTo = ref<UserRow | null>(null)
+const grantRedeem = ref(false)
+const grantError = ref('')
+const savingGrant = ref(false)
+
+function openGrants(user: UserRow): void {
+  grantingTo.value = user
+  grantRedeem.value = (user.granted_abilities ?? []).includes(VOUCHER_REDEEM)
+  grantError.value = ''
+}
+
+async function submitGrants(): Promise<void> {
+  const user = grantingTo.value
+  if (!user) return
+
+  savingGrant.value = true
+  grantError.value = ''
+  try {
+    await api.put(`/users/${user.id}/abilities`, {
+      abilities: grantRedeem.value ? [VOUCHER_REDEEM] : [],
+    })
+    successMessage.value = grantRedeem.value
+      ? `${user.name} ตัดสิทธิ์บัตรกำนัลได้แล้ว`
+      : `ยกเลิกสิทธิ์ตัดบัตรกำนัลของ ${user.name} แล้ว`
+    grantingTo.value = null
+    await load()
+  } catch (e) {
+    grantError.value = apiErrorMessage(e, 'บันทึกสิทธิ์ไม่สำเร็จ')
+  } finally {
+    savingGrant.value = false
+  }
+}
 
 const adminCount = computed(() => rows.value.filter((r) => r.role === 'company_admin' && r.is_active).length)
+// A right nobody can count is a right nobody audits — see holdsRedemption().
+const redeemerCount = computed(() => rows.value.filter((r) => r.is_active && holdsRedemption(r)).length)
 
 watch(() => activeCompany.companyId, () => load())
 onMounted(() => {
@@ -426,6 +517,7 @@ onMounted(() => {
           <option value="">ทุกบทบาท</option>
           <option value="company_admin">ผู้ดูแลบริษัท</option>
           <option value="agent">ตัวแทน</option>
+          <option value="voucher_staff">พนักงานหน้าร้าน</option>
         </select>
       </div>
       <div class="flex-1 min-w-[16rem]">
@@ -455,7 +547,9 @@ onMounted(() => {
       <EmptyState v-if="!rows.length" icon="users" title="ไม่พบผู้ใช้ตามเงื่อนไขนี้" />
       <div v-else>
         <p class="mb-2 text-xs text-slate-500">
-          ผู้ดูแลบริษัทที่ใช้งานอยู่ <strong>{{ adminCount }}</strong> คน · ทั้งหมด {{ rows.length }} รายการ
+          ผู้ดูแลบริษัทที่ใช้งานอยู่ <strong>{{ adminCount }}</strong> คน ·
+          <span data-test="redeemer-count">ตัดสิทธิ์บัตรกำนัลได้ <strong>{{ redeemerCount }}</strong> คน</span> ·
+          ทั้งหมด {{ rows.length }} รายการ
         </p>
         <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white/95">
           <table class="w-full text-sm">
@@ -481,9 +575,19 @@ onMounted(() => {
                 <td class="px-4 py-2.5">
                   <span
                     class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="user.role === 'company_admin' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-600'"
+                    :class="user.role === 'company_admin' ? 'bg-brand-50 text-brand-700' : user.role === 'voucher_staff' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'"
                   >
                     {{ roleLabel(user.role) }}
+                  </span>
+                  <!-- The right that is GIVEN, shown next to the role that is
+                       held — so "who can redeem?" is one glance down a column
+                       rather than opening every person in turn. -->
+                  <span
+                    v-if="holdsRedemption(user)"
+                    class="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700"
+                    data-test="redeem-badge"
+                  >
+                    ตัดบัตรกำนัลได้
                   </span>
                 </td>
                 <td v-if="isSuperAdmin" class="px-4 py-2.5 text-slate-500 text-xs">{{ user.company?.name ?? '—' }}</td>
@@ -526,6 +630,36 @@ onMounted(() => {
                       @click="askRoleChange(user, 'agent')"
                     >
                       ถอดสิทธิ์ผู้ดูแล
+                    </button>
+                    <!-- 2026-09-10 — the two ways to hold the redemption
+                         right, one button each (see ManageableRole above).
+                         The ROLE, for somebody whose whole job is the
+                         counter. -->
+                    <button
+                      v-if="user.permissions.update && user.is_active && user.role !== 'voucher_staff'"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      data-test="make-voucher-staff"
+                      @click="askRoleChange(user, 'voucher_staff')"
+                    >
+                      ให้เป็นพนักงานหน้าร้าน
+                    </button>
+                    <button
+                      v-if="user.permissions.update && user.is_active && user.role === 'voucher_staff'"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                      data-test="unmake-voucher-staff"
+                      @click="askRoleChange(user, 'agent')"
+                    >
+                      เลิกเป็นพนักงานหน้าร้าน
+                    </button>
+                    <!-- The GRANT, for a Company Admin who also works the
+                         counter and keeps everything else they had. -->
+                    <button
+                      v-if="user.permissions.update && user.is_active && user.role === 'company_admin'"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                      data-test="edit-abilities"
+                      @click="openGrants(user)"
+                    >
+                      สิทธิ์ตัดบัตรกำนัล
                     </button>
                     <button
                       v-if="user.permissions.update && user.is_active"
@@ -603,10 +737,8 @@ onMounted(() => {
 
     <ConfirmDialog
       :show="pendingRoleChange !== null"
-      :title="pendingRoleChange?.role === 'company_admin' ? 'ให้สิทธิ์ผู้ดูแลบริษัท' : 'ถอดสิทธิ์ผู้ดูแลบริษัท'"
-      :body="pendingRoleChange?.role === 'company_admin'
-        ? `${pendingRoleChange?.user.name} จะเข้าถึงข้อมูลทั้งบริษัทได้ — ลูกค้า คำสั่งซื้อ ค่าคอมมิชชั่น และการจัดการผู้ใช้ · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด เขาต้องเข้าสู่ระบบใหม่`
-        : `${pendingRoleChange?.user.name} จะกลับไปเห็นเฉพาะข้อมูลของตัวเอง และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที`"
+      :title="`เปลี่ยนบทบาทเป็น${roleLabel(pendingRoleChange?.role ?? 'agent')}`"
+      :body="pendingRoleChange ? roleChangeWarning(pendingRoleChange.user, pendingRoleChange.role) : ''"
       confirm-label="ยืนยัน"
       variant="primary"
       @confirm="confirmRoleChange"
@@ -655,7 +787,13 @@ onMounted(() => {
           <select v-model="createForm.role" data-test="create-role" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
             <option value="company_admin">ผู้ดูแลบริษัท</option>
             <option value="agent">ตัวแทน</option>
+            <option value="voucher_staff">พนักงานหน้าร้าน (ตัดสิทธิ์บัตรกำนัลอย่างเดียว)</option>
           </select>
+          <!-- Said at the moment the choice is made, not discovered after the
+               account is handed over. -->
+          <p v-if="createForm.role === 'voucher_staff'" class="mt-1 text-[11px] text-slate-500" data-test="voucher-staff-hint">
+            บัญชีนี้จะเข้าได้เฉพาะหน้า <strong>ตัดสิทธิ์บัตรกำนัล</strong> หน้าเดียว — เห็นคำสั่งซื้อ ลูกค้า หรือค่าคอมมิชชั่นไม่ได้เลย
+          </p>
         </div>
         <div class="mt-3">
           <label class="text-xs font-bold text-slate-500">รหัสผ่านเริ่มต้น</label>
@@ -714,6 +852,40 @@ onMounted(() => {
           <button class="btn-secondary" :disabled="savingEdit" @click="editing = null">ยกเลิก</button>
           <button class="btn-primary" :disabled="savingEdit" data-test="submit-edit" @click="submitEdit">
             {{ savingEdit ? 'กำลังบันทึก…' : 'บันทึก' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2026-09-10 — the per-person grant. One checkbox today, and a list
+         shaped for more: the endpoint replaces the WHOLE set a person holds,
+         so what is saved is what this form shows, never a diff. -->
+    <div v-if="grantingTo" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" data-test="abilities-dialog" @click.self="grantingTo = null">
+      <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+        <p class="text-sm font-bold text-slate-900">สิทธิ์เพิ่มเติมของ {{ grantingTo.name }}</p>
+        <p class="mt-0.5 text-xs text-slate-400">{{ roleLabel(grantingTo.role) }}</p>
+
+        <label class="mt-3 flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 cursor-pointer hover:bg-slate-50">
+          <input v-model="grantRedeem" type="checkbox" data-test="grant-voucher-redeem" class="mt-0.5 rounded border-slate-300" />
+          <span>
+            <span class="block text-sm font-bold text-slate-800">ตัดสิทธิ์บัตรกำนัลได้</span>
+            <span class="block mt-0.5 text-[11px] text-slate-500">
+              เปิดเมนู "ตัดสิทธิ์บัตรกำนัล" ให้บัญชีนี้ — ใช้กับผู้ดูแลที่ต้องยืนหน้าเคาน์เตอร์ด้วย
+              ผู้ดูแลบริษัทไม่ได้สิทธิ์นี้มาโดยอัตโนมัติอีกต่อไป ต้องมอบให้เป็นรายคน
+            </span>
+          </span>
+        </label>
+        <!-- Why it is worth a deliberate act: redemption spends something the
+             customer paid for, and it cannot be undone from this screen. -->
+        <p class="mt-2 text-[11px] text-slate-400">
+          การตัดสิทธิ์คือการใช้บริการที่ลูกค้าจ่ายเงินมาแล้ว ระบบบันทึกทุกครั้งว่าใครเป็นคนตัด และใครเป็นคนมอบสิทธิ์นี้ให้
+        </p>
+
+        <p v-if="grantError" class="mt-2 text-xs font-bold text-rose-600" data-test="grant-error">{{ grantError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="btn-secondary" :disabled="savingGrant" @click="grantingTo = null">ยกเลิก</button>
+          <button class="btn-primary" :disabled="savingGrant" data-test="submit-abilities" @click="submitGrants">
+            {{ savingGrant ? 'กำลังบันทึก…' : 'บันทึกสิทธิ์' }}
           </button>
         </div>
       </div>

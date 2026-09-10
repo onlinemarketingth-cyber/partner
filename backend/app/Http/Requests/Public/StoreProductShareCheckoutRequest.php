@@ -99,7 +99,21 @@ class StoreProductShareCheckoutRequest extends FormRequest
         return [
             'name' => ['required', 'string', 'max:255'],
             'phone' => ['required', 'string', 'max:32'],
-            'email' => ['nullable', 'email', 'max:255'],
+            /*
+             * REQUIRED since 2026-09-10.
+             *
+             * It was optional because the affiliate lead form it was copied
+             * from is optional, and for a LEAD that is right — somebody asking
+             * to be called back owes us nothing.
+             *
+             * This form is not that form: it takes money, and what the customer
+             * gets back is a voucher code. Without an address there is exactly
+             * one copy of that code, on a page reachable only from a link in
+             * the tab they are standing in — close it and the thing they paid
+             * for is unreachable, with no way for us to send it to them and no
+             * way for them to ask.
+             */
+            'email' => ['required', 'email', 'max:255'],
             // PDPA (§6) — an anonymous visitor must explicitly consent
             // before their data is collected, stronger than the internal
             // StoreClientRequest's nullable consent_given_at (an internal
@@ -107,6 +121,22 @@ class StoreProductShareCheckoutRequest extends FormRequest
             // this one does not).
             'consent' => ['required', 'accepted'],
             'hp_field' => ['nullable', 'string'],
+        ];
+    }
+
+    /**
+     * The email message says WHY it is being asked for.
+     *
+     * "email is required" on a checkout sheet reads as a form being nosy, and
+     * a customer who thinks that types something to get past it. Saying what
+     * arrives there is what makes them type the real one.
+     *
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'email.required' => 'กรุณากรอกอีเมล — ระบบจะส่งรหัสเข้ารับบริการและใบยืนยันการชำระเงินไปที่อีเมลนี้',
         ];
     }
 }

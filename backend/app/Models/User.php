@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\Ability;
 use App\Enums\AgentApprovalStatus;
 use App\Enums\ApprovalSource;
 use App\Enums\BinaryLeg;
@@ -490,6 +491,41 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isAgent(): bool
     {
         return $this->role === UserRole::Agent;
+    }
+
+    /**
+     * 2026-09-10 — front-desk staff: they redeem vouchers at a branch and do
+     * nothing else. See UserRole::VoucherStaff for why this is a role rather
+     * than a narrower Company Admin.
+     */
+    public function isVoucherStaff(): bool
+    {
+        return $this->role === UserRole::VoucherStaff;
+    }
+
+    /** @return HasMany<UserAbility, $this> Abilities granted to this person by name (ADR-032 Phase 3). */
+    public function abilityGrants(): HasMany
+    {
+        return $this->hasMany(UserAbility::class);
+    }
+
+    /**
+     * Does this person hold this ability by an explicit GRANT (as opposed to
+     * by their role)?
+     *
+     * Read through the loaded relation when it is already loaded, so a screen
+     * that eager-loads grants for a list of users does not issue a query per
+     * row. PermissionResolver is the only caller — nothing else should ask
+     * this question directly, because the role half of the answer lives
+     * there.
+     */
+    public function hasAbilityGrant(Ability $ability): bool
+    {
+        if ($this->relationLoaded('abilityGrants')) {
+            return $this->abilityGrants->contains('ability', $ability->value);
+        }
+
+        return $this->abilityGrants()->where('ability', $ability->value)->exists();
     }
 
     /**

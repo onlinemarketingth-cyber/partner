@@ -218,7 +218,10 @@ const router = createRouter({
       path: '/profile',
       name: 'profile',
       component: () => import('../views/ProfileSettingsView.vue'),
-      meta: { navLabel: 'โปรไฟล์ของฉัน' },
+      // `voucherStaff: true` — their own name, password and language. The
+      // backend's allowlist lets `profile` through for the same reason: their
+      // own record is not somebody else's data.
+      meta: { navLabel: 'โปรไฟล์ของฉัน', voucherStaff: true },
     },
     // TASK-055 Phase 3 (ADR-018) — per-company theming / white-label of the
     // Agent Portal. Company-Admin-visible (Super Admin too); this whole app
@@ -356,7 +359,10 @@ const router = createRouter({
       path: '/voucher-redeem',
       name: 'voucher-redeem',
       component: () => import('../views/VoucherRedeemView.vue'),
-      meta: { navLabel: 'ตัดสิทธิ์บัตรกำนัล' },
+      // 2026-09-10 — `voucherStaff: true` marks the ONE screen a front-desk
+      // account may open. The ability is no longer something a Company Admin
+      // holds by being one: it is granted, per person, on the user screen.
+      meta: { navLabel: 'ตัดสิทธิ์บัตรกำนัล', voucherStaff: true },
     },
     // TASK-190 §5 — platform-wide SMTP settings. Same gating convention as
     // '/companies' above: `requiresSuperAdmin: true` meta, enforced client-
@@ -418,6 +424,25 @@ router.beforeEach(async (to) => {
       // whether the server-side /logout call succeeded.
     }
     return { name: 'login', query: { blocked: 'agent' } }
+  }
+
+  /*
+   * 2026-09-10 — the front-desk account (human: "ที่ได้สิทธิ์ในการตัดได้เฉพาะ
+   * หน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+   *
+   * Unlike the Agent block above, this role BELONGS in this app — it just
+   * belongs on one screen of it. So it is not signed out; it is sent to the
+   * screen it came for. `meta.voucherStaff` is an allowlist, matching the
+   * backend's RestrictVoucherStaff middleware: a route added tomorrow is
+   * closed to them until somebody opens it deliberately, which is the only
+   * default that stays correct without being maintained.
+   *
+   * This is UX, not enforcement — the middleware refuses the API calls
+   * regardless. Without it the console would render a menu of screens that
+   * answer nothing but 403.
+   */
+  if (authStore.user?.role === 'voucher_staff' && !to.meta.public && !to.meta.voucherStaff) {
+    return { name: 'voucher-redeem' }
   }
 
   if (!to.meta.public && !authStore.isAuthenticated) {

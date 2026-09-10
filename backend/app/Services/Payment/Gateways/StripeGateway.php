@@ -5,6 +5,7 @@ namespace App\Services\Payment\Gateways;
 use App\Enums\PaymentProvider;
 use App\Models\Company;
 use App\Models\Order;
+use App\Support\PortalOrigin;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -333,9 +334,10 @@ class StripeGateway implements PaymentGateway
      */
     private function publicPayUrl(Order $order): string
     {
-        $frontend = rtrim((string) config('services.agent_portal.frontend_url'), '/');
-
-        return $frontend.'/pay/'.$order->public_token;
+        // 2026-09-10 — via PortalOrigin, so a customer who checked out on a
+        // parked alias comes back from Stripe to the domain they were on
+        // rather than to a brand they have never seen.
+        return PortalOrigin::payUrl($order);
     }
 
     /**

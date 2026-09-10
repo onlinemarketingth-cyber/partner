@@ -216,7 +216,14 @@ class OrderController extends Controller
         // built below.
         if (filled($order->client?->email) && ($mailSettingService->get()['is_enabled'] ?? false)) {
             try {
-                Mail::to($order->client->email)->send(new OrderPaymentConfirmedMail($order));
+                // 2026-09-10 — the voucher this confirmation just minted, so
+                // the email can carry the code the customer needs. Loaded
+                // here rather than added to self::RELATIONS: it exists only
+                // on a paid order, and no other action on this controller has
+                // a use for it.
+                Mail::to($order->client->email)->send(
+                    new OrderPaymentConfirmedMail($order->load('voucher'))
+                );
             } catch (Throwable $e) {
                 Log::error('TASK-190: OrderPaymentConfirmedMail failed to send', [
                     'order_id' => $order->id,

@@ -402,9 +402,13 @@ class CompanyDeactivationTest extends TestCase
 
         $this->getJson('/api/v1/public/product-shares/'.$link->token)->assertNotFound();
 
+        // A COMPLETE payload, email included (required since 2026-09-10): the
+        // refusal under test is the closed tenant, and a payload that failed
+        // validation first would prove nothing about it.
         $this->postJson('/api/v1/public/product-shares/'.$link->token.'/checkout', [
             'name' => 'ลูกค้า ทดสอบ',
             'phone' => '0812345678',
+            'email' => 'customer@example.com',
             'consent' => true,
         ])->assertNotFound();
 

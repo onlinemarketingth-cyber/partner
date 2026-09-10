@@ -175,8 +175,20 @@ class AbilityCatalogueTest extends TestCase
          * an ability has to be a deliberate edit somebody justifies here,
          * which is exactly what did not happen last time.
          */
+        /*
+         * 2026-09-10 — Company Admin dropped to 30: Ability::VoucherRedeem
+         * left this row and became grant-only (human: "ที่ได้สิทธิ์ในการตัด
+         * ได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน"). Redeeming a
+         * customer's paid entitlement is a front-desk job; holding it by
+         * virtue of being an admin was a permission nobody chose to give and
+         * nobody could take away.
+         *
+         * Super Admin keeps it — the platform owner is the fallback when a
+         * company's own arrangement fails, and taking it away would leave a
+         * counter with a customer and nobody able to help.
+         */
         $this->assertCount(35, $superAdmin);
-        $this->assertCount(31, $companyAdmin);
+        $this->assertCount(30, $companyAdmin);
 
         $this->assertContains(Ability::ReportPlatformView, $superAdmin);
         $this->assertNotContains(Ability::ReportPlatformView, $companyAdmin);
@@ -206,9 +218,26 @@ class AbilityCatalogueTest extends TestCase
                 fn (Ability $a) => $a !== Ability::ReportPlatformView
                     && $a !== Ability::SettingsMailUpdate
                     && $a !== Ability::CommissionRateCapUpdate
-                    && $a !== Ability::SettingsPaymentGatewayUpdate,
+                    && $a !== Ability::SettingsPaymentGatewayUpdate
+                    && $a !== Ability::VoucherRedeem,
             )),
             $companyAdmin,
+        );
+    }
+
+    /**
+     * 2026-09-10 — the fourth role, and the shortest row in the table.
+     *
+     * Front-desk staff exist to redeem vouchers at a branch. The whole value
+     * of the role is what it does NOT hold: not sales, not commission, not a
+     * customer's PDPA record. Asserted as an exact list, so a second ability
+     * cannot be added to it without this line changing.
+     */
+    public function test_voucher_staff_holds_exactly_one_ability(): void
+    {
+        $this->assertSame(
+            [Ability::VoucherRedeem],
+            PermissionResolver::abilitiesFor(UserRole::VoucherStaff),
         );
     }
 

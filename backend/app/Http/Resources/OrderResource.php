@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Enums\OrderStatus;
 use App\Models\Order;
+use App\Support\PortalOrigin;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -19,9 +20,10 @@ class OrderResource extends JsonResource
      */
     public static function publicPayUrl(Order $order): string
     {
-        $frontendUrl = rtrim((string) config('services.agent_portal.frontend_url'), '/');
-
-        return "{$frontendUrl}/pay/{$order->public_token}";
+        // 2026-09-10 — delegated, so this URL is built ONE way for every
+        // surface (this Resource, the Stripe return URL, the confirmation
+        // email) and lands on the domain the customer actually bought from.
+        return PortalOrigin::payUrl($order);
     }
 
     /**

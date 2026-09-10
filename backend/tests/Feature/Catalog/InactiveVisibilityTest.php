@@ -459,9 +459,13 @@ class InactiveVisibilityTest extends TestCase
             'product_id' => $product->id,
         ]);
 
+        // Email included (required since 2026-09-10) so the payload is
+        // complete: the refusal under test is the deactivated product, and a
+        // 422 from validation would hide whether that check ran at all.
         $this->postJson("/api/v1/public/product-shares/{$link->token}/checkout", [
             'name' => 'สมชาย ใจดี',
             'phone' => '0812345678',
+            'email' => 'customer@example.com',
             'consent' => true,
         ])
             /*

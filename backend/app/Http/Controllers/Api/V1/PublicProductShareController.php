@@ -18,6 +18,7 @@ use App\Services\Catalog\ProductSalesMaterialService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Order\ProductShareCheckoutService;
 use App\Support\Media\RangeFileResponder;
+use App\Support\PortalOrigin;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 
@@ -88,8 +89,24 @@ class PublicProductShareController extends Controller
     ): JsonResponse {
         $link = $this->resolveUsableLink($token);
 
+        /*
+         * 2026-09-10 — remember WHICH of our domains this customer is on.
+         *
+         * The portal answers on more than one first-party address, and until
+         * now every link we sent afterwards pointed at the canonical one — so
+         * a customer who bought on the alias got a confirmation email for a
+         * site they had never seen. PortalOrigin::resolve() accepts the header
+         * only if it names an origin this deployment already declares as its
+         * own; on a public endpoint the Origin is attacker-controlled, and
+         * writing it through unchecked would let anyone have us email a
+         * customer a link to their own copy of our payment page.
+         */
         $order = empty($request->validated('hp_field'))
-            ? $service->checkout($link, $request->validated())
+            ? $service->checkout(
+                $link,
+                $request->validated(),
+                PortalOrigin::resolve($request->headers->get('Origin')),
+            )
             : null;
 
         abort_if(! $order, 422, 'ขออภัย ขณะนี้ไม่สามารถทำรายการสั่งซื้อจากลิงก์นี้ได้');
@@ -99,10 +116,8 @@ class PublicProductShareController extends Controller
         // PublicPaymentView), not on this API. The order's public_token is
         // itself unguessable (40 random chars) and is the ONLY identifier
         // that leaves this endpoint.
-        $frontendUrl = rtrim((string) config('services.agent_portal.frontend_url'), '/');
-
         return response()->json([
-            'pay_url' => "{$frontendUrl}/pay/{$order->public_token}",
+            'pay_url' => PortalOrigin::payUrl($order),
         ]);
     }
 

@@ -102,10 +102,40 @@ class PermissionResolver
             Ability::SettingsAffiliateAttributionUpdate,
             Ability::SettingsAnnouncementUpdate,
             Ability::AcademyCertificationGrant,
-            // ADR-033 (TASK-189) §2.1 — interim voucher-redemption grant.
-            // Unlike every case above, this one was never a bare role check
-            // to "convert" — it is wired straight onto the resolver from the
-            // moment it exists. Not Agent.
+            /*
+             * 2026-09-10 — Ability::VoucherRedeem USED TO BE HERE, and its
+             * removal is the point (human: "ที่ได้สิทธิ์ในการตัดได้เฉพาะหน้า
+             * การตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+             *
+             * Redeeming a voucher is a front-desk job. Every Company Admin
+             * holding it automatically meant a permission nobody chose to
+             * give and nobody could take away — the opposite of what a
+             * company wants from the one action that consumes a customer's
+             * paid entitlement.
+             *
+             * It is now held two ways, both of them deliberate acts:
+             *   · UserRole::VoucherStaff, whose whole job it is;
+             *   · a per-user grant (user_abilities), for a Company Admin who
+             *     also works the counter.
+             *
+             * Every Company Admin who held it on 2026-09-10 was granted it by
+             * the migration, so nobody lost it mid-shift; the rule applies to
+             * everyone made after that.
+             */
+        ],
+
+        /*
+         * VOUCHER STAFF (2026-09-10).
+         *
+         * One ability, and it is the entire reason the role exists. They see
+         * the admin console's redemption screen and nothing else — not
+         * sales, not commission, not a customer's PDPA record.
+         *
+         * The shortness of this row is the guarantee: a role that holds one
+         * thing cannot quietly come to hold a second without that line
+         * appearing in a diff.
+         */
+        UserRole::VoucherStaff->value => [
             Ability::VoucherRedeem,
         ],
 
@@ -209,7 +239,24 @@ class PermissionResolver
          * pretends to.
          */
 
-        return $this->roleGrants($user->role, $ability);
+        if ($this->roleGrants($user->role, $ability)) {
+            return true;
+        }
+
+        /*
+         * 2026-09-10 — ADR-032 §2.2/Phase 3's per-user grant, built for the
+         * first ability that needed it.
+         *
+         * ADDITIVE, NEVER SUBTRACTIVE. A grant can only add to what a role
+         * already holds; it can never remove one. That direction matters: a
+         * revocable-by-grant model would let one bad row silently strip a
+         * Super Admin of something the enumerated table above says they have,
+         * and the table would stop being readable as the answer.
+         *
+         * The company-level ceiling above still wins when Phase 2 lands —
+         * that is why this sits below it and not above.
+         */
+        return $user->hasAbilityGrant($ability);
     }
 
     /** Does this base role hold this ability? Unlisted ⇒ false (fail closed). */

@@ -470,3 +470,119 @@ describe('UserManagementView — moving an account to another company', () => {
     expect(post).toHaveBeenCalledWith('/users/7/move-company', { company_id: 5 })
   })
 })
+
+/**
+ * 2026-09-10 (human: "การกระจายสิทธิ์ให้ Company Admin และ Admin ที่ได้สิทธิ์
+ * ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+ *
+ * Redeeming a voucher spends something a customer paid for. Until today every
+ * Company Admin could do it by virtue of being one — a right nobody chose to
+ * give and nobody could take away.
+ *
+ * Two things grant it now and both are deliberate: the front-desk ROLE, and a
+ * per-person GRANT for an admin who also works the counter. This screen is
+ * where both are handed out, so these tests are about the two ways that goes
+ * wrong quietly: a right that cannot be seen (so nobody audits it) and a role
+ * whose cost is discovered after the account is handed over.
+ */
+describe('UserManagementView — who may redeem a voucher', () => {
+  it('asks the API for the grants, so the list can show who holds the right', async () => {
+    const wrapper = await mountView()
+
+    expect(get.mock.calls[0]?.[0]).toContain('with_abilities=1')
+    expect(wrapper.exists()).toBe(true)
+  })
+
+  it('badges a granted admin and counts them, rather than hiding it one row deep', async () => {
+    mockUsers([
+      makeUser({ id: 7, role: 'company_admin', granted_abilities: ['voucher.redeem'] }),
+      makeUser({ id: 8, name: 'สมหญิง', role: 'company_admin', granted_abilities: [] }),
+    ])
+    const wrapper = await mountView()
+
+    expect(wrapper.findAll('[data-test="redeem-badge"]')).toHaveLength(1)
+    expect(btn(wrapper, 'redeemer-count').text()).toContain('1')
+  })
+
+  it('badges the front-desk role too — the right is held either way', async () => {
+    mockUsers([makeUser({ role: 'voucher_staff' })])
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'redeem-badge').exists()).toBe(true)
+  })
+
+  it('sends the WHOLE set, not an add — the endpoint replaces it', async () => {
+    mockUsers([makeUser({ role: 'company_admin', granted_abilities: [] })])
+    const wrapper = await mountView()
+
+    await btn(wrapper, 'edit-abilities').trigger('click')
+    await btn(wrapper, 'grant-voucher-redeem').setValue(true)
+    await btn(wrapper, 'submit-abilities').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7/abilities', { abilities: ['voucher.redeem'] })
+  })
+
+  it('revokes by sending an empty list, which is the one thing a diff could not say', async () => {
+    mockUsers([makeUser({ role: 'company_admin', granted_abilities: ['voucher.redeem'] })])
+    const wrapper = await mountView()
+
+    await btn(wrapper, 'edit-abilities').trigger('click')
+    // The box opens TICKED — it reflects what this person already holds, so
+    // unticking is the revoke.
+    expect((btn(wrapper, 'grant-voucher-redeem').element as HTMLInputElement).checked).toBe(true)
+
+    await btn(wrapper, 'grant-voucher-redeem').setValue(false)
+    await btn(wrapper, 'submit-abilities').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7/abilities', { abilities: [] })
+  })
+
+  it('does not offer to revoke a right that comes from the role', async () => {
+    // A front-desk account holds it BY ROLE and has no grant row. A ticked
+    // box here would offer to take away something this form cannot take away.
+    mockUsers([makeUser({ role: 'voucher_staff' })])
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'edit-abilities').exists()).toBe(false)
+  })
+
+  it('says what the front-desk role costs before the role is applied', async () => {
+    mockUsers([makeUser({ role: 'agent' })])
+    const wrapper = await mountView()
+
+    await btn(wrapper, 'make-voucher-staff').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.find('[data-test="confirm"]')
+    expect(dialog.text()).toContain('ตัดสิทธิ์บัตรกำนัล')
+    // The cost, stated: it is a one-screen account, and it signs them out.
+    expect(dialog.text()).toContain('เข้าไม่ได้')
+    expect(dialog.text()).toContain('ถอนการเข้าใช้งาน')
+
+    await btn(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7', { role: 'voucher_staff' })
+  })
+
+  it('offers the way back out of the role', async () => {
+    mockUsers([makeUser({ role: 'voucher_staff' })])
+    const wrapper = await mountView()
+
+    await btn(wrapper, 'unmake-voucher-staff').trigger('click')
+    await btn(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7', { role: 'agent' })
+  })
+
+  it('warns on the create form too, where the account is actually made', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-role').setValue('voucher_staff')
+
+    expect(btn(wrapper, 'voucher-staff-hint').text()).toContain('ตัดสิทธิ์บัตรกำนัล')
+  })
+})

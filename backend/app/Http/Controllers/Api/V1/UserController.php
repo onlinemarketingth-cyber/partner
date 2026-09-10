@@ -80,6 +80,21 @@ class UserController extends Controller
             ]);
         }
 
+        /*
+         * ?with_abilities=1 — 2026-09-10. "Who in this company may redeem a
+         * voucher?" is the question the grant screen exists to answer, and it
+         * has to be answerable at a GLANCE, not one row at a time: a right
+         * that can only be inspected by opening each person in turn is one
+         * nobody audits.
+         *
+         * An eager load, so it is ONE extra query for the page rather than one
+         * per row — and opt-in, because the four other callers of /users have
+         * no use for it (see UserResource's `granted_abilities`).
+         */
+        if ($request->boolean('with_abilities')) {
+            $query->with('abilityGrants');
+        }
+
         // TASK-060 — search, same pattern as ClientController::index
         // (TASK-049). `q` is a free-text LIKE across name/phone/email
         // (partial match). `national_id` is EXACT-only: the column is
@@ -142,7 +157,10 @@ class UserController extends Controller
 
     public function show(User $user): UserResource
     {
-        return new UserResource($user->load('company'));
+        // 2026-09-10 — grants are loaded HERE and not on index(): the detail
+        // screen edits them, a list of a hundred users would issue a query
+        // each to render a toggle nobody is looking at.
+        return new UserResource($user->load(['company', 'abilityGrants']));
     }
 
     public function update(UpdateUserRequest $request, User $user, UserService $service): UserResource

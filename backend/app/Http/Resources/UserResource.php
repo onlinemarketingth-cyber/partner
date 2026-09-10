@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\Ability;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -79,6 +80,24 @@ class UserResource extends JsonResource
             'email' => $this->email,
             'phone' => $this->phone,
             'role' => $this->role?->value,
+            /*
+             * 2026-09-10 — abilities granted to this person BY NAME, on top
+             * of what their role holds (ADR-032 §2.2/Phase 3).
+             *
+             * Only present when the caller asked for them (the user-detail
+             * screen), because a list of a hundred users does not need a
+             * query each to render a toggle nobody is looking at.
+             *
+             * The role's own abilities are deliberately NOT merged in here:
+             * this field answers "what was this person given", which is the
+             * question the screen edits. What they can DO is the resolver's
+             * answer, and merging the two would make a revocable grant
+             * indistinguishable from something their role holds outright.
+             */
+            'granted_abilities' => $this->whenLoaded(
+                'abilityGrants',
+                fn () => $this->abilityGrants->pluck('ability')->map(fn ($a) => $a instanceof Ability ? $a->value : $a)->values(),
+            ),
             // TASK-112 / ADR-025 §1 — a FLAG, not a role: `role` above is
             // still 'agent' for a team leader. Surfaced unconditionally
             // (not gated behind can('view')) because it is a capability

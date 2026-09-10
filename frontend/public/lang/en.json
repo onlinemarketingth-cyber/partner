@@ -401,7 +401,8 @@
     "transfer_help": "Transfer using the details below, then upload your slip — we will check and confirm it",
     "back_home": "Back to home",
     "auto_return": "Returning to home in {seconds}s",
-    "auto_return_stopped": "Countdown stopped — tap the button above when you are ready"
+    "auto_return_stopped": "Countdown stopped — tap the button above when you are ready",
+    "voucher_pending": "Your service-access code appears here as soon as staff confirm the payment, and is sent to the email address you gave — please keep this link."
   },
   "bank": {
     "name": "Bank",
@@ -541,7 +542,8 @@
     "consent": "I consent to my name, phone and email being stored and used to contact me and process this order",
     "confirm_pay": "Confirm and pay",
     "confirm_note": "You will be taken to the payment page after confirming",
-    "buyer_name": "Your name"
+    "buyer_name": "Your name",
+    "email_reason": "Your service-access code and payment confirmation are sent to this address."
   },
   "ship": {
     "title": "Delivery address",

@@ -2,8 +2,10 @@
 
 namespace Tests\Feature\Order;
 
+use App\Enums\Ability;
 use App\Enums\CommissionRateType;
 use App\Enums\PipelineStage;
+use App\Enums\UserRole;
 use App\Models\CertTier;
 use App\Models\Client;
 use App\Models\CommissionRule;
@@ -13,6 +15,7 @@ use App\Models\OrderVoucher;
 use App\Models\Product;
 use App\Models\Referral;
 use App\Models\User;
+use App\Models\UserAbility;
 use App\Models\UserCertification;
 use App\Models\VoucherRedemption;
 use App\Services\Order\OrderService;
@@ -29,6 +32,27 @@ use Tests\TestCase;
 class VoucherTest extends TestCase
 {
     use RefreshDatabase;
+
+    /**
+     * A Company Admin who has been GIVEN the redemption right.
+     *
+     * 2026-09-10 — being a Company Admin stopped implying it (human:
+     * "ที่ได้สิทธิ์ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+     * Redeeming consumes a customer's paid entitlement at a counter; it is a
+     * front-desk job, and it is now granted per person or held by
+     * UserRole::VoucherStaff whose whole job it is.
+     *
+     * Every existing Company Admin was granted it by the migration, so this
+     * mirrors production rather than describing a special case.
+     */
+    private function redeemer(Company $company): User
+    {
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        UserAbility::create(['user_id' => $admin->id, 'ability' => Ability::VoucherRedeem->value]);
+
+        return $admin;
+    }
 
     private function passBasicCert(User $agent, Company $company): CertTier
     {
@@ -146,7 +170,7 @@ class VoucherTest extends TestCase
     {
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = $this->redeemer($company);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, ['voucher_usage_quota' => 2]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
         $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
@@ -170,7 +194,7 @@ class VoucherTest extends TestCase
     {
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = $this->redeemer($company);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting, ['voucher_usage_quota' => 1]);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
         $this->actingAs($this->paymentConfirmer($company))->postJson("/api/v1/orders/{$order->id}/confirm")->assertOk();
@@ -193,7 +217,7 @@ class VoucherTest extends TestCase
     {
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = $this->redeemer($company);
         $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
         $order = Order::factory()->paid()->create(['referral_id' => $referral->id]);
         $voucher = OrderVoucher::create([
@@ -222,7 +246,7 @@ class VoucherTest extends TestCase
         $voucher = OrderVoucher::where('order_id', $order->id)->firstOrFail();
 
         $companyB = Company::factory()->create();
-        $adminB = User::factory()->companyAdmin()->create(['company_id' => $companyB->id]);
+        $adminB = $this->redeemer($companyB);
 
         $this->actingAs($adminB)->getJson("/api/v1/vouchers/{$voucher->code}")->assertNotFound();
         $this->actingAs($adminB)
@@ -249,11 +273,53 @@ class VoucherTest extends TestCase
             ->assertOk();
     }
 
-    public function test_ability_voucher_redeem_denies_agent_but_allows_company_admin_and_super_admin(): void
+    public function test_a_company_admin_who_was_never_granted_it_may_not_redeem(): void
+    {
+        /*
+         * 2026-09-10 — THE RULE THAT CHANGED. Before this, every Company
+         * Admin could consume any customer's paid entitlement in their
+         * company, because of what they were rather than because anybody
+         * decided it.
+         */
+        $company = Company::factory()->create();
+        $ungranted = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $this->actingAs($ungranted)
+            ->postJson('/api/v1/vouchers/redeem', ['code' => 'does-not-matter'])
+            ->assertForbidden();
+        $this->actingAs($ungranted)
+            ->getJson('/api/v1/vouchers/does-not-matter')
+            ->assertForbidden();
+    }
+
+    public function test_front_desk_staff_may_redeem_and_nothing_else(): void
+    {
+        /*
+         * The role exists so a counter can be staffed without handing over
+         * the company's sales, commission and customer records. Asserted from
+         * both sides: the redemption endpoint lets them past the ability
+         * gate, and a neighbouring admin endpoint does not.
+         */
+        $company = Company::factory()->create();
+        $staff = User::factory()->create([
+            'company_id' => $company->id,
+            'role' => UserRole::VoucherStaff,
+        ]);
+
+        $this->actingAs($staff)
+            ->postJson('/api/v1/vouchers/redeem', ['code' => 'does-not-matter'])
+            ->assertUnprocessable();
+
+        $this->actingAs($staff)
+            ->getJson('/api/v1/orders')
+            ->assertForbidden();
+    }
+
+    public function test_ability_voucher_redeem_denies_agent_but_allows_a_granted_admin_and_super_admin(): void
     {
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = $this->redeemer($company);
         $superAdmin = User::factory()->superAdmin()->create();
 
         // Agent is denied BEFORE any code lookup happens (FormRequest::authorize()

@@ -299,7 +299,18 @@ const navItems: NavItem[] = [
 ]
 
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
-const visibleNavItems = computed(() => navItems.filter((item) => !item.superAdminOnly || isSuperAdmin.value))
+/*
+ * 2026-09-10 — the front-desk account sees ONE pillar.
+ *
+ * Written as "keep only voucher-redeem" rather than as a flag on every other
+ * item, so a pillar added tomorrow is hidden from them without anybody
+ * remembering this role exists — the same fail-closed shape as the router's
+ * `meta.voucherStaff` allowlist and the backend's RestrictVoucherStaff.
+ */
+const isVoucherStaff = computed(() => authStore.user?.role === 'voucher_staff')
+const visibleNavItems = computed(() => navItems
+  .filter((item) => !isVoucherStaff.value || item.name === 'voucher-redeem')
+  .filter((item) => !item.superAdminOnly || isSuperAdmin.value))
 const activeName = computed(() => route.name as string)
 
 // The actual TASK-043 fix: a pillar is active when `route.name` matches
@@ -388,7 +399,10 @@ const activeSubMenus = computed(() => {
             <Icon name="search" :size="18" />
           </button>
 
-          <NotificationBell />
+          <!-- Hidden from the front-desk account: it polls an endpoint the
+               allowlist refuses, so it could only ever show an error where a
+               count goes. -->
+          <NotificationBell v-if="!isVoucherStaff" />
 
           <div class="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-full border border-slate-200 p-0.5">
             <button

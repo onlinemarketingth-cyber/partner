@@ -45,7 +45,7 @@ class UpdateUserRequest extends FormRequest
              * disagree about what a valid number is.
              */
             'phone' => ['sometimes', 'nullable', 'string', 'max:32'],
-            'role' => ['sometimes', Rule::in(['agent', 'company_admin'])],
+            'role' => ['sometimes', Rule::in(['agent', 'company_admin', 'voucher_staff'])],
             // TASK-112 / ADR-025 §1 — the "may mint recruit links and
             // approve their own recruits" flag. Company Admin / Super
             // Admin only, expressed with the same Rule::prohibitedIf()

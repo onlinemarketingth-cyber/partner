@@ -169,6 +169,31 @@ describe('after the money is in', () => {
     expect(w.find('[data-test="back-home"]').exists()).toBe(true)
   })
 
+  /**
+   * 2026-09-10 (human: "หลังจากชำระเงินสำเร็จใน frontend แล้ว ลูกค้าจะได้รหัส
+   * ยืนยันใช้บริการได้อย่างไร").
+   *
+   * The voucher is minted when staff CONFIRM the payment, not when the money
+   * lands (ADR-033 §2.2/B1). So there is a real window — this one — in which
+   * the customer has paid and there genuinely is no code yet. What goes in
+   * that gap decides whether they wait or start phoning.
+   */
+  it('says where the code will appear, in the window where there is not one yet', async () => {
+    const w = await mountPage()
+
+    const note = w.find('[data-test="voucher-pending-note"]')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('รหัสเข้ารับบริการ')
+  })
+
+  it('does not say it on an order nobody has paid', async () => {
+    // Before payment the sentence would be describing something that has not
+    // been bought.
+    const w = await mountPage({ gateway: { payment_received: false, intent: null, test_mode: false } })
+
+    expect(w.find('[data-test="voucher-pending-note"]').exists()).toBe(false)
+  })
+
   it('leaves an unpaid order alone', async () => {
     // No countdown, no exit button: this customer still has something to do
     // here, and a page that navigated away from a half-finished payment

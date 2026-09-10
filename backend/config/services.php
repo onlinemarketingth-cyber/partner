@@ -40,6 +40,18 @@ return [
     // FollowUpReminderNotification can build a link into an email.
     'agent_portal' => [
         'frontend_url' => env('FRONTEND_URL', 'http://agent.localhost:5178'),
+        /*
+         * 2026-09-10 — the SAME comma-separated list config/cors.php reads,
+         * surfaced as config so App\Support\PortalOrigin can read it after
+         * `config:cache` (env() returns null once the config is cached — the
+         * .env file is not loaded at all in that state, which is exactly the
+         * production this runs in).
+         *
+         * It stays a copy of one env var rather than a second setting: a
+         * domain that may not make a credentialed request to this API is not
+         * one we should be sending customers to either.
+         */
+        'extra_origins' => env('CORS_EXTRA_ORIGINS', ''),
     ],
 
     // TASK-020 — same env var + default as config/cors.php's

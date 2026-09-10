@@ -3,6 +3,7 @@
 use App\Http\Middleware\EnsureCompanyIsOperational;
 use App\Http\Middleware\ExtendAccessToken;
 use App\Http\Middleware\ResolveChunkedUpload;
+use App\Http\Middleware\RestrictVoucherStaff;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ServerTiming;
 use Illuminate\Foundation\Application;
@@ -68,6 +69,20 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'resolve.chunked-upload' => ResolveChunkedUpload::class,
             'company.operational' => EnsureCompanyIsOperational::class,
+            /*
+             * 2026-09-10 — the front-desk role's wall (see the middleware's
+             * own docblock for why it is an allowlist rather than a hundred
+             * Policy edits).
+             *
+             * An ALIAS applied inside the authenticated route group, NOT a
+             * global append. Global middleware runs before `auth:sanctum`,
+             * where there is no user to check; appending instead would run it
+             * after the controller, by which time a write has already
+             * happened. Inside the group it sits between the two, which is
+             * the only position where it can both see the user and stop the
+             * request.
+             */
+            'restrict.voucher-staff' => RestrictVoucherStaff::class,
         ]);
 
         /*

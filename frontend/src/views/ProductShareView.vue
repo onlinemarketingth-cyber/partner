@@ -224,9 +224,10 @@ async function submitCheckout() {
     const res = await api.post<{ pay_url: string }>(`/public/product-shares/${token}/checkout`, {
       name: checkoutForm.value.name.trim(),
       phone: checkoutForm.value.phone.trim(),
-      // Optional field: send null rather than '' so the Request's
-      // `nullable|email` rule sees an absent value, not an invalid one.
-      email: checkoutForm.value.email.trim() || null,
+      // REQUIRED since 2026-09-10 — this is where the voucher code is sent
+      // after payment, and without it the code exists in exactly one place:
+      // a tab the customer is about to close.
+      email: checkoutForm.value.email.trim(),
       consent: checkoutForm.value.consent,
       hp_field: checkoutForm.value.hp_field,
     })
@@ -795,16 +796,24 @@ function openLightbox(material: SalesMaterialItem) {
             </div>
             <div>
               <label for="checkout-email" class="text-xs font-bold text-ink-card-muted">
-                {{ td('field.email') }} <span class="font-normal text-ink-card-subtle">{{ td('common.optional') }}</span>
+                {{ td('field.email') }}
               </label>
               <input
                 id="checkout-email"
                 v-model="checkoutForm.email"
+                required
                 type="email"
                 autocomplete="email"
+                data-test="checkout-email"
                 class="mt-1 w-full min-h-[44px] px-3 py-2 rounded-xl border border-line-input bg-surface-input text-sm text-ink-input"
                 placeholder="name@example.com"
               />
+              <!-- Says what arrives there. "required" alone reads as a form
+                   being nosy, and a customer who reads it that way types
+                   something to get past it. -->
+              <p class="mt-1 text-[11px] text-ink-card-subtle" data-test="email-reason">
+                {{ td('share.email_reason') }}
+              </p>
             </div>
 
             <!-- Honeypot. Present in the DOM (a bot that reads the form

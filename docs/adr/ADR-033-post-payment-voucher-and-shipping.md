@@ -148,3 +148,63 @@ door, same principle this codebase has enforced repeatedly this sprint (TASK-176
 - **Reading `product.voucher_usage_quota`/`voucher_validity_days` live at redemption time instead
   of snapshotting.** Rejected: breaks the "customer gets what they were quoted" invariant
   ADR-017/TASK-136 already established for price.
+
+---
+
+## 6. Amendment — 2026-09-10: who may redeem, and how the customer gets the code
+
+Two things §2.1 and §3 left open turned out to matter as soon as a real customer paid.
+
+### 6.1 `voucher.redeem` is no longer something a Company Admin holds by being one
+
+§2.1 set the interim grant to `company_admin` + `super_admin` and said narrowing it later "is a
+Phase-3 role change, not a rewrite". That is what happened, ahead of Phase 3 and at the human's
+request (*"ทำงานคนละหน้าที่กัน"*): the ability was **removed from the `company_admin` row** and is
+now held two ways, both deliberate acts —
+
+- `UserRole::VoucherStaff`, a front-desk account that reaches the redemption endpoints and nothing
+  else; and
+- a per-person grant (`user_abilities`) for a Company Admin who also works the counter.
+
+A migration backfills the grant for every existing Company Admin, so nobody loses the ability on
+deploy. §4's accepted consequence — *"any Company Admin … can redeem any voucher of their own
+company"* — no longer describes the system: any Company Admin **who has been given it** can. The
+redemption endpoint, its Policy and its tests are unchanged, which is the seam §2.1 predicted.
+See ADR-032 §6 for the grant model and why the grantable set is closed.
+
+### 6.2 The email carries the code
+
+§3 deferred email delivery "until reuse of the pay-token page proves insufficient in practice".
+It proved insufficient on the first live sale: the human asked *"หลังจากชำระเงินสำเร็จใน frontend
+แล้ว ลูกค้าจะได้รหัสยืนยันใช้บริการได้อย่างไร"*, and the honest answer was **only by still having the
+tab open**. `OrderPaymentConfirmedMail` now carries the code, what it entitles the customer to,
+and its expiry.
+
+The "one delivery surface" reasoning in §2.4 is kept where it applies: it was about **drift**, and
+what drifts is a voucher's mutable state. So the email carries only what is fixed at issuance —
+the code, the entitlement, the expiry — while remaining uses and redemption status stay on the
+page, which the email links to. The QR also stays on the page: an emailed QR is an embedded image
+a mail client may block, and a code that sometimes silently fails to arrive is worse than one the
+customer has to open a link for.
+
+Two supporting changes come with it:
+
+- **`email` is now required at self-serve checkout** (`StoreProductShareCheckoutRequest`). It was
+  optional, copied from the affiliate lead form where that is right; this form takes money and
+  gives back a code, and without an address there is nowhere to send it.
+- **The `payment_received` window says where the code will appear.** The voucher is minted at
+  confirmation, not at payment (§2.2/B1), so there is a real gap in which the customer has paid
+  and there genuinely is no code yet. The page names that gap rather than leaving it blank.
+
+### 6.3 Links point at the domain the customer bought from
+
+Not strictly a voucher decision, but it is what makes the email above usable. The portal is served
+from more than one first-party domain, and every public URL was built from `FRONTEND_URL` alone —
+so a customer who bought on the parked alias received a receipt pointing at a brand they had never
+seen. `orders.checkout_origin` records the origin, and `App\Support\PortalOrigin` is now the one
+place a `/pay/{token}` URL is derived (Resource, Stripe return URL, email).
+
+The origin is accepted **only if this deployment already declares it**, read from the same setting
+CORS enforces. A public checkout's `Origin` header is attacker-controlled: written through
+unchecked, it would let anyone have this system email a customer — from our address, about their
+real order — a link to their own copy of our payment page.

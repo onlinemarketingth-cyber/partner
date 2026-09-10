@@ -89,7 +89,14 @@ class ProductShareCheckoutService
      *
      * @param  array{name: string, phone: string, email?: string|null}  $data
      */
-    public function checkout(ProductShareLink $link, array $data): ?Order
+    /**
+     * @param  string|null  $checkoutOrigin  The portal domain this customer is
+     *                                       buying on, already vetted by App\Support\PortalOrigin (null = the
+     *                                       canonical host). Passed in rather than read from the request here:
+     *                                       this Service must stay callable without one, and the decision about
+     *                                       which origins are ours belongs in one place, not in every caller.
+     */
+    public function checkout(ProductShareLink $link, array $data, ?string $checkoutOrigin = null): ?Order
     {
         // BR-1 (Access Gate), enforced on the LINK's agent exactly as
         // AffiliateLeadCaptureService does. An agent who has lost/never
@@ -172,7 +179,7 @@ class ProductShareCheckoutService
 
         $paymentMethod = $this->defaultPaymentMethod($link->company_id);
 
-        return DB::transaction(function () use ($link, $data, $product, $template, $paymentMethod) {
+        return DB::transaction(function () use ($link, $data, $product, $template, $paymentMethod, $checkoutOrigin) {
             $client = Client::create([
                 'company_id' => $link->company_id,
                 'referring_agent_id' => $link->agent_id,
@@ -262,6 +269,19 @@ class ProductShareCheckoutService
              * link is why they were here at all, and it is the one whose
              * conversion rate means anything.
              */
+            /*
+             * 2026-09-10 — the domain this customer is standing on.
+             *
+             * forceFill, like `tracked_link_id` below: this is a fact about
+             * the request, not a field any form may submit, and keeping it out
+             * of $fillable is what stops it ever being set from user input by
+             * some future endpoint (same reasoning as `gateway_charge_id`,
+             * ADR-027).
+             */
+            if ($checkoutOrigin !== null) {
+                $order->forceFill(['checkout_origin' => $checkoutOrigin])->save();
+            }
+
             $shareLink = $link->trackedLink()->withoutGlobalScopes()->first();
             if ($shareLink) {
                 $referral->forceFill(['tracked_link_id' => $shareLink->id])->save();

@@ -141,3 +141,55 @@ database), `phone` missing from user creation, and the remaining inconsistencies
   product does not have.
 - **Per-user ad-hoc grants with no roles.** Rejected: unauditable in practice — nobody can answer
   "who can mark commission paid?" without scanning every user.
+
+---
+
+## 6. Amendment — 2026-09-10: per-user grants, shipped ahead of Phase 3
+
+**Human request:** *"เพิ่มเรื่องการกระจายสิทธิ์ให้ Company Admin และ Admin ที่ได้สิทธิ์ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน"* — asked while
+reviewing voucher redemption, and answered **"ทำทั้งสองอย่าง"** when offered a front-desk role or
+per-person grants.
+
+### 6.1 What shipped
+
+- `user_abilities` (`user_id`, `ability`, `granted_by_user_id`, unique per pair). A row means
+  **also may**; there is no row shape for "may not", so the role table in `PermissionResolver`
+  stays the readable answer to what a role holds and a grant can never quietly subtract from it.
+- `UserRole::VoucherStaff` — a front-desk tier that reaches the redemption endpoints and nothing
+  else, enforced by `RestrictVoucherStaff`, an **allowlist at the door** rather than edits to
+  every Policy. Most admin gates ask `isCompanyAdmin()` and refuse a new role for free, but
+  `OrderPolicy::viewAny()` returns true for any authenticated user — whether the next one of those
+  leaks would depend on somebody remembering this role exists while writing it.
+- `PUT /users/{user}/abilities`, replacing the whole set for one person, audited as
+  `user.abilities_updated` when — and only when — the set actually changed.
+- `Ability::VoucherRedeem` **removed from the `company_admin` row.** It is now held only by the
+  front-desk role or by an explicit grant. A migration backfills a grant for every existing
+  `company_admin` so nobody loses an ability on deploy; from that point on it is given, by
+  somebody, on purpose.
+
+### 6.2 Why this is not the alternative §5 rejected
+
+§5 rejected *"per-user ad-hoc grants with no roles"* as *"unauditable in practice — nobody can
+answer 'who can mark commission paid?' without scanning every user"*. That objection is answered
+rather than ignored:
+
+- **The set is closed.** `UserAbilityController::GRANTABLE` is a constant, today holding one
+  entry. Widening it is a code change plus review — the same shape §2.2 chose for the catalogue
+  itself. Without it a Company Admin could grant themselves `settings.payment_gateway.update`,
+  the one ability ADR-027 withholds from them precisely because it names the bank account their
+  company's revenue lands in.
+- **The question is answerable on screen.** `GET /users?with_abilities=1` eager-loads the grants
+  (one query for the page, not one per row), and จัดการผู้ใช้ระบบ badges every holder and counts
+  them in its header line. "Who may redeem?" is one glance, not a scan.
+- **Roles did not go away.** The role remains the answer for somebody whose whole job is the
+  counter; the grant exists for the person who does two jobs. §2.3's ceiling is untouched — a
+  grant narrows within a tier and never widens past it, and `voucher.redeem` is not grantable to
+  an `agent` in any case, since this app refuses that role at the door.
+
+### 6.3 What Phase 3 still owes
+
+This is not `company_roles`. It is one table, one endpoint and one grantable ability, built
+because a real permission needed distributing before the role editor exists. Phase 3 subsumes it:
+when custom roles ship, a company role holding `voucher.redeem` replaces the per-person grants,
+and `user_abilities` stays as the exception mechanism it is here. The three questions §4 lists as
+open before Phase 3 are unaffected — none of them is decided by this amendment.

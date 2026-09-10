@@ -5,7 +5,12 @@ import { api, ApiError, ensureCsrfCookie } from '@/api/client'
 // Matches App\Enums\UserRole (backend). Kept as a string union rather than
 // re-declaring business rules on the frontend — role gates itself live in
 // Laravel Policies (CLAUDE.md Section 5); this is only for UI display/nav.
-export type UserRole = 'agent' | 'company_admin' | 'super_admin'
+// 2026-09-10 — `voucher_staff` is the front-desk account (human: "ที่ได้สิทธิ์
+// ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน"): it signs into
+// THIS app and sees the redemption screen only. The real wall is the backend's
+// RestrictVoucherStaff middleware — the router guard below just keeps them off
+// screens that would render as a wall of 403s.
+export type UserRole = 'agent' | 'company_admin' | 'super_admin' | 'voucher_staff'
 
 export interface UserBackground {
   type: 'gradient' | 'image' | null

@@ -41,7 +41,21 @@ class StoreUserRequest extends FormRequest
             // SECURITY AUDIT 2026-08-21 (V18) — one policy, registered in
             // AppServiceProvider.
             'password' => ['required', 'string', Password::defaults()],
-            'role' => ['required', Rule::in(['agent', 'company_admin'])],
+            /*
+             * 2026-09-10 — `voucher_staff` joins the list (human: "ที่ได้
+             * สิทธิ์ในการตัดได้เฉพาะหน้าการตัดสิทธิ์ เพราะทำงานคนละหน้าที่กัน").
+             *
+             * Front-desk staff: they redeem vouchers at a branch and reach
+             * nothing else in the console (RestrictVoucherStaff). Creatable
+             * here because that is where a company's people are made, and
+             * making one any other way would mean a Super Admin editing a
+             * database column.
+             *
+             * `super_admin` is still absent, and still deliberately: this
+             * endpoint creates a company's own staff, and the platform owner
+             * is not one of them.
+             */
+            'role' => ['required', Rule::in(['agent', 'company_admin', 'voucher_staff'])],
             // TASK-122 — WHICH identity document `national_id` below is.
             // `required_with`, not `required`: the document itself stays
             // optional here (see below), so demanding a type for an absent

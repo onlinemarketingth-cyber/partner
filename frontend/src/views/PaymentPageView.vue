@@ -973,6 +973,16 @@ async function payByCard() {
               <p class="text-xs text-ink-card-muted">
                 {{ td('pay.received_help') }}
               </p>
+              <!-- 2026-09-10 (human: "ลูกค้าจะได้รหัสยืนยันใช้บริการได้อย่างไร").
+                   The voucher is minted when staff CONFIRM the payment, not
+                   when the money lands (ADR-033 §2.2/B1) — so there is a real
+                   window where the customer has paid and there is genuinely
+                   no code to show. Saying where it will appear is the only
+                   honest thing to put in that gap; anything else reads as the
+                   code having been lost. -->
+              <p class="mt-1 text-xs text-ink-card-muted" data-test="voucher-pending-note">
+                {{ td('pay.voucher_pending') }}
+              </p>
             </div>
           </div>
 
