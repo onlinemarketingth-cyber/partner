@@ -401,9 +401,6 @@
     "online_or": "or",
     "transfer_title": "Bank transfer / PromptPay",
     "transfer_help": "Transfer using the details below, then upload your slip — we will check and confirm it",
-    "back_home": "Back to home",
-    "auto_return": "Returning to home in {seconds}s",
-    "auto_return_stopped": "Countdown stopped — tap the button above when you are ready",
     "voucher_pending": "Your service-access code appears here as soon as staff confirm the payment, and is sent to the email address you gave — please keep this link.",
     "attempt_failed": "Your last payment attempt did not go through",
     "attempt_failed_help": "This order is still unpaid — try another card, or transfer using the details below.",
@@ -421,7 +418,8 @@
     "shipping_required": "Please complete the delivery address before paying",
     "copy_amount": "Copy amount",
     "send_slip": "Send transfer slip",
-    "sending_slip": "Uploading…"
+    "sending_slip": "Uploading…",
+    "keep_this_link": "Keep this link — it opens your code and QR any time, with no sign-in, and the same link is in the confirmation email we sent you."
   },
   "bank": {
     "name": "Bank",

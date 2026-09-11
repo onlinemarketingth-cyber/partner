@@ -135,13 +135,40 @@ describe('after the money is in', () => {
     expect(w.text()).toContain('123-4-56789-0')
   })
 
-  it('offers a way off the page', async () => {
+  /*
+   * 2026-09-11 (human: "ส่ง email ให้ลูกค้าต้องไม่ติด Login สามารถดูได้เหมือน
+   * หน้าชำระสำเร็จ").
+   *
+   * Three tests used to live here, and they pinned a bug.
+   *
+   * A day earlier this page grew a "กลับหน้าหลัก" button and a 90-second
+   * timer, both calling `window.location.assign('/')` — and one of those
+   * tests asserted exactly that call. `/` is the AGENT PORTAL's dashboard,
+   * which is not a public route, so the router bounced the visitor to
+   * /login: a customer who had just paid ฿8,900 put their phone down, and
+   * ninety seconds later their voucher code and QR had been replaced by a
+   * login form for a system they have no account on.
+   *
+   * The tests were green the whole time. They checked that the navigation
+   * HAPPENED, never where it landed — a reminder that a passing assertion
+   * about a call is not an assertion about an outcome.
+   *
+   * What replaces them says what the page must now do instead: stay, and
+   * tell the customer this link keeps working.
+   */
+  it('keeps the customer on their receipt instead of sending them to a login screen', async () => {
     const w = await mountPage()
 
-    expect(w.find('[data-test="back-home"]').exists()).toBe(true)
+    expect(w.find('[data-test="back-home"]').exists()).toBe(false)
+    expect(w.find('[data-test="auto-return-countdown"]').exists()).toBe(false)
   })
 
-  it('counts down, and leaves on its own after 90 seconds', async () => {
+  it('never navigates away on its own, however long the page is left open', async () => {
+    /*
+     * The failure this prevents is silent and delayed: nobody is watching
+     * when it happens, and the customer cannot describe it afterwards beyond
+     * "it logged me out".
+     */
     vi.useFakeTimers()
     const assign = vi.fn()
     // jsdom refuses a real navigation; the call is what matters.
@@ -150,41 +177,18 @@ describe('after the money is in', () => {
       value: { ...window.location, assign },
     })
 
-    const w = await mountPage()
+    await mountPage()
+    await vi.advanceTimersByTimeAsync(600_000)
 
-    expect(w.find('[data-test="auto-return-countdown"]').text()).toContain('90')
-
-    await vi.advanceTimersByTimeAsync(89_000)
     expect(assign).not.toHaveBeenCalled()
-
-    await vi.advanceTimersByTimeAsync(2_000)
-    expect(assign).toHaveBeenCalledWith('/')
   })
 
-  it('stops the countdown the moment the customer touches the page', async () => {
-    /*
-     * A paid order can carry a voucher — a redemption code and a QR the
-     * customer is meant to keep. Pulling that off the screen mid-photograph
-     * would be a worse failure than the dead end this fixes, so the timer
-     * yields to any sign of a person being there.
-     */
-    vi.useFakeTimers()
-    const assign = vi.fn()
-    Object.defineProperty(window, 'location', {
-      configurable: true,
-      value: { ...window.location, assign },
-    })
-
+  it('says the link keeps working without a login', async () => {
+    // The reassurance the button was standing in for: /pay/{token} is
+    // permanent and public, and the same link is in the confirmation email.
     const w = await mountPage()
 
-    window.dispatchEvent(new Event('pointerdown'))
-    await flushPromises()
-
-    await vi.advanceTimersByTimeAsync(120_000)
-
-    expect(assign).not.toHaveBeenCalled()
-    expect(w.find('[data-test="auto-return-countdown"]').exists()).toBe(false)
-    expect(w.find('[data-test="back-home"]').exists()).toBe(true)
+    expect(w.find('[data-test="keep-this-link"]').text()).toContain('ไม่ต้องเข้าสู่ระบบ')
   })
 
   /**
@@ -213,13 +217,12 @@ describe('after the money is in', () => {
   })
 
   it('leaves an unpaid order alone', async () => {
-    // No countdown, no exit button: this customer still has something to do
-    // here, and a page that navigated away from a half-finished payment
-    // would be a new bug rather than a fix.
+    // The closing line belongs to a finished payment. On an order still
+    // waiting for money it would be telling somebody to keep a link to a
+    // receipt they do not have yet.
     const w = await mountPage({ gateway: { payment_received: false, intent: null, test_mode: false, last_error: null, last_error_at: null } })
 
-    expect(w.find('[data-test="back-home"]').exists()).toBe(false)
-    expect(w.find('[data-test="auto-return-countdown"]').exists()).toBe(false)
+    expect(w.find('[data-test="keep-this-link"]').exists()).toBe(false)
   })
 })
 

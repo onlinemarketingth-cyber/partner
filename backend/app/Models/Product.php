@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Collection;
 
 /**
  * Product catalog — ERD-001 §"Product Catalog". CLAUDE.md §2 "Package /
@@ -254,6 +255,30 @@ class Product extends Model
     public function effectiveSpecDescription(): ?string
     {
         return $this->catalog_item_id ? $this->catalogItem?->spec_description : $this->spec_description;
+    }
+
+    /**
+     * The spec sheet, from wherever this product's identity lives.
+     *
+     * 2026-09-11 — added when the payment-confirmation email began printing a
+     * product's details, and `$product->specs` turned out to be the sixth
+     * place the "catalog wins when linked" rule had to be known. A
+     * catalog-linked product's own `product_specs` rows are vestigial in
+     * exactly the way its name and description are, so reading them directly
+     * gives a customer an empty spec sheet for a product that has a full one.
+     *
+     * Returns a plain Collection rather than a relation: the two sides are
+     * different models (ProductSpec / ProductCatalogSpec) and no query can
+     * span both. Both carry spec_group / spec_key / spec_value, which is all
+     * any caller reads.
+     *
+     * @return Collection<int, ProductSpec|ProductCatalogSpec>
+     */
+    public function effectiveSpecs(): Collection
+    {
+        return $this->catalog_item_id
+            ? collect($this->catalogItem?->specs ?? [])
+            : collect($this->specs);
     }
 
     public function effectiveBrand(): Brand|CatalogBrand|null

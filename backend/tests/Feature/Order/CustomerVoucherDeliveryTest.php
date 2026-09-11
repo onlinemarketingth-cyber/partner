@@ -144,6 +144,253 @@ class CustomerVoucherDeliveryTest extends TestCase
         });
     }
 
+    /**
+     * 2026-09-11 (human: "ปรับ email ให้เป็นรูปแบบสากล เรียน ใส่ชื่อลูกค้าจาก
+     * ระบบ รวมถึง link ดูรายละเอียดการสั่งซื้อ และ QR สร้างเป็น UI แบบปุ่มให้
+     * ชัดเจน").
+     */
+    public function test_the_email_addresses_the_customer_by_the_name_on_file(): void
+    {
+        /*
+         * It opened "เรียนคุณลูกค้า" to somebody whose name is in the clients
+         * table. Addressing a person as "customer" while holding their name is
+         * what makes a receipt read as bulk mail — and bulk mail is deleted
+         * unread, taking the voucher code with it.
+         */
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+        $order->client->forceFill(['name' => 'สมชาย ใจดี'])->save();
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            return str_contains($mail->render(), 'เรียน คุณสมชาย ใจดี');
+        });
+    }
+
+    public function test_an_order_with_no_name_is_not_addressed_to_nobody(): void
+    {
+        // "เรียน คุณ" trailing into nothing is worse than the generic form, and
+        // an order an agent keys in by hand may genuinely have no name.
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+        $order->client->forceFill(['name' => ''])->save();
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            return str_contains($mail->render(), 'เรียน คุณลูกค้า');
+        });
+    }
+
+    public function test_the_one_action_looks_like_a_button(): void
+    {
+        /*
+         * The link was an underlined sentence at the bottom of a stack of
+         * paragraphs — the same shape as the text around it, which is the
+         * shape people skim past. It is now a filled cell.
+         *
+         * Asserted as a BACKGROUND-BEARING CELL containing the link rather
+         * than on any one style string: `bgcolor` is the attribute Outlook
+         * reads and the one a "make it a button" change must not lose.
+         */
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($order) {
+            $html = $mail->render();
+
+            return str_contains($html, 'bgcolor=')
+                && str_contains($html, 'ดูรายละเอียดคำสั่งซื้อ และ QR เข้ารับบริการ')
+                // And the address is still printed in full underneath: a
+                // client that strips the button must not strip the only route
+                // back to the voucher.
+                && substr_count($html, PortalOrigin::payUrl($order)) >= 2;
+        });
+    }
+
+    public function test_the_receipt_carries_what_a_receipt_is_kept_for(): void
+    {
+        // Forwarded to an accounts department, or held against a card
+        // statement. "฿8,900" with no order number answers nothing.
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($order) {
+            $html = $mail->render();
+
+            return str_contains($html, $order->order_number)
+                && str_contains($html, '฿8,900.00')
+                && str_contains($html, 'ตรวจสุขภาพประจำปี')
+                && str_contains($html, 'ชำระเมื่อ');
+        });
+    }
+
+    /**
+     * 2026-09-11 (human: "ขอรายละเอียด ชื่อ รายละเอียดสินค้า เข้าไปใน email
+     * ด้วยครับ").
+     */
+    public function test_the_email_carries_what_the_customer_actually_bought(): void
+    {
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder([
+            'voucher_usage_quota' => 1,
+            'voucher_validity_days' => null,
+            'description' => '<p>โปรแกรมตรวจสุขภาพเชิงป้องกัน <strong>ครบ 1 ปี</strong></p><ul><li>ตรวจเลือด 38 รายการ</li></ul>',
+            'spec_description' => '<p>รวมค่าแพทย์และค่าบริการแล้ว</p>',
+        ]);
+
+        $order->product->specs()->create([
+            'company_id' => $company->id,
+            'spec_group' => 'สิ่งที่ได้รับ',
+            'spec_key' => 'Health Tracker V8',
+            'spec_value' => '1 เครื่อง',
+            'sort_order' => 1,
+        ]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            $html = $mail->render();
+
+            return str_contains($html, 'รายละเอียดสินค้า')
+                && str_contains($html, 'ตรวจเลือด 38 รายการ')
+                && str_contains($html, 'รวมค่าแพทย์และค่าบริการแล้ว')
+                // The spec sheet, group heading and all.
+                && str_contains($html, 'สิ่งที่ได้รับ')
+                && str_contains($html, 'Health Tracker V8')
+                && str_contains($html, '1 เครื่อง');
+        });
+    }
+
+    public function test_the_formatting_an_admin_typed_survives_as_formatting(): void
+    {
+        /*
+         * The ONE field in this email that is not escaped. Its markup is
+         * already clean — App\Support\RichText gates these columns on WRITE
+         * against a twelve-element allowlist — so escaping here would print
+         * `<strong>` at a customer instead of making a word bold.
+         *
+         * The second half of this test is the half that matters: the same
+         * value going through the same email must not be able to carry a
+         * script tag. It cannot, because the database cannot hold one — and
+         * this asserts that end of it rather than trusting the memory of it.
+         */
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder([
+            'voucher_usage_quota' => 1,
+            'voucher_validity_days' => null,
+            'description' => '<p>ดูแล <strong>ต่อเนื่อง</strong></p>',
+        ]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            $html = $mail->render();
+
+            return str_contains($html, '<strong')
+                && ! str_contains($html, '&lt;strong&gt;')
+                && ! str_contains($html, '<script');
+        });
+    }
+
+    public function test_no_product_section_appears_when_there_is_nothing_to_say(): void
+    {
+        // A heading over an empty box reads as content that failed to load.
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder([
+            'voucher_usage_quota' => 1,
+            'voucher_validity_days' => null,
+            'description' => null,
+            'spec_description' => null,
+        ]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            return ! str_contains($mail->render(), 'รายละเอียดสินค้า');
+        });
+    }
+
+    public function test_the_message_is_held_to_a_readable_width(): void
+    {
+        /*
+         * From the screenshot that prompted the redesign: the code box ran off
+         * the right edge of the window, because the body was bare <p> tags at
+         * whatever width the client happened to be. A fixed-width table inside
+         * a full-width wrapper is the only centring Outlook honours, so this
+         * pins both halves.
+         */
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) {
+            $html = $mail->render();
+
+            return str_contains($html, 'max-width:600px')
+                && str_contains($html, 'width="600"');
+        });
+    }
+
+    public function test_the_inbox_preview_shows_the_code_rather_than_the_greeting(): void
+    {
+        // Without a preheader the preview line is "เรียน คุณ…" — the one part
+        // of the message carrying no information. With it, a customer at a
+        // counter often does not have to open the email at all.
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->payableOrder(['voucher_usage_quota' => 1, 'voucher_validity_days' => null]);
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/orders/{$order->id}/confirm")
+            ->assertOk();
+
+        $code = VoucherCode::format($order->fresh()->voucher->code);
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($code) {
+            return str_contains($mail->render(), 'รหัสเข้ารับบริการของคุณคือ '.$code);
+        });
+    }
+
     public function test_the_email_promises_no_expiry_that_does_not_exist(): void
     {
         // Null quota/validity mean unlimited and never-expiring. Printing

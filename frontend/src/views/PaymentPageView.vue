@@ -20,7 +20,7 @@ const { td } = useI18n()
  *   - GET  /pay/{token}       — on mount (404 → dead-link state).
  *   - POST /pay/{token}/slip  — multipart slip upload (api.postForm).
  */
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import QRCode from 'qrcode'
 import { api, ApiError } from '@/api/client'
@@ -495,71 +495,48 @@ async function uploadSlip() {
 }
 
 /*
- * 2026-09-10 (human, from a live payment: "เมื่อชำระแล้วไม่มีปุ่มไปไหนเลย
- * ต้องมีปุ่มกลับหน้า Frontend ตั้งเวลา 90 วินาทีกลับอัตโนมัติ").
+ * ══ 2026-09-11 — THE PAGE NO LONGER SENDS THE CUSTOMER ANYWHERE ══
  *
- * ── THE DEAD END ──
+ * (human: "เมื่อชำระเสร็จแล้ว ส่ง email ให้ลูกค้าต้องไม่ติด Login สามารถดูได้
+ * เหมือนหน้าชำระสำเร็จ")
  *
- * This page is the last thing a customer sees. Once the money is in there is
- * nothing left to do on it and — until now — nothing to press: no link, no
- * button, no way onward. The person is simply left on a receipt with a back
- * button that returns them to a payment provider.
+ * ── WHAT WAS HERE, AND WHY IT HAD TO GO ──
  *
- * ── WHY THE COUNTDOWN STOPS WHEN THEY TOUCH THE PAGE ──
+ * A day earlier the same person asked for the opposite, and they were right
+ * about the problem: "เมื่อชำระแล้วไม่มีปุ่มไปไหนเลย ต้องมีปุ่มกลับหน้า
+ * Frontend ตั้งเวลา 90 วินาทีกลับอัตโนมัติ". So this page grew a "กลับหน้าหลัก"
+ * button and a 90-second timer, both of which called
+ * `window.location.assign('/')`.
  *
- * A paid order can carry a VOUCHER: a redemption code and a QR the customer
- * is meant to keep. Yanking that off the screen mid-photograph would be a
- * worse failure than the dead end it fixes. So the 90 seconds run only while
- * nobody is doing anything; the first tap, scroll or keypress cancels the
- * timer for good and leaves the button, which is the whole point of having
- * one.
+ * `/` is the AGENT PORTAL's dashboard. It is not a public route (see
+ * router/index.ts — every page except the token pages requires auth), so the
+ * router bounced the visitor straight to /login.
+ *
+ * Which means: a customer paid ฿8,900, was shown a voucher code and a QR, put
+ * their phone down for ninety seconds — and the page replaced their receipt
+ * with a login form for a system they have no account on and never will. The
+ * dead end was real; what replaced it was worse, because the old one at least
+ * still had the voucher on it.
+ *
+ * ── WHY NOT JUST POINT IT SOMEWHERE ELSE ──
+ *
+ * Because there is nowhere to point it. Every public route in this app is a
+ * token page belonging to somebody — /p/:token, /l/:token, /pay/:token — and
+ * an order does not record which share link it came from, so we cannot even
+ * send them back to the product they just bought. There is no public company
+ * landing page in this system to return to. Inventing a destination would
+ * mean inventing a page.
+ *
+ * ── SO THE PAGE IS THE DESTINATION ──
+ *
+ * That is the honest answer, not a fallback. `/pay/{token}` is permanent,
+ * public and unauthenticated: the same link is in the confirmation email, and
+ * it renders exactly what is on screen now — the code, the QR, the remaining
+ * uses. A customer who closes the tab opens the email; a customer who keeps
+ * it open keeps the thing they paid for. What replaces the button is a line
+ * saying so, because "you can come back to this" is the reassurance the
+ * button was standing in for.
  */
-const RETURN_AFTER_SECONDS = 90
-
-const secondsUntilReturn = ref(RETURN_AFTER_SECONDS)
-const autoReturnStopped = ref(false)
-let returnTimer: ReturnType<typeof setInterval> | null = null
-
-/** The site root, on whatever host this page is being served from. */
-function goHome(): void {
-  stopAutoReturn()
-  window.location.assign('/')
-}
-
-function stopAutoReturn(): void {
-  if (returnTimer !== null) {
-    clearInterval(returnTimer)
-    returnTimer = null
-  }
-  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
-    window.removeEventListener(event, cancelAutoReturn)
-  }
-}
-
-function cancelAutoReturn(): void {
-  if (returnTimer === null) return
-  autoReturnStopped.value = true
-  stopAutoReturn()
-}
-
-function startAutoReturn(): void {
-  if (returnTimer !== null || autoReturnStopped.value) return
-
-  secondsUntilReturn.value = RETURN_AFTER_SECONDS
-
-  for (const event of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
-    // passive: this only ever cancels a timer, and a non-passive touch
-    // listener on a page people scroll is a jank complaint waiting to happen.
-    window.addEventListener(event, cancelAutoReturn, { passive: true })
-  }
-
-  returnTimer = setInterval(() => {
-    secondsUntilReturn.value -= 1
-    if (secondsUntilReturn.value <= 0) goHome()
-  }, 1000)
-}
-
-onUnmounted(stopAutoReturn)
 
 const isPaid = computed(() => order.value?.status === 'paid')
 const isCancelled = computed(() => order.value?.status === 'cancelled')
@@ -625,10 +602,6 @@ const returnedUnpaid = computed(() => route.query.stripe === 'cancelled' && !isF
  * waiting for confirmation, nothing to press.
  */
 const isFinished = computed(() => isPaid.value || paymentReceived.value)
-
-watch(isFinished, (finished) => {
-  if (finished) startAutoReturn()
-}, { immediate: true })
 
 /** The card form is offered only when the SERVER says a charge is possible. */
 const cardIntent = computed(() => {
@@ -1462,40 +1435,19 @@ async function payByCard() {
           </div>
         </template>
 
-        <!-- 2026-09-10 (human, from a live payment: "เมื่อชำระแล้วไม่มีปุ่ม
-             ไปไหนเลย ต้องมีปุ่มกลับหน้า Frontend ตั้งเวลา 90 วินาทีกลับ
-             อัตโนมัติ").
+        <!-- 2026-09-11 — what replaced the "กลับหน้าหลัก" button and its
+             90-second timer. Both navigated to `/`, which is the agent
+             portal's dashboard and requires a login the customer does not
+             have; see the block comment in the script for the full story.
 
              ONE instance, outside the paid / cancelled / awaiting chain,
              because this belongs to the PAGE having finished with the
              customer rather than to which of the two finished states they
              are in — `payment_received` (charged, confirmation pending) is
-             the state it was reported from, and `paid` is the one with a
-             voucher on screen.
-
-             The countdown line disappears the moment they touch the page;
-             the button never does. -->
-        <div v-if="isFinished" class="pt-2 space-y-2">
-          <button
-            type="button"
-            data-test="back-home"
-            class="w-full min-h-[44px] py-2.5 rounded-xl bg-brand-600 text-ink-primary text-sm font-bold hover:bg-brand-700 inline-flex items-center justify-center gap-1.5"
-            @click="goHome"
-          >
-            <Icon name="home" :size="16" />
-            {{ td('pay.back_home') }}
-          </button>
-          <p
-            v-if="!autoReturnStopped"
-            data-test="auto-return-countdown"
-            class="text-center text-xs text-ink-card-subtle"
-          >
-            {{ td('pay.auto_return', '', { seconds: String(secondsUntilReturn) }) }}
-          </p>
-          <p v-else class="text-center text-xs text-ink-card-subtle">
-            {{ td('pay.auto_return_stopped') }}
-          </p>
-        </div>
+             one, and `paid` is the one with a voucher on screen. -->
+        <p v-if="isFinished" data-test="keep-this-link" class="pt-2 text-center text-xs text-ink-card-subtle">
+          {{ td('pay.keep_this_link') }}
+        </p>
       </div>
     </div>
 

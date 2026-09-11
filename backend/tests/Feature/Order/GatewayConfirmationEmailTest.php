@@ -74,6 +74,44 @@ class GatewayConfirmationEmailTest extends TestCase
         });
     }
 
+    public function test_the_link_in_that_email_opens_without_signing_in(): void
+    {
+        /*
+         * 2026-09-11 (human: "ส่ง email ให้ลูกค้าต้องไม่ติด Login สามารถดูได้
+         * เหมือนหน้าชำระสำเร็จ").
+         *
+         * The customer has no account and never will — nobody registers with
+         * an insurance portal to collect a voucher they have paid for. So the
+         * receipt has to be reachable by the link alone. `/pay/{token}` is
+         * built that way (ADR-011: the token IS the credential), and this
+         * test is what keeps it that way: an `auth:sanctum` added to the
+         * public payment group during a tidy-up would break every
+         * confirmation email ever sent, silently, and only for people who
+         * cannot report it.
+         *
+         * Asserted end to end — the address the email actually carries, then
+         * the request that address's page makes — rather than by trusting the
+         * route file to still say what it says today.
+         */
+        Mail::fake();
+        $this->enablePlatformMail();
+
+        [$company, $order] = $this->stripeOrder();
+
+        $this->postPaidWebhook($company, $order, 'pi_public_link')->assertOk();
+
+        Mail::assertSent(OrderPaymentConfirmedMail::class, function (OrderPaymentConfirmedMail $mail) use ($order) {
+            return str_contains($mail->render(), '/pay/'.$order->public_token);
+        });
+
+        // Logged out — no actingAs anywhere in this test — and the page's own
+        // request answers in full, voucher included.
+        $this->getJson("/api/v1/pay/{$order->public_token}")
+            ->assertOk()
+            ->assertJsonPath('data.status', 'paid')
+            ->assertJsonPath('data.voucher.code', $order->fresh()->voucher->code);
+    }
+
     public function test_the_admin_button_still_sends_it_too(): void
     {
         /*
