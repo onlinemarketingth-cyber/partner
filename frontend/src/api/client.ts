@@ -1,5 +1,5 @@
 /**
- * Base API client for Sync Vision Agent.
+ * Base API client for Live to 100 Club.
  *
  * ── 2026-08-27: COOKIE SESSION -> BEARER TOKEN ──
  *
@@ -139,8 +139,8 @@ export function authHeaders(headers: Headers): Headers {
 }
 
 /**
- * 2026-09-10 (human, reported on the Admin console but true of every screen
- * here: "ค้างไว้ ... กดปุ่มทำงานอะไรไม่ได้ ต้องกดปุ่ม refresh ถึงกลับมาทำงานได้").
+ * 2026-09-10 — reported on the Admin console and true of this app for the same
+ * reason ("ค้างไว้ ... กดปุ่มทำงานอะไรไม่ได้ ต้องกดปุ่ม refresh ถึงกลับมาทำงานได้").
  *
  * `fetch()` HAS NO TIMEOUT. A request issued over a connection that has since
  * died — the phone left the building, the laptop slept, the Wi-Fi changed — is
@@ -238,9 +238,38 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     public body: unknown,
+    /**
+     * Seconds until the caller may retry, from the response's `Retry-After`
+     * header. Only ever set on a 429.
+     *
+     * It is on the error rather than left in the response because of a
+     * production report (2026-09-07): a visitor filling in the sign-up form
+     * hit `throttle:10,1` and the page told them
+     * "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้" — the server was answering perfectly, it
+     * was refusing. Without the number the only honest thing a screen can say
+     * is "later", which is what made the message useless enough to be replaced
+     * by a wrong one.
+     */
+    public retryAfterSeconds: number | null = null,
   ) {
     super(`API error ${status}`)
   }
+}
+
+/**
+ * `Retry-After` as a number of seconds, or null.
+ *
+ * Laravel's ThrottleRequests always sends it as a delta-seconds integer; the
+ * HTTP-date form the RFC also allows is not parsed, because nothing in this
+ * API emits it and a half-supported parse is worse than an honest null.
+ */
+function retryAfterSeconds(res: Response): number | null {
+  const raw = res.headers.get('Retry-After')
+  if (raw === null) return null
+
+  const seconds = Number(raw)
+
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null
 }
 
 // Bug fix: the router guard only calls authStore.fetchUser() ONCE per
@@ -297,7 +326,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const isJson = res.headers.get('content-type')?.includes('application/json')
     const body = isJson ? await res.json() : await res.text()
 
-    if (!res.ok) throw new ApiError(res.status, body)
+    if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
 
     return body as T
   } catch (error) {
@@ -329,7 +358,7 @@ async function requestForm<T>(path: string, formData: FormData): Promise<T> {
     const isJson = res.headers.get('content-type')?.includes('application/json')
     const body = isJson ? await res.json() : await res.text()
 
-    if (!res.ok) throw new ApiError(res.status, body)
+    if (!res.ok) throw new ApiError(res.status, body, retryAfterSeconds(res))
 
     return body as T
   } catch (error) {
@@ -352,6 +381,7 @@ async function requestDownload(path: string, filename: string): Promise<void> {
   const deadline = withDeadline(TRANSFER_TIMEOUT_MS)
 
   let res: Response
+  let blob: Blob
   try {
     res = await fetch(`${API_BASE_URL}/api/v1${path}`, {
       method: 'GET',
@@ -363,15 +393,15 @@ async function requestDownload(path: string, filename: string): Promise<void> {
 
     if (!res.ok) {
       const isJson = res.headers.get('content-type')?.includes('application/json')
-      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
     }
+
+    blob = await res.blob()
   } catch (error) {
     throw transportError(error, deadline.timedOut())
   } finally {
     deadline.done()
   }
-
-  const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
@@ -411,7 +441,7 @@ async function requestDownloadAbsolute(url: string, filename?: string): Promise<
 
     if (!res.ok) {
       const isJson = res.headers.get('content-type')?.includes('application/json')
-      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
     }
   } catch (error) {
     throw transportError(error, deadline.timedOut())
@@ -462,7 +492,7 @@ async function requestBlob(path: string): Promise<Blob> {
 
     if (!res.ok) {
       const isJson = res.headers.get('content-type')?.includes('application/json')
-      throw new ApiError(res.status, isJson ? await res.json() : await res.text())
+      throw new ApiError(res.status, isJson ? await res.json() : await res.text(), retryAfterSeconds(res))
     }
 
     return await res.blob()

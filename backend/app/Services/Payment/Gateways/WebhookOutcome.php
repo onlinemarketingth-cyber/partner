@@ -58,6 +58,18 @@ class WebhookOutcome
          * should be undiscoverable.
          */
         public readonly ?string $eventType = null,
+        /*
+         * 2026-09-10 — the provider's RAW refusal code, beside the human
+         * sentence in `failureMessage`.
+         *
+         * Support's question months later is "which code did the bank send?",
+         * and that cannot be worked out backwards from the message: a dozen
+         * codes deliberately share one wording, including the four whose real
+         * reason must never be shown to the cardholder. So the code is carried
+         * separately and lands in the audit log, where staff can read it and
+         * the customer cannot.
+         */
+        public readonly ?string $failureCode = null,
     ) {}
 
     public static function ignore(?string $eventType = null): self

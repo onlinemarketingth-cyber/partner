@@ -130,3 +130,43 @@ describe('a load the view cancelled itself', () => {
     expect(apiErrorMessage(error)).toBe('')
   })
 })
+
+/**
+ * 2026-09-10 — a regression guard, added after causing the regression.
+ *
+ * `ApiError.retryAfterSeconds` is read by RegisterView to say "กรุณารออีก 47
+ * วินาที" when the sign-up form is throttled. It was lost when this file's
+ * transport was rewritten for the deadline above, and nothing here noticed:
+ * RegisterView's own tests mock ApiError with their own class, so they kept
+ * passing against a client that no longer produced the value. Only the
+ * production type-check caught it, at deploy time.
+ *
+ * These two tests exercise the REAL ApiError through the REAL transport,
+ * which is the gap that let it through.
+ */
+describe('a throttled request', () => {
+  it('carries the wait from the server\'s own Retry-After header', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: 'Too Many Attempts.' }), {
+      status: 429,
+      headers: { 'content-type': 'application/json', 'Retry-After': '47' },
+    }))
+
+    const error = (await api.post('/register', {}).catch((e) => e)) as ApiError
+
+    expect(error.status).toBe(429)
+    expect(error.retryAfterSeconds).toBe(47)
+  })
+
+  it('invents no number when the server did not send one', async () => {
+    // BR-7 — a made-up wait is a number nobody chose, and being wrong about it
+    // is what teaches people to ignore the message.
+    fetchMock.mockResolvedValue(new Response('{}', {
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const error = (await api.post('/register', {}).catch((e) => e)) as ApiError
+
+    expect(error.retryAfterSeconds).toBeNull()
+  })
+})

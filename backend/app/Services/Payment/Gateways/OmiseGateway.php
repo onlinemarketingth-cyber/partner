@@ -316,7 +316,9 @@ class OmiseGateway implements PaymentGateway
                 orderToken: $orderToken,
                 failureMessage: $status === 'successful' ? null : (string) ($charge['failure_message'] ?? $status),
                 // 2026-09-10 — named, for the same reason as Stripe's: the
-                // webhook log must be able to say WHICH event moved an order.
+                // webhook log must be able to say WHICH event moved an order,
+                // and the audit trail must keep the provider's own code.
+                failureCode: $status === 'successful' ? null : (string) ($charge['failure_code'] ?? $status),
                 eventType: $key,
             );
         }

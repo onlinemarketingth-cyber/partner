@@ -665,6 +665,10 @@ class GatewayPaymentService
                 'charge_id' => $outcome->chargeId,
                 'amount_satang' => $outcome->amountSatang,
                 'message' => $message,
+                // 2026-09-10 — the provider's own code, beside the sentence
+                // the customer saw. A dozen codes share one wording on
+                // purpose; this is how staff tell them apart afterwards.
+                'failure_code' => $outcome->failureCode,
                 'provider' => $order->payment_provider?->value,
             ],
         ]);

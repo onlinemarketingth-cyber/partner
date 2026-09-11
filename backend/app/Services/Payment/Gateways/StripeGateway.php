@@ -5,6 +5,7 @@ namespace App\Services\Payment\Gateways;
 use App\Enums\PaymentProvider;
 use App\Models\Company;
 use App\Models\Order;
+use App\Support\Payment\StripeDeclineReason;
 use App\Support\PortalOrigin;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
@@ -498,6 +499,7 @@ class StripeGateway implements PaymentGateway
                 // string. This message is shown to the customer on the pay
                 // page; "card_declined" is a value, not a sentence.
                 failureMessage: $status === 'paid' ? null : $this->declineMessage($object),
+                failureCode: $status === 'paid' ? null : ($this->declineCode($object) ?: $status),
                 // 2026-09-10 — every outcome now names its event. Without it
                 // the webhook log could say an order had been marked paid but
                 // not by WHAT, which is the first question anybody asks.
@@ -566,6 +568,7 @@ class StripeGateway implements PaymentGateway
                 amountSatang: null,
                 orderToken: $orderToken,
                 failureMessage: $this->declineMessage($object),
+                failureCode: $this->declineCode($object),
                 eventType: $type,
             );
         }
@@ -609,54 +612,49 @@ class StripeGateway implements PaymentGateway
      *
      * A PaymentIntent carries `last_payment_error.decline_code` (the issuer's
      * reason) and `.code` (Stripe's category). A Charge carries
-     * `outcome.reason` and `failure_code`. Read in that order of specificity,
-     * because "insufficient funds" is actionable and "card_declined" is not.
+     * `outcome.reason` and `failure_code`. A Checkout Session that finished
+     * without money carries only `payment_status`. Read in that order of
+     * specificity, because "insufficient funds" is actionable and
+     * "card_declined" is not.
      *
-     * ── WHY NOT JUST PASS STRIPE'S OWN MESSAGE THROUGH ──
-     *
-     * It is English, and it is written for a US cardholder. This message is
-     * shown to a Thai customer on the pay page and to the agent chasing the
-     * sale, so it is mapped rather than forwarded.
-     *
-     * ── THE LOST/STOLEN RULE ──
-     *
-     * `lost_card` and `stolen_card` are deliberately given the SAME generic
-     * wording as an ordinary decline. Stripe's own guidance is not to tell the
-     * person holding the card that the issuer reported it lost or stolen: if
-     * they are the thief it is a warning, and if they are not it is a false
-     * accusation from a shop. The issuer tells the real cardholder.
+     * The wording itself lives in App\Support\Payment\StripeDeclineReason —
+     * every code Stripe documents, including the ones whose real reason must
+     * not be repeated back to whoever is holding the card.
      *
      * @param  array<string, mixed>  $object
      */
     private function declineMessage(array $object): string
     {
-        $generic = 'บัตรถูกปฏิเสธโดยธนาคารผู้ออกบัตร — กรุณาลองบัตรใบอื่น หรือติดต่อธนาคารของคุณ';
+        return StripeDeclineReason::message($this->declineCode($object));
+    }
 
+    /**
+     * The most specific refusal code in the payload, or null.
+     *
+     * Kept separate from the message so the RAW code can be recorded beside
+     * the Thai sentence: support answers "which code did the bank send?" from
+     * the audit log, and nobody can work that out backwards from a translated
+     * message that a dozen codes share.
+     *
+     * @param  array<string, mixed>  $object
+     */
+    private function declineCode(array $object): ?string
+    {
         $error = is_array($object['last_payment_error'] ?? null) ? $object['last_payment_error'] : [];
         $outcome = is_array($object['outcome'] ?? null) ? $object['outcome'] : [];
 
-        $reason = (string) (
-            $error['decline_code']
-            ?? $outcome['reason']
-            ?? $error['code']
-            ?? $object['failure_code']
-            ?? ''
-        );
+        foreach ([
+            $error['decline_code'] ?? null,
+            $outcome['reason'] ?? null,
+            $error['code'] ?? null,
+            $object['failure_code'] ?? null,
+        ] as $candidate) {
+            if (is_string($candidate) && $candidate !== '') {
+                return $candidate;
+            }
+        }
 
-        return match ($reason) {
-            'insufficient_funds' => 'ยอดเงินในบัตรไม่พอสำหรับรายการนี้',
-            'expired_card' => 'บัตรหมดอายุแล้ว กรุณาใช้บัตรใบอื่น',
-            'incorrect_cvc', 'invalid_cvc' => 'รหัส CVC หลังบัตรไม่ถูกต้อง',
-            'incorrect_number', 'invalid_number' => 'เลขบัตรไม่ถูกต้อง',
-            'incorrect_zip' => 'รหัสไปรษณีย์ที่ผูกกับบัตรไม่ถูกต้อง',
-            'card_not_supported', 'currency_not_supported' => 'บัตรใบนี้ใช้ชำระเป็นเงินบาทไม่ได้ กรุณาใช้บัตรใบอื่น',
-            'authentication_required' => 'ธนาคารขอให้ยืนยันตัวตนเพิ่มเติม (OTP / 3-D Secure) กรุณาลองใหม่และยืนยันให้ครบขั้นตอน',
-            'processing_error' => 'เกิดข้อผิดพลาดระหว่างประมวลผล กรุณาลองใหม่อีกครั้ง',
-            'withdrawal_count_limit_exceeded' => 'บัตรใบนี้ใช้เกินวงเงินที่ธนาคารกำหนดไว้แล้ว',
-            // 'card_declined', 'generic_decline', 'do_not_honor', 'lost_card',
-            // 'stolen_card', 'fraudulent' and everything unknown: one wording.
-            default => $generic,
-        };
+        return null;
     }
 
     /**
