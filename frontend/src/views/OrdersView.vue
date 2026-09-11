@@ -332,6 +332,25 @@ function canCancel(order: Order): boolean {
 }
 
 /**
+ * Is there still money to collect on this order?
+ *
+ * 2026-09-11 (human: "สถานะชำระสำเร็จแล้ว ไม่ควรมีลิงก์ชำระเงินอีก"). The pay
+ * link and the share button were printed on EVERY row regardless of status,
+ * so a paid order still offered "แชร์ลิงก์ชำระเงิน" — an agent following the
+ * obvious action sends a customer who has already paid to a page asking them
+ * to pay. The link itself is harmless (the pay page shows the paid state),
+ * but that is a reassurance the customer has to work out for themselves after
+ * being frightened, which is not a defence of putting the button there.
+ *
+ * Cancelled is included for the plainer reason: that link is genuinely dead —
+ * the cancel dialog says so as it cancels — and offering to share a dead link
+ * is offering to waste somebody's time.
+ */
+function isStillCollectable(order: Order): boolean {
+  return order.status === 'pending' || order.status === 'awaiting_verification'
+}
+
+/**
  * What the agent is actually waiting for once a slip is in.
  *
  * Replaces the button they could not press. "Nothing here" would read as
@@ -532,17 +551,39 @@ const hasOrders = computed(() => orders.value.length > 0)
                Material minimum. Raised via min-h-[44px] only: the type size
                and colour are unchanged, it is the HIT AREA that was
                failing, not the legibility. -->
-          <div class="flex items-center gap-2">
+          <!-- 2026-09-11 — only while there is still something to pay. See
+               isStillCollectable() in the script for why a paid order must
+               not be offered a payment link to share. -->
+          <div v-if="isStillCollectable(order)" data-test="pay-link-row" class="flex items-center gap-2">
             <input
               :value="order.short_pay_url ?? order.public_pay_url"
               readonly
               class="flex-1 min-w-0 min-h-[44px] px-3 py-1.5 rounded-lg border border-line-card text-[11px] text-ink-chip bg-surface-chip"
             />
-            <AppButton variant="secondary" size="sm" class="shrink-0" @click="openShare(order)">
+            <AppButton variant="secondary" size="sm" class="shrink-0" data-test="share-pay-link" @click="openShare(order)">
               <Icon name="share" :size="14" />
               {{ td('order.share_pay_link') }}
             </AppButton>
           </div>
+
+          <!-- What takes its place on a closed sale. Not "nothing": a row
+               that simply loses its controls reads as the app having
+               forgotten the order, which is the same complaint the
+               awaiting-admin note below was written to answer. -->
+          <p
+            v-else-if="order.status === 'paid'"
+            data-test="paid-note"
+            class="flex items-start gap-2 rounded-lg bg-surface-success border border-line-card px-3 py-2 text-xs text-ink-success"
+          >
+            <Icon name="check" :size="14" class="mt-0.5 shrink-0" />
+            <!-- States the fact and nothing more. The tempting extra line —
+                 "ส่งรหัสใช้บริการให้ลูกค้าแล้ว" — is a claim this screen
+                 cannot check: the customer may have no email on file, or
+                 platform mail may be off, in which cases the mailer skips
+                 silently and the agent would be told a lie they then repeat
+                 to the customer. -->
+            <span>ชำระเงินเรียบร้อยแล้ว<template v-if="order.paid_at"> เมื่อ {{ formatDate(order.paid_at) }}</template></span>
+          </p>
 
           <p
             v-if="isAwaitingAdminCheck(order)"

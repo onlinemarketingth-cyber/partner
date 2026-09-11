@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\Referral;
 use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
+use App\Services\Order\CustomerPaymentConfirmationMailer;
 use App\Services\Order\OrderService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use Illuminate\Console\Command;
@@ -59,7 +60,7 @@ class RetryStuckGatewayConfirmationsCommand extends Command
 
     protected $description = 'Close the sales where a gateway payment arrived but the order could not be confirmed';
 
-    public function handle(OrderService $orders, PipelineTemplateResolver $resolver): int
+    public function handle(OrderService $orders, PipelineTemplateResolver $resolver, CustomerPaymentConfirmationMailer $mailer): int
     {
         // The same condition the admin screen's "ได้รับเงินแล้วแต่ยืนยันไม่
         // สำเร็จ" tab shows (OrderController: ?needs_attention=1), so what
@@ -123,7 +124,21 @@ class RetryStuckGatewayConfirmationsCommand extends Command
                     throw new \RuntimeException('ไม่พบตัวแทนเจ้าของรายการ');
                 }
 
-                DB::transaction(fn () => $orders->confirmPayment($order, $actor));
+                $paid = DB::transaction(fn () => $orders->confirmPayment($order, $actor));
+
+                /*
+                 * 2026-09-11 — and tell the customer, exactly as the live
+                 * gateway path now does. This command finishes a payment that
+                 * ALREADY HAPPENED: the customer paid, saw the system fail to
+                 * finish, and is waiting. Closing the sale silently would
+                 * leave them the only person who does not know, and their
+                 * voucher code is in that email.
+                 *
+                 * After the transaction, and never inside it — an email
+                 * cannot be un-sent. Never throws, so one unreachable SMTP
+                 * host cannot stop the rest of the queue being confirmed.
+                 */
+                $mailer->send($paid);
 
                 $this->info("  ✓ {$order->order_number} — ยืนยันการชำระเงินแล้ว".($repaired ? ' (ปรับเส้นทางให้ตรงกับสินค้าแล้ว)' : ''));
                 $confirmed++;

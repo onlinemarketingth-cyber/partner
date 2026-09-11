@@ -12,6 +12,7 @@ use App\Models\Order;
 use App\Models\User;
 use App\Notifications\GatewayRefundReportedNotification;
 use App\Services\Notification\NotificationService;
+use App\Services\Order\CustomerPaymentConfirmationMailer;
 use App\Services\Order\OrderService;
 use App\Services\Payment\Gateways\GatewayException;
 use App\Services\Payment\Gateways\PaymentIntent;
@@ -59,6 +60,7 @@ class GatewayPaymentService
         private readonly CompanyPaymentGatewayService $gateways,
         private readonly PaymentGatewayRegistry $registry,
         private readonly NotificationService $notifications,
+        private readonly CustomerPaymentConfirmationMailer $confirmationMailer,
     ) {}
 
     /**
@@ -309,7 +311,7 @@ class GatewayPaymentService
         }
 
         try {
-            return DB::transaction(fn () => $this->orders->confirmPayment($order, $this->actorFor($order)));
+            $confirmed = DB::transaction(fn () => $this->orders->confirmPayment($order, $this->actorFor($order)));
         } catch (Throwable $e) {
             Log::critical('Gateway payment received but the order could not be confirmed', [
                 'order_id' => $order->id,
@@ -321,6 +323,28 @@ class GatewayPaymentService
 
             return null;
         }
+
+        /*
+         * 2026-09-11 — TELL THE CUSTOMER. (human: "ถ้าขึ้นสถานะสำเร็จ ต้องส่ง
+         * email ให้ลูกค้า — ยังไม่ส่ง")
+         *
+         * This was the missing half of guard 3 above. The comment says the
+         * gateway path uses "the SAME confirmation the manual slip flow
+         * uses", and everything INSIDE confirmPayment() — commission,
+         * voucher, pipeline, the agent's notification — was indeed identical.
+         * The customer's email was not: it sat in OrderController::confirm(),
+         * outside the shared method, so it only ever fired for an admin
+         * pressing a button. The customer who actually paid by card got
+         * nothing, holding a voucher code on a page they had closed.
+         *
+         * OUTSIDE the try above and outside the transaction, both on purpose:
+         * the send must not be mistaken for a confirmation failure, and must
+         * never happen for a transaction that then rolls back — an email
+         * cannot be un-sent. The mailer itself never throws.
+         */
+        $this->confirmationMailer->send($confirmed);
+
+        return $confirmed;
     }
 
     /**

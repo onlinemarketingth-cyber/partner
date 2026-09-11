@@ -8,6 +8,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Company;
 use App\Models\Order;
+use App\Models\PaymentWebhookEvent;
 use App\Models\User;
 use App\Notifications\GatewayEventUnmatchedNotification;
 use App\Services\Payment\CompanyPaymentGatewayService;
@@ -15,6 +16,7 @@ use App\Services\Payment\GatewayPaymentService;
 use App\Services\Payment\Gateways\WebhookOutcome;
 use App\Services\Payment\Gateways\WebhookResult;
 use App\Services\Payment\PaymentGatewayRegistry;
+use App\Services\Payment\PaymentWebhookRecorder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -63,6 +65,7 @@ class PaymentWebhookController extends Controller
         CompanyPaymentGatewayService $gateways,
         GatewayPaymentService $payments,
         PaymentGatewayRegistry $registry,
+        PaymentWebhookRecorder $recorder,
     ): JsonResponse {
         $paymentProvider = PaymentProvider::tryFrom($provider);
         // No TenantScope — there is no authenticated user on a webhook, and
@@ -106,9 +109,32 @@ class PaymentWebhookController extends Controller
             return response()->json(['message' => 'ลายเซ็นไม่ถูกต้อง'], 401);
         }
 
-        $outcome = $driver->interpret($request->json()->all());
+        /*
+         * 2026-09-11 — THE BODY IS KEPT FROM HERE ON.
+         *
+         * Read once into a variable rather than re-read at each branch: what
+         * gets recorded must be the same bytes the decision was made from,
+         * or the record is of a different request than the one that happened.
+         *
+         * Below the signature check, deliberately. The rule this controller
+         * already states for logging — an unverified body is chosen by whoever
+         * sent it — applies with more force to a table: writing one would hand
+         * anyone on the internet a place to put content of their choosing.
+         */
+        $payload = $request->json()->all();
+
+        $outcome = $driver->interpret($payload);
 
         if ($outcome->result === WebhookResult::Ignore) {
+            /*
+             * Recorded even though nothing is done with it. "The gateway never
+             * sent it" and "the gateway sent it and this system ignored it"
+             * are indistinguishable from the inside, and they call for
+             * opposite fixes — one is a dashboard subscription, the other is
+             * a missing handler here.
+             */
+            $recorder->record($tenant, $paymentProvider, $payload, $outcome, null);
+
             /*
              * 2026-09-03 — an ignored event used to return 200 and leave no
              * trace whatsoever.
@@ -140,6 +166,12 @@ class PaymentWebhookController extends Controller
         $order = $this->resolveOrder($outcome->orderToken, $tenant);
 
         if ($order === null) {
+            // The most valuable row in the table: a verified event, naming
+            // money or not, that belongs to nothing here. Whatever went wrong
+            // is IN this payload — a missing metadata token, a token from
+            // another environment — and there is no order to read it from.
+            $recorder->record($tenant, $paymentProvider, $payload, $outcome, null, PaymentWebhookEvent::RESULT_UNMATCHED);
+
             $this->reportUnmatched($outcome, $paymentProvider, $tenant);
 
             return response()->json(['message' => 'unmatched']);
@@ -180,6 +212,13 @@ class PaymentWebhookController extends Controller
             'charge_id' => $outcome->chargeId,
             'amount_satang' => $outcome->amountSatang,
         ]);
+
+        /*
+         * And the payload itself, BEFORE it is acted on — so a delivery that
+         * makes this system fall over still leaves behind the thing that
+         * caused it. `orders:explain` prints these against the order.
+         */
+        $recorder->record($tenant, $paymentProvider, $payload, $outcome, $order);
 
         match ($outcome->result) {
             WebhookResult::Paid => $payments->applyPaid($order, $outcome),

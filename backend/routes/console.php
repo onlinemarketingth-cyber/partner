@@ -7,6 +7,7 @@ use App\Console\Commands\PayDueAgentPromotionCredits;
 use App\Console\Commands\PruneChunkedUploadsCommand as PruneChunkedUploads;
 use App\Console\Commands\RecalculateAgentRanks;
 use App\Console\Commands\RunDueBinaryMatchingCycles;
+use App\Models\PaymentWebhookEvent;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -61,3 +62,18 @@ Schedule::command(PayDueAgentPromotionCredits::class)->monthly();
 // day's worth of interrupted 44MB video uploads is real disk, and the
 // command is cheap when there is nothing to prune.
 Schedule::command(PruneChunkedUploads::class)->hourly();
+
+/*
+ * 2026-09-11 — the raw gateway payloads kept by PaymentWebhookRecorder.
+ *
+ * Thirty days (PaymentWebhookEvent::prunable) — long enough to investigate a
+ * payment somebody is disputing, short enough that the volume stays bounded.
+ * Volume is not ours to control: which event types arrive is chosen in the
+ * provider's dashboard, where "select all" is one click, so this table needs
+ * a ceiling it does not have to be asked for.
+ *
+ * model:prune rather than a command of its own — the rule is one sentence and
+ * it lives on the model, which is where somebody changing the retention would
+ * look for it.
+ */
+Schedule::command('model:prune', ['--model' => [PaymentWebhookEvent::class]])->daily();

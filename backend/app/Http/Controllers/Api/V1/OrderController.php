@@ -7,23 +7,19 @@ use App\Enums\PaymentMethod;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Order\StoreOrderRequest;
 use App\Http\Resources\OrderResource;
-use App\Mail\OrderPaymentConfirmedMail;
 use App\Models\AuditLog;
 use App\Models\Order;
 use App\Models\Referral;
 use App\Services\Commission\CommissionReversalService;
+use App\Services\Order\CustomerPaymentConfirmationMailer;
 use App\Services\Order\OrderService;
-use App\Services\Platform\PlatformMailSettingService;
 use App\Support\CompanyScopeFilter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
-use Throwable;
 
 // ADR-017 (TASK-054) — authenticated order management. §5 rule 4: index
 // narrows to the Agent's own orders (same shape as ReferralController);
@@ -196,41 +192,27 @@ class OrderController extends Controller
     }
 
     /** POST /orders/{order}/confirm — verify payment, close the sale (BR-4). */
-    public function confirm(Order $order, Request $request, OrderService $service, PlatformMailSettingService $mailSettingService): OrderResource
+    public function confirm(Order $order, Request $request, OrderService $service, CustomerPaymentConfirmationMailer $mailer): OrderResource
     {
         $this->authorize('confirm', $order);
 
         $order = $service->confirmPayment($order, $request->user());
         $order->load(self::RELATIONS);
 
-        // TASK-190 §4.3 — sent AFTER confirmPayment()'s transaction has
-        // already committed above, never from inside it (a slow/failing
-        // SMTP call must not hold the DB transaction open, and a rollback
-        // must never have already sent an email). Only attempted when the
-        // client has an email AND platform mail is enabled — silently
-        // skipped otherwise (the agent's in-app notification, fired inside
-        // OrderService::confirmPayment() itself, is the guaranteed path
-        // either way). Wrapped in try/catch: a mail-send failure is logged
-        // and must NEVER surface as an error to the Admin who just
-        // confirmed a real payment, and must never affect the response
-        // built below.
-        if (filled($order->client?->email) && ($mailSettingService->get()['is_enabled'] ?? false)) {
-            try {
-                // 2026-09-10 — the voucher this confirmation just minted, so
-                // the email can carry the code the customer needs. Loaded
-                // here rather than added to self::RELATIONS: it exists only
-                // on a paid order, and no other action on this controller has
-                // a use for it.
-                Mail::to($order->client->email)->send(
-                    new OrderPaymentConfirmedMail($order->load('voucher'))
-                );
-            } catch (Throwable $e) {
-                Log::error('TASK-190: OrderPaymentConfirmedMail failed to send', [
-                    'order_id' => $order->id,
-                    'message' => $e->getMessage(),
-                ]);
-            }
-        }
+        /*
+         * TASK-190 §4.3 — sent AFTER confirmPayment()'s transaction has
+         * already committed above, never from inside it.
+         *
+         * 2026-09-11 — the thirty lines that used to be here (the email
+         * guards and the try/catch) moved into the Mailer, because THIS
+         * CONTROLLER WAS THE ONLY PLACE THAT HAD THEM: an order confirmed by
+         * the gateway never came through here, so a customer who paid by card
+         * — the normal case — was never told. See the Mailer's docblock.
+         *
+         * It never throws: a mail failure must not surface as an error to the
+         * Admin who just confirmed a real payment.
+         */
+        $mailer->send($order);
 
         return new OrderResource($order);
     }
