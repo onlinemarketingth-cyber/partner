@@ -114,10 +114,56 @@ const navItems: NavItem[] = [
     label: { th: 'ภาพรวม', en: 'Dashboard' },
     subMenus: [{ name: 'home', icon: 'dashboard', label: { th: 'ภาพรวม', en: 'Dashboard' } }],
   },
+  /*
+   * TASK-048 / ADR-012 — Client (Contact) + Referral/Pipeline (Deal) + the
+   * order they produce are ONE sales workflow, so they share a pillar,
+   * mirroring the standard CRM two-object model (HubSpot/Pipedrive: Contacts
+   * vs Deals under one Sales area).
+   *
+   * ── 2026-09-11 (human: "ย้ายเมนูลูกค้าไปต่อจาก home และเปลี่ยนชื่อเป็น
+   * order") ──
+   *
+   * Moved from sixth position to second, and renamed. Three changes, and the
+   * second and third exist only because the first would otherwise leave the
+   * bar lying:
+   *
+   *  1. POSITION. Second, directly after ภาพรวม — this is the pillar the
+   *     console is opened for daily now that orders and payments run through
+   *     it, and it was sitting below Academy and Gamification.
+   *
+   *  2. LABEL. "Order", as asked.
+   *
+   *  3. WHERE THE PILLAR ITSELF LANDS, and which sub-item is first. The
+   *     pillar `name` is the route clicking it opens; it pointed at
+   *     `client-management`, so a pillar labelled "Order" would have opened
+   *     the CLIENT LIST — a name that says one thing and a page that does
+   *     another, which is the exact failure the comment on the Commission
+   *     pillar below was written about. It now opens the orders screen, and
+   *     คำสั่งซื้อ leads row 2.
+   *
+   * ลูกค้า and ดีล/Pipeline stay under it: they are the two things an order
+   * comes from, and neither has anywhere better to live. Route names are
+   * UNCHANGED throughout, so every bookmark and in-app link still resolves —
+   * isPillarActive() matches ANY sub-route, so all three sub-pages highlight
+   * this pillar and render row 2.
+   */
+  {
+    name: 'order-payments',
+    icon: 'cart',
+    label: { th: 'Order', en: 'Order' },
+    subMenus: [
+      // Money coming IN from a customer. It sits here rather than under
+      // Commission on purpose: Commission is money going OUT to an agent,
+      // and it has its own pillar.
+      { name: 'order-payments', icon: 'money', label: { th: 'คำสั่งซื้อ / การชำระเงิน', en: 'Orders / Payments' } },
+      { name: 'client-management', icon: 'user', label: { th: 'ลูกค้า', en: 'Clients' } },
+      { name: 'referral-pipeline-management', icon: 'pipeline', label: { th: 'ดีล / Pipeline', en: 'Deals / Pipeline' } },
+    ],
+  },
   // 2026-09-01 (human request) — this pillar lands on the ROSTER, and sits
-  // second, right after Dashboard and BEFORE "สินค้า": agents are what this
-  // console is opened for. The dashboard is the pillar above, so pointing
-  // this one at it would have been a second link to the same page.
+  // third, after Dashboard and Order and BEFORE "สินค้า": agents are what
+  // this console is opened for. The dashboard is the pillar above, so
+  // pointing this one at it would have been a second link to the same page.
   {
     name: 'agent-roster',
     icon: 'users',
@@ -168,28 +214,6 @@ const navItems: NavItem[] = [
   },
   { name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' }, subMenus: [{ name: 'academy-management', icon: 'book', label: { th: 'Academy', en: 'Academy' } }] },
   { name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' }, subMenus: [{ name: 'gamification-config', icon: 'star', label: { th: 'Gamification', en: 'Gamification' } }] },
-  // TASK-048 / ADR-012 — Client (Contact) + Referral/Pipeline (Deal) are
-  // one sales workflow, so they live under a single "การขาย" pillar with
-  // two sub-menus, mirroring the standard CRM two-object model
-  // (HubSpot/Pipedrive: Contacts vs Deals under one Sales area). The
-  // pillar `name` points at the first sub-route (client-management) so
-  // clicking the pillar itself lands on Clients; isPillarActive() already
-  // matches ANY sub-route, so both sub-pages highlight this pillar and
-  // render row 2. Route names are UNCHANGED (no router/bookmark impact).
-  {
-    name: 'client-management',
-    icon: 'cart',
-    label: { th: 'ลูกค้า', en: 'Clients' },
-    subMenus: [
-      { name: 'client-management', icon: 'user', label: { th: 'ลูกค้า', en: 'Clients' } },
-      { name: 'referral-pipeline-management', icon: 'pipeline', label: { th: 'ดีล / Pipeline', en: 'Deals / Pipeline' } },
-      // Sits under ลูกค้า rather than under Commission on purpose: this is
-      // money coming IN from a customer, which is the same conversation as
-      // the deal and the client file. Commission is money going OUT to an
-      // agent, and it already has its own pillar.
-      { name: 'order-payments', icon: 'money', label: { th: 'คำสั่งซื้อ / การชำระเงิน', en: 'Orders / Payments' } },
-    ],
-  },
   // Untouched by TASK-043 (spec §4/§5) — stays a distinct top-level
   // pillar, not folded into agent-management's submenu.
   //
