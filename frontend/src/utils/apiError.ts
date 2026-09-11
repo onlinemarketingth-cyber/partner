@@ -106,10 +106,21 @@ export function apiErrorMessage(e: unknown, fallback = 'ทำรายการ
       const first = Object.values(e.body.errors)[0]?.[0]
       if (first) return first
     }
-    // Laravel's `message` is human-written for deliberate abort()s.
-    // Skip its generic framework defaults, which are no better than ours.
+    /*
+     * Laravel's `message` is human-written for deliberate abort()s.
+     * Skip its generic framework defaults, which are no better than ours.
+     *
+     * 2026-09-11 — 'Too Many Attempts.' joined the list after a customer met
+     * it on the public payment page, in English, above ฿8,900 they were
+     * trying to hand over. It is the rate limiter's built-in string, so it
+     * arrives on any throttled endpoint and reads to this function like a
+     * message somebody wrote on purpose. The backend now answers throttles in
+     * Thai (bootstrap/app.php); this is the second lock on the same door, for
+     * a client running against an older build of the API.
+     */
     const msg = e.body.message
-    if (msg && msg !== 'Server Error' && msg !== 'Unauthenticated.' && !/^HTTP \d+/.test(msg)) {
+    if (msg && msg !== 'Server Error' && msg !== 'Unauthenticated.'
+      && msg !== 'Too Many Attempts.' && !/^HTTP \d+/.test(msg)) {
       return msg
     }
   }

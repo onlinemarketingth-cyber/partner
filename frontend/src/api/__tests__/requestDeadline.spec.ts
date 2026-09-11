@@ -157,6 +157,28 @@ describe('a throttled request', () => {
     expect(error.retryAfterSeconds).toBe(47)
   })
 
+  it('never puts the rate limiter\'s English in front of a customer', async () => {
+    /*
+     * 2026-09-11 — reported from the public payment page: "Too Many
+     * Attempts." shown above ฿8,900 somebody was trying to pay. It is
+     * Laravel's built-in string, so it arrives on any throttled endpoint, and
+     * apiErrorMessage preferred it because a server-written `message`
+     * is normally the most specific thing available.
+     *
+     * The API answers throttles in Thai now. This pins the client half, which
+     * is what protects a browser holding an older cached build.
+     */
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ message: 'Too Many Attempts.' }), {
+      status: 429,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const message = apiErrorMessage(await api.post('/pay/abc/intent', {}).catch((e) => e))
+
+    expect(message).not.toContain('Too Many Attempts')
+    expect(message).toContain('ถี่เกินไป')
+  })
+
   it('invents no number when the server did not send one', async () => {
     // BR-7 — a made-up wait is a number nobody chose, and being wrong about it
     // is what teaches people to ignore the message.

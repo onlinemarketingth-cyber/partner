@@ -224,17 +224,33 @@ Route::prefix('v1')->group(function () {
         ->middleware('throttle:60,1')
         ->name('affiliate-leads.show');
 
-    // ADR-017 (TASK-054) — PUBLIC, UNAUTHENTICATED payment page, same
-    // opaque-token + throttled treatment as the affiliate routes above.
-    // GET returns the amount + company bank/PromptPay details (via
-    // PublicOrderResource — never agent/commission/PDPA data, §6); POST
-    // accepts the customer's payment slip. Resolved by public_token only,
-    // outside TenantScope (there is no authenticated user to scope by).
+    /*
+     * ADR-017 (TASK-054) — PUBLIC, UNAUTHENTICATED payment page, same
+     * opaque-token + throttled treatment as the affiliate routes above.
+     * GET returns the amount + company bank/PromptPay details (via
+     * PublicOrderResource — never agent/commission/PDPA data, §6); POST
+     * accepts the customer's payment slip. Resolved by public_token only,
+     * outside TenantScope (there is no authenticated user to scope by).
+     *
+     * ── 2026-09-11: THE LIMITS ARE KEYED ON THE ORDER, NOT THE ADDRESS ──
+     *
+     * These four were `throttle:N,1`, which on an unauthenticated route keys
+     * on the IP. Every customer behind one address therefore shared one
+     * bucket — an office, a hotel, a seminar room, or any carrier doing
+     * CGNAT — so at an event where twenty people buy at once, the eleventh
+     * was refused on their first tap with "Too Many Attempts." while holding
+     * their money out.
+     *
+     * The named limiters (AppServiceProvider::definePublicPaymentRateLimits)
+     * key on the order token, which is what a limit here is actually meant to
+     * protect, and keep a much looser per-IP ceiling behind it. The tiers are
+     * unchanged in spirit: read < attempt < charge.
+     */
     Route::get('/pay/{token}', [PublicPaymentController::class, 'show'])
-        ->middleware('throttle:60,1')
+        ->middleware('throttle:pay-read')
         ->name('public-payment.show');
     Route::post('/pay/{token}/slip', [PublicPaymentController::class, 'submitSlip'])
-        ->middleware('throttle:10,1')
+        ->middleware('throttle:pay-attempt')
         ->name('public-payment.slip');
 
     /*
@@ -242,28 +258,28 @@ Route::prefix('v1')->group(function () {
      *
      * Separate from the GET above because it is not a read: it opens a
      * session with the gateway and stamps the order with the provider now
-     * taking its money. 10/min matches the slip route — a customer switching
+     * taking its money. Same tier as the slip route — a customer switching
      * between the two buttons while they decide is normal, and each request
      * here still moves no money on its own.
      */
     Route::post('/pay/{token}/intent', [PublicPaymentController::class, 'intent'])
-        ->middleware('throttle:10,1')
+        ->middleware('throttle:pay-attempt')
         ->name('public-payment.intent');
 
     /*
      * ADR-027 / TASK-139 — the CARD half of the same public pay page.
      *
-     * Throttled to 5/min rather than the slip's 10: each request here is a
+     * Throttled harder than the slip and the intent: each request here is a
      * real charge attempt against the company's gateway account, and a
-     * stream of them from one address is either card testing or an attack on
-     * the company's provider-side fraud reputation. A person paying for one
-     * order does not need six attempts a minute.
+     * stream of them is either card testing or an attack on the company's
+     * provider-side fraud reputation. A person paying for one order does not
+     * need six attempts a minute.
      *
      * The body carries a one-time provider token, never a card number — see
      * ChargeOrderRequest.
      */
     Route::post('/pay/{token}/charge', [PublicPaymentController::class, 'charge'])
-        ->middleware('throttle:5,1')
+        ->middleware('throttle:pay-charge')
         ->name('public-payment.charge');
 
     /*

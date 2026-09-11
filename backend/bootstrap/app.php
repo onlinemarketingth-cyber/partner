@@ -9,6 +9,7 @@ use App\Http\Middleware\ServerTiming;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Exceptions\ThrottleRequestsException;
 use Illuminate\Http\Request;
 
 // Fix (2026-07-14, surfaced by the human running `php artisan test`):
@@ -142,5 +143,37 @@ return Application::configure(basePath: dirname(__DIR__))
         // Accept: text/html path that caused the original crash.
         $exceptions->shouldRenderJsonWhen(function (Request $request, Throwable $e) {
             return $request->is('api/*') || $request->expectsJson();
+        });
+
+        /*
+         * 2026-09-11 — a rate limit that answers in Thai, and says how long.
+         *
+         * Reported from the public payment page: a customer met the banner
+         * "Too Many Attempts." — Laravel's own English string, on a page
+         * where they were trying to hand over ฿8,900. It is not their
+         * language, it does not say what to do, and it does not say when
+         * they may try again, so the only move it leaves is to press the
+         * button again, which extends the very window that is blocking them.
+         *
+         * Fixed HERE rather than on the payment page because every one of the
+         * ~30 throttled routes in this API had the same English answer, and
+         * both frontends show `message` verbatim when the server sends one.
+         * One place, and the whole API stops speaking English at the moment
+         * it says no.
+         *
+         * The wait is read from the framework's own Retry-After header, never
+         * invented (BR-7: a made-up number being wrong is what teaches people
+         * to ignore the message). The headers are passed through unchanged so
+         * Retry-After still reaches the clients that read it — the agent
+         * portal's sign-up screen counts down from it.
+         */
+        $exceptions->render(function (ThrottleRequestsException $e, Request $request) {
+            $seconds = (int) ($e->getHeaders()['Retry-After'] ?? 0);
+
+            return response()->json([
+                'message' => $seconds > 0
+                    ? "ทำรายการถี่เกินไป กรุณารออีก {$seconds} วินาที แล้วลองใหม่อีกครั้ง"
+                    : 'ทำรายการถี่เกินไป กรุณารอสักครู่แล้วลองใหม่อีกครั้ง',
+            ], 429, $e->getHeaders());
         });
     })->create();

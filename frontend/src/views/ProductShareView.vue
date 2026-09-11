@@ -738,14 +738,19 @@ function openLightbox(material: SalesMaterialItem) {
     </div>
 
     <!-- Checkout sheet. Bottom sheet on mobile (thumb reach), centred
-         card from `sm` up. Same overlay/drawer pattern the portal's other
-         sheets use; kept inside this view because it is single-use and
-         carries the PDPA consent copy that belongs to this flow. -->
-    <Transition name="drawer">
+         card from `sm` up. Kept inside this view because it is single-use and
+         carries the PDPA consent copy that belongs to this flow.
+
+         2026-09-11 — `sheet`, not `drawer`. It used the drawer transition,
+         which slides in from the right edge: correct for a panel pulled out
+         from off-screen, wrong for something that comes to rest in the middle
+         of the screen. It now fades in over half a second and nothing moves.
+         See the .sheet-* rules in assets/main.css. -->
+    <Transition name="sheet">
       <div v-if="checkoutOpen" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
         <div class="absolute inset-0 bg-slate-900/40" @click="checkoutOpen = false" />
         <div
-          class="drawer-panel relative w-full sm:max-w-md bg-surface-card rounded-t-3xl sm:rounded-3xl shadow-xl p-5 max-h-[90vh] overflow-y-auto"
+          class="relative w-full sm:max-w-md bg-surface-card rounded-t-3xl sm:rounded-3xl shadow-xl p-5 max-h-[90vh] overflow-y-auto"
           role="dialog"
           aria-modal="true"
           aria-labelledby="checkout-sheet-title"

@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\AuditLog;
 use App\Models\Order;
 use App\Models\PaymentWebhookEvent;
+use App\Support\VoucherCode;
 use Illuminate\Console\Command;
 
 /**
@@ -68,11 +69,30 @@ class ExplainOrderPaymentCommand extends Command
              */
             ['เลขที่การชำระจากเกตเวย์', $order->gateway_charge_id ?? '— (ไม่มี = ไม่ได้มาจากเกตเวย์)'],
             ['ชำระเมื่อ', $order->paid_at?->toDateTimeString() ?? '—'],
-            ['ยืนยันโดย', $order->verifiedBy?->name ?? '—'],
+            /*
+             * 2026-09-11 — this line was read as "a person pressed approve"
+             * and it does not mean that.
+             *
+             * `verified_by_user_id` is not nullable, so a gateway payment —
+             * which no person verified — records the agent who owns the sale
+             * (GatewayPaymentService, guard 3: the truthful answer to "whose
+             * sale closed", rather than a fake system user in an audit
+             * trail). Printing a name with no qualifier next to "ชำระแล้ว"
+             * invites exactly the wrong conclusion, in a command whose whole
+             * job is to say which of the two ways this happened.
+             */
+            ['ยืนยันโดย', $order->verifiedBy?->name
+                ? $order->verifiedBy->name.($order->hasGatewayPayment()
+                    ? ' — ระบบยืนยันอัตโนมัติจากเกตเวย์ (ไม่ใช่คนกดยืนยัน · ชื่อนี้คือตัวแทนเจ้าของการขาย)'
+                    : ' — คนกดยืนยันในระบบหลังบ้าน')
+                : '—'],
             ['ตัวแทน', $order->agent?->name ?? '—'],
             ['ความผิดพลาดล่าสุด', $order->last_payment_error ?? '—'],
             ['เมื่อ', $order->last_payment_error_at?->toDateTimeString() ?? '—'],
-            ['บัตรกำนัล', $order->voucher?->code ?? '— (ยังไม่ออก)'],
+            // Grouped as it is printed on the card, the pay page and the
+            // email (ABC-123). Staff key this by hand; a version of it with
+            // the grouping missing is a fourth spelling to reconcile.
+            ['บัตรกำนัล', $order->voucher ? VoucherCode::format($order->voucher->code) : '— (ยังไม่ออก)'],
         ]);
 
         $this->line('');

@@ -7,9 +7,12 @@ use App\Models\User;
 use App\Services\Academy\LessonAccessGate;
 use App\Services\Authorization\PermissionResolver;
 use App\Services\Platform\MailSettingsService;
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 
@@ -181,6 +184,7 @@ class AppServiceProvider extends ServiceProvider
         });
 
         $this->defineAbilityGates();
+        $this->definePublicPaymentRateLimits();
 
         // TASK-190 §3.5 — the "simplest correct integration point" the spec
         // asks for: once per request, before any Mailable/Notification in
@@ -192,6 +196,80 @@ class AppServiceProvider extends ServiceProvider
         // ShouldQueue mail — a queue worker boots this same provider chain
         // per job, so the override still applies there too).
         app(MailSettingsService::class)->applyRuntimeConfig();
+    }
+
+    /**
+     * 2026-09-11 (human, blocked mid-payment by "Too Many Attempts.").
+     *
+     * ── WHY `throttle:10,1` WAS THE WRONG LIMIT ──
+     *
+     * On an unauthenticated route Laravel's throttle keys on the IP address.
+     * The /pay/{token} routes are unauthenticated by design (ADR-011: the
+     * token IS the credential), so every customer behind one address shared
+     * one bucket — an office, a hotel, a seminar room, or any Thai mobile
+     * carrier doing CGNAT, where thousands of phones leave through a handful
+     * of addresses.
+     *
+     * The failure that produces is the worst one this system has: at an event
+     * where twenty people buy at once, the eleventh customer is refused on
+     * their FIRST tap, in English, on a page holding their money. Nothing
+     * they can do fixes it, and nobody watching can tell it happened.
+     *
+     * ── WHAT THESE LIMITS PROTECT INSTEAD ──
+     *
+     * The ORDER. A limit exists here to stop one link being hammered — a bot
+     * cycling attempts against a single order, or a retry loop — and the
+     * order token is what identifies that. It is also unguessable, so it
+     * cannot be used to deny service to anybody else's order.
+     *
+     * The per-IP ceiling stays as a SECOND, much looser limit, because the
+     * first one alone would let somebody with a list of tokens work through
+     * them freely. Both apply; whichever is hit first answers.
+     *
+     * Numbers chosen so an honest customer never meets them: nobody taps pay
+     * ten times in a minute on one order, and forty requests a minute from
+     * one address is a busy office rather than an attack.
+     */
+    private function definePublicPaymentRateLimits(): void
+    {
+        // The order this request is about. Falls back to the IP when the
+        // route has no token (it always does — this is belt and braces, so a
+        // future route reusing the limiter cannot accidentally key on null
+        // and put every caller in one bucket).
+        $order = fn (Request $request): string => 'pay-order:'.($request->route('token') ?? $request->ip());
+        $address = fn (Request $request): string => 'pay-ip:'.$request->ip();
+
+        // Reading the page. One call per page load; the ceiling only exists
+        // to stop a scraper walking tokens.
+        RateLimiter::for('pay-read', fn (Request $request) => [
+            Limit::perMinute(60)->by($order($request)),
+            Limit::perMinute(180)->by($address($request)),
+        ]);
+
+        /*
+         * Opening a gateway session, and uploading a slip.
+         *
+         * Ten per order per minute: a customer who switches between card and
+         * transfer while deciding is normal and must not be punished for it,
+         * and neither request moves money on its own.
+         */
+        RateLimiter::for('pay-attempt', fn (Request $request) => [
+            Limit::perMinute(10)->by($order($request)),
+            Limit::perMinute(40)->by($address($request)),
+        ]);
+
+        /*
+         * A real charge against the company's gateway account.
+         *
+         * Kept tighter than the rest, unchanged in spirit from the original
+         * `throttle:5,1`: a stream of these from one source is card testing,
+         * which costs the company its provider-side fraud reputation. A
+         * person paying for one order does not need six attempts a minute.
+         */
+        RateLimiter::for('pay-charge', fn (Request $request) => [
+            Limit::perMinute(5)->by($order($request)),
+            Limit::perMinute(20)->by($address($request)),
+        ]);
     }
 
     /**

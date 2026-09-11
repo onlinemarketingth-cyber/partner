@@ -386,6 +386,36 @@
   transform: translateX(100%);
 }
 
+/* Fade-in sheet — wrap the `v-if` block in <Transition name="sheet">.
+   Nothing moves: the whole thing, backdrop and panel together, fades.
+
+   2026-09-11 (human, on the product page's checkout sheet: "ปรับ animation
+   จากขวามาซ้ายเป็น fade in 0.5 วินาที"). That sheet used `drawer` above, which
+   slides in from the right edge. A drawer SHOULD do that — it is a panel that
+   lives off-screen and is pulled out, which is what ClientsView and
+   PipelineBoard have. The checkout sheet is not one: from `sm` up it is a
+   centred dialog, so it was flying in from the right and stopping in the
+   middle of the screen, which reads as a mis-aimed drawer rather than as a
+   dialog opening.
+
+   Kept as a SECOND name rather than by editing `drawer` — the two real
+   drawers are still drawers and should still slide.
+
+   The leave is faster than the enter on purpose. Opening at half a second is
+   deliberate and calm; closing at half a second is a dialog that will not go
+   away, and the moment somebody presses × they have already stopped looking
+   at it. */
+.sheet-enter-active {
+  transition: opacity 0.5s ease;
+}
+.sheet-leave-active {
+  transition: opacity 0.2s ease;
+}
+.sheet-enter-from,
+.sheet-leave-to {
+  opacity: 0;
+}
+
 /* Respect the user's OS-level motion preference — accessibility, not
    optional polish. Overrides every transition/animation above (and the
    sk-shimmer keyframe in LoadingSkeleton.vue) uniformly. */
