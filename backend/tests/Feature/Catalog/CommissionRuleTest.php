@@ -4,6 +4,7 @@ namespace Tests\Feature\Catalog;
 
 use App\Enums\CommissionRateType;
 use App\Models\CertTier;
+use App\Models\CommissionRule;
 use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductCategory;
@@ -27,15 +28,66 @@ class CommissionRuleTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_company_admin_can_create_a_commission_rule(): void
+    /**
+     * 2026-09-11 (owner decision) — THIS TEST IS AN INVERSION. It used to be
+     * test_company_admin_can_create_a_commission_rule and it asserted 201.
+     *
+     * Commission rate configuration is now writable by Super Admin only: the
+     * rate here is money, and the owner decided one person owns those
+     * numbers. The capability the old test protected is gone on purpose, so
+     * the test asserts its absence rather than being deleted — a silently
+     * removed test is how a capability comes back by accident.
+     *
+     * All THREE scopes are asserted together, because the three old
+     * "company_admin can create a ... rule" tests collapse into this one
+     * refusal: CommissionRulePolicy::create() does not branch on scope, so a
+     * Company Admin loses product-scoped, category-scoped AND company-wide
+     * default rules in one go. That is the full extent of the loss, stated
+     * in one place.
+     */
+    public function test_company_admin_can_no_longer_create_a_commission_rule_in_any_scope(): void
     {
         $company = Company::factory()->create();
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $tier = CertTier::factory()->create();
         $product = Product::factory()->for($company)->create();
+        $category = ProductCategory::factory()->for($company)->create();
 
-        $this->actingAs($admin)
+        $base = [
+            'cert_tier_id' => $tier->id,
+            'rate_type' => CommissionRateType::Percentage->value,
+            'rate_value' => 500,
+            'effective_from' => now()->toDateString(),
+        ];
+
+        foreach ([
+            ['product_id' => $product->id],      // product-scoped
+            ['product_category_id' => $category->id], // category-scoped
+            [],                                   // company-wide default
+        ] as $scope) {
+            $this->actingAs($admin)
+                ->postJson('/api/v1/commission-rules', $base + $scope)
+                ->assertForbidden();
+        }
+
+        $this->assertDatabaseCount('commission_rules', 0);
+    }
+
+    /**
+     * The other half of the 2026-09-11 decision: the capability did not
+     * disappear, it moved. Kept as a sibling so a Policy change that
+     * accidentally locked EVERYONE out would still fail loudly.
+     */
+    public function test_super_admin_can_create_a_commission_rule(): void
+    {
+        $company = Company::factory()->create();
+        $superAdmin = User::factory()->superAdmin()->create();
+        $tier = CertTier::factory()->create();
+        $product = Product::factory()->for($company)->create();
+
+        $this->actingAs($superAdmin)
             ->postJson('/api/v1/commission-rules', [
+                'company_id' => $company->id,
                 'cert_tier_id' => $tier->id,
                 'product_id' => $product->id,
                 'rate_type' => CommissionRateType::Percentage->value,
@@ -50,12 +102,17 @@ class CommissionRuleTest extends TestCase
         // BR-2 — a CommissionService reading this table must always find
         // exactly one applicable rate; overlapping ranges make that
         // ambiguous, so CommissionRuleService blocks it up front.
+        //
+        // Actor is a Super Admin since 2026-09-11 only because that is who
+        // may write a rule now; the subject is the overlap rule, not who
+        // triggered it, and the assertion is unchanged.
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
         $product = Product::factory()->for($company)->create();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -66,6 +123,7 @@ class CommissionRuleTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-rules', [
+                'company_id' => $company->id,
                 'cert_tier_id' => $tier->id,
                 'product_id' => $product->id,
                 'rate_type' => CommissionRateType::Percentage->value,
@@ -78,16 +136,24 @@ class CommissionRuleTest extends TestCase
     }
 
     // ADR-011/TASK-028 — category-level and company-wide-default rules.
+    //
+    // These two used to be named "company_admin can create..."; since
+    // 2026-09-11 the actor is a Super Admin and the name no longer claims
+    // an actor, because the subject was always the SCOPE SHAPE (what the
+    // resource renders for a rule with no product / no category), not who
+    // is allowed to post it. The Company Admin's loss of all three scopes
+    // is asserted once, above.
 
-    public function test_company_admin_can_create_a_category_level_commission_rule(): void
+    public function test_a_category_level_commission_rule_renders_without_a_product(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
         $category = ProductCategory::factory()->for($company)->create();
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-rules', [
+                'company_id' => $company->id,
                 'cert_tier_id' => $tier->id,
                 'product_category_id' => $category->id,
                 'rate_type' => CommissionRateType::Percentage->value,
@@ -99,16 +165,17 @@ class CommissionRuleTest extends TestCase
             ->assertJsonPath('data.product_category.id', $category->id);
     }
 
-    public function test_company_admin_can_create_a_company_wide_default_commission_rule(): void
+    public function test_a_company_wide_default_commission_rule_renders_with_neither_scope(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
 
         // Neither product_id nor product_category_id set = company-wide
         // default for this cert tier.
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-rules', [
+                'company_id' => $company->id,
                 'cert_tier_id' => $tier->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 200,
@@ -121,14 +188,17 @@ class CommissionRuleTest extends TestCase
 
     public function test_setting_both_product_id_and_product_category_id_is_rejected(): void
     {
+        // Actor switched to Super Admin on 2026-09-11 (see above); the
+        // subject is the mutual exclusion of the two scope columns.
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
         $product = Product::factory()->for($company)->create();
         $category = ProductCategory::factory()->for($company)->create();
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-rules', [
+                'company_id' => $company->id,
                 'cert_tier_id' => $tier->id,
                 'product_id' => $product->id,
                 'product_category_id' => $category->id,
@@ -153,13 +223,13 @@ class CommissionRuleTest extends TestCase
         $adminB = User::factory()->companyAdmin()->create(['company_id' => $companyB->id]);
         $tier = CertTier::factory()->create();
 
-        $productRule = \App\Models\CommissionRule::factory()->create([
+        $productRule = CommissionRule::factory()->create([
             'company_id' => $companyA->id,
             'cert_tier_id' => $tier->id,
             'product_id' => Product::factory()->for($companyA)->create()->id,
             'product_category_id' => null,
         ]);
-        $companyWideRule = \App\Models\CommissionRule::factory()->create([
+        $companyWideRule = CommissionRule::factory()->create([
             'company_id' => $companyA->id,
             'cert_tier_id' => $tier->id,
             'product_id' => null,
@@ -186,12 +256,15 @@ class CommissionRuleTest extends TestCase
         // Different scopes (category vs company-wide) must be allowed to
         // coexist for the exact same cert tier + date range — only rules
         // in the SAME scope are checked for overlap.
+        // Actor switched to Super Admin on 2026-09-11 (see above); the
+        // subject is scope independence in the overlap check.
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
         $category = ProductCategory::factory()->for($company)->create();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_category_id' => $category->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -200,6 +273,7 @@ class CommissionRuleTest extends TestCase
         ])->assertCreated();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 200,

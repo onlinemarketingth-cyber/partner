@@ -7,7 +7,8 @@ use App\Enums\MatrixSpilloverRule;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-// ADR-011/TASK-030 — Company Admin (own company) / Super Admin only,
+// ADR-011/TASK-030 — SUPER ADMIN ONLY since 2026-09-11 (same owner
+// decision as UpdateCommissionBinarySettingRequest; reads unchanged),
 // same shape as UpdateCommissionBinarySettingRequest. width/depth are
 // BR-7 (never defaulted here); spillover_rule is a fixed vocabulary
 // (see MatrixSpilloverRule's own docblock — only 'breadth' is actually

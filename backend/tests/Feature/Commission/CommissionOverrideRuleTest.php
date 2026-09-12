@@ -15,6 +15,13 @@ use Tests\TestCase;
 // TASK-025 / ADR-006 — mirrors tests/Feature/Catalog/CommissionRuleTest.php,
 // same access-control shape (Agent excluded entirely, sensitive
 // compensation config).
+//
+// 2026-09-11 — every test below whose subject is the RULE (overlap, scope
+// vocabulary, mutual exclusion, BR-6 product ownership) now acts as a Super
+// Admin, because after the owner's decision that is the only role that may
+// write a leader rate at all; a Company Admin would 403 before the rule
+// under test ever ran. The assertions are unchanged. The capability the
+// Company Admin lost is asserted directly, as its own test, below.
 class CommissionOverrideRuleTest extends TestCase
 {
     use RefreshDatabase;
@@ -29,7 +36,18 @@ class CommissionOverrideRuleTest extends TestCase
             ->assertForbidden();
     }
 
-    public function test_company_admin_can_create_a_commission_override_rule(): void
+    /**
+     * 2026-09-11 (owner decision) — THIS TEST IS AN INVERSION. It used to be
+     * test_company_admin_can_create_a_commission_override_rule and asserted
+     * 201 with the rule stamped with the admin's own company_id.
+     *
+     * A manager override rate is a commission rate, so it moved with the
+     * rest of the family when the owner decided rate configuration is Super
+     * Admin's alone — a rate is money. THE COST: a Company Admin can no
+     * longer set what their own leaders earn on their team's sales, and must
+     * ask the platform owner for every change.
+     */
+    public function test_company_admin_can_no_longer_create_a_commission_override_rule(): void
     {
         $company = Company::factory()->create();
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
@@ -37,6 +55,26 @@ class CommissionOverrideRuleTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'manager_cert_tier_id' => $managerTier->id,
+                'rate_type' => CommissionRateType::Percentage->value,
+                'rate_value' => 200,
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseCount('commission_override_rules', 0);
+    }
+
+    /** The other half of the decision: the capability moved, it did not vanish. */
+    public function test_super_admin_can_create_a_commission_override_rule(): void
+    {
+        $company = Company::factory()->create();
+        $admin = User::factory()->superAdmin()->create();
+        $managerTier = CertTier::factory()->create();
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'manager_cert_tier_id' => $managerTier->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 200,
@@ -53,10 +91,11 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_overlapping_effective_date_range_is_rejected(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $managerTier = CertTier::factory()->create();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-override-rules', [
+            'company_id' => $company->id,
             'manager_cert_tier_id' => $managerTier->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 200,
@@ -66,6 +105,7 @@ class CommissionOverrideRuleTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'manager_cert_tier_id' => $managerTier->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 300,
@@ -83,11 +123,12 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_a_leader_rate_can_be_scoped_to_one_product_without_a_cert_tier(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $product = Product::factory()->create(['company_id' => $company->id]);
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'product_id' => $product->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 250,
@@ -102,11 +143,12 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_a_leader_rate_can_be_scoped_to_a_category(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $category = ProductCategory::factory()->create(['company_id' => $company->id]);
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'product_category_id' => $category->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 150,
@@ -120,12 +162,13 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_a_leader_rate_cannot_name_both_a_product_and_a_category(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $product = Product::factory()->create(['company_id' => $company->id]);
         $category = ProductCategory::factory()->create(['company_id' => $company->id]);
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'product_id' => $product->id,
                 'product_category_id' => $category->id,
                 'rate_type' => CommissionRateType::Percentage->value,
@@ -144,11 +187,12 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_two_company_wide_rates_differing_only_by_cert_tier_are_now_rejected(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tierA = CertTier::factory()->create(['key' => 'tier_a', 'sort_order' => 2]);
         $tierB = CertTier::factory()->create(['key' => 'tier_b', 'sort_order' => 3]);
 
         $payload = fn (int $tierId, int $rate) => [
+            'company_id' => $company->id,
             'manager_cert_tier_id' => $tierId,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => $rate,
@@ -165,16 +209,18 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_a_product_scoped_rate_does_not_collide_with_the_company_default(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $product = Product::factory()->create(['company_id' => $company->id]);
 
         $this->actingAs($admin)->postJson('/api/v1/commission-override-rules', [
+            'company_id' => $company->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 100,
             'effective_from' => now()->toDateString(),
         ])->assertCreated();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-override-rules', [
+            'company_id' => $company->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 250,
@@ -186,11 +232,12 @@ class CommissionOverrideRuleTest extends TestCase
     public function test_a_leader_rate_cannot_name_another_companys_product(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $foreignProduct = Product::factory()->create(['company_id' => Company::factory()->create()->id]);
 
         $this->actingAs($admin)
             ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
                 'product_id' => $foreignProduct->id,
                 'rate_type' => CommissionRateType::Percentage->value,
                 'rate_value' => 250,

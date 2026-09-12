@@ -8,7 +8,10 @@ use App\Enums\CommissionRateType;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-// ADR-011/TASK-029 — Company Admin (own company) / Super Admin only,
+// ADR-011/TASK-029 — SUPER ADMIN ONLY since 2026-09-11 (owner decision:
+// the matched rate is money, so one person owns it). Reading stays open
+// to a Company Admin via SettingsCommissionBinaryView; only this write
+// narrowed. Was Company Admin (own company) / Super Admin,
 // same visibility shape as UpdateVideoProcessingSettingRequest /
 // CommissionRule management. Every value here is BR-7 (matched rate,
 // cycle cadence, payout cap, carry-over policy) — none defaulted or

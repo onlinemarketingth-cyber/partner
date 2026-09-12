@@ -63,6 +63,34 @@ enum Ability: string
     case CommissionAgentSummaryView = 'commission.agent_summary.view';
 
     /**
+     * Read whether this company's commission is configured well enough to
+     * pay anybody (CommissionReadinessController::show()).
+     *
+     * SAME PROVENANCE SHAPE AS Ability::VoucherRedeem — not derived from a
+     * pre-existing `abort_unless`/raw-role-check call site. This is a new
+     * endpoint; there is no prior line number to point to.
+     *
+     * WHY NOT Ability::ReportConfigHealthView, WHICH ALREADY HAS EXACTLY THIS
+     * AUDIENCE. Because the audience is the only thing the two share, and
+     * this file's own rule is one case per distinct QUESTION. The config
+     * health report is a specialist BR-7 tracker, read on purpose, by
+     * somebody who went looking for it; this is fetched by every admin
+     * session to decide whether to put a banner on every page. Sharing a case
+     * would mean a Phase 3 custom role that should not see a cross-company
+     * platform report cannot be told its own company is paying nobody — and
+     * that revoking the report silently switches the warning off everywhere,
+     * with no line in any diff saying so.
+     *
+     * Granted to BOTH admin tiers, unlike the six commission *Update
+     * abilities withdrawn from Company Admin on the same day (2026-09-11).
+     * That is the point of the endpoint: a Company Admin can no longer FIX a
+     * commission rate, but they are the person an agent asks first, so they
+     * must still be told. The endpoint's own `can_fix` field carries the
+     * other half of that decision — see CommissionReadinessService.
+     */
+    case CommissionReadinessView = 'commission.readiness.view';
+
+    /**
      * Per-agent commission summary as a payout CSV. From
      * AgentCommissionSummaryController.php:123.
      *

@@ -31,9 +31,14 @@ use Tests\TestCase;
  *
  * So each resource now carries the Policy's own answer. These tests pin the
  * three answers to the three DIFFERENT rules behind them — in particular that
- * `set_commission_rule` is not `update` wearing another name: ADR-040 grants a
- * Company Admin their own commission on a shared product, and deriving one
- * from the other would take that back.
+ * `set_commission_rule` is not `update` wearing another name.
+ *
+ * 2026-09-11 — the example that used to make that last point is gone: ADR-040
+ * granted a Company Admin their own commission on a shared product, and the
+ * owner has since decided commission rate configuration is Super Admin's
+ * alone. The two flags now happen to agree for a Company Admin. They are
+ * still computed from two different rules, and the tests below keep them
+ * apart so the next move of either one is caught.
  */
 class CatalogPermissionsPayloadTest extends TestCase
 {
@@ -165,21 +170,48 @@ class CatalogPermissionsPayloadTest extends TestCase
 
     // ── Commission: a DIFFERENT question, and the ADR depends on it ───
 
-    public function test_a_company_admin_may_set_their_own_commission_on_a_shared_product(): void
+    /**
+     * 2026-09-11 (owner decision) — THIS TEST IS AN INVERSION. It used to be
+     * test_a_company_admin_may_set_their_own_commission_on_a_shared_product
+     * and it asserted `set_commission_rule` was TRUE.
+     *
+     * WHAT IT REPLACED: ADR-040 kept commission per company precisely so a
+     * shared product could pay differently in each, and this flag was the one
+     * answer that had to stay true while `update` was false. The owner has
+     * now decided commission rate configuration is Super Admin's alone,
+     * because a rate is money — which supersedes that right and, knowingly,
+     * takes it away.
+     *
+     * The two assertions stay side by side because the ORIGINAL point of the
+     * test survives the inversion: these are still two different questions
+     * asked of two different rules. They merely now agree, by coincidence of
+     * this decision, and a screen that starts deriving one from the other
+     * would be wrong again the moment either moves.
+     */
+    public function test_a_company_admin_may_no_longer_set_commission_on_a_shared_product(): void
     {
-        /*
-         * The one that must not be derived from `update`. ADR-040 keeps
-         * commission per company precisely so a shared product can pay
-         * differently in each — so this is true while `update` is false, and a
-         * screen that hid the button when `update` was false would remove a
-         * right the human agreed to.
-         */
         $this->product(null);
 
         $permissions = $this->permissionsFor($this->companyAdmin, '/api/v1/products');
 
         $this->assertFalse($permissions['update']);
-        $this->assertTrue($permissions['set_commission_rule']);
+        $this->assertFalse($permissions['set_commission_rule']);
+    }
+
+    /**
+     * ...and not on their own standalone product either — the loss is total,
+     * not limited to the shared catalogue. Recorded explicitly because the
+     * inverted test above could otherwise be misread as "shared products are
+     * the special case", which is exactly backwards now.
+     */
+    public function test_a_company_admin_may_no_longer_set_commission_on_their_own_product_either(): void
+    {
+        $this->product($this->company->id);
+
+        $permissions = $this->permissionsFor($this->companyAdmin, '/api/v1/products');
+
+        $this->assertTrue($permissions['update']);
+        $this->assertFalse($permissions['set_commission_rule']);
     }
 
     public function test_a_company_admin_may_not_set_commission_on_a_catalog_linked_product(): void

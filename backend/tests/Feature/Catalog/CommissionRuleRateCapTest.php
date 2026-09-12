@@ -46,14 +46,29 @@ class CommissionRuleRateCapTest extends TestCase
         Cache::forget(PlatformCommissionSettingService::CACHE_KEY);
     }
 
+    /**
+     * The actor is a SUPER ADMIN since 2026-09-11, not the Company Admin it
+     * used to be: the owner's decision made commission rate configuration
+     * writable by Super Admin only, so a Company Admin can no longer reach
+     * POST/PUT /commission-rules at all and would 403 long before the cap is
+     * evaluated. The subject of this file is the cap arithmetic, not who may
+     * write a rule — every assertion below is unchanged. The Company Admin's
+     * refusal is asserted in CommissionRuleTest.
+     *
+     * $company comes back alongside the actor because a Super Admin has no
+     * company_id of their own to borrow; every write here must name the
+     * tenant explicitly.
+     *
+     * @return array{0: User, 1: CertTier, 2: Product, 3: Company}
+     */
     private function makeAdminAndProduct(): array
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
         $product = Product::factory()->for($company)->create(['price_satang' => self::CAPPED_PRICE_SATANG]);
 
-        return [$admin, $tier, $product];
+        return [$admin, $tier, $product, $company];
     }
 
     // -----------------------------------------------------------------
@@ -62,9 +77,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_percentage_rate_exactly_at_the_cap_is_allowed_on_create(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -75,9 +91,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_percentage_rate_one_basis_point_over_the_cap_is_rejected_on_create(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -90,10 +107,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_percentage_rate_exactly_at_the_cap_is_allowed_on_update(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage,
@@ -107,10 +124,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_percentage_rate_one_basis_point_over_the_cap_is_rejected_on_update(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage,
@@ -130,9 +147,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_fixed_satang_rate_exactly_at_the_cap_is_allowed_on_create(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
@@ -143,9 +161,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_fixed_satang_rate_one_basis_point_over_the_cap_is_rejected_on_create(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
@@ -158,10 +177,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_fixed_satang_rate_exactly_at_the_cap_is_allowed_on_update(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang,
@@ -175,10 +194,10 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_fixed_satang_rate_one_basis_point_over_the_cap_is_rejected_on_update(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang,
@@ -200,12 +219,12 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_switching_rate_type_on_update_re_evaluates_the_cap(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         // 3000 satang = exactly 30.00% of the 10,000-satang product — at
         // the cap as fixed_satang.
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang,
@@ -224,7 +243,7 @@ class CommissionRuleRateCapTest extends TestCase
         // a case that is over the cap only once reinterpreted) confirms
         // the check runs again on type change, not just on value change.
         $rule2 = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang,
@@ -246,13 +265,15 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_company_wide_default_rule_is_not_subject_to_the_cap_check(): void
     {
+        // Super Admin actor for the same reason as makeAdminAndProduct().
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $tier = CertTier::factory()->create();
 
         // An extreme rate that would fail against any real product's
         // price, if it were being checked at all.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 9999,
@@ -267,7 +288,7 @@ class CommissionRuleRateCapTest extends TestCase
 
     public function test_a_lowered_cap_rejects_a_rate_that_was_previously_fine(): void
     {
-        [$admin, $tier, $product] = $this->makeAdminAndProduct();
+        [$admin, $tier, $product, $company] = $this->makeAdminAndProduct();
 
         // Via the Service (not a raw Eloquent update) so the short-lived
         // Cache::remember() key is invalidated the same way a real
@@ -278,6 +299,7 @@ class CommissionRuleRateCapTest extends TestCase
         app(PlatformCommissionSettingService::class)->update(['max_commission_rate_basis_points' => 1000], $admin);
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $company->id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,

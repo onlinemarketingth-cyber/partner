@@ -69,7 +69,9 @@ class PermissionResolver
          * Ability::ReportPlatformView — PlatformReportController.php:22 is the
          * one site of the seventeen gated on `isSuperAdmin()` alone, and the
          * cross-company report is precisely what a tenant admin must not see
-         * (CLAUDE.md §5 rule 4 / BR-6).
+         * (CLAUDE.md §5 rule 4 / BR-6) — and except the six commission-rate
+         * *Update abilities, withdrawn on 2026-09-11; the note at the foot of
+         * this row says why and what that costs.
          */
         UserRole::CompanyAdmin->value => [
             Ability::ReportComplianceView,
@@ -78,6 +80,17 @@ class PermissionResolver
             Ability::SalesAgentDashboardMetricsView,
             Ability::CommissionAgentSummaryView,
             Ability::CommissionAgentSummaryExport,
+            /*
+             * 2026-09-11 — held by BOTH tiers, on the same day the six
+             * commission *Update abilities left this row. That pairing is
+             * deliberate, not an oversight: a Company Admin who may no longer
+             * change a rate is still the person their agents ask why nobody
+             * was paid, and "the system is not paying commission" is not a
+             * fact the platform may keep from the company it is happening to.
+             * The endpoint tells them the state and tells them, via can_fix,
+             * to contact the platform owner.
+             */
+            Ability::CommissionReadinessView,
             Ability::AgentTargetView,
             Ability::AgentTargetUpdate,
             Ability::SettingsTeamVisibilityView,
@@ -93,15 +106,55 @@ class PermissionResolver
             Ability::SettingsTeamVisibilityUpdate,
             Ability::SettingsAcademyCompletionUpdate,
             Ability::SettingsCommissionWithdrawalUpdate,
-            Ability::SettingsCommissionBinaryUpdate,
-            Ability::SettingsCommissionMatrixUpdate,
-            Ability::SettingsCommissionGenerationUpdate,
-            Ability::SettingsAgentRankUpdate,
-            Ability::SettingsCommissionSplitUpdate,
             Ability::SettingsVideoProcessingUpdate,
-            Ability::SettingsAffiliateAttributionUpdate,
             Ability::SettingsAnnouncementUpdate,
             Ability::AcademyCertificationGrant,
+            /*
+             * 2026-09-11 — THE SIX COMMISSION-RATE *Update ABILITIES USED TO
+             * BE HERE, and their removal is the point (owner decision):
+             * SettingsCommissionBinaryUpdate, SettingsCommissionMatrixUpdate,
+             * SettingsCommissionGenerationUpdate, SettingsAgentRankUpdate,
+             * SettingsAffiliateAttributionUpdate,
+             * SettingsCommissionSplitUpdate.
+             *
+             * WHY. A commission rate is money. These six settings, together
+             * with the five rate tables behind CommissionRulePolicy and its
+             * siblings, decide what the platform actually pays out; the owner
+             * decided that one person owns those numbers rather than every
+             * tenant admin holding them by virtue of the role. Spread across
+             * every Company Admin, a payout change was a permission nobody
+             * chose to give and nobody could take away.
+             *
+             * WHAT IT COSTS, stated plainly so nobody rediscovers it from a
+             * support ticket: a Company Admin can no longer set their own
+             * commission rate. Not the binary matched rate, not the matrix or
+             * generation depth, not the rank ladder, not the affiliate
+             * attribution window, not the split switch — and not on a shared
+             * catalog product they sell, where the ability to price their own
+             * margin was previously the whole point. Every rate change is now
+             * a request to the platform owner, and a company onboarding
+             * itself cannot finish its own commission configuration
+             * unassisted.
+             *
+             * The matching *View abilities deliberately STAY in this row
+             * above. A Company Admin who cannot change a rate must still be
+             * able to see the rate their agents are earning under, or they
+             * cannot answer the first question an agent asks them.
+             *
+             * Unlike VoucherRedeem above, there is NO migration grandfathering
+             * the admins who held these on 2026-09-11. That is the decision,
+             * not an oversight: a rate nobody chose to delegate is exactly
+             * what the owner is taking back, so grandfathering would have
+             * preserved the thing being removed.
+             *
+             * If one company ever needs one of these SIX back, it is a
+             * per-user grant (user_abilities) — a deliberate act with a name
+             * attached — not a line restored here. Note the asymmetry: that
+             * escape hatch reaches these six settings only. The five rate
+             * TABLES (CommissionRulePolicy and its siblings) ask
+             * isSuperAdmin() directly and hold no Ability, so no grant can
+             * reopen them; that would need its own decision and its own code.
+             */
             /*
              * 2026-09-10 — Ability::VoucherRedeem USED TO BE HERE, and its
              * removal is the point (human: "ที่ได้สิทธิ์ในการตัดได้เฉพาะหน้า
@@ -149,7 +202,10 @@ class PermissionResolver
          * docblock for why platform-wide SMTP config has no "own company"
          * scope to grant a Company Admin into), plus
          * Ability::CommissionRateCapUpdate (TASK-196 §2.2 — same
-         * Super-Admin-only reasoning as SettingsMailUpdate). Note what is
+         * Super-Admin-only reasoning as SettingsMailUpdate), plus — since
+         * 2026-09-11 — the six commission-rate *Update abilities that used to
+         * be held by both tiers and are now held only here (see the note at
+         * the foot of the Company Admin row). Note what is
          * NOT here: AcademyExamAttemptCreate, RewardRedemptionCreate and
          * UserViewSuperAdminRecord. Those three absences are the entire reason
          * this list is written out instead of `return true`.
@@ -167,6 +223,8 @@ class PermissionResolver
             Ability::SalesAgentDashboardMetricsView,
             Ability::CommissionAgentSummaryView,
             Ability::CommissionAgentSummaryExport,
+            // 2026-09-11 — held by both tiers; see the Company Admin row.
+            Ability::CommissionReadinessView,
             Ability::AgentTargetView,
             Ability::AgentTargetUpdate,
             Ability::SettingsTeamVisibilityView,

@@ -6,7 +6,9 @@ use App\Enums\Ability;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-// ADR-011/TASK-032 — Company Admin (own company) / Super Admin only,
+// ADR-011/TASK-032 — SUPER ADMIN ONLY since 2026-09-11 (the attribution
+// window decides WHICH affiliate is paid, so it moved with the rest of
+// the commission-rate group; the Agent-level READ is untouched),
 // same shape as UpdateAgentRankSettingRequest. attribution_window_days
 // is BR-7, never defaulted here.
 class UpdateAffiliateAttributionSettingRequest extends FormRequest

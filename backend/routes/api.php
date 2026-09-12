@@ -37,6 +37,7 @@ use App\Http\Controllers\Api\V1\CommissionLedgerController;
 use App\Http\Controllers\Api\V1\CommissionMatrixLevelRateController;
 use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
 use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
+use App\Http\Controllers\Api\V1\CommissionReadinessController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
 use App\Http\Controllers\Api\V1\CommissionWithdrawalRequestController;
@@ -535,6 +536,23 @@ Route::prefix('v1')->group(function () {
             ->parameters(['product-recommendation-pins' => 'product_recommendation_pin']);
         Route::apiResource('commission-rules', CommissionRuleController::class)
             ->parameters(['commission-rules' => 'commission_rule']);
+
+        /*
+         * 2026-09-11 (owner): "หากยังไม่ได้มีการ setup ค่าคอม ให้แจ้งเตือนใน
+         * ทุกหน้า" — the per-page banner's one question.
+         *
+         * Registered here next to commission-rules rather than beside
+         * /config-health-report, because that is what it reads and that is
+         * where the fix is. Deliberately NOT an extension of the BR-7 report:
+         * that one is gated behind Ability::ReportConfigHealthView, answers
+         * per company with a coarse `commission_rules_count`, and cannot tell
+         * a live rate from one that expired last month — which is exactly the
+         * case that pays nobody while looking configured.
+         *
+         * ->only-style single verb on purpose: there is nothing here to
+         * create, and a readiness verdict is derived state, never stored.
+         */
+        Route::get('/commission-readiness', [CommissionReadinessController::class, 'show']);
 
         // ADR-026 (TASK-136) — pipeline templates, READ-ONLY.
         //

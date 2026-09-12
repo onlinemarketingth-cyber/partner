@@ -134,20 +134,35 @@ class RoleGateCharacterizationTest extends TestCase
             'settings.team_visibility.update' => [403, 200, 200, 200],
             // Academy/UpdateAcademyCompletionSettingRequest.php:14
             'settings.academy_completion.update' => [403, 200, 200, 200],
-            // Commission/UpdateCommissionBinarySettingRequest.php:21 — 201, row created.
-            'settings.commission_binary.update' => [403, 201, 201, 201],
+            /*
+             * THE SIX COMMISSION-RATE WRITES — company_admin column went
+             * 201/200 => 403 on 2026-09-11, and the foreign_company_admin
+             * column with it (same role, so the refusal now lands before
+             * the tenancy question ever comes up).
+             *
+             * This is NOT a drift this suite failed to catch: it is the
+             * owner's decision that commission rate configuration is Super
+             * Admin only, because a rate is money. The cost, accepted: a
+             * Company Admin can no longer set their own commission rate,
+             * including on a shared catalog product. The matching `.view`
+             * rows above are deliberately UNCHANGED at 204 for every admin
+             * — reads were not narrowed, and if one of those ever turns
+             * 403 it is a regression, not this decision.
+             */
+            // Commission/UpdateCommissionBinarySettingRequest.php:21
+            'settings.commission_binary.update' => [403, 403, 201, 403],
             // Commission/UpdateCommissionMatrixSettingRequest.php:18
-            'settings.commission_matrix.update' => [403, 201, 201, 201],
+            'settings.commission_matrix.update' => [403, 403, 201, 403],
             // Commission/UpdateCommissionGenerationSettingRequest.php:15
-            'settings.commission_generation.update' => [403, 201, 201, 201],
+            'settings.commission_generation.update' => [403, 403, 201, 403],
             // Commission/UpdateAgentRankSettingRequest.php:17
-            'settings.agent_rank.update' => [403, 201, 201, 201],
+            'settings.agent_rank.update' => [403, 403, 201, 403],
             // Commission/UpdateCommissionSplitSettingRequest.php:20
-            'settings.commission_split.update' => [403, 200, 200, 200],
+            'settings.commission_split.update' => [403, 403, 200, 403],
             // Catalog/UpdateVideoProcessingSettingRequest.php:14
             'settings.video_processing.update' => [403, 200, 200, 200],
             // Referral/UpdateAffiliateAttributionSettingRequest.php:15
-            'settings.affiliate_attribution.update' => [403, 201, 201, 201],
+            'settings.affiliate_attribution.update' => [403, 403, 201, 403],
             // Engagement/UpdateAnnouncementSettingRequest.php:15
             'settings.announcement.update' => [403, 200, 200, 200],
             /*
@@ -204,6 +219,15 @@ class RoleGateCharacterizationTest extends TestCase
      * behaviour AcademyProgressSummaryRequest.php:39-48 criticises in its own
      * docblock while the older report endpoints keep doing it. Pinned here so
      * a conversion cannot quietly turn the silence into a 403 (or into a leak).
+     *
+     * 2026-09-11 — THE ENDPOINT CHANGED, THE PROPERTY DID NOT. This used to
+     * probe PUT /commission-generation-settings, which a Company Admin can no
+     * longer write at all after the owner's Super-Admin-only commission-rate
+     * decision; a 403 there proves nothing about BR-6 muting. It now probes
+     * PUT /team-visibility-settings, which has the identical shape (a
+     * company_id that is validated, discarded, and replaced by the caller's
+     * own in the Controller) and which a Company Admin still holds. The
+     * commission endpoint's new refusal is recorded in the matrix above.
      */
     public function test_company_admin_naming_a_foreign_company_is_answered_about_their_own(): void
     {
@@ -212,17 +236,18 @@ class RoleGateCharacterizationTest extends TestCase
         $adminB = User::factory()->companyAdmin()->create(['company_id' => $companyB->id]);
 
         $this->actingAs($adminB)
-            ->putJson('/api/v1/commission-generation-settings', [
+            ->putJson('/api/v1/team-visibility-settings', [
                 'company_id' => $companyA->id,
-                'max_generation_depth' => 7,
+                'client_visibility_level' => 'names',
+                'is_enabled' => true,
             ])
-            ->assertStatus(201);
+            ->assertStatus(200);
 
-        $this->assertDatabaseHas('commission_generation_settings', [
+        $this->assertDatabaseHas('team_visibility_settings', [
             'company_id' => $companyB->id,
-            'max_generation_depth' => 7,
+            'client_visibility_level' => 'names',
         ]);
-        $this->assertDatabaseMissing('commission_generation_settings', [
+        $this->assertDatabaseMissing('team_visibility_settings', [
             'company_id' => $companyA->id,
         ]);
     }

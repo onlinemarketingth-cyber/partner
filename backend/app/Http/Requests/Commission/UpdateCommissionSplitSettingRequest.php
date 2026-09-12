@@ -6,8 +6,11 @@ use App\Enums\Ability;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-// TASK-174 (D2) — Company Admin (own company) / Super Admin only, same
-// visibility shape as UpdateTeamVisibilitySettingRequest.
+// TASK-174 (D2) — SUPER ADMIN ONLY since 2026-09-11 (owner decision:
+// flipping this silently redirects half an agent's commission to a
+// colleague, so it moved with the commission-rate group). Was Company
+// Admin (own company) / Super Admin, same visibility shape as
+// UpdateTeamVisibilitySettingRequest.
 //
 // An Agent must never reach this: the flag decides whether an agent can
 // direct part of their own commission to a colleague, so letting the party

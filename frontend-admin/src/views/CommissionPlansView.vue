@@ -25,11 +25,47 @@
  * at this display/input layer. BR-7: no rate/threshold/window value is
  * ever defaulted to something meaningful — every numeric input starts
  * blank, never pre-filled with a guessed business value.
+ *
+ * ── 2026-09-11 — THE 4-STEP FLOW (owner-approved mockups) ──
+ *
+ * Owner's complaint, verbatim: "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง". The screen
+ * described above was six peer tabs plus an overview/settings toggle, and
+ * every one of those tabs looked equally urgent and equally optional. An
+ * admin who finished one had no way to learn what the next one was, or
+ * whether they were done — and "done" here means the difference between a
+ * closed deal paying somebody and a closed deal paying nobody.
+ *
+ * So the six tabs became FOUR ORDERED STEPS, named after what the admin
+ * came to do rather than after the table behind them:
+ *
+ *   1 เลือกบริษัท              — which company's money are we setting
+ *   2 เลือกแผนคอมมิชชั่น        — Unilevel/Binary/Matrix/Stairstep/Generation/
+ *                                Affiliate + that plan's own structural form
+ *   3 ตั้งอัตราตัวแทนผู้ขาย      — the company default, then the per-product
+ *                                exceptions (the one step that cannot be skipped)
+ *   4 ส่วนเพิ่มเติม             — leader rate, co-agent split, withdrawal minimum
+ *
+ * WHAT WAS KEPT, DELIBERATELY. Every structural section, form, endpoint and
+ * modal below is the one that already shipped and passed UAT-012 — only its
+ * `v-if` moved. The redesign is a re-addressing of working parts, not a
+ * rewrite of them, because the parts were never what the owner complained
+ * about.
+ *
+ * WHAT IT COSTS. Steps are ordered but never blocked (any tab is clickable
+ * at any time): an order the UI shows but does not enforce is a hint, and a
+ * hint cannot strand an admin who genuinely needs step 4 first. The price is
+ * that "ขั้นที่ 3 ยังไม่ครบ" is advice the admin can walk straight past —
+ * which is why the readiness banner sits ABOVE the steps on every one of
+ * them and says, in money terms, what walking past it means.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 // TASK-208 / ADR-038 — one company scope, chosen in the header.
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+// 2026-09-11 — the banner above this screen and the banner above every other
+// page are now the same answer, fetched once per session. See the block at
+// `blockingStep` for why this screen stopped computing its own.
+import { useCommissionReadinessStore } from '@/stores/commissionReadiness'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -49,7 +85,6 @@ import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 // BuddhistDateInput (TASK-199) dropped that affordance, so this restores it
 // consistently everywhere in this file.
 import CalendarDatePicker from '@/design-system/components/CalendarDatePicker.vue'
-import { readStored, writeStored } from '@/utils/safeStorage'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -111,6 +146,48 @@ function byCompany<T extends { company_id: number | null }>(items: T[]): T[] {
     : items
 }
 
+const commissionReadiness = useCommissionReadinessStore()
+
+/**
+ * EVERY WRITE ON THIS SCREEN GOES THROUGH HERE, so the readiness verdict is
+ * invalidated in ONE place instead of twenty-one.
+ *
+ * The alternative — a `refresh()` line after each save — was written first and
+ * thrown away: this file has seventeen save/delete functions across five plan
+ * types, and the one somebody forgets is the one that leaves an admin looking
+ * at "ไม่มีใครได้เงิน" seconds after they fixed it. Worse, the next write added
+ * to this screen would be uncovered by default. Wrapping the verb makes the
+ * default correct.
+ *
+ * Reads deliberately still use `api` directly: re-asking the server whether
+ * commission is configured after fetching a list would be a request per
+ * request.
+ *
+ * Fire-and-forget on purpose — the save's own reload is what the admin is
+ * waiting for, and the banner catching up a tick later costs nobody anything.
+ */
+const commissionApi = {
+  post: async <T,>(path: string, data?: unknown): Promise<T> => {
+    const result = await api.post<T>(path, data)
+    void commissionReadiness.refresh()
+
+    return result
+  },
+  put: async <T,>(path: string, data?: unknown): Promise<T> => {
+    const result = await api.put<T>(path, data)
+    void commissionReadiness.refresh()
+
+    return result
+  },
+  delete: async <T,>(path: string, data?: unknown): Promise<T> => {
+    const result = await api.delete<T>(path, data)
+    void commissionReadiness.refresh()
+
+    return result
+  },
+}
+
+
 /**
  * TASK-245 — may THIS viewer set a commission rule on this product?
  *
@@ -127,38 +204,104 @@ function canEditPlanType(product: ProductOption): boolean {
   return product.permissions?.update === true
 }
 
+/**
+ * 2026-09-11 — may THIS viewer change ANY commission number on this screen?
+ *
+ * The owner narrowed every commission write to Super Admin on the same day
+ * this screen was restructured: a commission rate is money, and the decision
+ * was that one person owns those numbers rather than every tenant admin
+ * holding them by virtue of their role. Reads were left completely alone —
+ * a Company Admin still has to see the rates their agents are earning under.
+ *
+ * WHY A BARE ROLE CHECK IS THE HONEST EXPRESSION HERE, AND NOT THE MISTAKE
+ * TASK-245 REMOVED.
+ *
+ * TASK-245 deleted role checks from this file's neighbours because those
+ * questions were NOT role questions: "may I set a commission rule on this
+ * product" depended on the PRODUCT (shared? catalog-linked? ADR-036 §5/§6),
+ * so a copied `role === 'super_admin'` was a guess that happened to agree
+ * with the server often enough to look right. The fix was to ask the server
+ * per row — `permissions.set_commission_rule`, still read by
+ * canSetCommission() above.
+ *
+ * This question is different in kind. The new rule has NO row dimension at
+ * all: five policies now answer create/update/delete with nothing but
+ * `$user->isSuperAdmin()` —
+ *
+ *   CommissionRulePolicy, CommissionOverrideRulePolicy, AgentRankPolicy,
+ *   CommissionGenerationRulePolicy, CommissionMatrixLevelRatePolicy
+ *
+ * — and the six structural-settings singletons (binary / matrix /
+ * generation / agent-rank / affiliate-attribution / split) enforce it by
+ * their *Update abilities having been taken out of the Company Admin row in
+ * PermissionResolver::ROLE_ABILITIES, leaving them only in the Super Admin
+ * row. So the role IS the rule, and mirroring it is reporting the server's
+ * answer rather than guessing at it.
+ *
+ * WHAT THIS COSTS, and what breaks it. The day any of those eleven grows a
+ * per-company or per-row condition, this computed becomes the TASK-245 bug
+ * again — silently, because a role check never errors, it just shows the
+ * wrong buttons. If that day comes, the replacement is a server-sent
+ * capability (the `permissions` block on a Resource), not a longer boolean
+ * here.
+ *
+ * House rule (owner): "อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน ไม่ใช่ให้
+ * error 403" — so every control this gates is HIDDEN, never disabled-with-a-
+ * tooltip and never left clickable to fail at the server.
+ */
+const canEditCommissionConfig = computed(() => isSuperAdmin.value)
+
+/*
+ * `Tab` survives the 4-step redesign on purpose, in a narrower job.
+ *
+ * It is no longer an address the admin navigates to — it is the LAZY-LOAD
+ * KEY for one plan type's data (loadTab / loadedTabs at the bottom of this
+ * file), and in step 2 it doubles as "which plan's structural form is on
+ * screen". Every `v-if` that used to read it now reads `activeStep`, but the
+ * fetching machinery underneath is untouched: rewriting six working loaders
+ * to be keyed by something else would have been risk paid for nothing.
+ */
 type Tab = 'rules' | 'binary' | 'matrix' | 'ranks' | 'generation' | 'affiliate'
 const activeTab = ref<Tab>('rules')
-const tabDefs: { key: Tab; label: string; icon: string }[] = [
-  { key: 'rules', label: 'กฎคอมมิชชั่น', icon: 'money' },
-  { key: 'binary', label: 'Binary', icon: 'branch' },
-  { key: 'matrix', label: 'Matrix', icon: 'layers' },
-  { key: 'ranks', label: 'อันดับ (Stairstep)', icon: 'trophy' },
-  { key: 'generation', label: 'Generation', icon: 'users' },
-  { key: 'affiliate', label: 'พันธมิตร (Affiliate)', icon: 'link' },
-]
 
-// ── UI redesign (2026-07-22, human-approved "B ผสม C"): the flat 6-tab
-// layout tested fine functionally (UAT-012) but the human found it
-// confusing to use as a starting point. Rather than rewrite/risk the
-// already-verified tab sections below, this adds a NEW default
-// "ภาพรวมสินค้า" (product-driven) overview layer on top, additive only:
-//  - Option B: browse/configure primarily by product — see the resolved
-//    plan type per product, jump into the right company-wide section
-//    only when that plan type actually needs one.
-//  - Option C: visibility (which products use which plan type — small
-//    count badges next to each company-wide tab) + a client-side
-//    "ทดสอบคำนวณ" preview of the DIRECT commission rate that resolves
-//    for a given product+cert-tier. Deliberately does NOT attempt to
-//    simulate Override/Matrix/Rank/Generation payouts client-side —
-//    that logic is genuinely multi-record/multi-level (see UAT-012 §4)
-//    and reproducing it here risks showing a wrong number as if it were
-//    real; the preview says so explicitly instead of guessing.
-// The original tab bar + all 6 sections are unchanged and still reachable
-// under "การตั้งค่าทั้งหมด" — zero regression risk on what already passed
-// live UAT.
-type ViewMode = 'overview' | 'settings'
-const viewMode = ref<ViewMode>('overview')
+/*
+ * ── WHAT REPLACED `viewMode` (2026-09-11) ──
+ *
+ * The 2026-07-22 redesign added a "ภาพรวมสินค้า" / "การตั้งค่าทั้งหมด" toggle
+ * on top of the six tabs — an extra axis whose Option B idea (browse by
+ * PRODUCT, see the rate that actually resolves, jump to the section that is
+ * actually missing) was right and is kept: it is now step 3's "3.2
+ * แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง" list, where it is on the path instead of
+ * beside it. Option C's parts likewise survive — the per-plan product counts
+ * annotate the step-2 chips, and "ทดสอบคำนวณ" is still on every product row,
+ * still deliberately previewing ONLY the direct commission (simulating
+ * Override/Matrix/Rank/Generation client-side would risk showing a wrong
+ * number as if it were real — see UAT-012 §4; the modal still says so).
+ *
+ * The TOGGLE itself is gone rather than mapped onto the steps, because a
+ * `viewMode` that can only ever hold one value is state that lies about
+ * having a choice. `activeStep` is the only mode this screen has now.
+ */
+type Step = 1 | 2 | 3 | 4
+const activeStep = ref<Step>(1)
+const stepDefs: { step: Step; label: string }[] = [
+  { step: 1, label: 'เลือกบริษัท' },
+  { step: 2, label: 'เลือกแผนคอมมิชชั่น' },
+  { step: 3, label: 'ตั้งอัตราตัวแทนผู้ขาย' },
+  { step: 4, label: 'ส่วนเพิ่มเติม' },
+]
+/**
+ * 'optional' is not a softer 'incomplete'. Step 4 holds three genuinely
+ * skippable settings, and telling an admin they are "ยังไม่ครบ" for skipping
+ * something skippable is how a warning stops being read — which is the same
+ * failure the blanket amber banner had before TASK-213.
+ */
+type StepStatus = 'done' | 'incomplete' | 'optional'
+const stepStatusLabels: Record<StepStatus, string> = {
+  done: 'เสร็จแล้ว',
+  incomplete: 'ยังไม่ครบ',
+  optional: 'ข้ามได้',
+}
 const planTypeLabels: Record<CommissionPlanType, string> = {
   unilevel: 'Unilevel',
   binary: 'Binary',
@@ -167,9 +310,21 @@ const planTypeLabels: Record<CommissionPlanType, string> = {
   generation: 'Generation',
   affiliate: 'พันธมิตร (Affiliate)',
 }
-// Only plan types with their own company-wide structural settings tab
-// need a "ไปตั้งค่า" jump link; Unilevel is pure rate-rule-driven (no
-// dedicated tab exists for it, by design — see tabDefs above).
+/*
+ * Which plan types have a company-wide structural form to fill in at all.
+ *
+ * Unilevel is deliberately absent and always has been: it is pure
+ * rate-rule-driven, so there is nothing to configure beyond step 3's rates
+ * and step 4's leader rate. This map is what step 2 consults to decide
+ * whether a chip reveals a form or just an explanation, and what the
+ * readiness probe consults to decide whether "no structure" is even a
+ * question worth asking about a product.
+ *
+ * The inverse map (`tabToPlanType`) was deleted with the tab bar — its only
+ * two readers were the per-tab product-count badge and the overview's
+ * "ตั้งค่าระดับบริษัท" grid. The count badge survives on the step-2 chips,
+ * which are keyed by plan type already and so need no translation.
+ */
 const planTypeToTab: Partial<Record<CommissionPlanType, Tab>> = {
   binary: 'binary',
   matrix: 'matrix',
@@ -177,17 +332,35 @@ const planTypeToTab: Partial<Record<CommissionPlanType, Tab>> = {
   generation: 'generation',
   affiliate: 'affiliate',
 }
-const tabToPlanType: Partial<Record<Tab, CommissionPlanType>> = {
-  binary: 'binary',
-  matrix: 'matrix',
-  ranks: 'stairstep_breakaway',
-  generation: 'generation',
-  affiliate: 'affiliate',
-}
-function goToSettingsTab(tab: Tab) {
-  viewMode.value = 'settings'
-  activeTab.value = tab
-  if (!loadedTabs.value.has(tab)) loadTab(tab)
+/**
+ * The ONE lazy-load entry point (was five: goToSettingsTab, the activeTab
+ * watcher, the company watcher, onMounted and wizardEnsureStructureLoaded,
+ * each with its own copy of the `loadedTabs.has()` test).
+ *
+ * Scattering it was survivable while a section could only be reached by
+ * clicking its own tab. It stops being survivable now that a step can render
+ * a section the admin never "navigated" to — such a section would show an
+ * empty list and never fetch, which reads exactly like "this company has
+ * nothing configured".
+ */
+const inFlightTabLoads = new Map<Tab, Promise<void>>()
+
+async function ensureTabLoaded(tab: Tab): Promise<void> {
+  if (loadedTabs.value.has(tab)) return
+  /*
+   * Deduped by the IN-FLIGHT promise, not just by loadedTabs: `loadedTabs`
+   * only gains the key after the request resolves, so two callers arriving in
+   * the same tick (a step change that sets activeTab AND asks for its data)
+   * would both start the same fetch. Harmless with GETs, but it doubles the
+   * traffic on every navigation and makes the readiness probe race itself.
+   */
+  const existing = inFlightTabLoads.get(tab)
+  if (existing) return existing
+
+  const run = loadTab(tab).finally(() => inFlightTabLoads.delete(tab))
+  inFlightTabLoads.set(tab, run)
+
+  return run
 }
 
 const loading = ref(false)
@@ -297,29 +470,35 @@ function ruleScopeLabel(r: CommissionRuleItem): string {
 // actual resolution happens server-side (CommissionService), this is
 // just an honest UI explanation of that existing order.
 const RESOLUTION_ORDER_NOTE = 'ลำดับการใช้ค่า: สินค้าเฉพาะ > หมวดหมู่ > ค่าเริ่มต้นทั้งบริษัท (ใช้อันที่เจาะจงที่สุดที่ตรงเงื่อนไข)'
-// Human request (2026-07-22): show this explanation as a dismissible
-// modal instead of a permanent inline line — "เข้าใจแล้ว" dismisses it
-// for this viewing only; the checkbox persists the dismissal for good.
-// Same pure-UI-nag/localStorage pattern already used in
-// AcademyManagementView.vue's HIDE_INCOMPLETE_WARNING_KEY (not business
-// data, no backend needed).
-// Via safeStorage for the same reason as AcademyManagementView's copy of
-// this pattern: read at setup() time, so an unusable storage must not be
-// able to take the screen down. See safeStorage.js.
-const HIDE_RESOLUTION_ORDER_NOTE_KEY = 'commission-rules-hide-resolution-order-note'
-const hideResolutionOrderNote = ref(readStored(HIDE_RESOLUTION_ORDER_NOTE_KEY) === '1')
+/*
+ * ── THE NAG IS GONE (2026-09-11), AND SO IS ITS DISMISSAL FLAG ──
+ *
+ * This used to auto-open on every entry to the rules tab, with a
+ * "ไม่ต้องแสดงข้อความนี้อีก" checkbox persisted through safeStorage (the
+ * AcademyManagementView HIDE_INCOMPLETE_WARNING_KEY pattern). The human
+ * asked for that in 2026-07-22 for a good reason: the resolution order is
+ * the single most load-bearing fact on the screen, and it was one grey line
+ * nobody read.
+ *
+ * Step 3 now draws that order as a permanent ladder at the top of the panel
+ * — สินค้า → หมวดหมู่ → ค่าเริ่มต้นทั้งบริษัท — so the fact is on screen
+ * every time, unconditionally, which is strictly more than the modal ever
+ * achieved. A modal that interrupts you to repeat what is already drawn
+ * behind it is the definition of a nag, so the auto-open went.
+ *
+ * The persisted dismissal went WITH it, deliberately: a "don't show again"
+ * flag for something that is never shown unless you ask for it is dead state
+ * that reads as if a suppression is still in force. The modal itself stays,
+ * reachable from a "ลำดับการใช้ค่า" link beside the ladder, because the full
+ * sentence is longer than the diagram can carry.
+ */
 const showResolutionOrderModal = ref(false)
-const dontShowResolutionOrderAgain = ref(false)
 
 function openResolutionOrderModal() {
   showResolutionOrderModal.value = true
 }
 
 function closeResolutionOrderModal() {
-  if (dontShowResolutionOrderAgain.value) {
-    hideResolutionOrderNote.value = true
-    writeStored(HIDE_RESOLUTION_ORDER_NOTE_KEY, '1')
-  }
   showResolutionOrderModal.value = false
 }
 
@@ -364,10 +543,6 @@ function resetRuleForm() {
   showRuleForm.value = false
   ruleFormError.value = ''
   ruleCapGuard.reset()
-}
-function openCreateRuleForm() {
-  resetRuleForm()
-  showRuleForm.value = true
 }
 function openEditRuleForm(r: CommissionRuleItem) {
   ruleCapGuard.reset()
@@ -456,9 +631,9 @@ async function submitRule() {
         : {}),
     })
     if (editingRuleId.value) {
-      await api.put(`/commission-rules/${editingRuleId.value}`, payload)
+      await commissionApi.put(`/commission-rules/${editingRuleId.value}`, payload)
     } else {
-      await api.post('/commission-rules', payload)
+      await commissionApi.post('/commission-rules', payload)
     }
     resetRuleForm()
     // TASK-197 §2.2's server-side side effect (a product's FIRST rule
@@ -474,7 +649,7 @@ async function submitRule() {
 }
 async function deleteRule(r: CommissionRuleItem) {
   try {
-    await api.delete(`/commission-rules/${r.id}`)
+    await commissionApi.delete(`/commission-rules/${r.id}`)
     commissionRules.value = commissionRules.value.filter((x) => x.id !== r.id)
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
@@ -511,9 +686,23 @@ async function loadRulesTabData() {
  * "จ่ายหัวหน้าทีมเป็นจำนวนเงินคงที่" was a supported business case that
  * simply had no button.
  */
-type RateRecipient = 'agent' | 'leader'
-const rateRecipientFilter = ref<'all' | RateRecipient>('all')
-
+/*
+ * ── `rateRecipientFilter` WAS DELETED BY THE 4-STEP FLOW (2026-09-11) ──
+ *
+ * TASK-213 put agent rates and leader rates in ONE list behind a
+ * ทั้งหมด/ตัวแทนผู้ขาย/หัวหน้าทีม chip row, because "an admin thinks
+ * ตัวแทนได้เท่าไหร่ / หัวหน้าได้เท่าไหร่, not commission_rules vs
+ * commission_override_rules".
+ *
+ * That reasoning did not go away — it got a stronger expression. The two
+ * recipients are now two STEPS: agent rates are step 3 (the one that cannot
+ * be skipped, because without it nobody is paid at all) and leader rates are
+ * step 4 (an addition on top of a working payout). A filter chip that hides
+ * half a list is a weaker version of a step that names why the half exists,
+ * and keeping both would have meant three consumers of one ref — the chips,
+ * which add button exists, and which rows render — disagreeing about which
+ * step they were on.
+ */
 const showOverrideForm = ref(false)
 const editingOverrideId = ref<number | null>(null)
 const savingOverride = ref(false)
@@ -592,9 +781,9 @@ async function submitOverrideRule(): Promise<void> {
       effective_to: overrideForm.value.effective_to || null,
     }
     if (editingOverrideId.value) {
-      await api.put(`/commission-override-rules/${editingOverrideId.value}`, body)
+      await commissionApi.put(`/commission-override-rules/${editingOverrideId.value}`, body)
     } else {
-      await api.post('/commission-override-rules', withCompanyBody(body))
+      await commissionApi.post('/commission-override-rules', withCompanyBody(body))
     }
     resetOverrideForm()
     await loadRulesTabData()
@@ -616,7 +805,7 @@ function overrideScopeLabel(r: CommissionOverrideRuleItem): string {
 async function deleteOverrideRule(r: CommissionOverrideRuleItem): Promise<void> {
   if (!window.confirm(`ลบอัตราหัวหน้าทีม "${overrideScopeLabel(r)}"?`)) return
   try {
-    await api.delete(`/commission-override-rules/${r.id}`)
+    await commissionApi.delete(`/commission-override-rules/${r.id}`)
     commissionOverrideRules.value = commissionOverrideRules.value.filter((x) => x.id !== r.id)
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
@@ -687,13 +876,27 @@ async function loadReadinessProbe(): Promise<void> {
   structureReady.value = next
 }
 
-// ── Overview helpers (Option B/C — see viewMode block above) ──
+// ── Product-row helpers (the Option B idea, now living in step 3.2) ──
+/*
+ * Sets the STEP as well as the form. It used to set viewMode + activeTab +
+ * form state together for exactly this reason: the form opens as an overlay
+ * over whatever is behind it, and closing it must not drop the admin back on
+ * a panel that has nothing to do with what they just saved. Step 3 is where
+ * the row they clicked lives, so step 3 is where they land.
+ */
 function openRuleFormForProduct(p: ProductOption) {
-  viewMode.value = 'settings'
+  activeStep.value = 3
   activeTab.value = 'rules'
+  void ensureTabLoaded('rules')
   resetRuleForm()
   ruleForm.value.scope = 'product'
   ruleForm.value.product_id = p.id
+  showRuleForm.value = true
+}
+/** Step 3's two add buttons ("+ เพิ่มอัตราของสินค้า" / "…ของหมวดหมู่"). */
+function openCreateRuleFormWithScope(scope: RuleScope) {
+  resetRuleForm()
+  ruleForm.value.scope = scope
   showRuleForm.value = true
 }
 const productPlanTypeCounts = computed<Partial<Record<CommissionPlanType, number>>>(() => {
@@ -835,7 +1038,15 @@ const conflictingOverrideIds = computed<Set<number>>(() => {
   return ids
 })
 
-const totalConflicts = computed(() => conflictingRuleIds.value.size + conflictingOverrideIds.value.size)
+/*
+ * `totalConflicts` (the two sets added together) was deleted with the tab
+ * bar. It existed because the overview and the rules tab were different
+ * places and the overview could only afford ONE number to send an admin to
+ * the other one. The steps split the two kinds of collision back apart —
+ * agent-rate overlaps are step 3's and leader-rate overlaps are step 4's —
+ * and each is now counted where it can actually be deleted, which is the
+ * only place the count is useful.
+ */
 
 /** How many live rules share the scope this product actually resolves at. */
 function conflictCountFor(p: ProductOption): number {
@@ -890,12 +1101,14 @@ function resolveOverrideFor(product: ProductOption): CommissionOverrideRuleItem 
   )
 }
 
-/** '—' / '2.50% · สินค้า: X' for the overview card. */
-function leaderRateLabel(product: ProductOption): string {
-  const rule = resolveOverrideFor(product)
-
-  return rule ? formatRate(rule.rate_type, rule.rate_value) : '—'
-}
+/*
+ * `leaderRateLabel` was deleted with the overview card it formatted. Step 4
+ * shows the leader rows themselves rather than one summarised number per
+ * product, so there is nothing left to abbreviate to '—' — and '—' was
+ * always the weakest part of that card: it could not distinguish "no leader
+ * rate" from "this plan does not pay the leader from this table at all".
+ * leaderRateGaps() answers that question properly instead.
+ */
 
 /**
  * TASK-213 Phase 1 — can this product actually pay, today?
@@ -946,6 +1159,310 @@ const readinessCounts = computed(() => {
 
   return c
 })
+
+// ══════════════════════════ The 4-step flow (2026-09-11) ══════════════════════════
+/*
+ * Everything below re-cuts facts productReadiness() already establishes, per
+ * STEP instead of per PRODUCT. Both views are needed and neither replaces
+ * the other: a product card has to say what is wrong with that product, and
+ * a step tab has to say whether that step is finished — and one product with
+ * no rate makes step 3 unfinished no matter how many others are fine.
+ *
+ * The cut lines match the server's, not the screen's convenience:
+ *   step 2 owns the STRUCTURAL singletons (binary/matrix/rank/generation),
+ *   step 3 owns commission_rules,
+ *   step 4 owns commission_override_rules and the two other routes.
+ */
+
+/** In-use plan types whose company-wide structure is confirmed MISSING (step 2). */
+const unsetStructuralPlans = computed<CommissionPlanType[]>(() => {
+  const inUse = new Set(byCompany(products.value).map((p) => p.effective_plan_type).filter(Boolean) as CommissionPlanType[])
+
+  // `=== false` and not `!`: loadReadinessProbe() leaves a key UNDEFINED when
+  // its probe could not answer, and "unknown" must never raise an alarm.
+  return [...inUse].filter((pt) => structureReady.value[pt] === false)
+})
+
+/** Products with no rate that resolves TODAY — the money-losing set (step 3). */
+const productsMissingAgentRate = computed<ProductOption[]>(() =>
+  byCompany(products.value).filter((p) => !resolveRuleFor(p)))
+
+/*
+ * Step 3 is complete when every product resolves to exactly ONE live rate.
+ * Overlaps count as incomplete for the same reason productReadiness ranks
+ * them beside "no rule at all": the money still moves, at an amount nobody
+ * chose and nobody can predict, into a ledger that cannot be corrected (BR-4).
+ */
+const step3Complete = computed(() =>
+  productsMissingAgentRate.value.length === 0 && conflictingRuleIds.value.size === 0)
+
+/**
+ * Unilevel/Affiliate products with nobody set to pay the upline (step 4).
+ *
+ * Only those two plans pay the leader out of commission_override_rules; on
+ * the others the upline is paid by that plan's own structure, so counting
+ * them here would invent a gap that does not exist.
+ */
+const leaderRateGaps = computed<ProductOption[]>(() =>
+  byCompany(products.value).filter((p) =>
+    (p.effective_plan_type === 'unilevel' || p.effective_plan_type === 'affiliate') && !resolveOverrideFor(p)))
+
+const stepStatuses = computed<Record<Step, StepStatus>>(() => ({
+  1: effectiveCompanyId.value ? 'done' : 'incomplete',
+  2: unsetStructuralPlans.value.length ? 'incomplete' : 'done',
+  3: step3Complete.value ? 'done' : 'incomplete',
+  // Always skippable — see StepStatus above. The banner still says what
+  // skipping it costs, which is the honest half of "ข้ามได้".
+  4: 'optional',
+}))
+
+/**
+ * The ONE step the admin should go to next, worst-first.
+ *
+ * The order is productReadiness()'s, lifted: no rate at all beats a missing
+ * structure (a product with no rate pays NOBODY, which makes every other
+ * observation about it irrelevant), and both beat a missing leader rate
+ * (where the agent is still paid).
+ *
+ * null = nothing is blocking; the banner turns green.
+ */
+/*
+ * ── 2026-09-11 — THE BANNER NOW READS THE SERVER, NOT THIS FILE ──
+ *
+ * The four computeds below used to derive the banner from the rows this
+ * screen had already loaded, and that was defensible while this was the only
+ * screen that showed it. It stopped being defensible the day the owner asked
+ * for the same warning on EVERY page ("หากยังไม่ได้มีการ setup ค่าคอม
+ * ให้แจ้งเตือนในทุกหน้า"): the app shell's banner asks
+ * GET /commission-readiness, this one derived its own answer, and two answers
+ * about whether anybody is being paid WILL diverge — over a rate that expired
+ * at midnight, a product another admin added in the next tab, a category rule
+ * this screen filters client-side. They would diverge, of all places, in
+ * front of the person who opened this screen to fix it.
+ *
+ * So `commissionReadiness` is the single source, and the server is where the
+ * rate-resolution rule lives (mirroring CommissionService exactly — see
+ * CommissionReadinessService's docblock).
+ *
+ * WHAT STAYED LOCAL, AND WHY THAT IS NOT THE SAME MISTAKE. The step PILLS and
+ * the per-product cards below still compute from loaded rows, because they
+ * answer a different question: "what is wrong with THIS row / THIS step",
+ * which the endpoint deliberately does not carry (it is fetched by every
+ * admin session and must stay small). The banner's verdict is the thing that
+ * had to be one answer, and now is.
+ */
+const blockingStep = computed<Step | null>(() => commissionReadiness.blockingStep)
+
+/**
+ * 'bad' = closed deals pay nobody · 'warn' = they pay, but not everybody.
+ *
+ * Note what moved with the verdict: a missing plan STRUCTURE, and two live
+ * rates fighting over one scope, used to paint this red. The server calls
+ * both 'incomplete', per the owner's own definition of the amber state — in
+ * each case somebody IS paid. Red is now reserved for the one sentence it
+ * claims: nobody is.
+ *
+ * An unknown state (first paint, before the fetch lands, or a failed fetch)
+ * reads as 'ok' — the same thing this screen did before, when its empty
+ * arrays resolved to "nothing missing". A banner must not shout about a
+ * verdict it does not have yet.
+ */
+const readinessLevel = computed<ReadinessLevel>(() => {
+  if (commissionReadiness.state === 'missing') return 'bad'
+  if (commissionReadiness.state === 'incomplete') return 'warn'
+
+  return 'ok'
+})
+
+const readinessHeadline = computed(() => {
+  if (commissionReadiness.state === null) return 'กำลังตรวจสอบสถานะการตั้งค่าค่าคอม…'
+  if (readinessLevel.value === 'ok') return 'พร้อมจ่ายค่าคอมแล้ว — ทุกสินค้ามีอัตราที่ใช้ได้'
+  if (readinessLevel.value === 'warn') return 'จ่ายตัวแทนผู้ขายได้แล้ว แต่หัวหน้าทีมยังไม่ได้ส่วนแบ่ง'
+
+  return 'ยังไม่พร้อมจ่ายค่าคอม — ดีลที่ปิดได้จะไม่มีใครได้เงิน'
+})
+
+/**
+ * The second line: which step it is stuck on, and the number that proves it.
+ *
+ * The numbers come from the server's `issues`, already in Thai and already
+ * carrying their own counts — re-phrasing them here would put a second copy
+ * of a sentence about money in a second file, which is the whole thing this
+ * change removes. Every issue is joined rather than only the first, because
+ * this is the screen where they get fixed: an admin about to clear one gap
+ * should see the next without hunting for it.
+ */
+const readinessDetail = computed(() => {
+  const step = blockingStep.value
+  if (step === null) return 'ตรวจจากอัตราและโครงสร้างที่ตั้งไว้จริง ณ วันนี้ (ตรวจโดยเซิร์ฟเวอร์)'
+
+  const stuck = `ติดอยู่ที่ขั้นที่ ${step} · `
+  if (step === 1) return `${stuck}ยังไม่ได้เลือกบริษัท — เลือกบริษัทก่อนจึงจะดูและตั้งอัตราได้`
+
+  const labels = commissionReadiness.issues.map((i) => i.label).join(' · ')
+
+  return labels ? `${stuck}${labels}` : stuck.replace(/ · $/, '')
+})
+
+// ── Step 2: which plan, and what that plan means ──
+const planChipOrder: CommissionPlanType[] = ['unilevel', 'binary', 'matrix', 'stairstep_breakaway', 'generation', 'affiliate']
+
+/**
+ * The plan THIS COMPANY is on, read out of data the screen already has.
+ *
+ * A product with no `commission_plan_type` of its own inherits the company's,
+ * so that product's `effective_plan_type` IS the company's answer — no extra
+ * request, and no second copy of the value to drift out of step with
+ * CompanyManagementView (which is still the only place it can be CHANGED).
+ *
+ * null when every product carries its own override, or there are no products
+ * yet. That is left as null rather than defaulted to Unilevel on purpose:
+ * BR-7's rule against guessing a business value applies to what the screen
+ * ASSERTS as much as to what it submits.
+ */
+const companyPlanType = computed<CommissionPlanType | null>(() =>
+  byCompany(products.value).find((p) => !p.commission_plan_type && p.effective_plan_type)?.effective_plan_type ?? null)
+
+/** Which plan's details are on screen in step 2 — not necessarily the one in use. */
+const viewingPlanType = ref<CommissionPlanType>('unilevel')
+
+/**
+ * What each plan actually does, in the words an admin uses.
+ *
+ * `affects` is the part the six tabs could never say: it names the step this
+ * choice changes, which is the whole reason the choice is step 2 rather than
+ * a dropdown on some other screen.
+ */
+const planExplainers: Record<CommissionPlanType, { title: string; how: string; affects: string }> = {
+  unilevel: {
+    title: 'Unilevel — ขายตรง + ส่วนแบ่งหัวหน้าสาย',
+    how: 'ตัวแทนได้จากยอดที่ตัวเองปิด และหัวหน้าสายได้ส่วนแบ่งจากยอดลูกทีม',
+    affects: 'แผนนี้ทำให้ขั้นที่ 4 มี "อัตราหัวหน้าทีม" ให้ตั้ง',
+  },
+  binary: {
+    title: 'Binary — จ่ายจากยอดขาที่น้อยกว่า',
+    how: 'ตัวแทนมีสายซ้าย/ขวา ระบบจับคู่ยอดสองขาแล้วจ่ายจากขาที่น้อยกว่าตามรอบที่ตั้งไว้',
+    affects: 'แผนนี้ต้องตั้งอัตรา Matched และรอบคำนวณในขั้นนี้ก่อน ไม่งั้นไม่มีรอบไหนถูกประมวลผลเลย',
+  },
+  matrix: {
+    title: 'Matrix — จำกัดความกว้างและความลึกของสาย',
+    how: 'แต่ละคนมีลูกทีมได้ไม่เกินความกว้างที่กำหนด คนที่เกินจะไหลลง (spillover) และจ่ายตามชั้น',
+    affects: 'แผนนี้ต้องตั้งความกว้าง/ความลึก และอัตราของแต่ละชั้นในขั้นนี้',
+  },
+  stairstep_breakaway: {
+    title: 'อันดับ (Stairstep) — เลื่อนขั้นตามยอดสะสม',
+    how: 'ตัวแทนเลื่อนอันดับเมื่อยอดถึงเกณฑ์ และได้อัตราของอันดับนั้น อันดับ Breakaway จะตัดออกจากสายบน',
+    affects: 'แผนนี้ต้องตั้งบันไดอันดับในขั้นนี้ — ถ้าไม่มีอันดับเลย จะไม่มีใครเลื่อนขั้นได้',
+  },
+  generation: {
+    title: 'Generation — จ่ายเป็นรุ่นลึกลงไป',
+    how: 'นับรุ่น (generation) ลงไปจากคนที่ปิดการขาย และจ่ายตามอัตราของแต่ละรุ่น',
+    affects: 'แผนนี้ต้องตั้งความลึกและอัตราของแต่ละรุ่นในขั้นนี้ — ความลึกอย่างเดียวไม่จ่ายใคร',
+  },
+  affiliate: {
+    title: 'พันธมิตร (Affiliate) — จ่ายจากลิงก์แนะนำ',
+    how: 'นับเครดิตให้ลิงก์ที่ถูกคลิกล่าสุดภายในช่วงเวลาที่กำหนด และจ่ายขึ้นไปชั้นเดียว',
+    affects: 'แผนนี้ทำให้ขั้นที่ 4 มี "อัตราหัวหน้าทีม" ให้ตั้ง (จ่ายชั้นเดียว)',
+  },
+}
+
+/**
+ * Pick a plan to LOOK AT in step 2 — which is not the same as switching to it.
+ *
+ * Switching the company onto a plan is CompanyManagementView's job (and
+ * CompanyPolicy::update, Super Admin only). All this does is reveal that
+ * plan's structural form, which is exactly what the dimmed chips promise:
+ * "กดดูรายละเอียดได้ แต่ยังไม่มีผลจนกว่าจะสลับมาใช้".
+ */
+function viewPlan(pt: CommissionPlanType): void {
+  viewingPlanType.value = pt
+  const tab = planTypeToTab[pt]
+  // Unilevel has no structural tab by design (it is pure rate-rule-driven),
+  // so there is nothing to load and nothing to render below the chips.
+  if (tab) {
+    activeTab.value = tab
+    void ensureTabLoaded(tab)
+  }
+}
+
+// ── Step 3: which layer a product's rate actually comes from ──
+/** The company-wide default rows that are live today (step 3.1). */
+const companyDefaultRules = computed<CommissionRuleItem[]>(() => {
+  const now = new Date()
+
+  return byCompany(commissionRules.value).filter((r) => !r.product && !r.product_category && isRuleActiveOn(r, now))
+})
+
+/** 'ตั้งเฉพาะสินค้านี้' / 'ใช้อัตราหมวดหมู่' / 'ใช้ค่าเริ่มต้นบริษัท' — the badge in 3.2. */
+function rateLayerLabel(p: ProductOption): string {
+  const r = resolveRuleFor(p)
+  if (!r) return 'ยังไม่มีอัตรา'
+  if (r.product) return 'ตั้งเฉพาะสินค้านี้'
+  if (r.product_category) return 'ใช้อัตราหมวดหมู่'
+
+  return 'ใช้ค่าเริ่มต้นบริษัท'
+}
+
+/**
+ * The rate this product USED to have, when it has none now.
+ *
+ * An expired `effective_to` is the cruellest version of "no rate": the admin
+ * set one, saw it work, and it stopped on a date nobody was reminded of. The
+ * generic "ยังไม่มีอัตรา" makes that look like an omission and sends them to
+ * create a duplicate; naming the end date sends them to the row that needs
+ * one field changed.
+ */
+function expiredRuleFor(p: ProductOption): CommissionRuleItem | null {
+  const now = new Date()
+  const categoryId = p.category?.id
+  const expired = byCompany(commissionRules.value)
+    .filter((r) => !!r.effective_to && new Date(r.effective_to) < now)
+    .filter((r) => r.product?.id === p.id || (!!categoryId && r.product_category?.id === categoryId) || (!r.product && !r.product_category))
+    .sort((a, b) => (b.effective_to ?? '').localeCompare(a.effective_to ?? ''))
+
+  return expired[0] ?? null
+}
+
+// ── Step navigation ──
+function stepLabel(step: Step): string {
+  return stepDefs.find((s) => s.step === step)?.label ?? ''
+}
+const prevStep = computed<Step | null>(() => (activeStep.value > 1 ? ((activeStep.value - 1) as Step) : null))
+const nextStep = computed<Step | null>(() => (activeStep.value < 4 ? ((activeStep.value + 1) as Step) : null))
+
+/**
+ * Step 1's own company picker.
+ *
+ * Writes through activeCompany.requestCompany() — the same action the header
+ * switcher uses — rather than setting `selectedId`, so the unsaved-work guard
+ * (ADR-038's 2026-09-04 addition) still gets its say and the header stays in
+ * step. A second write path here would be a second place for the two to
+ * disagree about which company is on screen, which is the exact bug ADR-038
+ * was created to end.
+ */
+function pickCompany(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value
+
+  void activeCompany.requestCompany(value === '' ? null : Number(value))
+}
+
+/**
+ * Moving between steps also arranges for the panel's data to exist.
+ *
+ * Step 3 and step 4 both read the rules payload (agent rates, leader rates,
+ * products, categories and the readiness probe all arrive together in
+ * loadRulesTabData), and step 2 reads whichever structural tab the viewed
+ * plan maps to. Routing every move through here is what stops a step from
+ * rendering an empty list it never asked the server about.
+ */
+function goToStep(step: Step): void {
+  activeStep.value = step
+  if (step === 2) viewPlan(viewingPlanType.value)
+  else if (step === 3 || step === 4) {
+    activeTab.value = 'rules'
+    void ensureTabLoaded('rules')
+  }
+}
 
 // ── "ทดสอบคำนวณ" simulate modal — direct commission preview only, see
 // the caveat text rendered alongside it in the template. ──
@@ -1088,7 +1605,7 @@ async function wizardConfirmProductAndPlan() {
      * stops the 403 should be the rule, not a coincidence of the markup.
      */
     if (canEditPlanType(wizardProduct.value) && desired !== (wizardProduct.value.commission_plan_type ?? null)) {
-      await api.put(`/products/${wizardProduct.value.id}`, withCompanyBody({ commission_plan_type: desired }))
+      await commissionApi.put(`/products/${wizardProduct.value.id}`, withCompanyBody({ commission_plan_type: desired }))
       await loadRulesTabData() // refresh products' effective_plan_type
     }
     const existing = wizardProduct.value ? findExactProductRule(wizardProduct.value.id) : undefined
@@ -1102,7 +1619,9 @@ async function wizardConfirmProductAndPlan() {
 }
 async function wizardEnsureStructureLoaded() {
   const tab = wizardEffectivePlanType.value ? planTypeToTab[wizardEffectivePlanType.value] : undefined
-  if (tab && !loadedTabs.value.has(tab)) await loadTab(tab)
+  // Through the shared entry point (2026-09-11) — this was the fifth copy of
+  // the `loadedTabs.has()` test, and the one most likely to be forgotten.
+  if (tab) await ensureTabLoaded(tab)
 }
 function wizardPrefillStructureForm() {
   const pt = wizardEffectivePlanType.value
@@ -1128,8 +1647,8 @@ async function wizardSaveRates() {
         effective_from: existing?.effective_from ?? new Date().toISOString().slice(0, 10),
         effective_to: null,
       })
-      if (existing) await api.put(`/commission-rules/${existing.id}`, payload)
-      else await api.post('/commission-rules', payload)
+      if (existing) await commissionApi.put(`/commission-rules/${existing.id}`, payload)
+      else await commissionApi.post('/commission-rules', payload)
     }
     await loadRulesTabData()
     if (wizardNeedsStructureStep()) {
@@ -1224,7 +1743,7 @@ async function submitBinarySettings() {
       payout_cap_satang: binaryForm.value.payout_cap_thb === '' ? null : Math.round(Number(binaryForm.value.payout_cap_thb) * 100),
       carry_over_unmatched: binaryForm.value.carry_over_unmatched,
     })
-    const res = await api.put<{ data: BinarySettings }>(`/commission-binary-settings${companyQuery()}`, payload)
+    const res = await commissionApi.put<{ data: BinarySettings }>(`/commission-binary-settings${companyQuery()}`, payload)
     binarySettings.value = res.data
   } catch (e) {
     binaryError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
@@ -1272,7 +1791,7 @@ async function submitMatrixSettings() {
       depth: Number(matrixForm.value.depth),
       spillover_rule: matrixForm.value.spillover_rule,
     })
-    const res = await api.put<{ data: MatrixSettings }>(`/commission-matrix-settings${companyQuery()}`, payload)
+    const res = await commissionApi.put<{ data: MatrixSettings }>(`/commission-matrix-settings${companyQuery()}`, payload)
     matrixSettings.value = res.data
   } catch (e) {
     matrixError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
@@ -1292,7 +1811,7 @@ async function submitLevelRate() {
   savingLevelRate.value = true
   matrixError.value = ''
   try {
-    await api.post(
+    await commissionApi.post(
       '/commission-matrix-level-rates',
       withCompanyBody({
         level: Number(levelRateForm.value.level),
@@ -1312,7 +1831,7 @@ async function submitLevelRate() {
 }
 async function deleteLevelRate(item: MatrixLevelRateItem) {
   try {
-    await api.delete(`/commission-matrix-level-rates/${item.id}`)
+    await commissionApi.delete(`/commission-matrix-level-rates/${item.id}`)
     matrixLevelRates.value = matrixLevelRates.value.filter((x) => x.id !== item.id)
   } catch (e) {
     matrixError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
@@ -1363,7 +1882,7 @@ async function submitRankSettings() {
   savingRankSettings.value = true
   rankError.value = ''
   try {
-    const res = await api.put<{ data: AgentRankSettingsData }>(
+    const res = await commissionApi.put<{ data: AgentRankSettingsData }>(
       `/agent-rank-settings${companyQuery()}`,
       withCompanyBody({
         trailing_window_days: Number(rankSettingsForm.value.trailing_window_days),
@@ -1418,9 +1937,9 @@ async function submitRank() {
       is_breakaway_rank: rankForm.value.is_breakaway_rank,
     })
     if (editingRankId.value) {
-      await api.put(`/agent-ranks/${editingRankId.value}`, payload)
+      await commissionApi.put(`/agent-ranks/${editingRankId.value}`, payload)
     } else {
-      await api.post('/agent-ranks', payload)
+      await commissionApi.post('/agent-ranks', payload)
     }
     resetRankForm()
     await loadRanksTabData()
@@ -1432,7 +1951,7 @@ async function submitRank() {
 }
 async function deleteRank(r: AgentRankItem) {
   try {
-    await api.delete(`/agent-ranks/${r.id}`)
+    await commissionApi.delete(`/agent-ranks/${r.id}`)
     agentRanks.value = agentRanks.value.filter((x) => x.id !== r.id)
   } catch (e) {
     rankError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
@@ -1473,7 +1992,7 @@ async function submitGenerationSettings() {
   savingGenerationSettings.value = true
   generationError.value = ''
   try {
-    const res = await api.put<{ data: GenerationSettingsData }>(
+    const res = await commissionApi.put<{ data: GenerationSettingsData }>(
       `/commission-generation-settings${companyQuery()}`,
       withCompanyBody({ max_generation_depth: Number(generationSettingsForm.value.max_generation_depth) }),
     )
@@ -1496,7 +2015,7 @@ async function submitGenerationRule() {
   savingGenerationRule.value = true
   generationError.value = ''
   try {
-    await api.post(
+    await commissionApi.post(
       '/commission-generation-rules',
       withCompanyBody({
         generation_number: Number(generationRuleForm.value.generation_number),
@@ -1516,7 +2035,7 @@ async function submitGenerationRule() {
 }
 async function deleteGenerationRule(item: GenerationRuleItem) {
   try {
-    await api.delete(`/commission-generation-rules/${item.id}`)
+    await commissionApi.delete(`/commission-generation-rules/${item.id}`)
     generationRules.value = generationRules.value.filter((x) => x.id !== item.id)
   } catch (e) {
     generationError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
@@ -1547,7 +2066,7 @@ async function submitAffiliateSettings() {
   savingAffiliate.value = true
   affiliateError.value = ''
   try {
-    const res = await api.put<{ data: AffiliateAttributionSettingsData }>(
+    const res = await commissionApi.put<{ data: AffiliateAttributionSettingsData }>(
       `/affiliate-attribution-settings${companyQuery()}`,
       withCompanyBody({
         attribution_window_days: Number(affiliateForm.value.attribution_window_days),
@@ -1590,15 +2109,23 @@ async function loadTab(tab: Tab) {
     hasLoadedOnce.value = true
   }
 }
+/*
+ * The resolution-order modal is NO LONGER auto-opened here — see the
+ * RESOLUTION_ORDER_NOTE block for why the nag went and what replaced it.
+ */
 watch(activeTab, (tab) => {
-  if (!loadedTabs.value.has(tab)) loadTab(tab)
-  if (tab === 'rules' && !hideResolutionOrderNote.value) openResolutionOrderModal()
+  void ensureTabLoaded(tab)
 })
 watch(() => activeCompany.companyId, () => {
-  // Company changed (Super Admin) — every tab's cached data is now
-  // stale, force a reload next time each is viewed.
+  // Company changed — from the header switcher OR from step 1's own picker,
+  // which goes through the same store action, so this keeps working without
+  // a second code path. Every tab's cached data is now stale, force a reload
+  // next time each is viewed.
   loadedTabs.value.clear()
-  if (activeTab.value !== 'rules') loadTab(activeTab.value)
+  // The banner's verdict is per company too — the store caches by company id,
+  // so switching back to one already seen this session costs no request.
+  void commissionReadiness.ensureLoaded()
+  if (activeTab.value !== 'rules') void ensureTabLoaded(activeTab.value)
   // The rules tab is deliberately NOT refetched: it loads every company's
   // rows once and narrows them with byCompany(). The readiness probe is
   // the exception — it asks per-company endpoints (companyQuery()), so
@@ -1606,928 +2133,1308 @@ watch(() => activeCompany.companyId, () => {
   // this company's products, which is worse than showing nothing.
   else void loadReadinessProbe()
 })
+/*
+ * ONE place sets the opening state, because the three pieces of it have to
+ * agree and used to be set in three places that could not see each other:
+ * `activeTab` defaulted to 'rules', `viewMode` defaulted to 'overview' (a
+ * combination no `v-if` matched), and onMounted hard-coded loadTab('rules')
+ * regardless of either.
+ *
+ * The screen opens on STEP 1 every time rather than jumping to
+ * `blockingStep`. Landing somewhere different on each visit is exactly the
+ * disorientation the redesign exists to remove — and the banner above the
+ * tabs already carries a one-click jump for the admin who only came to fix
+ * the blockage.
+ */
 onMounted(async () => {
+  activeStep.value = 1
+  activeTab.value = 'rules'
   await activeCompany.loadCompanies()
-  await loadTab('rules')
-  if (!hideResolutionOrderNote.value) openResolutionOrderModal()
+  // Before the tab data, and awaited: the banner is the first thing above the
+  // steps, and an admin who opened this screen because of the warning should
+  // not watch it appear after the rate table has already rendered.
+  await commissionReadiness.ensureLoaded()
+  await ensureTabLoaded('rules')
+})
+/*
+ * Step 2 opens on the plan the company is ACTUALLY on, not on the first chip
+ * — and re-points when the company changes underneath it. Watching the
+ * derived value rather than setting it once after load covers both moments
+ * with one rule; `companyPlanType` is only knowable after products arrive,
+ * so there is no earlier point at which this could be assigned.
+ */
+watch(companyPlanType, (pt) => {
+  if (pt) viewingPlanType.value = pt
 })
 </script>
 
 <template>
   <main class="min-h-screen px-4 py-6 lg:px-8">
+    <!-- storage-key unchanged: an admin who collapsed this header keeps it
+         collapsed across the redesign. The #tabs slot is gone because the
+         step bar is no longer a filter on one page — it IS the page, and it
+         has to stay visible when the header is collapsed. -->
     <HeroHeader
       icon="money"
-      title="แผนคอมมิชชั่น"
-      subtitle="ตั้งค่ารูปแบบคอมมิชชั่นทุกแบบของบริษัท"
-      description="Unilevel/Binary/Matrix/Stairstep-Breakaway/Generation/Affiliate (ADR-011) — ตั้งค่าที่นี่หลังเลือกรูปแบบที่หน้าจัดการบริษัท"
+      title="ตั้งค่าคอมมิชชั่น"
+      :subtitle="`กดทีละขั้น 1 → 4 · ตอนนี้อยู่ขั้นที่ ${activeStep} จาก 4`"
+      description="Unilevel/Binary/Matrix/Stairstep-Breakaway/Generation/Affiliate (ADR-011) — ตั้งครบทั้ง 4 ขั้นแล้วระบบถึงจะจ่ายค่าคอมได้"
       accent-color="brand"
       storage-key="commission-plans"
-    >
-      <template #tabs>
-        <div class="flex gap-1 px-4 py-2">
-          <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors"
-            :class="viewMode === 'overview' ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
-            @click="viewMode = 'overview'"
-          >
-            <Icon name="box" :size="16" />
-            ภาพรวมสินค้า
-          </button>
-          <button
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors"
-            :class="viewMode === 'settings' ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
-            @click="viewMode = 'settings'"
-          >
-            <Icon name="list" :size="16" />
-            การตั้งค่าทั้งหมด
-          </button>
-        </div>
-        <div v-if="viewMode === 'settings'" class="flex gap-1 px-4 py-2 overflow-x-auto border-t border-slate-100">
-          <button
-            v-for="t in tabDefs"
-            :key="t.key"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-colors"
-            :class="activeTab === t.key ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
-            @click="activeTab = t.key"
-          >
-            <Icon :name="t.icon" :size="16" />
-            {{ t.label }}
-            <span v-if="tabToPlanType[t.key] && productPlanTypeCounts[tabToPlanType[t.key]!]" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600">
-              {{ productPlanTypeCounts[tabToPlanType[t.key]!] }}
-            </span>
-          </button>
-        </div>
-      </template>
-    </HeroHeader>
+    />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
     </div>
 
-    <EmptyState
-      v-if="activeCompany.requiresCompanyPick"
-      icon="building"
-      title="กรุณาเลือกบริษัทก่อน"
-      message="กดปุ่ม “ทุกบริษัท” มุมขวาบนของหน้าจอ แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนคอมมิชชั่น"
-      class="mt-4"
-    />
+    <!--
+      THE READINESS BANNER, PROMOTED ABOVE THE STEPS (2026-09-11).
 
-    <template v-else>
-      <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
+      TASK-213 Phase 1 put this on the ภาพรวม tab, where it could only be
+      seen by an admin who happened to be on that tab — which is nobody in
+      the middle of configuring something. Thirteen code paths can leave a
+      closed deal paying nobody, every one of them silently and by design
+      (the sale must never be blocked by a config gap), so the one thing
+      this screen must never do is let somebody leave it believing they are
+      finished. It now sits outside the step card, on every step, and names
+      the step that is blocking.
+    -->
+    <div
+      class="mt-4 flex items-start gap-3.5 rounded-2xl border px-4 py-4"
+      :class="readinessLevel === 'ok' ? 'bg-emerald-50 border-emerald-200' : readinessLevel === 'warn' ? 'bg-amber-50 border-amber-200' : 'bg-rose-50 border-rose-200'"
+      data-test="readiness-banner"
+    >
+      <Icon
+        :name="readinessLevel === 'ok' ? 'check_circle' : 'alert'"
+        :size="21"
+        class="shrink-0 mt-0.5"
+        :class="readinessLevel === 'ok' ? 'text-emerald-600' : readinessLevel === 'warn' ? 'text-amber-700' : 'text-rose-700'"
+      />
+      <div class="flex-1 min-w-0">
+        <p
+          class="text-[15px] font-extrabold"
+          :class="readinessLevel === 'ok' ? 'text-emerald-800' : readinessLevel === 'warn' ? 'text-amber-800' : 'text-rose-800'"
+          data-test="readiness-headline"
+        >
+          {{ readinessHeadline }}
+        </p>
+        <p
+          class="mt-0.5 text-[13px]"
+          :class="readinessLevel === 'ok' ? 'text-emerald-700' : readinessLevel === 'warn' ? 'text-amber-700' : 'text-rose-700'"
+          data-test="readiness-detail"
+        >
+          {{ readinessDetail }}
+        </p>
+      </div>
+      <button
+        v-if="blockingStep"
+        type="button"
+        class="btn-primary shrink-0 h-9"
+        :class="readinessLevel === 'warn' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'"
+        data-test="readiness-jump"
+        @click="goToStep(blockingStep!)"
+      >
+        ไปที่ขั้นที่ {{ blockingStep }}
+      </button>
+    </div>
 
-      <template v-else>
-        <!-- ═══════════ ภาพรวมสินค้า (Option B/C — new, additive default view) ═══════════ -->
-        <section v-if="viewMode === 'overview'" class="mt-4">
-          <!-- Setup hub (มุมมองที่ 3, human-approved 2026-07-22): จุดเดียวที่รวมทาง
-               เข้าสู่การ Setup ทั้ง 3 อย่าง — Wizard ต่อสินค้า (ในหน้านี้เอง),
-               แผนมาตรฐานบริษัท (CompanyManagementView), Gamification
-               (GamificationConfigView). ไม่ได้ย้าย route จริงมารวมกัน (ความเสี่ยง
-               สูงกว่า/นอกขอบเขตที่ตกลงไว้) — เป็นแค่ทางลัดเข้าออกจุดเดียว. -->
-          <div class="mb-4 p-4 rounded-xl bg-white/95 border border-slate-200">
-            <p class="text-sm font-bold text-slate-900 mb-2">การ Setup</p>
-            <div class="flex flex-wrap gap-2">
-              <button class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 flex items-center gap-1.5" @click="openWizard()">
-                <Icon name="sparkles" :size="14" />
-                เริ่ม Wizard ตั้งค่าคอมมิชชั่นสินค้า
-              </button>
-              <RouterLink :to="{ name: 'company-management' }" class="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5">
-                <Icon name="building" :size="14" />
-                แผนมาตรฐานบริษัท
-              </RouterLink>
-              <RouterLink :to="{ name: 'gamification-config' }" class="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50 flex items-center gap-1.5">
-                <Icon name="trophy" :size="14" />
-                ตั้งค่า Gamification
-              </RouterLink>
-            </div>
-          </div>
+    <div class="mt-4 rounded-2xl border border-slate-200 bg-white/95 overflow-hidden">
+      <!--
+        The four step tabs. FREELY CLICKABLE, never disabled: the numbering
+        is advice about the order the work makes sense in, not a gate. An
+        admin who came back only to fix step 4 must not have to re-walk 1–3,
+        and a UI that refuses the click cannot explain itself — the pill does
+        that job instead, on every step, all the time.
+      -->
+      <div class="flex flex-col sm:flex-row bg-slate-50 border-b border-slate-200" role="tablist">
+        <button
+          v-for="s in stepDefs"
+          :key="s.step"
+          type="button"
+          role="tab"
+          :aria-selected="activeStep === s.step"
+          class="flex-1 flex items-center gap-2.5 px-4 py-3.5 text-left border-b-[3px] transition-colors"
+          :class="activeStep === s.step ? 'bg-white border-brand-600' : 'border-transparent hover:bg-slate-100'"
+          :data-test="`step-tab-${s.step}`"
+          @click="goToStep(s.step)"
+        >
+          <span
+            class="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-extrabold"
+            :class="stepStatuses[s.step] === 'done' ? 'bg-brand-600 text-white' : activeStep === s.step ? 'bg-gold-600 text-white' : 'bg-slate-200 text-slate-500'"
+          >
+            <Icon v-if="stepStatuses[s.step] === 'done'" name="check" :size="14" />
+            <template v-else>{{ s.step }}</template>
+          </span>
+          <span class="flex-1 min-w-0">
+            <span class="block text-[11px] font-bold text-slate-400">ขั้นที่ {{ s.step }}</span>
+            <span class="block text-[13.5px] font-extrabold" :class="activeStep === s.step ? 'text-slate-900' : 'text-slate-600'">{{ s.label }}</span>
+          </span>
+          <span
+            class="shrink-0 text-[11px] font-bold rounded-full px-2.5 py-1"
+            :class="stepStatuses[s.step] === 'done' ? 'bg-emerald-100 text-emerald-700' : stepStatuses[s.step] === 'incomplete' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'"
+            :data-test="`step-pill-${s.step}`"
+          >
+            {{ stepStatusLabels[stepStatuses[s.step]] }}
+          </span>
+        </button>
+      </div>
 
-          <!-- TASK-213 Phase 1 — the headline. Thirteen code paths can
-               leave a closed deal paying nobody, every one of them
-               silently and by design (the sale must not be blocked by a
-               config gap). This is the first screen that says so BEFORE a
-               real deal hits one of them. -->
-          <div v-if="byCompany(products).length" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex items-center gap-4 flex-wrap">
+      <div class="p-5 sm:p-6">
+        <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" />
+
+        <template v-else>
+          <!-- ═══════════ ขั้นที่ 1 · เลือกบริษัท ═══════════ -->
+          <section v-if="activeStep === 1" class="space-y-4" data-test="step-panel-1">
             <div>
-              <p class="text-sm font-bold text-slate-900">ความพร้อมจ่ายค่าคอม</p>
-              <p class="text-xs text-slate-400 mt-0.5">ตรวจจากอัตราและโครงสร้างที่ตั้งไว้จริง ณ วันนี้</p>
+              <p class="text-[17px] font-extrabold text-slate-900">ตั้งค่าคอมมิชชั่นของบริษัทไหน</p>
+              <p class="mt-1 text-[13px] text-slate-500">ทุกอย่างในขั้นที่ 2–4 เป็นของบริษัทที่เลือกไว้ตรงนี้เท่านั้น</p>
             </div>
-            <div class="flex items-center gap-2 flex-wrap ml-auto">
-              <span class="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-bold">พร้อมจ่าย {{ readinessCounts.ok }}</span>
-              <span v-if="readinessCounts.warn" class="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-xs font-bold">ควรตรวจสอบ {{ readinessCounts.warn }}</span>
-              <span v-if="readinessCounts.bad" class="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-xs font-bold">ต้องแก้ไข {{ readinessCounts.bad }}</span>
-              <!-- Shown even when no product currently RESOLVES to the
-                   clashing scope (e.g. two live company-default rows): the
-                   collision is real and will bite the first product that
-                   falls through to it. -->
-              <button
-                v-if="totalConflicts"
-                class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
-                @click="goToSettingsTab('rules')"
-              >
-                อัตราซ้อนทับ {{ totalConflicts }} → ดูรายการ
-              </button>
-            </div>
-          </div>
 
-          <p class="text-xs text-slate-400 mb-3">เลือกสินค้าเพื่อดูอัตราคอมมิชชั่นที่ใช้งานจริง และทดสอบคำนวณตัวอย่าง (ไม่ใช่การขายจริง)</p>
-          <EmptyState v-if="!byCompany(products).length" icon="money" title="ยังไม่มีสินค้า" />
-          <div v-else class="space-y-3">
-            <div v-for="p in byCompany(products)" :key="p.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
-              <div class="flex items-start justify-between gap-3 flex-wrap">
-                <div>
-                  <p class="text-sm font-bold text-slate-900">
-                    {{ p.name }}
-                    <span class="ml-1 text-xs font-bold px-2 py-0.5 rounded-lg bg-brand-50 text-brand-700">{{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}</span>
-                    <span v-if="!p.commission_plan_type" class="ml-1 text-xs font-normal text-slate-400">(สืบทอดจากบริษัท)</span>
-                  </p>
-                  <p class="text-xs text-slate-400 mt-0.5">{{ p.category?.name ?? 'ไม่มีหมวดหมู่' }}<span v-if="p.price_satang"> · {{ formatSatang(p.price_satang) }}</span></p>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <button class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50" @click="openSimulate(p)">
-                    ทดสอบคำนวณ
-                  </button>
-                  <button v-if="canSetCommission(p)" class="px-3 py-1.5 rounded-lg text-brand-700 border border-brand-200 bg-brand-50 text-xs font-bold hover:bg-brand-100 flex items-center gap-1" @click="openWizard(p.id)">
-                    <Icon name="sparkles" :size="12" />
-                    Wizard
-                  </button>
-                  <!-- ADR-035 — Unilevel is now flat-rate (one rate per
-                       product/category/company scope, no cert-tier
-                       dimension). Button label no longer says "ตาม tier";
-                       wording flips to "แก้ไข" once a rule already resolves
-                       for this product (openRuleFormForProduct still pins
-                       scope='product' + this product's id). -->
-                  <!-- TASK-245 — hidden when the server will refuse it. A
-                       catalog-LINKED product still belongs to this company, so
-                       nothing visible on this card said the rule form would
-                       403 (StoreCommissionRuleRequest, ADR-036 §5/§6). A
-                       SHARED product is not affected: commission stays per
-                       company, which is the whole point of ADR-040. -->
-                  <button v-if="canSetCommission(p)" class="btn-primary" @click="openRuleFormForProduct(p)">
-                    {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
-                  </button>
-                  <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="สินค้าที่ผูกกับแคตตาล็อกกลาง ตั้งค่าคอมมิชชั่นได้เฉพาะ Super Admin">
-                    ตั้งค่าโดย Super Admin
-                  </span>
-                </div>
+            <!--
+              The company used to be reachable ONLY from the header switcher
+              (TASK-208 / ADR-038), and the screen's response to "no company
+              picked" was an EmptyState telling the admin to go look up
+              there. That is a correct instruction and a bad first step: the
+              answer to "which company" belongs on the step that asks it.
+              The picker still writes through the SAME store action, so the
+              header stays in sync and the company-change watcher below
+              keeps working unchanged.
+            -->
+            <div class="rounded-xl border border-slate-200 p-4 flex flex-wrap items-end gap-4">
+              <div class="min-w-0">
+                <p class="text-[11px] font-bold text-slate-400">บริษัทที่กำลังตั้งค่า</p>
+                <p class="text-lg font-extrabold text-slate-900" data-test="step1-company-name">
+                  {{ activeCompany.companyName ?? 'ยังไม่ได้เลือกบริษัท' }}
+                </p>
               </div>
-
-              <!-- TASK-213 Phase 1 — who gets what, on one line each. The
-                   leader column used to exist nowhere on this screen. -->
-              <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
-                  <p class="text-[11px] font-bold text-slate-400">ตัวแทนผู้ขายได้</p>
-                  <p class="text-sm font-bold" :class="resolveRuleFor(p) ? 'text-slate-900' : 'text-rose-600'">
-                    {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : 'ยังไม่ได้ตั้ง' }}
-                    <span v-if="resolveRuleFor(p)" class="text-[11px] font-normal text-slate-400">· {{ ruleScopeLabel(resolveRuleFor(p)!) }}</span>
-                  </p>
-                </div>
-                <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-100">
-                  <p class="text-[11px] font-bold text-slate-400">
-                    หัวหน้าทีมได้
-                    <!-- Only these two plans pay the upline from
-                         commission_override_rules; for the others the
-                         upline is paid by that plan's own structure, so
-                         showing this number there would be wrong. -->
-                    <span v-if="p.effective_plan_type && p.effective_plan_type !== 'unilevel' && p.effective_plan_type !== 'affiliate'" class="font-normal">
-                      (ตามโครงสร้าง {{ planTypeLabels[p.effective_plan_type] }})
-                    </span>
-                  </p>
-                  <p class="text-sm font-bold text-slate-900">
-                    <template v-if="p.effective_plan_type === 'unilevel' || p.effective_plan_type === 'affiliate'">
-                      <span :class="resolveOverrideFor(p) ? '' : 'text-amber-600'">{{ leaderRateLabel(p) }}</span>
-                      <span v-if="resolveOverrideFor(p)" class="text-[11px] font-normal text-slate-400"> · {{ overrideScopeLabel(resolveOverrideFor(p)!) }}</span>
-                      <span v-if="p.effective_plan_type === 'affiliate'" class="text-[11px] font-normal text-slate-400"> · จ่ายชั้นเดียว</span>
-                      <span v-else class="text-[11px] font-normal text-slate-400"> · จ่ายทั้งสาย</span>
-                    </template>
-                    <span v-else class="text-slate-400 font-normal text-xs">ดูที่แท็บ {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}</span>
-                  </p>
-                </div>
-              </div>
-
-              <!-- Replaces the old blanket amber banner, which fired for
-                   EVERY product on a structured plan whether or not the
-                   structure was actually missing — so it said nothing and
-                   was learned to be ignored. This one is silent when the
-                   config is fine. -->
-              <div
-                v-if="productReadiness(p).level !== 'ok'"
-                class="mt-3 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
-                :class="productReadiness(p).level === 'bad' ? 'bg-rose-50 text-rose-700' : 'bg-amber-50 text-amber-700'"
-              >
-                <span class="font-bold">{{ productReadiness(p).level === 'bad' ? '●' : '!' }} {{ productReadiness(p).message }}</span>
-                <button
-                  v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false"
-                  class="font-bold whitespace-nowrap hover:underline"
-                  @click="goToSettingsTab(planTypeToTab[p.effective_plan_type]!)"
+              <div v-if="isSuperAdmin" class="ml-auto min-w-[220px]">
+                <label class="text-sm font-bold text-slate-500" for="step1-company">เปลี่ยนบริษัท</label>
+                <select
+                  id="step1-company"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+                  :value="activeCompany.companyId ?? ''"
+                  data-test="step1-company-select"
+                  @change="pickCompany"
                 >
-                  ไปตั้งค่า →
-                </button>
-                <button v-else class="font-bold whitespace-nowrap hover:underline" @click="goToSettingsTab('rules')">
-                  ไปตั้งอัตรา →
-                </button>
+                  <option value="" disabled>เลือกบริษัท</option>
+                  <option v-for="c in activeCompany.companies" :key="c.id" :value="c.id">{{ c.name }}</option>
+                </select>
               </div>
-              <p v-else class="mt-3 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
+              <p v-else class="ml-auto text-[12.5px] text-slate-400">บริษัทของคุณถูกกำหนดจากบัญชีผู้ใช้ เปลี่ยนที่นี่ไม่ได้</p>
             </div>
-          </div>
 
-          <div class="mt-6">
-            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">ตั้งค่าระดับบริษัท</h3>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-              <button
-                v-for="t in tabDefs.filter((x) => x.key !== 'rules')"
-                :key="t.key"
-                class="p-3 rounded-xl border border-slate-200 bg-white/95 text-left hover:bg-slate-50"
-                @click="goToSettingsTab(t.key)"
-              >
-                <div class="flex items-center gap-1.5 text-slate-700">
-                  <Icon :name="t.icon" :size="16" />
-                  <span class="text-sm font-bold">{{ t.label }}</span>
-                </div>
-                <p class="text-xs text-slate-400 mt-1">ใช้กับ {{ (tabToPlanType[t.key] && productPlanTypeCounts[tabToPlanType[t.key]!]) || 0 }} สินค้า</p>
-              </button>
+            <!--
+              Shown to EVERYONE, not only to the Company Admin it constrains:
+              a Super Admin who cannot see this sentence has no way to know
+              what the person they are configuring for will actually be able
+              to do with the screen afterwards.
+            -->
+            <div class="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3" data-test="commission-lock-note">
+              <Icon name="eye" :size="16" class="shrink-0 mt-0.5 text-slate-400" />
+              <p class="text-[12.5px] text-slate-500">แก้ไขได้เฉพาะ Super Admin · ผู้ดูแลบริษัทเปิดดูได้แต่กดแก้ไม่ได้</p>
             </div>
-          </div>
-        </section>
 
-        <!-- ═══════════ Commission Rules ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'rules'" class="mt-4">
-          <!-- TASK-213 Phase 2 — one list, filtered by WHO GETS PAID.
-               An admin thinks "ตัวแทนได้เท่าไหร่ / หัวหน้าได้เท่าไหร่",
-               not "commission_rules vs commission_override_rules" — and
-               the leader half used to live in a different route entirely
-               (/product-catalog), which is why nobody could find it. -->
-          <div class="flex flex-wrap items-center gap-2 mb-3">
-            <button
-              v-for="f in ([{ k: 'all', l: 'ทั้งหมด' }, { k: 'agent', l: 'ตัวแทนผู้ขาย' }, { k: 'leader', l: 'หัวหน้าทีม' }] as const)"
-              :key="f.k"
-              class="px-3 py-1.5 rounded-full border text-xs font-bold"
-              :class="rateRecipientFilter === f.k ? 'bg-brand-600 text-white border-brand-600' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'"
-              @click="rateRecipientFilter = f.k"
-            >
-              {{ f.l }}
-            </button>
-            <div class="ml-auto flex flex-wrap gap-2">
-              <button v-if="rateRecipientFilter !== 'leader'" class="btn-primary" @click="openCreateRuleForm">
-                + เพิ่มอัตราตัวแทนผู้ขาย
-              </button>
-              <button v-if="rateRecipientFilter !== 'agent'" class="px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100" @click="openCreateOverrideForm">
-                + เพิ่มอัตราหัวหน้าทีม
-              </button>
-            </div>
-          </div>
-
-          <!-- TASK-213 r2 — name the collisions where they can be deleted.
-               A count on the ภาพรวม tab tells an admin something is wrong;
-               only this list can tell them WHICH ROW to remove. -->
-          <div v-if="totalConflicts" class="mb-3 p-4 rounded-xl bg-rose-50 border border-rose-200">
-            <p class="text-sm font-bold text-rose-800">พบอัตราซ้อนทับกัน {{ totalConflicts }} รายการ</p>
-            <p class="mt-1 text-xs text-rose-700 leading-relaxed">
-              แถวที่ติดป้าย <b>ซ้อนทับ</b> ด้านล่างมีผลพร้อมกันในขอบเขตเดียวกัน — ระบบเรียงตามวันที่เริ่มมีผลแล้วหยิบอันแรก
-              <b>เมื่อวันเริ่มเท่ากันจึงหยิบอันไหนก็ได้ ทำนายไม่ได้</b> · ค่าคอมที่ลงบัญชีไปแล้วแก้ย้อนหลังไม่ได้ (BR-4)
-              จึงควรลบให้เหลือรายการเดียวก่อนจะมีดีลปิดเพิ่ม
-            </p>
-            <p class="mt-1 text-xs text-rose-600">
-              ระบบไม่ยอมให้สร้างแบบนี้แล้วตั้งแต่ต้น — รายการเหล่านี้มักเป็นข้อมูลเก่าที่เคยแยกด้วย cert tier ก่อน ADR-035 (18 ส.ค. 2569)
-            </p>
-          </div>
-
-          <!-- Leader-rate form. Kept separate from the agent-rate form
-               above for an honest reason, not a lazy one: the two ask
-               different questions today — an agent rate is scoped by
-               product/หมวดหมู่/บริษัท and can carry a renewal rate, while
-               a leader rate is keyed by the MANAGER'S cert tier and has no
-               product dimension at all. Merging them into one form before
-               commission_override_rules gains product scope (Phase 4)
-               would mean a form whose fields lie about what the row can
-               express. -->
-          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
-               modal backgroud สีดำ"). Inline forms opened at the TOP of
-               the page while the row being edited sat further down and
-               often off-screen; the overlay removes the question by
-               removing everything else. -->
-          <div v-if="showOverrideForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetOverrideForm">
-            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
-            <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div class="min-w-0">
-                <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมหัวหน้าทีม</p>
-                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ overrideFormTargetLabel }}</h1>
+            <div v-if="effectiveCompanyId" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div class="px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <p class="text-[11px] font-bold text-slate-400">สินค้าที่ต้องมีอัตรา</p>
+                <p class="text-sm font-extrabold text-slate-900">{{ byCompany(products).length }} รายการ</p>
               </div>
-              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetOverrideForm">
-                <Icon name="x" :size="20" />
-              </button>
-            </div>
-              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
-              <p class="text-xs text-amber-800">
-                จ่ายให้ "หัวหน้าทีม" ตาม cert tier ของหัวหน้าเอง ทุกครั้งที่ลูกทีมปิดการขาย ·
-                แผน <b>มาตรฐาน (Unilevel)</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว
-              </p>
-              <p class="text-xs text-amber-800">
-                <b>อัตราแยกรายสินค้าได้แล้ว</b> · ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ > หมวดหมู่ > ค่าเริ่มต้นทั้งบริษัท
-              </p>
-              <div v-if="overrideFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ overrideFormError }}</div>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <!-- TASK-214 — the cert-tier picker that used to be here is
-                     gone: the rate no longer depends on the manager's tier
-                     (human ruling 2026-08-19). This is the scope selector
-                     that replaced it, deliberately identical to the agent
-                     rate's above so both read the same way. -->
-                <div class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-                  <select v-model="overrideForm.scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
-                    <option value="category">ตามหมวดหมู่สินค้า</option>
-                    <option value="product">ตามสินค้า</option>
-                  </select>
-                </div>
-                <div v-if="overrideForm.scope === 'product'" class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">สินค้า</label>
-                  <select v-model="overrideForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="" disabled>เลือกสินค้า</option>
-                    <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                </div>
-                <div v-if="overrideForm.scope === 'category'" class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
-                  <select v-model="overrideForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="" disabled>เลือกหมวดหมู่</option>
-                    <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
-                  </select>
-                </div>
-                <!-- TASK-213 — the field that did not exist. The old form
-                     sent rate_type: 'percentage' unconditionally. -->
-                <div>
-                  <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                  <select v-model="overrideForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="percentage">% ของยอดขาย</option>
-                    <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">{{ overrideForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                  <input v-model="overrideForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-                  <div class="mt-1 flex flex-wrap items-start gap-2">
-                    <BuddhistDateInput v-model="overrideForm.effective_from" required />
-                    <CalendarDatePicker v-model="overrideForm.effective_from" />
-                  </div>
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
-                  <div class="mt-1 flex flex-wrap items-start gap-2">
-                    <BuddhistDateInput v-model="overrideForm.effective_to" />
-                    <CalendarDatePicker v-model="overrideForm.effective_to" />
-                  </div>
-                </div>
+              <div class="px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <p class="text-[11px] font-bold text-slate-400">แผนคอมมิชชั่นของบริษัท</p>
+                <p class="text-sm font-extrabold text-slate-900">{{ companyPlanType ? planTypeLabels[companyPlanType] : 'ยังไม่ทราบ' }}</p>
               </div>
-              </div>
-            <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
-              <button type="button" class="btn-secondary" @click="resetOverrideForm">ยกเลิก</button>
-              <button type="submit" :disabled="savingOverride" class="btn-primary">{{ savingOverride ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
-            </div>
-            </form>
-          </div>
-          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
-               modal backgroud สีดำ"). Inline forms opened at the TOP of
-               the page while the row being edited sat further down and
-               often off-screen; the overlay removes the question by
-               removing everything else. -->
-          <div v-if="showRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRuleForm">
-            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRule">
-            <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div class="min-w-0">
-                <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมตัวแทนผู้ขาย</p>
-                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ ruleFormTargetLabel }}</h1>
-              </div>
-              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRuleForm">
-                <Icon name="x" :size="20" />
-              </button>
-            </div>
-              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
-              <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ ruleFormError }}</div>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-                  <select v-model="ruleForm.scope" :disabled="!!editingRuleId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
-                    <option value="category">ตามหมวดหมู่สินค้า</option>
-                    <option value="product">ตามสินค้า</option>
-                  </select>
-                </div>
-                <div v-if="ruleForm.scope === 'product'" class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">สินค้า</label>
-                  <select v-model="ruleForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
-                    <option value="" disabled>เลือกสินค้า</option>
-                    <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
-                  </select>
-                </div>
-                <div v-if="ruleForm.scope === 'category'" class="col-span-2">
-                  <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
-                  <select v-model="ruleForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                    <option value="" disabled>เลือกหมวดหมู่</option>
-                    <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
-                  </select>
-                </div>
-                <!-- TASK-197 §3.4 — product-scope rules use the PRODUCT's
-                     locked-in commission_rate_type once it has one
-                     (server-enforced, §2.2): the selector only shows for
-                     company-wide/category rules (which keep their own free
-                     choice, §1 unchanged) OR the very first rule a product
-                     ever gets (nothing to inherit from yet). -->
-                <div v-if="showRuleFormRateTypeSelector">
-                  <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                  <select v-model="ruleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
-                    <option value="percentage">% ของยอดขาย</option>
-                    <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">{{ effectiveRuleFormRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                  <input
-                    v-model="ruleForm.rate_value_input"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    required
-                    class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
-                    @input="recheckRuleCapDebounced"
-                    @blur="recheckRuleCap"
-                  />
-                  <!-- TASK-197 §3.4 — when the selector above is hidden
-                       (locked-in product format), tell the admin which
-                       unit their number means instead of leaving them to
-                       guess. -->
-                  <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ rateTypeLabels[effectiveRuleFormRateType] }}</p>
-                  <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-                  <div class="mt-1 flex flex-wrap items-start gap-2">
-                    <BuddhistDateInput v-model="ruleForm.effective_from" required />
-                    <CalendarDatePicker v-model="ruleForm.effective_from" />
-                  </div>
-                </div>
-                <div>
-                  <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
-                  <div class="mt-1 flex flex-wrap items-start gap-2">
-                    <BuddhistDateInput v-model="ruleForm.effective_to" />
-                    <CalendarDatePicker v-model="ruleForm.effective_to" />
-                  </div>
-                </div>
-              </div>
-              </div>
-            <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
-              <button type="button" class="btn-secondary" @click="resetRuleForm">ยกเลิก</button>
-              <button type="submit" :disabled="savingRule || ruleCapGuard.isOverCap.value" class="btn-primary">
-                {{ savingRule ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-            </form>
-          </div>
-
-          <!-- TASK-196 §3.3 — same blocking-alert shape as the resolution-order
-               info modal below (this file's own closest existing pattern for a
-               single-button informational modal). -->
-          <div v-if="ruleCapGuard.modalOpen.value" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="ruleCapGuard.closeModal">
-            <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
-              <div class="flex items-center gap-2 mb-2">
-                <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
-                <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
-              </div>
-              <p class="text-xs text-slate-500 mb-4">{{ ruleCapGuard.violationMessage.value }}</p>
-              <div class="flex justify-end">
-                <button class="btn-primary" @click="ruleCapGuard.closeModal">เข้าใจแล้ว</button>
-              </div>
-            </div>
-          </div>
-
-          <EmptyState
-            v-if="!byCompany(commissionRules).length && !activeOverrideRules.length"
-            icon="money"
-            title="ยังไม่มีอัตราค่าคอม"
-            message="เพิ่มอัตราของตัวแทนผู้ขายก่อน — ถ้าไม่มี ดีลที่ปิดได้จะไม่มีใครได้เงินเลย"
-            class="mt-2"
-          />
-          <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <!-- ตัวแทนผู้ขาย -->
-            <div
-              v-for="r in (rateRecipientFilter === 'leader' ? [] : byCompany(commissionRules))"
-              :key="`agent-${r.id}`"
-              class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
-              :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
-            >
-              <div class="min-w-0">
-                <p class="text-sm font-bold text-slate-900">
-                  <span class="mr-2 px-2 py-0.5 rounded-md bg-brand-50 text-brand-700 text-[11px] align-middle">ตัวแทนผู้ขาย</span>
-                  <span v-if="conflictingRuleIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
-                  {{ ruleScopeLabel(r) }}
-                </p>
-                <p class="text-xs text-slate-400">
-                  อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
-                  <span v-if="r.renewal_rate_type"> · ต่ออายุ {{ formatRate(r.renewal_rate_type, r.renewal_rate_value!) }}</span>
+              <!-- TASK-213 Phase 1's per-product verdict, kept as a breakdown.
+                   The banner above reduces it to one blocking step, which is
+                   the right thing for a call to action and the wrong thing for
+                   "how much work is left" — 1 bad out of 40 and 40 out of 40
+                   produce the same banner. -->
+              <div class="px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <p class="text-[11px] font-bold text-slate-400">ความพร้อมจ่ายรายสินค้า</p>
+                <p class="text-sm font-extrabold text-slate-900" data-test="step1-readiness-counts">
+                  <span class="text-emerald-700">พร้อม {{ readinessCounts.ok }}</span>
+                  <span v-if="readinessCounts.warn" class="text-amber-700"> · ควรตรวจ {{ readinessCounts.warn }}</span>
+                  <span v-if="readinessCounts.bad" class="text-rose-700"> · ต้องแก้ {{ readinessCounts.bad }}</span>
                 </p>
               </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditRuleForm(r)">แก้ไข</button>
-                <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRule(r)">ลบ</button>
-              </div>
             </div>
+          </section>
 
-            <!-- หัวหน้าทีม (TASK-213 — moved here from /product-catalog) -->
-            <div
-              v-for="r in (rateRecipientFilter === 'agent' ? [] : byCompany(commissionOverrideRules))"
-              :key="`leader-${r.id}`"
-              class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
-              :class="conflictingOverrideIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-amber-200'"
-            >
-              <div class="min-w-0">
-                <p class="text-sm font-bold text-slate-900">
-                  <span class="mr-2 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] align-middle">หัวหน้าทีม</span>
-                  <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
-                  {{ overrideScopeLabel(r) }}
-                  <!-- Shown only on legacy rows. A row created after
-                       TASK-214 has no tier, and saying "ทุก tier" on it
-                       would imply a dimension that no longer exists. -->
-                  <span v-if="r.manager_cert_tier" class="ml-1 text-[11px] font-normal text-slate-400">
-                    (เดิมตั้งไว้ที่ tier {{ r.manager_cert_tier.name }} — ไม่ถูกใช้แล้ว)
-                  </span>
-                </p>
-                <p class="text-xs text-slate-400">
-                  อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
-                </p>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
-                <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
-              </div>
-            </div>
-          </TransitionGroup>
-        </section>
-
-        <!-- ═══════════ Binary ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'binary'" class="mt-4">
-          <div v-if="binaryError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ binaryError }}</div>
-          <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3" @submit.prevent="submitBinarySettings">
+          <!-- ═══════════ ขั้นที่ 2 · เลือกแผนคอมมิชชั่น ═══════════ -->
+          <section v-else-if="activeStep === 2" class="space-y-4" data-test="step-panel-2">
             <div>
-              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา Matched</label>
-              <select v-model="binaryForm.matched_rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="percentage">% ของยอด Matched</option>
+              <p class="text-[17px] font-extrabold text-slate-900">บริษัทนี้ใช้แผนคอมมิชชั่นแบบไหน</p>
+              <p class="mt-1 text-[13px] text-slate-500">เลือกได้แผนเดียว — แผนที่เลือกจะเป็นตัวกำหนดว่าขั้นที่ 3 และ 4 มีอะไรให้ตั้งบ้าง</p>
+            </div>
+
+            <EmptyState
+              v-if="activeCompany.requiresCompanyPick"
+              icon="building"
+              title="กรุณาเลือกบริษัทก่อน"
+              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนคอมมิชชั่น"
+            />
+            <template v-else>
+              <div class="flex flex-wrap gap-2.5">
+                <button
+                  v-for="pt in planChipOrder"
+                  :key="pt"
+                  type="button"
+                  class="inline-flex items-center gap-2 text-[13.5px] rounded-full px-4.5 py-2.5 border transition-colors"
+                  :class="pt === companyPlanType
+                    ? 'font-extrabold text-white bg-brand-600 border-brand-600'
+                    : pt === viewingPlanType
+                      ? 'font-bold text-slate-700 bg-white border-slate-300'
+                      : 'font-semibold text-slate-400 bg-slate-50 border border-dashed border-slate-200 hover:text-slate-600'"
+                  :data-test="`plan-chip-${pt}`"
+                  @click="viewPlan(pt)"
+                >
+                  <Icon v-if="pt === companyPlanType" name="check" :size="14" />
+                  {{ planTypeLabels[pt] }}
+                  <span
+                    v-if="productPlanTypeCounts[pt]"
+                    class="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                    :class="pt === companyPlanType ? 'bg-white/25 text-white' : 'bg-slate-200 text-slate-600'"
+                  >
+                    {{ productPlanTypeCounts[pt] }}
+                  </span>
+                </button>
+              </div>
+              <p class="text-[12.5px] text-slate-500">แผนที่จางคือแผนที่บริษัทนี้ไม่ได้ใช้ — กดดูรายละเอียดได้ แต่ยังไม่มีผลจนกว่าจะสลับมาใช้</p>
+
+              <div class="flex flex-wrap items-start gap-3.5 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-4" data-test="plan-explainer">
+                <div class="flex-1 min-w-0">
+                  <p class="text-[15px] font-extrabold text-brand-700">{{ planExplainers[viewingPlanType].title }}</p>
+                  <p class="mt-1 text-[13px] text-slate-500">{{ planExplainers[viewingPlanType].how }}</p>
+                  <p class="mt-2 text-[12.5px] font-bold text-brand-600">{{ planExplainers[viewingPlanType].affects }}</p>
+                </div>
+                <!-- Switching the company ONTO a plan is CompanyPolicy::update
+                     (Super Admin only) and lives on another screen, so this is
+                     a link-out and is hidden from anybody who would be refused
+                     when they got there. -->
+                <RouterLink
+                  v-if="canEditCommissionConfig"
+                  :to="{ name: 'company-management' }"
+                  class="btn-secondary shrink-0 h-9"
+                  data-test="change-plan-link"
+                >
+                  เปลี่ยนแผน
+                </RouterLink>
+              </div>
+
+              <div class="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+                <Icon name="alert" :size="15" class="shrink-0 mt-0.5 text-amber-700" />
+                <span class="text-[12.5px] font-bold text-amber-800">
+                  การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+                </span>
+              </div>
+
+              <!--
+                ═══ THE STRUCTURAL SECTIONS, RE-POINTED ═══
+
+                Binary / Matrix / อันดับ / Generation / Affiliate below are
+                byte-for-byte the sections that shipped with TASK-029..033 and
+                passed UAT-012 — the same forms, the same submit functions,
+                the same endpoints. Only the `v-if` changed: they used to be
+                `viewMode === 'settings' && activeTab === '<key>'`, five peer
+                tabs an admin had to know to open; they are now revealed by
+                the plan chip that needs them, which is the only moment they
+                mean anything.
+
+                `!wizardOpen` on each is belt and braces for a real hazard
+                rather than a reachable bug today: the Setup Wizard's own
+                structure step binds the SAME refs (binaryForm, matrixForm,
+                rankSettingsForm, generationSettingsForm, affiliateForm) via
+                wizardPrefillStructureForm(), so two simultaneous renders
+                would be two editors of one object. The wizard can only be
+                opened from step 3 and its overlay covers the tab bar, so the
+                two cannot currently coexist — this guard is what keeps that
+                true if either entry point moves.
+              -->
+              <div v-if="viewingPlanType === 'unilevel'" class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12.5px] text-slate-500">
+                Unilevel ไม่มีค่าตั้งระดับบริษัทให้กรอกในขั้นนี้ — ทุกอย่างมาจากอัตราในขั้นที่ 3 และอัตราหัวหน้าทีมในขั้นที่ 4
+              </div>
+
+              <!-- ═══════════ Binary ═══════════ -->
+              <div v-else-if="viewingPlanType === 'binary' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-binary">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Binary</h3>
+                <div v-if="binaryError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ binaryError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3" @submit.prevent="submitBinarySettings">
+                  <!-- One `disabled` for the whole input block (display:contents
+                       keeps the grid intact): a read-only Company Admin sees
+                       every configured value, and cannot change any of it. -->
+                  <fieldset class="contents" :disabled="!canEditCommissionConfig">
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา Matched</label>
+                      <select v-model="binaryForm.matched_rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                        <option value="percentage">% ของยอด Matched</option>
+                        <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">{{ binaryForm.matched_rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                      <input v-model="binaryForm.matched_rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">รอบคำนวณ</label>
+                      <select v-model="binaryForm.cycle_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                        <option value="weekly">รายสัปดาห์</option>
+                        <option value="biweekly">ทุก 2 สัปดาห์</option>
+                        <option value="monthly">รายเดือน</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">เพดานจ่าย/รอบ (บาท, ว่าง = ไม่จำกัด)</label>
+                      <input v-model="binaryForm.payout_cap_thb" type="number" min="0" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                    <div class="col-span-2 sm:col-span-4 flex items-center gap-2">
+                      <input id="carry_over" v-model="binaryForm.carry_over_unmatched" type="checkbox" />
+                      <label for="carry_over" class="text-sm font-bold text-slate-500">ยกยอดที่ไม่ Matched ไปรอบถัดไป</label>
+                    </div>
+                  </fieldset>
+                  <div v-if="canEditCommissionConfig" class="col-span-2 sm:col-span-4 flex justify-end">
+                    <button type="submit" :disabled="savingBinary" class="btn-primary" data-test="save-binary">
+                      {{ savingBinary ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                </form>
+
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-4">ประวัติรอบ Matching (อ่านอย่างเดียว)</h3>
+                <EmptyState v-if="!binaryCycles.length" icon="branch" title="ยังไม่มีรอบ Matching" />
+                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                  <div v-for="c in binaryCycles" :key="c.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                    <div>
+                      <p class="text-sm font-bold text-slate-900">Agent #{{ c.agent_id }} · {{ c.period_start }} – {{ c.period_end }}</p>
+                      <p class="text-xs text-slate-400">
+                        ซ้าย {{ formatSatang(c.left_volume_satang) }} · ขวา {{ formatSatang(c.right_volume_satang) }} ·
+                        Matched {{ formatSatang(c.matched_volume_satang) }} · ยกยอด {{ formatSatang(c.unmatched_carried_satang) }}
+                      </p>
+                    </div>
+                    <span class="text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap" :class="c.commission_ledger_id ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'">
+                      {{ c.commission_ledger_id ? 'จ่ายแล้ว' : 'ไม่มีคอมมิชชั่น' }}
+                    </span>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!-- ═══════════ Matrix ═══════════ -->
+              <div v-else-if="viewingPlanType === 'matrix' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-matrix">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Matrix</h3>
+                <div v-if="matrixError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ matrixError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-3" @submit.prevent="submitMatrixSettings">
+                  <fieldset class="contents" :disabled="!canEditCommissionConfig">
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">ความกว้าง (Width)</label>
+                      <input v-model="matrixForm.width" type="number" min="1" max="100" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">ความลึก (Depth)</label>
+                      <input v-model="matrixForm.depth" type="number" min="1" max="100" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">กฎ Spillover</label>
+                      <select v-model="matrixForm.spillover_rule" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                        <option value="breadth">Breadth-first (กว้างก่อน)</option>
+                      </select>
+                    </div>
+                  </fieldset>
+                  <div v-if="canEditCommissionConfig" class="col-span-2 sm:col-span-3 flex justify-end">
+                    <button type="submit" :disabled="savingMatrix" class="btn-primary" data-test="save-matrix">
+                      {{ savingMatrix ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                </form>
+
+                <!-- Visual preview grid -->
+                <div v-if="matrixSettings" class="mt-3 p-4 rounded-xl bg-white/95 border border-slate-200">
+                  <p class="text-sm font-bold text-slate-500 mb-2">
+                    ตัวอย่างโครงสร้าง {{ matrixSettings.width }} x {{ matrixSettings.depth }}
+                    <span v-if="matrixPreviewGrid.truncatedWidth || matrixPreviewGrid.truncatedDepth" class="font-normal text-slate-400">(ย่อแสดงบางส่วน)</span>
+                  </p>
+                  <div class="space-y-2">
+                    <div v-for="d in matrixPreviewGrid.d" :key="'row-' + d" class="flex gap-1.5 items-center" :style="{ paddingLeft: (d - 1) * 12 + 'px' }">
+                      <div v-for="w in matrixPreviewGrid.w" :key="'cell-' + d + '-' + w" class="w-6 h-6 rounded bg-brand-50 border border-brand-100 flex items-center justify-center text-[9px] text-brand-600 font-bold">
+                        {{ d }}.{{ w }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="flex justify-between items-center mt-4 mb-2 px-1">
+                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Level</h3>
+                  <button v-if="canEditCommissionConfig" class="btn-primary" data-test="add-level-rate" @click="showLevelRateForm = !showLevelRateForm">
+                    + เพิ่ม Level
+                  </button>
+                </div>
+                <EmptyState v-if="!matrixLevelRates.length" icon="layers" title="ยังไม่มีอัตราตาม Level" />
+                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                  <div v-for="lr in matrixLevelRates" :key="lr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                    <p class="text-sm font-bold text-slate-900">Level {{ lr.level }} — {{ formatRate(lr.rate_type, lr.rate_value) }}</p>
+                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteLevelRate(lr)">ลบ</button>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!-- ═══════════ Agent Ranks / Stairstep-Breakaway ═══════════ -->
+              <div v-else-if="viewingPlanType === 'stairstep_breakaway' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-ranks">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผนอันดับ (Stairstep)</h3>
+                <div v-if="rankError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ rankError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRankSettings">
+                  <fieldset class="contents" :disabled="!canEditCommissionConfig">
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">หน้าต่างคำนวณยอดย้อนหลัง (วัน)</label>
+                      <input v-model="rankSettingsForm.trailing_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">ความถี่คำนวณอันดับใหม่</label>
+                      <select v-model="rankSettingsForm.recalculation_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                        <option value="daily">รายวัน</option>
+                        <option value="weekly">รายสัปดาห์</option>
+                        <option value="monthly">รายเดือน</option>
+                      </select>
+                    </div>
+                  </fieldset>
+                  <div v-if="canEditCommissionConfig" class="col-span-2 flex justify-end">
+                    <button type="submit" :disabled="savingRankSettings" class="btn-primary" data-test="save-rank-settings">
+                      {{ savingRankSettings ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                </form>
+
+                <div class="flex justify-between items-center mt-4 mb-2 px-1">
+                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">บันไดอันดับ (เรียงจาก sort order น้อยไปมาก)</h3>
+                  <button v-if="canEditCommissionConfig" class="btn-primary" data-test="add-rank" @click="showRankForm = !showRankForm">
+                    + เพิ่มอันดับ
+                  </button>
+                </div>
+                <EmptyState v-if="!agentRanks.length" icon="trophy" title="ยังไม่มีอันดับ" />
+                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                  <div v-for="r in agentRanks" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                    <div>
+                      <p class="text-sm font-bold text-slate-900">
+                        {{ r.sort_order }}. {{ r.name }}
+                        <span v-if="r.is_breakaway_rank" class="text-xs font-bold text-amber-600">(Breakaway)</span>
+                      </p>
+                      <p class="text-xs text-slate-400">ยอดขั้นต่ำ {{ formatSatang(r.volume_threshold) }} · อัตรา {{ formatRate(r.rate_type, r.rate_value) }}</p>
+                    </div>
+                    <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
+                      <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditRank(r)">แก้ไข</button>
+                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRank(r)">ลบ</button>
+                    </div>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!-- ═══════════ Generation ═══════════ -->
+              <div v-else-if="viewingPlanType === 'generation' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-generation">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Generation</h3>
+                <div v-if="generationError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ generationError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitGenerationSettings">
+                  <fieldset class="contents" :disabled="!canEditCommissionConfig">
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">ความลึกสูงสุด (จำนวน Generation)</label>
+                      <input v-model="generationSettingsForm.max_generation_depth" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                    </div>
+                  </fieldset>
+                  <div v-if="canEditCommissionConfig" class="flex justify-end items-end">
+                    <button type="submit" :disabled="savingGenerationSettings" class="btn-primary" data-test="save-generation-settings">
+                      {{ savingGenerationSettings ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                </form>
+
+                <div class="flex justify-between items-center mt-4 mb-2 px-1">
+                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Generation</h3>
+                  <button v-if="canEditCommissionConfig" class="btn-primary" data-test="add-generation-rule" @click="showGenerationRuleForm = !showGenerationRuleForm">
+                    + เพิ่ม Generation
+                  </button>
+                </div>
+                <EmptyState v-if="!generationRules.length" icon="users" title="ยังไม่มีอัตราตาม Generation" />
+                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                  <div v-for="gr in generationRules" :key="gr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
+                    <p class="text-sm font-bold text-slate-900">Generation {{ gr.generation_number }} — {{ formatRate(gr.rate_type, gr.rate_value) }}</p>
+                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteGenerationRule(gr)">ลบ</button>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!-- ═══════════ Affiliate ═══════════ -->
+              <div v-else-if="viewingPlanType === 'affiliate' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-affiliate">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผนพันธมิตร (Affiliate)</h3>
+                <div v-if="affiliateError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ affiliateError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitAffiliateSettings">
+                  <fieldset class="contents" :disabled="!canEditCommissionConfig">
+                    <div>
+                      <label class="text-sm font-bold text-slate-500">หน้าต่างนับเครดิต (วัน)</label>
+                      <input v-model="affiliateForm.attribution_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                      <p class="mt-1 text-xs text-slate-400">คลิกล่าสุดต้องอยู่ในช่วงเวลานี้จึงจะนับเป็นการแปลงที่มาจากลิงก์พันธมิตร (last-click)</p>
+                    </div>
+                    <div class="flex items-start gap-2 pt-6">
+                      <input id="differential" v-model="affiliateForm.new_vs_returning_rate_differential_enabled" type="checkbox" />
+                      <label for="differential" class="text-sm font-bold text-slate-500">แยกอัตราลูกค้าใหม่/ลูกค้าเก่า (ยังไม่รองรับการคำนวณจริง)</label>
+                    </div>
+                  </fieldset>
+                  <div v-if="canEditCommissionConfig" class="col-span-2 flex justify-end">
+                    <button type="submit" :disabled="savingAffiliate" class="btn-primary" data-test="save-affiliate">
+                      {{ savingAffiliate ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </template>
+          </section>
+
+          <!-- ═══════════ ขั้นที่ 3 · ตั้งอัตราตัวแทนผู้ขาย ═══════════ -->
+          <section v-else-if="activeStep === 3" class="space-y-4" data-test="step-panel-3">
+            <div>
+              <p class="text-[17px] font-extrabold text-slate-900">ตัวแทนผู้ขายได้กี่เปอร์เซ็นต์</p>
+              <p class="mt-1 text-[13px] text-slate-500">ขั้นเดียวในหน้านี้ที่ขาดไม่ได้ — ถ้าไม่มีอัตราที่ใช้ได้ ดีลที่ปิดได้จะไม่มีใครได้เงิน</p>
+            </div>
+
+            <EmptyState
+              v-if="activeCompany.requiresCompanyPick"
+              icon="building"
+              title="กรุณาเลือกบริษัทก่อน"
+              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งอัตราค่าคอม"
+            />
+            <template v-else>
+              <!--
+                The resolution ladder, INLINE and permanent. This is the
+                RESOLUTION_ORDER_NOTE that used to interrupt as a modal on
+                every entry to the rules tab — drawn instead of announced, so
+                it is on screen while the admin is reading the very rows it
+                explains.
+              -->
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5" data-test="resolution-ladder">
+                <div class="flex flex-wrap items-center gap-2 mb-2.5">
+                  <p class="text-xs font-bold text-slate-500">ระบบหาอัตราจากบนลงล่าง — เจอชั้นไหนก่อน หยุดที่ชั้นนั้น ไม่บวกกัน</p>
+                  <button type="button" class="ml-auto text-xs font-bold text-brand-600 hover:underline" data-test="open-resolution-order" @click="openResolutionOrderModal">
+                    ลำดับการใช้ค่า
+                  </button>
+                </div>
+                <div class="flex flex-wrap items-center gap-2.5">
+                  <span class="text-[13px] font-bold bg-white border border-slate-300 rounded-lg px-3 py-1.5">1 · อัตราของสินค้านั้น</span>
+                  <Icon name="arrow_right" :size="16" class="text-slate-300" />
+                  <span class="text-[13px] font-bold bg-white border border-slate-300 rounded-lg px-3 py-1.5">2 · อัตราของหมวดหมู่</span>
+                  <Icon name="arrow_right" :size="16" class="text-slate-300" />
+                  <span class="text-[13px] font-extrabold bg-brand-50 border-2 border-brand-600 text-brand-700 rounded-lg px-3 py-1.5">3 · ค่าเริ่มต้นทั้งบริษัท</span>
+                </div>
+              </div>
+
+              <!-- TASK-213 r2 — name the collisions where they can be deleted.
+                   A count elsewhere tells an admin something is wrong; only
+                   this list can tell them WHICH ROW to remove. -->
+              <div v-if="conflictingRuleIds.size" class="p-4 rounded-xl bg-rose-50 border border-rose-200" data-test="agent-rate-conflicts">
+                <p class="text-sm font-bold text-rose-800">พบอัตราตัวแทนซ้อนทับกัน {{ conflictingRuleIds.size }} รายการ</p>
+                <p class="mt-1 text-xs text-rose-700 leading-relaxed">
+                  แถวที่ติดป้าย <b>ซ้อนทับ</b> ด้านล่างมีผลพร้อมกันในขอบเขตเดียวกัน — ระบบเรียงตามวันที่เริ่มมีผลแล้วหยิบอันแรก
+                  <b>เมื่อวันเริ่มเท่ากันจึงหยิบอันไหนก็ได้ ทำนายไม่ได้</b> · ค่าคอมที่ลงบัญชีไปแล้วแก้ย้อนหลังไม่ได้ (BR-4)
+                  จึงควรลบให้เหลือรายการเดียวก่อนจะมีดีลปิดเพิ่ม
+                </p>
+                <p class="mt-1 text-xs text-rose-600">
+                  ระบบไม่ยอมให้สร้างแบบนี้แล้วตั้งแต่ต้น — รายการเหล่านี้มักเป็นข้อมูลเก่าที่เคยแยกด้วย cert tier ก่อน ADR-035 (18 ส.ค. 2569)
+                </p>
+              </div>
+
+              <!-- ── 3.1 ค่าเริ่มต้นทั้งบริษัท ── -->
+              <div data-test="step3-company-default">
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                  <span class="text-[13.5px] font-extrabold text-slate-900">3.1 ตั้งค่าเริ่มต้นทั้งบริษัทก่อน</span>
+                  <span class="text-[11.5px] text-slate-400">ตาข่ายกันพลาด — สินค้าที่ยังไม่ได้ตั้งเรตจะตกลงมาใช้ค่านี้</span>
+                  <span
+                    class="ml-auto text-[11px] font-bold rounded-full px-2.5 py-1"
+                    :class="companyDefaultRules.length ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
+                    data-test="company-default-pill"
+                  >
+                    {{ companyDefaultRules.length ? 'เรียบร้อย' : 'ยังไม่มี' }}
+                  </span>
+                </div>
+
+                <div v-if="companyDefaultRules.length" class="space-y-2">
+                  <div
+                    v-for="r in companyDefaultRules"
+                    :key="r.id"
+                    class="flex flex-wrap items-center gap-3.5 rounded-xl border px-4 py-3"
+                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+                    :data-test="`company-default-rule-${r.id}`"
+                  >
+                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <span v-if="conflictingRuleIds.has(r.id)" class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-rose-100 text-rose-700">ซ้อนทับ</span>
+                    <span class="text-sm font-extrabold text-slate-900">ค่าเริ่มต้นทั้งบริษัท</span>
+                    <span class="text-sm font-extrabold text-brand-700">{{ formatRate(r.rate_type, r.rate_value) }}</span>
+                    <span class="text-xs text-slate-400">
+                      มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : ' — ไม่มีวันสิ้นสุด' }}
+                      <span v-if="r.renewal_rate_type"> · ต่ออายุ {{ formatRate(r.renewal_rate_type, r.renewal_rate_value!) }}</span>
+                    </span>
+                    <span v-if="canEditCommissionConfig" class="ml-auto flex items-center gap-3">
+                      <button class="text-sm font-bold text-brand-700 hover:underline" @click="openEditRuleForm(r)">แก้ไข</button>
+                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRule(r)">ลบ</button>
+                    </span>
+                  </div>
+                </div>
+                <div v-else class="flex flex-wrap items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+                  <p class="flex-1 min-w-0 text-[13px] font-bold text-rose-700">
+                    ยังไม่มีค่าเริ่มต้นทั้งบริษัท — สินค้าที่ไม่ได้ตั้งเรตของตัวเองจะไม่มีใครได้เงินเลย
+                  </p>
+                  <button
+                    v-if="canEditCommissionConfig"
+                    type="button"
+                    class="btn-primary shrink-0"
+                    data-test="add-company-default"
+                    @click="openCreateRuleFormWithScope('company')"
+                  >
+                    + ตั้งค่าเริ่มต้นทั้งบริษัท
+                  </button>
+                </div>
+              </div>
+
+              <!-- ── 3.2 สินค้าที่มาร์จิ้นต่างจริง ── -->
+              <div data-test="step3-products">
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                  <span class="text-[13.5px] font-extrabold text-slate-900">3.2 แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง</span>
+                  <span class="text-[11.5px] text-slate-400">
+                    ไม่ต้องแยกทุกตัว — ที่ไม่แยกจะใช้{{ companyDefaultRules[0] ? ` ${formatRate(companyDefaultRules[0].rate_type, companyDefaultRules[0].rate_value)} ` : 'ค่าเริ่มต้น' }}ข้างบน
+                  </span>
+                </div>
+
+                <EmptyState v-if="!byCompany(products).length" icon="money" title="ยังไม่มีสินค้า" />
+                <div v-else class="space-y-2">
+                  <!--
+                    The Option B product card from the 2026-07-22 overview,
+                    folded onto the path. It keeps what that card was FOR —
+                    the rate that actually resolves, and the layer it came
+                    from — and drops the separate view mode that made it a
+                    detour.
+                  -->
+                  <div
+                    v-for="p in byCompany(products)"
+                    :key="p.id"
+                    class="rounded-xl border px-4 py-3"
+                    :class="productReadiness(p).level === 'bad' ? 'border-rose-200 bg-rose-50' : 'border-slate-200'"
+                    :data-test="`product-row-${p.id}`"
+                  >
+                    <div class="flex flex-wrap items-center gap-3.5">
+                      <div class="flex-1 min-w-[200px]">
+                        <p class="text-sm font-bold" :class="productReadiness(p).level === 'bad' ? 'text-rose-800' : 'text-slate-900'">{{ p.name }}</p>
+                        <p class="text-xs text-slate-400">
+                          {{ p.category?.name ?? 'ไม่มีหมวดหมู่' }}<span v-if="p.price_satang"> · {{ formatSatang(p.price_satang) }}</span>
+                          · แผน {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}<span v-if="!p.commission_plan_type"> (สืบทอดจากบริษัท)</span>
+                        </p>
+                      </div>
+                      <span class="text-sm font-extrabold" :class="resolveRuleFor(p) ? 'text-brand-700' : 'text-rose-600'" :data-test="`product-rate-${p.id}`">
+                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : 'ยังไม่มีอัตรา' }}
+                      </span>
+                      <!-- WHICH LAYER the number came from. Without it, "3.00%"
+                           on a product row is indistinguishable from a rate
+                           somebody chose for that product, and deleting the
+                           company default silently changes it. -->
+                      <span
+                        class="text-[11px] font-bold rounded-full px-2.5 py-1"
+                        :class="resolveRuleFor(p) ? (resolveRuleFor(p)!.product ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500') : 'bg-rose-100 text-rose-700'"
+                        :data-test="`product-layer-${p.id}`"
+                      >
+                        {{ rateLayerLabel(p) }}
+                      </span>
+                      <div class="flex items-center gap-2 shrink-0">
+                        <button type="button" class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50" @click="openSimulate(p)">
+                          ทดสอบคำนวณ
+                        </button>
+                        <!-- TASK-245's per-row question AND the 2026-09-11 role
+                             rule, asked together: `canSetCommission` still
+                             answers for the PRODUCT (a catalog-linked row is
+                             refused, ADR-036 §5/§6) while
+                             `canEditCommissionConfig` answers for the VIEWER.
+                             Either one refusing means the server would, so the
+                             button must not be there to click. -->
+                        <template v-if="canEditCommissionConfig && canSetCommission(p)">
+                          <button type="button" class="px-3 py-1.5 rounded-lg text-brand-700 border border-brand-200 bg-brand-50 text-xs font-bold hover:bg-brand-100 flex items-center gap-1" @click="openWizard(p.id)">
+                            <Icon name="sparkles" :size="12" />
+                            Wizard
+                          </button>
+                          <button type="button" class="btn-primary" @click="openRuleFormForProduct(p)">
+                            {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
+                          </button>
+                        </template>
+                        <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="การตั้งอัตราค่าคอมเป็นสิทธิ์ของ Super Admin">
+                          ตั้งค่าโดย Super Admin
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- An expired rate is not the same gap as a missing one;
+                         see expiredRuleFor()'s docblock. -->
+                    <p
+                      v-if="!resolveRuleFor(p) && expiredRuleFor(p)"
+                      class="mt-2 text-[12.5px] font-bold text-rose-700"
+                      :data-test="`product-expired-${p.id}`"
+                    >
+                      อัตราหมดอายุ {{ formatDate(expiredRuleFor(p)!.effective_to!) }} — ปิดการขายแล้วไม่มีใครได้เงิน
+                    </p>
+                    <div
+                      v-else-if="productReadiness(p).level !== 'ok'"
+                      class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
+                      :class="productReadiness(p).level === 'bad' ? 'bg-rose-100/60 text-rose-700' : 'bg-amber-50 text-amber-700'"
+                    >
+                      <span class="font-bold">{{ productReadiness(p).level === 'bad' ? '●' : '!' }} {{ productReadiness(p).message }}</span>
+                      <!-- Points at the STEP that owns the gap, which is the
+                           whole reason the steps exist: a structural gap is
+                           step 2's, a leader-rate gap is step 4's, and
+                           neither is fixable from here. -->
+                      <button
+                        v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false"
+                        type="button"
+                        class="font-bold whitespace-nowrap hover:underline"
+                        :data-test="`jump-structure-${p.id}`"
+                        @click="viewPlan(p.effective_plan_type!); goToStep(2)"
+                      >
+                        ไปขั้นที่ 2 ตั้งโครงสร้าง →
+                      </button>
+                      <button
+                        v-else-if="productReadiness(p).level === 'warn'"
+                        type="button"
+                        class="font-bold whitespace-nowrap hover:underline"
+                        :data-test="`jump-leader-${p.id}`"
+                        @click="goToStep(4)"
+                      >
+                        ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม →
+                      </button>
+                    </div>
+                    <p v-else class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
+                  </div>
+                </div>
+
+                <div v-if="canEditCommissionConfig" class="flex flex-wrap gap-2.5 mt-3">
+                  <button type="button" class="btn-primary" data-test="add-product-rate" @click="openCreateRuleFormWithScope('product')">
+                    + เพิ่มอัตราของสินค้า
+                  </button>
+                  <button type="button" class="btn-secondary" data-test="add-category-rate" @click="openCreateRuleFormWithScope('category')">
+                    + เพิ่มอัตราของหมวดหมู่
+                  </button>
+                  <!-- TASK-037's guided builder, kept reachable from the step
+                       whose numbers it writes (it sets a product's plan type
+                       and then its rate). -->
+                  <button type="button" class="btn-secondary flex items-center gap-1.5" data-test="open-wizard" @click="openWizard()">
+                    <Icon name="sparkles" :size="14" />
+                    เปิดตัวช่วยตั้งค่า (Wizard)
+                  </button>
+                </div>
+              </div>
+            </template>
+          </section>
+
+          <!-- ═══════════ ขั้นที่ 4 · ส่วนเพิ่มเติม ═══════════ -->
+          <section v-else class="space-y-4" data-test="step-panel-4">
+            <div>
+              <p class="text-[17px] font-extrabold text-slate-900">ส่วนเพิ่มเติม</p>
+              <p class="mt-1 text-[13px] text-slate-500">
+                ข้ามได้ทั้งหมด — ระบบจ่ายค่าคอมได้แล้วตั้งแต่จบขั้นที่ 3 · สามอย่างนี้คือส่วนที่จ่ายให้คนอื่นนอกจากตัวแทนที่ปิดการขาย
+              </p>
+            </div>
+
+            <EmptyState
+              v-if="activeCompany.requiresCompanyPick"
+              icon="building"
+              title="กรุณาเลือกบริษัทก่อน"
+              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งค่าส่วนเพิ่มเติม"
+            />
+            <template v-else>
+              <!--
+                CARD 1 — the leader rate. TASK-213 Phase 2 moved this table out
+                of /product-catalog and onto this screen because "an admin
+                asking how much the leader gets opens แผนคอมมิชชั่น and none of
+                the six tabs is it". It is now a named card on a named step,
+                which is the same fix one level further.
+              -->
+              <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4" data-test="step4-leader-rates">
+                <div class="flex flex-wrap items-center gap-2 mb-1">
+                  <p class="text-[15px] font-extrabold text-slate-900">อัตราหัวหน้าทีม</p>
+                  <span
+                    class="text-[11px] font-bold rounded-full px-2.5 py-1"
+                    :class="activeOverrideRules.length ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                  >
+                    {{ activeOverrideRules.length ? `${activeOverrideRules.length} อัตรา` : 'ยังไม่ได้ตั้ง' }}
+                  </span>
+                  <button
+                    v-if="canEditCommissionConfig"
+                    type="button"
+                    class="ml-auto px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100"
+                    data-test="add-leader-rate"
+                    @click="openCreateOverrideForm"
+                  >
+                    + เพิ่มอัตราหัวหน้าทีม
+                  </button>
+                </div>
+                <p class="text-[12.5px] text-slate-500 mb-3">
+                  จ่ายให้หัวหน้าทีมทุกครั้งที่ลูกทีมปิดการขาย · แผน <b>Unilevel</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว ·
+                  ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ &gt; หมวดหมู่ &gt; ค่าเริ่มต้นทั้งบริษัท
+                </p>
+
+                <div v-if="leaderRateGaps.length" class="mb-3 px-3 py-2 rounded-lg bg-amber-100/70 text-xs font-bold text-amber-800">
+                  สินค้า {{ leaderRateGaps.length }} รายการยังไม่มีอัตราหัวหน้าทีมที่ใช้ได้ — ตัวแทนได้ตามปกติ แต่หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนั้น
+                </div>
+
+                <EmptyState v-if="!byCompany(commissionOverrideRules).length" icon="users" title="ยังไม่มีอัตราหัวหน้าทีม" />
+                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                  <div
+                    v-for="r in byCompany(commissionOverrideRules)"
+                    :key="`leader-${r.id}`"
+                    class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
+                    :class="conflictingOverrideIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-amber-200'"
+                    :data-test="`leader-rule-${r.id}`"
+                  >
+                    <div class="min-w-0">
+                      <p class="text-sm font-bold text-slate-900">
+                        <span class="mr-2 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] align-middle">หัวหน้าทีม</span>
+                        <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
+                        {{ overrideScopeLabel(r) }}
+                        <!-- Shown only on legacy rows. A row created after
+                             TASK-214 has no tier, and saying "ทุก tier" on it
+                             would imply a dimension that no longer exists. -->
+                        <span v-if="r.manager_cert_tier" class="ml-1 text-[11px] font-normal text-slate-400">
+                          (เดิมตั้งไว้ที่ tier {{ r.manager_cert_tier.name }} — ไม่ถูกใช้แล้ว)
+                        </span>
+                      </p>
+                      <p class="text-xs text-slate-400">
+                        อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
+                      </p>
+                    </div>
+                    <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
+                      <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
+                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
+                    </div>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!--
+                CARDS 2 and 3 live on OTHER ROUTES and are linked, not
+                embedded. Said plainly on the card rather than discovered by
+                clicking: both screens carry unsaved state of their own, and
+                an admin halfway through step 4 deserves to know that the
+                click leaves this page.
+              -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <RouterLink
+                  :to="{ name: 'commission-split-settings' }"
+                  class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
+                  data-test="link-split-settings"
+                >
+                  <p class="text-[15px] font-extrabold text-slate-900">คอมมิชชั่นตัวแทนร่วม</p>
+                  <p class="mt-1 text-[12.5px] text-slate-500">แบ่งค่าคอมของดีลเดียวให้ตัวแทนมากกว่าหนึ่งคน ตามสัดส่วนที่ตั้งไว้</p>
+                  <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คอมมิชชั่นตัวแทนร่วม" →</p>
+                </RouterLink>
+                <RouterLink
+                  :to="{ name: 'commission-withdrawals' }"
+                  class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
+                  data-test="link-withdrawal-settings"
+                >
+                  <p class="text-[15px] font-extrabold text-slate-900">ยอดขั้นต่ำในการเบิก</p>
+                  <p class="mt-1 text-[12.5px] text-slate-500">ตัวแทนต้องมียอดสะสมถึงเท่าไหร่จึงจะกดขอเบิกค่าคอมได้</p>
+                  <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คำขอเบิกค่าคอม" →</p>
+                </RouterLink>
+              </div>
+
+              <!-- Carried over from the setup hub the overview tab used to
+                   host, so the entry point does not disappear with the tab. -->
+              <p class="text-xs text-slate-400">
+                อยากให้ตัวแทนได้แต้ม/เหรียญ/ภารกิจเพิ่มด้วย?
+                <RouterLink :to="{ name: 'gamification-config' }" class="font-bold text-brand-600 hover:underline" data-test="link-gamification">
+                  ตั้งค่า Gamification →
+                </RouterLink>
+              </p>
+            </template>
+          </section>
+        </template>
+      </div>
+
+      <!--
+        THE FOOTER THAT NAMES THE NEXT STEP.
+
+        This row is the point of the whole redesign. The owner's complaint was
+        "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง" — six peer tabs answered "what next?"
+        with silence, so the answer is now written on the button itself, with
+        the step's real name and not just an arrow.
+      -->
+      <div class="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3.5">
+        <button
+          v-if="prevStep"
+          type="button"
+          class="btn-secondary"
+          data-test="step-back"
+          @click="goToStep(prevStep!)"
+        >
+          ← ขั้นที่ {{ prevStep }} {{ stepLabel(prevStep!) }}
+        </button>
+        <div v-if="nextStep" class="ml-auto flex items-center gap-3.5">
+          <span class="text-[12.5px] text-slate-400">ขั้นถัดไป:</span>
+          <button type="button" class="btn-primary" data-test="step-next" @click="goToStep(nextStep!)">
+            ขั้นที่ {{ nextStep }} {{ stepLabel(nextStep!) }} →
+          </button>
+        </div>
+        <p v-else class="ml-auto text-[12.5px] font-bold" :class="blockingStep ? 'text-amber-700' : 'text-emerald-700'">
+          {{ blockingStep ? `ครบทุกขั้นแล้ว แต่ยังติดอยู่ที่ขั้นที่ ${blockingStep}` : 'ครบทุกขั้นแล้ว — พร้อมจ่ายค่าคอม' }}
+        </p>
+      </div>
+    </div>
+
+    <!--
+      ═══════════ PAGE-LEVEL MODALS ═══════════
+
+      All nine of them live HERE, outside every step panel, and that is a
+      deliberate change: six of these used to be nested inside the section
+      that owned them (three in the rules tab, one each in matrix / อันดับ /
+      generation). A `fixed inset-0` overlay is not visually part of its
+      panel, but it WAS part of its lifetime — so anything that unmounted the
+      section while a form was open took the half-typed form with it, without
+      a word. Steps unmount far more readily than tabs did, so the hazard went
+      from theoretical to one click away.
+
+      One rule, applied to all of them: a modal is page-level, its opener
+      lives in the step that owns it, and only `canEditCommissionConfig`
+      renders that opener. That is also why none of the write forms below
+      carry their own permission check — a Company Admin has no way to open
+      one, and a second check here would be a second thing to keep in step.
+    -->
+
+    <!-- อัตราหัวหน้าทีม — opened from step 4 -->
+    <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น modal
+         backgroud สีดำ"). Inline forms opened at the TOP of the page while
+         the row being edited sat further down and often off-screen; the
+         overlay removes the question by removing everything else. -->
+    <div v-if="showOverrideForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetOverrideForm">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมหัวหน้าทีม</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ overrideFormTargetLabel }}</h1>
+          </div>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetOverrideForm">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+          <p class="text-xs text-amber-800">
+            จ่ายให้ "หัวหน้าทีม" ทุกครั้งที่ลูกทีมปิดการขาย ·
+            แผน <b>มาตรฐาน (Unilevel)</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว
+          </p>
+          <p class="text-xs text-amber-800">
+            <b>อัตราแยกรายสินค้าได้แล้ว</b> · ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ &gt; หมวดหมู่ &gt; ค่าเริ่มต้นทั้งบริษัท
+          </p>
+          <div v-if="overrideFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ overrideFormError }}</div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <!-- TASK-214 — the cert-tier picker that used to be here is gone:
+                 the rate no longer depends on the manager's tier (human
+                 ruling 2026-08-19). This is the scope selector that replaced
+                 it, deliberately identical to the agent rate's so both read
+                 the same way. -->
+            <div class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
+              <select v-model="overrideForm.scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
+                <option value="category">ตามหมวดหมู่สินค้า</option>
+                <option value="product">ตามสินค้า</option>
+              </select>
+            </div>
+            <div v-if="overrideForm.scope === 'product'" class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">สินค้า</label>
+              <select v-model="overrideForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>เลือกสินค้า</option>
+                <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+            </div>
+            <div v-if="overrideForm.scope === 'category'" class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
+              <select v-model="overrideForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>เลือกหมวดหมู่</option>
+                <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </div>
+            <!-- TASK-213 — the field that did not exist. The old form sent
+                 rate_type: 'percentage' unconditionally. -->
+            <div>
+              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+              <select v-model="overrideForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="percentage">% ของยอดขาย</option>
                 <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
               </select>
             </div>
             <div>
-              <label class="text-sm font-bold text-slate-500">{{ binaryForm.matched_rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-              <input v-model="binaryForm.matched_rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              <label class="text-sm font-bold text-slate-500">{{ overrideForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+              <input v-model="overrideForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
             </div>
             <div>
-              <label class="text-sm font-bold text-slate-500">รอบคำนวณ</label>
-              <select v-model="binaryForm.cycle_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="weekly">รายสัปดาห์</option>
-                <option value="biweekly">ทุก 2 สัปดาห์</option>
-                <option value="monthly">รายเดือน</option>
+              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+              <div class="mt-1 flex flex-wrap items-start gap-2">
+                <BuddhistDateInput v-model="overrideForm.effective_from" required />
+                <CalendarDatePicker v-model="overrideForm.effective_from" />
+              </div>
+            </div>
+            <div>
+              <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
+              <div class="mt-1 flex flex-wrap items-start gap-2">
+                <BuddhistDateInput v-model="overrideForm.effective_to" />
+                <CalendarDatePicker v-model="overrideForm.effective_to" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" @click="resetOverrideForm">ยกเลิก</button>
+          <button type="submit" :disabled="savingOverride" class="btn-primary">{{ savingOverride ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- อัตราตัวแทนผู้ขาย — opened from step 3 -->
+    <div v-if="showRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRuleForm">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRule">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมตัวแทนผู้ขาย</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ ruleFormTargetLabel }}</h1>
+          </div>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRuleForm">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+          <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ ruleFormError }}</div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
+              <select v-model="ruleForm.scope" :disabled="!!editingRuleId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
+                <option value="category">ตามหมวดหมู่สินค้า</option>
+                <option value="product">ตามสินค้า</option>
+              </select>
+            </div>
+            <div v-if="ruleForm.scope === 'product'" class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">สินค้า</label>
+              <select v-model="ruleForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
+                <option value="" disabled>เลือกสินค้า</option>
+                <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
+              </select>
+            </div>
+            <div v-if="ruleForm.scope === 'category'" class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">หมวดหมู่</label>
+              <select v-model="ruleForm.product_category_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>เลือกหมวดหมู่</option>
+                <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+            </div>
+            <!-- TASK-197 §3.4 — product-scope rules use the PRODUCT's
+                 locked-in commission_rate_type once it has one
+                 (server-enforced, §2.2): the selector only shows for
+                 company-wide/category rules (which keep their own free
+                 choice, §1 unchanged) OR the very first rule a product ever
+                 gets (nothing to inherit from yet). -->
+            <div v-if="showRuleFormRateTypeSelector">
+              <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+              <select v-model="ruleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
+                <option value="percentage">% ของยอดขาย</option>
+                <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
               </select>
             </div>
             <div>
-              <label class="text-sm font-bold text-slate-500">เพดานจ่าย/รอบ (บาท, ว่าง = ไม่จำกัด)</label>
-              <input v-model="binaryForm.payout_cap_thb" type="number" min="0" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              <label class="text-sm font-bold text-slate-500">{{ effectiveRuleFormRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+              <input
+                v-model="ruleForm.rate_value_input"
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                @input="recheckRuleCapDebounced"
+                @blur="recheckRuleCap"
+              />
+              <!-- TASK-197 §3.4 — when the selector above is hidden (locked-in
+                   product format), tell the admin which unit their number
+                   means instead of leaving them to guess. -->
+              <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ rateTypeLabels[effectiveRuleFormRateType] }}</p>
+              <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
             </div>
-            <div class="col-span-2 sm:col-span-4 flex items-center gap-2">
-              <input id="carry_over" v-model="binaryForm.carry_over_unmatched" type="checkbox" />
-              <label for="carry_over" class="text-sm font-bold text-slate-500">ยกยอดที่ไม่ Matched ไปรอบถัดไป</label>
-            </div>
-            <div class="col-span-2 sm:col-span-4 flex justify-end">
-              <button type="submit" :disabled="savingBinary" class="btn-primary">
-                {{ savingBinary ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-
-          <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-4">ประวัติรอบ Matching (อ่านอย่างเดียว)</h3>
-          <EmptyState v-if="!binaryCycles.length" icon="branch" title="ยังไม่มีรอบ Matching" />
-          <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <div v-for="c in binaryCycles" :key="c.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-              <div>
-                <p class="text-sm font-bold text-slate-900">Agent #{{ c.agent_id }} · {{ c.period_start }} – {{ c.period_end }}</p>
-                <p class="text-xs text-slate-400">
-                  ซ้าย {{ formatSatang(c.left_volume_satang) }} · ขวา {{ formatSatang(c.right_volume_satang) }} ·
-                  Matched {{ formatSatang(c.matched_volume_satang) }} · ยกยอด {{ formatSatang(c.unmatched_carried_satang) }}
-                </p>
+            <div>
+              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+              <div class="mt-1 flex flex-wrap items-start gap-2">
+                <BuddhistDateInput v-model="ruleForm.effective_from" required />
+                <CalendarDatePicker v-model="ruleForm.effective_from" />
               </div>
-              <span class="text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap" :class="c.commission_ledger_id ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'">
-                {{ c.commission_ledger_id ? 'จ่ายแล้ว' : 'ไม่มีคอมมิชชั่น' }}
-              </span>
-            </div>
-          </TransitionGroup>
-        </section>
-
-        <!-- ═══════════ Matrix ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'matrix'" class="mt-4">
-          <div v-if="matrixError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ matrixError }}</div>
-          <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-3" @submit.prevent="submitMatrixSettings">
-            <div>
-              <label class="text-sm font-bold text-slate-500">ความกว้าง (Width)</label>
-              <input v-model="matrixForm.width" type="number" min="1" max="100" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
             </div>
             <div>
-              <label class="text-sm font-bold text-slate-500">ความลึก (Depth)</label>
-              <input v-model="matrixForm.depth" type="number" min="1" max="100" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">กฎ Spillover</label>
-              <select v-model="matrixForm.spillover_rule" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="breadth">Breadth-first (กว้างก่อน)</option>
-              </select>
-            </div>
-            <div class="col-span-2 sm:col-span-3 flex justify-end">
-              <button type="submit" :disabled="savingMatrix" class="btn-primary">
-                {{ savingMatrix ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-
-          <!-- Visual preview grid -->
-          <div v-if="matrixSettings" class="mt-3 p-4 rounded-xl bg-white/95 border border-slate-200">
-            <p class="text-sm font-bold text-slate-500 mb-2">
-              ตัวอย่างโครงสร้าง {{ matrixSettings.width }} x {{ matrixSettings.depth }}
-              <span v-if="matrixPreviewGrid.truncatedWidth || matrixPreviewGrid.truncatedDepth" class="font-normal text-slate-400">(ย่อแสดงบางส่วน)</span>
-            </p>
-            <div class="space-y-2">
-              <div v-for="d in matrixPreviewGrid.d" :key="'row-' + d" class="flex gap-1.5 items-center" :style="{ paddingLeft: (d - 1) * 12 + 'px' }">
-                <div v-for="w in matrixPreviewGrid.w" :key="'cell-' + d + '-' + w" class="w-6 h-6 rounded bg-brand-50 border border-brand-100 flex items-center justify-center text-[9px] text-brand-600 font-bold">
-                  {{ d }}.{{ w }}
-                </div>
+              <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
+              <div class="mt-1 flex flex-wrap items-start gap-2">
+                <BuddhistDateInput v-model="ruleForm.effective_to" />
+                <CalendarDatePicker v-model="ruleForm.effective_to" />
               </div>
             </div>
           </div>
+        </div>
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" @click="resetRuleForm">ยกเลิก</button>
+          <button type="submit" :disabled="savingRule || ruleCapGuard.isOverCap.value" class="btn-primary">
+            {{ savingRule ? 'กำลังบันทึก...' : 'บันทึก' }}
+          </button>
+        </div>
+      </form>
+    </div>
 
-          <div class="flex justify-between items-center mt-4 mb-2 px-1">
-            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Level</h3>
-            <button class="btn-primary" @click="showLevelRateForm = !showLevelRateForm">
-              + เพิ่ม Level
-            </button>
+    <!-- TASK-196 §3.3 — same blocking-alert shape as the resolution-order
+         info modal below (this file's own closest existing pattern for a
+         single-button informational modal). -->
+    <div v-if="ruleCapGuard.modalOpen.value" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="ruleCapGuard.closeModal">
+      <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
+        <div class="flex items-center gap-2 mb-2">
+          <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
+          <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+        </div>
+        <p class="text-xs text-slate-500 mb-4">{{ ruleCapGuard.violationMessage.value }}</p>
+        <div class="flex justify-end">
+          <button class="btn-primary" @click="ruleCapGuard.closeModal">เข้าใจแล้ว</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Matrix level rate — opened from step 2's Matrix structure -->
+    <div v-if="showLevelRateForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showLevelRateForm = false">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitLevelRate">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นรายชั้น (Matrix)</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ levelRateForm.level === '' ? 'ยังไม่ได้ระบุชั้น' : `ชั้นที่ ${levelRateForm.level}` }}</h1>
           </div>
-          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
-               modal backgroud สีดำ"). Inline forms opened at the TOP of
-               the page while the row being edited sat further down and
-               often off-screen; the overlay removes the question by
-               removing everything else. -->
-          <div v-if="showLevelRateForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showLevelRateForm = false">
-            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitLevelRate">
-            <div class="col-span-2 sm:col-span-4 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div class="min-w-0">
-                <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นรายชั้น (Matrix)</p>
-                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ levelRateForm.level === '' ? 'ยังไม่ได้ระบุชั้น' : `ชั้นที่ ${levelRateForm.level}` }}</h1>
-              </div>
-              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showLevelRateForm = false">
-                <Icon name="x" :size="20" />
-              </button>
-            </div>
-              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">Level</label>
-                <input v-model="levelRateForm.level" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                <select v-model="levelRateForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="percentage">%</option>
-                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">{{ levelRateForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                <input v-model="levelRateForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-                <div class="mt-1 flex flex-wrap items-start gap-2">
-                  <BuddhistDateInput v-model="levelRateForm.effective_from" required />
-                  <CalendarDatePicker v-model="levelRateForm.effective_from" />
-                </div>
-              </div>
-              </div>
-            <div class="col-span-2 sm:col-span-4 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
-              <!-- TASK-216 r2 — added with the modal conversion: an inline
-                   panel could be abandoned by scrolling past it, a modal
-                   cannot. -->
-              <button type="button" class="btn-secondary" @click="showLevelRateForm = false">ยกเลิก</button>
-              <button type="submit" :disabled="savingLevelRate" class="btn-primary">
-                {{ savingLevelRate ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-            </form>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showLevelRateForm = false">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <label class="text-sm font-bold text-slate-500">Level</label>
+            <input v-model="levelRateForm.level" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
-          <EmptyState v-if="!matrixLevelRates.length" icon="layers" title="ยังไม่มีอัตราตาม Level" />
-          <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <div v-for="lr in matrixLevelRates" :key="lr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-              <p class="text-sm font-bold text-slate-900">Level {{ lr.level }} — {{ formatRate(lr.rate_type, lr.rate_value) }}</p>
-              <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteLevelRate(lr)">ลบ</button>
-            </div>
-          </TransitionGroup>
-        </section>
-
-        <!-- ═══════════ Agent Ranks / Stairstep-Breakaway ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'ranks'" class="mt-4">
-          <div v-if="rankError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ rankError }}</div>
-          <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRankSettings">
-            <div>
-              <label class="text-sm font-bold text-slate-500">หน้าต่างคำนวณยอดย้อนหลัง (วัน)</label>
-              <input v-model="rankSettingsForm.trailing_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">ความถี่คำนวณอันดับใหม่</label>
-              <select v-model="rankSettingsForm.recalculation_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="daily">รายวัน</option>
-                <option value="weekly">รายสัปดาห์</option>
-                <option value="monthly">รายเดือน</option>
-              </select>
-            </div>
-            <div class="col-span-2 flex justify-end">
-              <button type="submit" :disabled="savingRankSettings" class="btn-primary">
-                {{ savingRankSettings ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-
-          <div class="flex justify-between items-center mt-4 mb-2 px-1">
-            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">บันไดอันดับ (เรียงจาก sort order น้อยไปมาก)</h3>
-            <button class="btn-primary" @click="showRankForm = !showRankForm">
-              + เพิ่มอันดับ
-            </button>
+          <div>
+            <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+            <select v-model="levelRateForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <option value="percentage">%</option>
+              <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+            </select>
           </div>
-          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
-               modal backgroud สีดำ"). Inline forms opened at the TOP of
-               the page while the row being edited sat further down and
-               often off-screen; the overlay removes the question by
-               removing everything else. -->
-          <div v-if="showRankForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRankForm">
-            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRank">
-            <div class="col-span-2 sm:col-span-3 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div class="min-w-0">
-                <p class="text-xs font-bold tracking-wide text-slate-400">{{ editingRankId ? 'แก้ไข' : 'เพิ่ม' }}ขั้นอันดับ (Stairstep)</p>
-                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ rankForm.name ? `อันดับ: ${rankForm.name}` : 'ยังไม่ได้ตั้งชื่ออันดับ' }}</h1>
-              </div>
-              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRankForm">
-                <Icon name="x" :size="20" />
-              </button>
-            </div>
-              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <div class="col-span-2 sm:col-span-1">
-                <label class="text-sm font-bold text-slate-500">ชื่ออันดับ</label>
-                <input v-model="rankForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">ยอดขั้นต่ำ (บาท)</label>
-                <input v-model="rankForm.volume_threshold_thb" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">ลำดับ (sort order)</label>
-                <input v-model="rankForm.sort_order" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                <select v-model="rankForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="percentage">%</option>
-                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">{{ rankForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                <input v-model="rankForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div class="flex items-center gap-2 self-end pb-2">
-                <input id="is_breakaway" v-model="rankForm.is_breakaway_rank" type="checkbox" />
-                <label for="is_breakaway" class="text-sm font-bold text-slate-500">เป็นอันดับ Breakaway (ตัดสายบน)</label>
-              </div>
-              </div>
-            <div class="col-span-2 sm:col-span-3 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
-              <button type="button" class="btn-secondary" @click="resetRankForm">ยกเลิก</button>
-              <button type="submit" :disabled="savingRank" class="btn-primary">
-                {{ savingRank ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-            </form>
+          <div>
+            <label class="text-sm font-bold text-slate-500">{{ levelRateForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+            <input v-model="levelRateForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
-          <EmptyState v-if="!agentRanks.length" icon="trophy" title="ยังไม่มีอันดับ" />
-          <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <div v-for="r in agentRanks" :key="r.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-              <div>
-                <p class="text-sm font-bold text-slate-900">
-                  {{ r.sort_order }}. {{ r.name }}
-                  <span v-if="r.is_breakaway_rank" class="text-xs font-bold text-amber-600">(Breakaway)</span>
-                </p>
-                <p class="text-xs text-slate-400">ยอดขั้นต่ำ {{ formatSatang(r.volume_threshold) }} · อัตรา {{ formatRate(r.rate_type, r.rate_value) }}</p>
-              </div>
-              <div class="flex items-center gap-2 shrink-0">
-                <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditRank(r)">แก้ไข</button>
-                <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRank(r)">ลบ</button>
-              </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+            <div class="mt-1 flex flex-wrap items-start gap-2">
+              <BuddhistDateInput v-model="levelRateForm.effective_from" required />
+              <CalendarDatePicker v-model="levelRateForm.effective_from" />
             </div>
-          </TransitionGroup>
-        </section>
-
-        <!-- ═══════════ Generation ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'generation'" class="mt-4">
-          <div v-if="generationError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ generationError }}</div>
-          <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitGenerationSettings">
-            <div>
-              <label class="text-sm font-bold text-slate-500">ความลึกสูงสุด (จำนวน Generation)</label>
-              <input v-model="generationSettingsForm.max_generation_depth" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-            </div>
-            <div class="flex justify-end items-end">
-              <button type="submit" :disabled="savingGenerationSettings" class="btn-primary">
-                {{ savingGenerationSettings ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-
-          <div class="flex justify-between items-center mt-4 mb-2 px-1">
-            <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Generation</h3>
-            <button class="btn-primary" @click="showGenerationRuleForm = !showGenerationRuleForm">
-              + เพิ่ม Generation
-            </button>
           </div>
-          <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น
-               modal backgroud สีดำ"). Inline forms opened at the TOP of
-               the page while the row being edited sat further down and
-               often off-screen; the overlay removes the question by
-               removing everything else. -->
-          <div v-if="showGenerationRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showGenerationRuleForm = false">
-            <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitGenerationRule">
-            <div class="col-span-2 sm:col-span-4 shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
-              <div class="min-w-0">
-                <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นราย Generation</p>
-                <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ generationRuleForm.generation_number === '' ? 'ยังไม่ได้ระบุ Generation' : `Generation ที่ ${generationRuleForm.generation_number}` }}</h1>
-              </div>
-              <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showGenerationRuleForm = false">
-                <Icon name="x" :size="20" />
-              </button>
-            </div>
-              <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">Generation ที่</label>
-                <input v-model="generationRuleForm.generation_number" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
-                <select v-model="generationRuleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="percentage">%</option>
-                  <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
-                </select>
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">{{ generationRuleForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-                <input v-model="generationRuleForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-                <div class="mt-1 flex flex-wrap items-start gap-2">
-                  <BuddhistDateInput v-model="generationRuleForm.effective_from" required />
-                  <CalendarDatePicker v-model="generationRuleForm.effective_from" />
-                </div>
-              </div>
-              </div>
-            <div class="col-span-2 sm:col-span-4 shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
-              <button type="button" class="btn-secondary" @click="showGenerationRuleForm = false">ยกเลิก</button>
-              <button type="submit" :disabled="savingGenerationRule" class="btn-primary">
-                {{ savingGenerationRule ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-            </form>
+        </div>
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <!-- TASK-216 r2 — added with the modal conversion: an inline panel
+               could be abandoned by scrolling past it, a modal cannot. -->
+          <button type="button" class="btn-secondary" @click="showLevelRateForm = false">ยกเลิก</button>
+          <button type="submit" :disabled="savingLevelRate" class="btn-primary">
+            {{ savingLevelRate ? 'กำลังบันทึก...' : 'บันทึก' }}
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <!-- ขั้นอันดับ (Stairstep) — opened from step 2's อันดับ structure -->
+    <div v-if="showRankForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRankForm">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRank">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-slate-400">{{ editingRankId ? 'แก้ไข' : 'เพิ่ม' }}ขั้นอันดับ (Stairstep)</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ rankForm.name ? `อันดับ: ${rankForm.name}` : 'ยังไม่ได้ตั้งชื่ออันดับ' }}</h1>
           </div>
-          <EmptyState v-if="!generationRules.length" icon="users" title="ยังไม่มีอัตราตาม Generation" />
-          <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
-            <div v-for="gr in generationRules" :key="gr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
-              <p class="text-sm font-bold text-slate-900">Generation {{ gr.generation_number }} — {{ formatRate(gr.rate_type, gr.rate_value) }}</p>
-              <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteGenerationRule(gr)">ลบ</button>
-            </div>
-          </TransitionGroup>
-        </section>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRankForm">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div class="col-span-2 sm:col-span-1">
+            <label class="text-sm font-bold text-slate-500">ชื่ออันดับ</label>
+            <input v-model="rankForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">ยอดขั้นต่ำ (บาท)</label>
+            <input v-model="rankForm.volume_threshold_thb" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">ลำดับ (sort order)</label>
+            <input v-model="rankForm.sort_order" type="number" min="0" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+            <select v-model="rankForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <option value="percentage">%</option>
+              <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">{{ rankForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+            <input v-model="rankForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div class="flex items-center gap-2 self-end pb-2">
+            <input id="is_breakaway" v-model="rankForm.is_breakaway_rank" type="checkbox" />
+            <label for="is_breakaway" class="text-sm font-bold text-slate-500">เป็นอันดับ Breakaway (ตัดสายบน)</label>
+          </div>
+        </div>
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" @click="resetRankForm">ยกเลิก</button>
+          <button type="submit" :disabled="savingRank" class="btn-primary">
+            {{ savingRank ? 'กำลังบันทึก...' : 'บันทึก' }}
+          </button>
+        </div>
+      </form>
+    </div>
 
-        <!-- ═══════════ Affiliate ═══════════ -->
-        <section v-if="viewMode === 'settings' && activeTab === 'affiliate'" class="mt-4">
-          <div v-if="affiliateError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ affiliateError }}</div>
-          <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitAffiliateSettings">
-            <div>
-              <label class="text-sm font-bold text-slate-500">หน้าต่างนับเครดิต (วัน)</label>
-              <input v-model="affiliateForm.attribution_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              <p class="mt-1 text-xs text-slate-400">คลิกล่าสุดต้องอยู่ในช่วงเวลานี้จึงจะนับเป็นการแปลงที่มาจากลิงก์พันธมิตร (last-click)</p>
+    <!-- อัตรา Generation — opened from step 2's Generation structure -->
+    <div v-if="showGenerationRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="showGenerationRuleForm = false">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitGenerationRule">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นราย Generation</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ generationRuleForm.generation_number === '' ? 'ยังไม่ได้ระบุ Generation' : `Generation ที่ ${generationRuleForm.generation_number}` }}</h1>
+          </div>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showGenerationRuleForm = false">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 content-start grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div>
+            <label class="text-sm font-bold text-slate-500">Generation ที่</label>
+            <input v-model="generationRuleForm.generation_number" type="number" min="1" max="50" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
+            <select v-model="generationRuleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <option value="percentage">%</option>
+              <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">{{ generationRuleForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+            <input v-model="generationRuleForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <div>
+            <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
+            <div class="mt-1 flex flex-wrap items-start gap-2">
+              <BuddhistDateInput v-model="generationRuleForm.effective_from" required />
+              <CalendarDatePicker v-model="generationRuleForm.effective_from" />
             </div>
-            <div class="flex items-start gap-2 pt-6">
-              <input id="differential" v-model="affiliateForm.new_vs_returning_rate_differential_enabled" type="checkbox" />
-              <label for="differential" class="text-sm font-bold text-slate-500">แยกอัตราลูกค้าใหม่/ลูกค้าเก่า (ยังไม่รองรับการคำนวณจริง)</label>
-            </div>
-            <div class="col-span-2 flex justify-end">
-              <button type="submit" :disabled="savingAffiliate" class="btn-primary">
-                {{ savingAffiliate ? 'กำลังบันทึก...' : 'บันทึก' }}
-              </button>
-            </div>
-          </form>
-        </section>
-      </template>
-    </template>
+          </div>
+        </div>
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" @click="showGenerationRuleForm = false">ยกเลิก</button>
+          <button type="submit" :disabled="savingGenerationRule" class="btn-primary">
+            {{ savingGenerationRule ? 'กำลังบันทึก...' : 'บันทึก' }}
+          </button>
+        </div>
+      </form>
+    </div>
 
+    <!-- ลำดับการใช้ค่า — now opened ONLY on request, from step 3's ladder -->
     <div v-if="showResolutionOrderModal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="closeResolutionOrderModal">
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
         <div class="flex items-center gap-2 mb-2">
@@ -2535,12 +3442,8 @@ onMounted(async () => {
           <p class="text-sm font-bold text-slate-900">ลำดับการใช้ค่าคอมมิชชั่น</p>
         </div>
         <p class="text-xs text-slate-500 mb-4">{{ RESOLUTION_ORDER_NOTE }}</p>
-        <label class="flex items-center gap-1.5 text-xs text-slate-500 mb-4">
-          <input v-model="dontShowResolutionOrderAgain" type="checkbox" />
-          ไม่ต้องแสดงข้อความนี้อีก
-        </label>
         <div class="flex justify-end">
-          <button class="btn-primary" @click="closeResolutionOrderModal">
+          <button class="btn-primary" data-test="close-resolution-order" @click="closeResolutionOrderModal">
             เข้าใจแล้ว
           </button>
         </div>
@@ -2577,7 +3480,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- ตัวช่วยตั้งค่าคอมมิชชั่นสินค้า (Setup Wizard, Task-037) -->
+    <!-- ตัวช่วยตั้งค่าคอมมิชชั่นสินค้า (Setup Wizard, TASK-037) — opened from step 3 -->
     <div v-if="wizardOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="closeWizard">
       <div class="w-full max-w-lg bg-white rounded-2xl shadow-lg p-5 max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between mb-3">
@@ -2596,21 +3499,20 @@ onMounted(async () => {
             <label class="text-sm font-bold text-slate-500">สินค้า</label>
             <select v-model="wizardProductId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
               <option value="" disabled>เลือกสินค้า</option>
-              <!-- TASK-245 — the wizard's first step writes the product's
-                   plan type and its last writes a commission rule, so a
-                   product it may not do EITHER to has no business in the
-                   list. -->
+              <!-- TASK-245 — the wizard's first step writes the product's plan
+                   type and its last writes a commission rule, so a product it
+                   may not do EITHER to has no business in the list. -->
               <option v-for="p in byCompany(products).filter(canSetCommission)" :key="p.id" :value="p.id">{{ p.name }}</option>
             </select>
           </div>
-          <!-- TASK-198 — this product's commission_rate_type is already
-               locked to fixed_satang by another form (TASK-197 §2.2); the
-               wizard's rate-entry step only ever submits 'percentage', so
-               letting the admin continue would just 422 at the end. Block
-               here instead of at submit time. -->
+          <!-- TASK-198 — this product's commission_rate_type is already locked
+               to fixed_satang by another form (TASK-197 §2.2); the wizard's
+               rate-entry step only ever submits 'percentage', so letting the
+               admin continue would just 422 at the end. Block here instead of
+               at submit time. -->
           <div v-if="wizardProduct && wizardProductBlockedFixedSatang" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 space-y-2">
-            <p>สินค้านี้ตั้งค่าคอมมิชชั่นเป็นแบบจำนวนเงินคงที่ (บาท) แล้ว ใช้ Wizard นี้ไม่ได้ กรุณาไปที่ "+ เพิ่มอัตราคอมตาม tier" แทน</p>
-            <button class="font-bold hover:underline" @click="wizardGoToProductRateForm">ไปที่ + เพิ่มอัตราคอมตาม tier →</button>
+            <p>สินค้านี้ตั้งค่าคอมมิชชั่นเป็นแบบจำนวนเงินคงที่ (บาท) แล้ว ใช้ Wizard นี้ไม่ได้ กรุณาไปที่ฟอร์ม "ตั้งอัตราคอมมิชชั่น" ของสินค้านี้แทน</p>
+            <button class="font-bold hover:underline" @click="wizardGoToProductRateForm">ไปที่ฟอร์มตั้งอัตราคอมมิชชั่น →</button>
           </div>
           <div v-else-if="wizardProduct">
             <label class="text-sm font-bold text-slate-500">รูปแบบแผนคอมมิชชั่น</label>
@@ -2646,7 +3548,7 @@ onMounted(async () => {
         <!-- Step 2: อัตราคอมมิชชั่น (flat-rate ต่อสินค้า, ADR-035) -->
         <div v-else-if="wizardStep === 2" class="space-y-3">
           <p class="text-xs text-slate-400">
-            ใส่อัตรา % สำหรับสินค้านี้ (เว้นว่างได้ถ้ายังไม่ตั้งตอนนี้) — ต้องการอัตราคงที่ (บาท) แทน % ให้ไปตั้งค่าที่ "การตั้งค่าทั้งหมด → กฎคอมมิชชั่น" แทน
+            ใส่อัตรา % สำหรับสินค้านี้ (เว้นว่างได้ถ้ายังไม่ตั้งตอนนี้) — ต้องการอัตราคงที่ (บาท) แทน % ให้ปิด Wizard แล้วใช้ "+ เพิ่มอัตราของสินค้า" ในขั้นที่ 3 แทน
           </p>
           <div class="flex items-center gap-3">
             <span class="text-sm font-bold text-slate-700 w-28 shrink-0">อัตราคอมมิชชั่น</span>
@@ -2710,14 +3612,14 @@ onMounted(async () => {
                   <option value="monthly">รายเดือน</option>
                 </select>
               </div>
-              <p class="col-span-2 text-xs text-slate-400">อันดับ (rank ladder) แต่ละขั้นตั้งเพิ่มเติมได้ที่ "การตั้งค่าทั้งหมด → อันดับ (Stairstep)"</p>
+              <p class="col-span-2 text-xs text-slate-400">บันไดอันดับแต่ละขั้นตั้งเพิ่มเติมได้ที่ขั้นที่ 2 → ชิป "อันดับ (Stairstep)"</p>
             </div>
             <div v-else-if="wizardEffectivePlanType === 'generation'" class="grid grid-cols-2 gap-3">
               <div>
                 <label class="text-sm font-bold text-slate-500">ความลึกสูงสุด (Generation)</label>
                 <input v-model="generationSettingsForm.max_generation_depth" type="number" min="1" max="50" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
               </div>
-              <p class="col-span-2 text-xs text-slate-400">อัตราตาม Generation แต่ละขั้นตั้งเพิ่มเติมได้ที่ "การตั้งค่าทั้งหมด → Generation"</p>
+              <p class="col-span-2 text-xs text-slate-400">อัตราตาม Generation แต่ละขั้นตั้งเพิ่มเติมได้ที่ขั้นที่ 2 → ชิป "Generation"</p>
             </div>
             <div v-else-if="wizardEffectivePlanType === 'affiliate'" class="grid grid-cols-2 gap-3">
               <div>

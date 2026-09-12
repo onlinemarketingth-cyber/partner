@@ -6,7 +6,8 @@ use App\Enums\Ability;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-// ADR-011/TASK-031 — Company Admin (own company) / Super Admin only,
+// ADR-011/TASK-031 — SUPER ADMIN ONLY since 2026-09-11 (same owner
+// decision as UpdateCommissionBinarySettingRequest; reads unchanged),
 // same shape as UpdateCommissionMatrixSettingRequest.
 // max_generation_depth is BR-7, never defaulted here.
 class UpdateCommissionGenerationSettingRequest extends FormRequest

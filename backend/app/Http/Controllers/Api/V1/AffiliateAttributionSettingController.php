@@ -18,8 +18,10 @@ class AffiliateAttributionSettingController extends Controller
      * "My Affiliate Links" screen displays this window read-only so an
      * Agent understands why an old click stopped counting as a
      * conversion (BR-7: the value itself stays admin-editable, only
-     * *reading* it is being widened here). update() is unchanged —
-     * still Company Admin/Super Admin only, enforced below.
+     * *reading* it is being widened here). update() narrowed the other
+     * way on 2026-09-11 — Super Admin only, enforced by
+     * UpdateAffiliateAttributionSettingRequest; reading stayed exactly
+     * as widened here, all the way down to an Agent.
      *
      * An Agent is always forced to their own company_id (the
      * ?company_id= override stays Super-Admin-only) — same narrowing

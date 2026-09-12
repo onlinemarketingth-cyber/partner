@@ -41,9 +41,18 @@ use Tests\TestCase;
  *   - ledger rows written while enabled are unchanged by switching off
  *       → test_switching_off_never_touches_a_ledger_row_already_written
  *   - tenant isolation on the new setting endpoint (BR-6)
- *       → test_a_company_admin_company_id_param_is_ignored_on_write
+ *       → test_a_company_admin_company_id_param_is_ignored_on_read_and_the_write_is_refused
  *         test_company_a_cannot_read_company_bs_setting
  *         test_a_super_admin_can_target_a_named_company
+ *
+ * 2026-09-11 (owner decision) — WHO may flip this switch changed, not what
+ * the switch does. Ability::SettingsCommissionSplitUpdate left the Company
+ * Admin row of PermissionResolver with the rest of the commission-rate
+ * group, so every write below is a Super Admin's. Reads are untouched at
+ * every tier, Agent included. The tests whose subject is the SWITCH (ledger
+ * immutability, upsert, validation, audit) simply changed actor; the one
+ * that asserted the Company Admin's capability is inverted and named as
+ * such.
  */
 class CommissionSplitSettingTest extends TestCase
 {
@@ -179,7 +188,9 @@ class CommissionSplitSettingTest extends TestCase
     {
         $company = Company::factory()->create();
         $this->enableSplit($company);
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        // Super Admin since 2026-09-11 — the subject is that switching off
+        // does not rewrite history, not who threw the switch.
+        $admin = User::factory()->superAdmin()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
         $coAgent = User::factory()->agent()->create(['company_id' => $company->id]);
         $tier = $this->passBasicCert($agent, $company);
@@ -200,7 +211,7 @@ class CommissionSplitSettingTest extends TestCase
         $this->assertCount(2, $before);
 
         $this->actingAs($admin)
-            ->putJson('/api/v1/commission-split-settings', ['is_enabled' => false])
+            ->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id, 'is_enabled' => false])
             ->assertOk()
             ->assertJsonPath('data.is_enabled', false);
 
@@ -377,13 +388,34 @@ class CommissionSplitSettingTest extends TestCase
         $this->putJson('/api/v1/commission-split-settings', ['is_enabled' => true])->assertUnauthorized();
     }
 
-    public function test_a_company_admin_can_turn_it_on_and_read_it_back(): void
+    /**
+     * 2026-09-11 (owner decision) — THIS TEST IS AN INVERSION. It used to be
+     * test_a_company_admin_can_turn_it_on_and_read_it_back and asserted 200
+     * on the write.
+     *
+     * THE COST, and this one deserves naming because the split switch is not
+     * a rate: a Company Admin can no longer turn co-agent commission
+     * splitting on or off for their own company. It travelled with the rate
+     * family because flipping it silently redirects half of an agent's
+     * commission to a colleague, which is a payout decision even though the
+     * endpoint takes a boolean.
+     *
+     * The read-back half is kept and still asserted against the Company
+     * Admin, because that is exactly what the decision preserved.
+     */
+    public function test_a_company_admin_can_no_longer_turn_it_on_but_still_reads_it_back(): void
     {
         $company = Company::factory()->create();
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
 
         $this->actingAs($admin)
             ->putJson('/api/v1/commission-split-settings', ['is_enabled' => true])
+            ->assertForbidden();
+
+        $this->assertDatabaseMissing('commission_split_settings', ['company_id' => $company->id]);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id, 'is_enabled' => true])
             ->assertOk()
             ->assertJsonPath('data.is_enabled', true);
 
@@ -460,30 +492,32 @@ class CommissionSplitSettingTest extends TestCase
             ->assertJsonMissingPath('data.pending_referrals_with_stored_split');
     }
 
+    /** Actor switched to Super Admin on 2026-09-11; the subject is the input shape. */
     public function test_is_enabled_is_required_and_must_be_boolean(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
 
         $this->actingAs($admin)
-            ->putJson('/api/v1/commission-split-settings', [])
+            ->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id])
             ->assertStatus(422)
             ->assertJsonValidationErrors('is_enabled');
 
         $this->actingAs($admin)
-            ->putJson('/api/v1/commission-split-settings', ['is_enabled' => 'maybe'])
+            ->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id, 'is_enabled' => 'maybe'])
             ->assertStatus(422)
             ->assertJsonValidationErrors('is_enabled');
     }
 
+    /** Actor switched to Super Admin on 2026-09-11; the subject is the upsert. */
     public function test_repeated_writes_update_one_row(): void
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
 
         foreach ([true, false, true] as $value) {
             $this->actingAs($admin)
-                ->putJson('/api/v1/commission-split-settings', ['is_enabled' => $value])
+                ->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id, 'is_enabled' => $value])
                 ->assertOk()
                 ->assertJsonPath('data.is_enabled', $value);
         }
@@ -494,10 +528,16 @@ class CommissionSplitSettingTest extends TestCase
     public function test_flipping_the_switch_is_written_to_the_audit_log(): void
     {
         // Section 6 — "record every action that affects money [or] commission."
+        //
+        // Actor switched to Super Admin on 2026-09-11, and the audit row
+        // matters MORE after that change, not less: the person who flips a
+        // company's split switch is now someone outside that company, so the
+        // company_id/actor_user_id pair below is the only record the company
+        // has of who changed it.
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
 
-        $this->actingAs($admin)->putJson('/api/v1/commission-split-settings', ['is_enabled' => true])->assertOk();
+        $this->actingAs($admin)->putJson('/api/v1/commission-split-settings', ['company_id' => $company->id, 'is_enabled' => true])->assertOk();
 
         $this->assertDatabaseHas('audit_logs', [
             'company_id' => $company->id,
@@ -510,7 +550,14 @@ class CommissionSplitSettingTest extends TestCase
     // BR-6 — tenant isolation on the new endpoint.
     // -----------------------------------------------------------------
 
-    public function test_a_company_admin_company_id_param_is_ignored_on_write(): void
+    /**
+     * 2026-09-11 — the WRITE half of this BR-6 probe could not survive the
+     * owner's decision (a Company Admin's PUT is refused before the smuggled
+     * company_id is looked at), so it is asserted as the refusal it became.
+     * The READ half, which still carries the original subject, is
+     * test_company_a_cannot_read_company_bs_setting right below.
+     */
+    public function test_a_company_admin_company_id_param_is_ignored_on_read_and_the_write_is_refused(): void
     {
         $companyA = Company::factory()->create();
         $companyB = Company::factory()->create();
@@ -519,9 +566,9 @@ class CommissionSplitSettingTest extends TestCase
         $this->actingAs($adminA)->putJson('/api/v1/commission-split-settings', [
             'is_enabled' => true,
             'company_id' => $companyB->id,
-        ])->assertOk();
+        ])->assertForbidden();
 
-        $this->assertDatabaseHas('commission_split_settings', ['company_id' => $companyA->id, 'is_enabled' => true]);
+        $this->assertDatabaseMissing('commission_split_settings', ['company_id' => $companyA->id]);
         $this->assertDatabaseMissing('commission_split_settings', ['company_id' => $companyB->id]);
     }
 

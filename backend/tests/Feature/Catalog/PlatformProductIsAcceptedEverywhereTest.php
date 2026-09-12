@@ -50,6 +50,12 @@ use Tests\TestCase;
  *
  * Another company's product stays refused by both. That is what the
  * hand-written rule was for, and none of this weakens it.
+ *
+ * 2026-09-11 — the INTERNAL CONFIGURATION rule above is unchanged, but the
+ * actor who exercises it for commission is not: commission rate writes are
+ * Super Admin's alone since the owner's decision, so the commission tests
+ * below act as a Super Admin. The grant-or-no-grant property is what this
+ * file pins; who holds the write is CommissionRulePolicy's business.
  */
 class PlatformProductIsAcceptedEverywhereTest extends TestCase
 {
@@ -196,18 +202,57 @@ class PlatformProductIsAcceptedEverywhereTest extends TestCase
 
     // ── Internal configuration: visibility is enough ─────────────────
 
-    public function test_a_company_may_set_its_own_commission_rate_on_a_shared_product(): void
+    /**
+     * 2026-09-11 (owner decision) — THIS TEST IS AN INVERSION. It used to be
+     * test_a_company_may_set_its_own_commission_rate_on_a_shared_product and
+     * it asserted 201 with the rule stamped with the company's own id.
+     *
+     * WHAT IT REPLACED: the ordering argument in this file's docblock — a
+     * company preparing its rates before the product is switched on for it is
+     * a normal order of operations, and the rule it writes is its own, so no
+     * grant was required. That argument is untouched and still correct; what
+     * changed is WHO may write the rule. The owner decided commission rate
+     * configuration is Super Admin's alone because a rate is money, and
+     * accepted the cost: a company can no longer set its own rate on a shared
+     * catalog product — it must ask the platform owner.
+     *
+     * The "internal configuration needs no grant" property this file exists
+     * to pin is NOT lost; it is asserted below against the Super Admin who
+     * now holds the write, with no grant in sight.
+     */
+    public function test_a_company_admin_may_no_longer_set_a_commission_rate_on_a_shared_product(): void
     {
-        /*
-         * No grant. A company preparing its rates before the product is
-         * switched on for it is a normal order of operations, and the rule it
-         * writes is its own — it can never pay out on a sale that cannot
-         * happen.
-         */
         $tier = CertTier::factory()->create();
 
         $this->actingAs($this->admin)
             ->postJson('/api/v1/commission-rules', [
+                'product_id' => $this->shared->id,
+                'cert_tier_id' => $tier->id,
+                'rate_type' => 'percentage',
+                'rate_value' => 500,
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseCount('commission_rules', 0);
+    }
+
+    public function test_a_super_admin_may_set_a_companys_commission_rate_on_a_shared_product_without_a_grant(): void
+    {
+        /*
+         * No grant, deliberately — this is the half of the old test that is
+         * still true and still this file's subject. Internal configuration
+         * does not wait on the grant: requiring it first would recreate the
+         * ordering trap the docblock above describes, and a rule attached to
+         * a product the company cannot yet sell simply never fires. The row
+         * still carries the company's own id, so nothing crosses a tenant
+         * boundary.
+         */
+        $tier = CertTier::factory()->create();
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->postJson('/api/v1/commission-rules', [
+                'company_id' => $this->aia->id,
                 'product_id' => $this->shared->id,
                 'cert_tier_id' => $tier->id,
                 'rate_type' => 'percentage',

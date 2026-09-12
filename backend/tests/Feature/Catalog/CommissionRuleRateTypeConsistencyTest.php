@@ -21,10 +21,24 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
 {
     use RefreshDatabase;
 
+    /**
+     * The actor is a SUPER ADMIN since 2026-09-11, not the Company Admin it
+     * used to be: the owner's decision made commission rate configuration
+     * writable by Super Admin only, so a Company Admin now 403s at
+     * POST/PUT /commission-rules before any rate_type consistency check
+     * runs. The subject of this file is the per-product FORMAT lock, not
+     * who may write a rule — every assertion below is unchanged, and the
+     * Company Admin's refusal is asserted in CommissionRuleTest.
+     *
+     * A Super Admin has no company_id to borrow, so $product->company_id is
+     * sent explicitly on every write below.
+     *
+     * @return array{0: User, 1: Product}
+     */
     private function makeAdminAndProduct(): array
     {
         $company = Company::factory()->create();
-        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $admin = User::factory()->superAdmin()->create();
         $product = Product::factory()->for($company)->create();
 
         return [$admin, $product];
@@ -43,6 +57,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         $this->assertNull($product->fresh()->commission_rate_type);
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
@@ -84,6 +99,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         // First rule locks the product into 'percentage', bounded so a
         // later non-overlapping rule can coexist with it below.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 500,
@@ -92,6 +108,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         ])->assertCreated();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
             'rate_value' => 500,
@@ -110,6 +127,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         // specifically about the mismatch, not some other side effect
         // of the second POST.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
             'rate_value' => 700,
@@ -128,6 +146,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         $tier = CertTier::factory()->create();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -137,7 +156,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
 
         $secondTier = CertTier::factory()->create();
         $rule = CommissionRule::factory()->create([
-            'company_id' => $admin->company_id,
+            'company_id' => $product->company_id,
             'cert_tier_id' => $secondTier->id,
             'product_id' => $product->id,
             'product_category_id' => null,
@@ -166,6 +185,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
 
         // Lock the product itself into 'percentage'.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -177,6 +197,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         // this test's product other than sharing a company) is free to
         // pick fixed_satang even though the product above is 'percentage'.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => CertTier::factory()->create()->id,
             'product_category_id' => $category->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
@@ -191,6 +212,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         $tier = CertTier::factory()->create();
 
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => $tier->id,
             'product_id' => $product->id,
             'rate_type' => CommissionRateType::Percentage->value,
@@ -201,6 +223,7 @@ class CommissionRuleRateTypeConsistencyTest extends TestCase
         // Neither product_id nor product_category_id set = company-wide
         // default, free to be fixed_satang.
         $this->actingAs($admin)->postJson('/api/v1/commission-rules', [
+            'company_id' => $product->company_id,
             'cert_tier_id' => CertTier::factory()->create()->id,
             'rate_type' => CommissionRateType::FixedSatang->value,
             'rate_value' => 500,

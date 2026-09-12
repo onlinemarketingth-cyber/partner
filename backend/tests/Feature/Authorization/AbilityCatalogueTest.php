@@ -154,11 +154,13 @@ class AbilityCatalogueTest extends TestCase
      * (ADR-033 §2.1 — the first case NOT derived from a pre-existing site),
      * plus Ability::SettingsMailUpdate (TASK-190 §3.2 — the second such
      * case), plus Ability::CommissionRateCapUpdate (TASK-196 §2.2 — the
-     * third), and Company Admin holds those 32 minus the cross-company
-     * platform report, minus the platform-wide mail settings, and minus
+     * third), and Company Admin holds those minus the cross-company
+     * platform report, minus the platform-wide mail settings, minus
      * the platform-wide commission-rate cap (none of the three has an
      * "own company" scope for a Company Admin to hold — see each case's
-     * own docblock).
+     * own docblock), minus the payment gateway and voucher redemption,
+     * and — since the 2026-09-11 owner decision — minus the six
+     * commission-rate *Update abilities.
      */
     public function test_super_admin_holds_every_phase_one_ability_and_company_admin_holds_all_but_the_platform_report(): void
     {
@@ -187,8 +189,59 @@ class AbilityCatalogueTest extends TestCase
          * company's own arrangement fails, and taking it away would leave a
          * counter with a customer and nobody able to help.
          */
-        $this->assertCount(35, $superAdmin);
-        $this->assertCount(30, $companyAdmin);
+        /*
+         * 2026-09-11 — Company Admin dropped to 24, and this is the
+         * deliberate edit this assertion exists to force somebody to
+         * justify. THE DECISION: commission rate configuration becomes
+         * writable by Super Admin only, because a commission rate is money
+         * and the owner decided one person owns those numbers. Six
+         * abilities left the Company Admin row:
+         * SettingsCommissionBinaryUpdate, SettingsCommissionMatrixUpdate,
+         * SettingsCommissionGenerationUpdate, SettingsAgentRankUpdate,
+         * SettingsAffiliateAttributionUpdate,
+         * SettingsCommissionSplitUpdate.
+         *
+         * THE COST, accepted knowingly: a Company Admin can no longer set
+         * their own commission rate — including on a shared catalog product
+         * they sell — and must ask the platform owner for every change.
+         *
+         * Super Admin's count is UNCHANGED at 35: nothing was granted, a
+         * capability was withdrawn from one tier. Every matching
+         * Settings...View ability stays with Company Admin, so reads are
+         * untouched; if this count ever falls below 24 by a *View leaving,
+         * that is a different decision and needs its own note.
+         */
+        /*
+         * 2026-09-11 (second edit of the day) — 36/25. ONE ability was ADDED
+         * and both tiers hold it: Ability::CommissionReadinessView, the
+         * per-page "is commission set up well enough to pay anybody" check
+         * behind GET /commission-readiness.
+         *
+         * THE JUSTIFICATION THIS ASSERTION EXISTS TO FORCE. The audience is
+         * identical to Ability::ReportConfigHealthView's, so reusing that case
+         * would have kept both counts where they were. It was rejected: this
+         * file's rule is one case per distinct QUESTION, and "may I read the
+         * cross-company BR-7 config report" is not "may I be told my own
+         * company is currently paying nobody". Coupling them would mean
+         * revoking the report silently switches the warning off on every page,
+         * with no line in any diff saying so.
+         *
+         * BOTH tiers, note — on the same day six commission *Update abilities
+         * were taken OFF the Company Admin row. That pairing is the decision,
+         * not an inconsistency: the owner narrowed who may CHANGE a rate, not
+         * who may be told the rates are broken. The endpoint's own `can_fix`
+         * field carries the difference, so a Company Admin is shown the state
+         * and told to contact the platform owner rather than handed a button
+         * that 403s.
+         */
+        $this->assertCount(36, $superAdmin);
+        $this->assertCount(25, $companyAdmin);
+
+        // Held by both, so it adds no divergence to the filtered comparison at
+        // the foot of this test — asserted here so "both" is a statement
+        // somebody had to write, not a thing the count happens to allow.
+        $this->assertContains(Ability::CommissionReadinessView, $superAdmin);
+        $this->assertContains(Ability::CommissionReadinessView, $companyAdmin);
 
         $this->assertContains(Ability::ReportPlatformView, $superAdmin);
         $this->assertNotContains(Ability::ReportPlatformView, $companyAdmin);
@@ -207,11 +260,41 @@ class AbilityCatalogueTest extends TestCase
         $this->assertNotContains(Ability::SettingsPaymentGatewayUpdate, $companyAdmin);
         $this->assertNotContains(Ability::CommissionRateCapUpdate, $companyAdmin);
 
-        // Company Admin's list is Super Admin's minus exactly those FOUR
+        /*
+         * 2026-09-11 — and the six commission-rate writes, the newest
+         * Super-Admin-only group. Asserted as a paired contrast: each
+         * *Update is gone from Company Admin while its *View sibling is
+         * still there, which is precisely the shape of the owner's decision
+         * (writes narrow, reads stay open) and the thing a careless "tidy
+         * up the commission abilities" change would break.
+         *
+         * SettingsCommissionSplitUpdate and
+         * SettingsAffiliateAttributionUpdate have no *View sibling in the
+         * catalogue — reading those two is not gated on an Ability at all —
+         * so they are asserted alone.
+         */
+        foreach ([
+            [Ability::SettingsCommissionBinaryUpdate, Ability::SettingsCommissionBinaryView],
+            [Ability::SettingsCommissionMatrixUpdate, Ability::SettingsCommissionMatrixView],
+            [Ability::SettingsCommissionGenerationUpdate, Ability::SettingsCommissionGenerationView],
+            [Ability::SettingsAgentRankUpdate, Ability::SettingsAgentRankView],
+        ] as [$write, $read]) {
+            $this->assertContains($write, $superAdmin);
+            $this->assertNotContains($write, $companyAdmin, "{$write->value} is Super Admin only since 2026-09-11");
+            $this->assertContains($read, $companyAdmin, "{$read->value} must stay — the decision narrowed writes, not reads");
+        }
+        $this->assertContains(Ability::SettingsAffiliateAttributionUpdate, $superAdmin);
+        $this->assertNotContains(Ability::SettingsAffiliateAttributionUpdate, $companyAdmin);
+        $this->assertContains(Ability::SettingsCommissionSplitUpdate, $superAdmin);
+        $this->assertNotContains(Ability::SettingsCommissionSplitUpdate, $companyAdmin);
+
+        // Company Admin's list is Super Admin's minus exactly those TEN
         // cases — no other divergence exists today. Enumerated rather than
         // derived, so a new Super-Admin-only grant cannot slip into the
         // platform unnoticed: adding one here is a deliberate edit somebody
-        // has to justify, which is the whole purpose of this assertion.
+        // has to justify, which is the whole purpose of this assertion. The
+        // six on the second half of this list are the 2026-09-11 commission
+        // rate decision; see the count note above for why and what it cost.
         $this->assertEqualsCanonicalizing(
             array_values(array_filter(
                 $superAdmin,
@@ -219,7 +302,13 @@ class AbilityCatalogueTest extends TestCase
                     && $a !== Ability::SettingsMailUpdate
                     && $a !== Ability::CommissionRateCapUpdate
                     && $a !== Ability::SettingsPaymentGatewayUpdate
-                    && $a !== Ability::VoucherRedeem,
+                    && $a !== Ability::VoucherRedeem
+                    && $a !== Ability::SettingsCommissionBinaryUpdate
+                    && $a !== Ability::SettingsCommissionMatrixUpdate
+                    && $a !== Ability::SettingsCommissionGenerationUpdate
+                    && $a !== Ability::SettingsAgentRankUpdate
+                    && $a !== Ability::SettingsAffiliateAttributionUpdate
+                    && $a !== Ability::SettingsCommissionSplitUpdate,
             )),
             $companyAdmin,
         );

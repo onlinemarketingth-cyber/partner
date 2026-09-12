@@ -234,14 +234,25 @@ class ProductResource extends JsonResource
              *                   `is_shared` alone cannot see — a linked product
              *                   still belongs to its company.
              *
-             *   set_commission_rule   NOT the same question, and the difference
-             *                   is the point of ADR-040: a Company Admin may
-             *                   absolutely set their own commission on a shared
-             *                   product — commission stays per company. What
-             *                   they may not do is set one on a catalog-LINKED
-             *                   product, which is what StoreCommissionRuleRequest
-             *                   refuses. Deriving this from `update` would take
-             *                   away a right the ADR grants.
+             *   set_commission_rule   Still NOT the same question, but since
+             *                   2026-09-11 it answers false for every Company
+             *                   Admin, on every product. The owner decided
+             *                   commission rate configuration is Super Admin's
+             *                   alone (a rate is money), which supersedes the
+             *                   ADR-040 right this flag used to carry: a
+             *                   Company Admin can no longer set their own
+             *                   commission on a shared product, or on any
+             *                   other. The catalog-linked clause below is now
+             *                   only reachable for a Super Admin, and is kept
+             *                   rather than simplified away so the ADR-036
+             *                   §5/§6 rule stays visible if the rate decision
+             *                   is ever revisited.
+             *
+             *                   It is still computed from CommissionRulePolicy
+             *                   rather than from `update`, because the two
+             *                   remain different rules and a screen deriving
+             *                   one from the other would be wrong again the
+             *                   moment either moves.
              */
             'permissions' => [
                 'update' => (bool) $request->user()?->can('update', $this->resource),
