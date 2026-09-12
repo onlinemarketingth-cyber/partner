@@ -185,6 +185,12 @@ interface Product {
   category: ProductCategory | null
   name: string
   price_satang: number
+  // 2026-09-12 — PV, this product's commissionable value in satang (BR-3),
+  // or null when nobody has set one. null and 0 are NOT the same answer:
+  // null is "no PV yet" (the readiness banner warns about it and the server
+  // falls back to the sale price), 0 is a decision — this product pays no
+  // commission. Nothing here may collapse the two.
+  pv_satang: number | null
   is_active: boolean
   description: string | null
   spec_description: string | null
@@ -568,6 +574,11 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 interface BasicsForm {
   name: string
   price_thb: string | number
+  // 2026-09-12 — PV in BAHT while it is being typed, exactly like price_thb
+  // above; saveBasics() does the BR-3 satang conversion. '' is the "no PV
+  // set" sentinel and maps to an explicit null, never to 0 — see the
+  // pv_satang field on Product for why those two must stay distinguishable.
+  pv_thb: string | number
   is_active: boolean
   brand_id: string | number
   category_id: string | number
@@ -602,6 +613,7 @@ interface BasicsForm {
 const basicsForm = ref<BasicsForm>({
   name: '',
   price_thb: '',
+  pv_thb: '',
   is_active: true,
   brand_id: '',
   category_id: '',
@@ -957,6 +969,10 @@ function syncBasicsFormFromProduct(p: Product) {
   basicsForm.value = {
     name: p.name,
     price_thb: p.price_satang / 100,
+    // Tested against null explicitly rather than with `??`/a falsy check: a
+    // stored 0 is a real PV and has to show as 0, while null is the only
+    // value that may leave the field blank.
+    pv_thb: p.pv_satang === null ? '' : p.pv_satang / 100,
     is_active: p.is_active,
     brand_id: p.brand?.id ?? '',
     category_id: p.category?.id ?? '',
@@ -1002,6 +1018,23 @@ async function saveBasics() {
       brand_id: Number(basicsForm.value.brand_id),
       category_id: Number(basicsForm.value.category_id),
       price_satang: Math.round(Number(basicsForm.value.price_thb) * 100), // THB -> satang (BR-3)
+      // 2026-09-12 — PV is commission CONFIGURATION, not product data: whoever
+      // can move it can move every agent's payout without ever opening a
+      // commission screen, which is why Store/UpdateProductRequest PROHIBIT
+      // the field for a Company Admin (a 422, not a silent drop). Omitted
+      // entirely for them — sending it would fail an unrelated edit on a field
+      // they were never shown.
+      ...(isSuperAdmin.value
+        ? {
+            // '' -> explicit null, the same inherit/clear contract as the
+            // sentinel fields below — but here null is not "inherit", it is
+            // "no PV set", which the readiness banner reports and the server
+            // answers by falling back to the sale price. A `||` here would
+            // turn a deliberate 0 ("pays no commission") into that warning.
+            pv_satang:
+              basicsForm.value.pv_thb === '' ? null : Math.round(Number(basicsForm.value.pv_thb) * 100),
+          }
+        : {}),
       is_active: basicsForm.value.is_active,
       // ADR-011/TASK-027/034: '' (inherit) -> explicit null, which both
       // StoreProductRequest and UpdateProductRequest accept — an
@@ -2534,6 +2567,34 @@ function goToVideoSettings() {
           <div>
             <label class="text-sm font-bold text-slate-500">ราคา (บาท)</label>
             <input v-model="priceDisplay" type="text" inputmode="numeric" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+          </div>
+          <!-- 2026-09-12 — the single-product counterpart of the bulk PV
+               table in CommissionPlansView step 2.
+
+               SUPER ADMIN ONLY, same gate the server applies: PV decides
+               what every agent is paid, so a Company Admin able to type a
+               number here could raise their own team's commissions without
+               ever opening a commission screen. Hidden AND left out of the
+               payload — the field is PROHIBITED server-side, so sending it
+               would 422 an edit they never made.
+
+               Empty = null, not 0. null means "no PV set" (warned about in
+               step 2, and the server falls back to the sale price); 0 means
+               this product pays nothing. -->
+          <div v-if="isSuperAdmin">
+            <label class="text-sm font-bold text-slate-500">PV (มูลค่าที่ใช้คิดค่าคอม)</label>
+            <input
+              v-model="basicsForm.pv_thb"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="ยังไม่กำหนด"
+              data-test="pv-input"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            />
+            <p class="mt-1 text-xs text-slate-400">
+              ใช้เฉพาะบริษัทที่คิดค่าคอมจาก PV ตั้งเป็นบาทเหมือนราคา — เว้นว่าง = ระบบคิดจากราคาขายแทน
+            </p>
           </div>
           <!-- ADR-011/TASK-027/034 — per-product plan-type override.
                '' (default) = inherit the company's plan type; an

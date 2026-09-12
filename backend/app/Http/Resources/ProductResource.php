@@ -63,6 +63,15 @@ class ProductResource extends JsonResource
              * difference between them is somebody's money.
              */
             'price_satang' => $this->price_satang,
+            /*
+             * 2026-09-12 — PV / commissionable value, or null when this
+             * product has none. Exposed raw, with no fallback baked in:
+             * the admin screen has to be able to tell "worth 0 PV" from
+             * "nobody has set a PV", because only one of those is a
+             * warning. The fallback that DOES exist lives in
+             * CommissionBasisResolver, where the money is.
+             */
+            'pv_satang' => $this->pv_satang,
             'effective_price_satang' => RequestScopedService::get($request, ProductPricingService::class)
                 ->effectivePriceSatang($this->resource, CompanyScopeFilter::contextCompanyId($request)),
             /*

@@ -70,6 +70,12 @@ use Illuminate\Support\Collection;
  */
 class CommissionReadinessService
 {
+    // 2026-09-12 — see the PV branch in forCompany(): the banner must ask
+    // the SAME object the money asks, or "ready" can mean two things.
+    public function __construct(
+        private readonly CommissionBasisResolver $commissionBasisResolver,
+    ) {}
+
     /**
      * @return array{
      *     state: string,
@@ -232,10 +238,28 @@ class CommissionReadinessService
         $uncovered = 0;
         $planTypesInUse = [];
         $leaderGaps = 0;
+        $pointValueGaps = 0;
 
         foreach ($products as $product) {
             if ($this->resolveRuleForCompany($product, $companyId) === null) {
                 $uncovered++;
+            }
+
+            /*
+             * 2026-09-12 — the gap PV creates, and the only reason a
+             * missing PV is allowed to fall back to the price silently in
+             * the calculation: it is not silent HERE.
+             *
+             * A company that switches to PV and forgets one product keeps
+             * being paid — at that product's price, by the old rule, at a
+             * rate that was written to mean "of PV". Nothing errors,
+             * nothing is logged, and every other signal on this screen
+             * says ready. Asked through CommissionBasisResolver rather
+             * than re-read from the column so this banner and the money
+             * cannot disagree about what "missing" means.
+             */
+            if ($this->commissionBasisResolver->isPointValueMissing($product, $company)) {
+                $pointValueGaps++;
             }
 
             $planType = $product->effectivePlanType($company);
@@ -306,6 +330,14 @@ class CommissionReadinessService
             ];
         }
 
+        if ($pointValueGaps > 0) {
+            $issues[] = [
+                'code' => 'point_value_missing',
+                'label' => "บริษัทนี้คิดค่าคอมจาก PV แต่สินค้า {$pointValueGaps} รายการยังไม่ได้กำหนด PV — ระบบจะคิดจากราคาขายไปก่อน",
+                'count' => $pointValueGaps,
+            ];
+        }
+
         if ($leaderGaps > 0) {
             $issues[] = [
                 'code' => 'leader_rate_missing',
@@ -316,7 +348,7 @@ class CommissionReadinessService
 
         $state = $this->resolveState($total, $covered, $issues);
 
-        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps), $total, $covered, $issues, $canFix);
+        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps, $pointValueGaps), $total, $covered, $issues, $canFix);
     }
 
     /**
@@ -365,7 +397,7 @@ class CommissionReadinessService
      *
      * @param  list<string>  $unsetStructures
      */
-    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps): ?int
+    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps, int $pointValueGaps): ?int
     {
         if ($state === 'ready') {
             return null;
@@ -376,6 +408,18 @@ class CommissionReadinessService
         }
 
         if ($unsetStructures !== []) {
+            return 2;
+        }
+
+        /*
+         * 2026-09-12 — step 2, not step 1, and that is where PV is edited.
+         * The basis switch and the per-product PV figures are one decision
+         * ("how is this company's commission measured") and they are
+         * answered on the same screen; sending an admin to step 1 to pick
+         * a company they have already picked would be the banner failing
+         * at the only job it has.
+         */
+        if ($pointValueGaps > 0) {
             return 2;
         }
 

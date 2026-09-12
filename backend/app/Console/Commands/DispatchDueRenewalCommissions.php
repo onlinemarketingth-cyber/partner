@@ -7,6 +7,7 @@ use App\Enums\PaymentStatus;
 use App\Models\CommissionLedger;
 use App\Models\Product;
 use App\Models\Referral;
+use App\Services\Commission\CommissionBasisResolver;
 use App\Services\Commission\CommissionService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -24,7 +25,7 @@ class DispatchDueRenewalCommissions extends Command
 
     protected $description = 'Record a renewal-year commission_ledger entry for every referral whose next_renewal_date is now due (TASK-024)';
 
-    public function handle(CommissionService $commissionService): int
+    public function handle(CommissionService $commissionService, CommissionBasisResolver $commissionBasisResolver): int
     {
         // withoutGlobalScopes() — same platform-wide background-job
         // rationale as DispatchDueFollowUpReminders: this never responds
@@ -50,7 +51,7 @@ class DispatchDueRenewalCommissions extends Command
         $dispatched = 0;
 
         foreach ($dueReferralIds as $referralId) {
-            DB::transaction(function () use ($referralId, $commissionService, &$dispatched) {
+            DB::transaction(function () use ($referralId, $commissionService, $commissionBasisResolver, &$dispatched) {
                 // Re-fetch + lock inside the transaction — between the
                 // pluck() above and this point, another process could
                 // have already claimed (or cleared) this referral.
@@ -111,8 +112,25 @@ class DispatchDueRenewalCommissions extends Command
                     return;
                 }
 
-                $productPriceSatang = $referral->product->price_satang;
-                $amountSatang = $commissionService->computeAmount($rule->renewal_rate_type, $rule->renewal_rate_value, $productPriceSatang);
+                /*
+                 * 2026-09-12 — a renewal is paid off the SAME base the
+                 * original sale was, or an agent's year-two cheque changes
+                 * shape for a reason nobody chose. On a price-basis company
+                 * this is `price_satang` exactly as before; on a PV company
+                 * it is the product's PV, which is the figure that does not
+                 * drift when the price is repriced between renewals — the
+                 * single clearest case for PV existing at all.
+                 *
+                 * Still the LIST price and not the promotional one, which is
+                 * deliberate and unchanged: a discount ran on one day's sale,
+                 * not on every anniversary of it.
+                 */
+                $commissionBaseSatang = $commissionBasisResolver->baseSatang(
+                    $referral->product,
+                    $referral->company,
+                    (int) $referral->product->price_satang,
+                );
+                $amountSatang = $commissionService->computeAmount($rule->renewal_rate_type, $rule->renewal_rate_value, $commissionBaseSatang);
 
                 CommissionLedger::create([
                     'company_id' => $referral->company_id,
@@ -120,6 +138,8 @@ class DispatchDueRenewalCommissions extends Command
                     'referral_id' => $referral->id,
                     'cert_tier_id_at_time' => $originalLedger->cert_tier_id_at_time,
                     'product_id' => $originalLedger->product_id,
+                    'commission_basis_at_time' => $commissionBasisResolver->basisFor($referral->company),
+                    'commission_base_satang_at_time' => $commissionBaseSatang,
                     'rate_type_applied' => $rule->renewal_rate_type,
                     'rate_applied' => $rule->renewal_rate_value,
                     'amount_satang' => $amountSatang,

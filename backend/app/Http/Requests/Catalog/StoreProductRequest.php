@@ -65,6 +65,23 @@ class StoreProductRequest extends FormRequest
             'category_id' => ['required', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['required', 'string', 'max:255'],
             'price_satang' => ['required', 'integer', 'min:0'], // BR-3 — never accept a float
+            /*
+             * 2026-09-12 — PV / commissionable value. Optional at create
+             * time on purpose: a product is catalogued before anybody has
+             * decided what it is worth in points, and a required field
+             * here would make "add a product" depend on a commission
+             * decision that only a Super Admin may make. The readiness
+             * banner is what stops it being forgotten — but only once the
+             * company is actually on the PV basis. See UpdateProductRequest
+             * for why this is Super-Admin-only rather than quietly ignored.
+             */
+            'pv_satang' => [
+                'sometimes',
+                'nullable',
+                Rule::prohibitedIf(fn () => ! $this->user()->isSuperAdmin()),
+                'integer',
+                'min:0',
+            ],
             'description' => $this->richTextRules(15000),
             'spec_description' => $this->richTextRules(15000), // ADR-008 — free-text spec narrative, additive alongside description
             'is_active' => ['sometimes', 'boolean'],

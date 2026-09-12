@@ -104,6 +104,14 @@ class CommissionReversalService
                     // was priced THEN, or the pair no longer sums to zero.
                     'sale_price_satang_at_time' => $original->sale_price_satang_at_time,
                     'applied_price_promotion_id_at_time' => $original->applied_price_promotion_id_at_time,
+                    // 2026-09-12 — and that includes WHICH BASE the original
+                    // was computed from. Left off, a PV reversal would carry a
+                    // price and a rate whose product is not its own amount,
+                    // and the pair would stop being readable as a pair. NULL
+                    // on a pre-PV original copies as NULL, which reads as
+                    // 'price' exactly as the original does.
+                    'commission_basis_at_time' => $original->commission_basis_at_time,
+                    'commission_base_satang_at_time' => $original->commission_base_satang_at_time,
                     'rate_type_applied' => $original->rate_type_applied,
                     'rate_applied' => $original->rate_applied,
                     'amount_satang' => -$original->amount_satang,

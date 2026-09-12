@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Commission;
 
+use App\Enums\CommissionBasis;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
 use App\Models\CommissionOverrideRule;
@@ -174,6 +175,85 @@ class CommissionReadinessTest extends TestCase
         $response->assertJsonPath('issues', []);
         $response->assertJsonPath('products_total', 1);
         $response->assertJsonPath('products_covered', 1);
+    }
+
+    // -----------------------------------------------------------------
+    // 1b. PV (2026-09-12)
+    // -----------------------------------------------------------------
+
+    /**
+     * THE GAP PV CREATES, AND THE ONLY THING THAT MAKES IT SURVIVABLE.
+     *
+     * CommissionBasisResolver falls back to the sale price when a PV company
+     * sells a product nobody has given a PV to — deliberately, because the
+     * alternative (a 0-satang row, or a refusal to pay) is worse. But that
+     * fallback is SILENT at the point it happens: the rate resolves, the
+     * gates pass, the ledger row is written, and the number is wrong in a
+     * table BR-4 forbids anyone from correcting.
+     *
+     * Every other signal on this screen would say 'ready'. This is the one
+     * that does not, and it is the entire reason the fallback is allowed to
+     * be quiet.
+     */
+    public function test_a_pv_company_with_a_product_that_has_no_pv_reads_as_incomplete(): void
+    {
+        [$company, $product] = $this->companyWithProduct();
+        $company->update(['commission_basis' => CommissionBasis::PointValue]);
+        $product->update(['pv_satang' => null]);
+
+        $this->companyDefaultRule($company);
+        $this->companyDefaultOverrideRule($company);
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $response = $this->actingAs($admin)->getJson(self::ENDPOINT)->assertOk();
+
+        $response->assertJsonPath('state', 'incomplete');
+        // Step 2, where the basis and the PV figures are both answered —
+        // not step 1, which would send an admin to re-pick a company they
+        // have already picked.
+        $response->assertJsonPath('blocking_step', 2);
+        $this->assertSame('point_value_missing', $response->json('issues.0.code'));
+    }
+
+    public function test_a_pv_company_whose_products_all_have_a_pv_reads_as_ready(): void
+    {
+        // The control. Without it the test above would also pass against a
+        // Service that called every PV company incomplete forever — which is
+        // the failure mode that gets a banner ignored on principle.
+        [$company, $product] = $this->companyWithProduct();
+        $company->update(['commission_basis' => CommissionBasis::PointValue]);
+        $product->update(['pv_satang' => 100000]);
+
+        $this->companyDefaultRule($company);
+        $this->companyDefaultOverrideRule($company);
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $this->actingAs($admin)->getJson(self::ENDPOINT)->assertOk()
+            ->assertJsonPath('state', 'ready')
+            ->assertJsonPath('issues', []);
+    }
+
+    public function test_a_price_basis_company_is_never_asked_about_pv(): void
+    {
+        /*
+         * A company evaluating the switch may well fill PV in on some
+         * products and not others before deciding. None of that is a gap
+         * until the basis actually changes, and warning about it would be
+         * the banner crying wolf about a setting nobody has turned on.
+         */
+        [$company, $product] = $this->companyWithProduct();
+        $product->update(['pv_satang' => null]);
+
+        $this->companyDefaultRule($company);
+        $this->companyDefaultOverrideRule($company);
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+
+        $this->actingAs($admin)->getJson(self::ENDPOINT)->assertOk()
+            ->assertJsonPath('state', 'ready')
+            ->assertJsonPath('issues', []);
     }
 
     // -----------------------------------------------------------------

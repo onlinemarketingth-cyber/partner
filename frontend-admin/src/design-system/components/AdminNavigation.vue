@@ -277,7 +277,12 @@ const navItems: NavItem[] = [
       // Admin), so NO `superAdminOnly` on any of the three.
       { name: 'video-settings', icon: 'settings', label: { th: 'ตั้งค่าวิดีโอ', en: 'Video Settings' } },
       { name: 'team-visibility-settings', icon: 'users', label: { th: 'การมองเห็นข้อมูลทีม', en: 'Team Visibility' } },
-      { name: 'commission-split-settings', icon: 'money', label: { th: 'คอมมิชชั่นตัวแทนร่วม', en: 'Co-agent Commission Split' } },
+      // 'commission-split-settings' was here until 2026-09-12. It is now a
+      // card inside CommissionPlansView's step 4 (ส่วนเพิ่มเติม) — a route, a
+      // menu entry and a full page for one boolean, when the step flow
+      // already listed it. The URL still resolves (router/index.ts keeps it
+      // as a redirect); only the menu entry is gone. Do not re-add it here
+      // without also removing the card there.
       // 2026-08-17 (human request) — moved in from its own top-level
       // pillar (see SubMenuItem's own docblock above for why). Still
       // Super-Admin-only (this is the ONE global platform SMTP config,

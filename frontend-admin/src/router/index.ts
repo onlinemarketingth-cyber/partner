@@ -249,11 +249,25 @@ const router = createRouter({
       component: () => import('../views/TeamVisibilitySettingsView.vue'),
       meta: { navLabel: 'การมองเห็นข้อมูลทีม' },
     },
+    /*
+     * 2026-09-12 — REDIRECT, NOT A DELETION.
+     *
+     * Owner: "ยังจำเป็นต้องใช้หน้านี้ไหม เพราะเรานำไปรวมกันแล้ว". It was not
+     * merged at the time (step 4 only linked to it); it is now — the switch
+     * lives in CommissionPlansView's step 4 and CommissionSplitSettingsView
+     * is gone. The whole page was a 59-line shell around
+     * CommissionSplitSettingCard, so nothing was lost in the move.
+     *
+     * The ROUTE stays as a redirect rather than being removed, because this
+     * URL has been in the admin menu since TASK-202 and is in browser
+     * histories and bookmarks. Deleting it turns "the setting moved" into
+     * "the setting is gone" for anybody who saved the link — and the setting
+     * in question decides whether a deal's commission is split, which is not
+     * a thing to let somebody conclude has disappeared.
+     */
     {
       path: '/commission-split-settings',
-      name: 'commission-split-settings',
-      component: () => import('../views/CommissionSplitSettingsView.vue'),
-      meta: { navLabel: 'คอมมิชชั่นตัวแทนร่วม' },
+      redirect: { name: 'commission-plans' },
     },
     // Agent Overview "เครื่องมือเสริม" link-out cards (see
     // AgentManagementView.vue's overview tab). Originally deliberately

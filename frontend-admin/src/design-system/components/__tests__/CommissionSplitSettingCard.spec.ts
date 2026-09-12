@@ -70,11 +70,15 @@ interface SettingPayload {
 /** Company Admin by default — no company picker, company_id resolved server-side. */
 async function mountCard(
   payload: SettingPayload,
-  { isSuperAdmin = false, companyId = null }: { isSuperAdmin?: boolean; companyId?: number | null } = {},
+  {
+    isSuperAdmin = false,
+    companyId = null,
+    readOnly = false,
+  }: { isSuperAdmin?: boolean; companyId?: number | null; readOnly?: boolean } = {},
 ) {
   get.mockResolvedValue({ data: payload })
   const wrapper = mount(CommissionSplitSettingCard, {
-    props: { companyId, isSuperAdmin },
+    props: { companyId, isSuperAdmin, readOnly },
     global: { stubs: { Icon: true } },
   })
   await flushPromises()
@@ -217,5 +221,41 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     expect(wrapper.text()).toContain('โหลดค่าตั้งการแบ่งคอมมิชชั่นไม่สำเร็จ')
     // An unreadable money switch must not render as a confident "on".
     expect(toggle(wrapper).attributes('title')).toBe('ปิดใช้งาน')
+  })
+})
+
+describe('CommissionSplitSettingCard — read-only (2026-09-12)', () => {
+  /*
+   * Added when this card moved into CommissionPlansView's step 4. That screen's
+   * house rule since the owner's 2026-09-11 decision is that a control a
+   * Company Admin cannot use is not SHOWN — and
+   * Ability::SettingsCommissionSplitUpdate sits in the Super Admin row alone,
+   * so the toggle and save button here would have walked a Company Admin into
+   * a 403 on a money switch.
+   */
+  it('shows the state and nothing that could change it', async () => {
+    const wrapper = await mountCard({ is_enabled: true }, { readOnly: true })
+
+    expect(wrapper.get('[data-test="split-readonly"]').text()).toContain('เปิดอยู่')
+    // Not a DISABLED toggle: a switch somebody can see but not move reads as
+    // broken. The honest message is that it is somebody else's decision.
+    expect(wrapper.findAll('button')).toHaveLength(0)
+  })
+
+  it('says who can change it, so the reader knows where to go', async () => {
+    const wrapper = await mountCard({ is_enabled: false }, { readOnly: true })
+
+    expect(wrapper.get('[data-test="split-readonly"]').text()).toContain('ปิดอยู่')
+    expect(wrapper.text()).toContain('ติดต่อผู้ดูแลระบบ')
+  })
+
+  it('is unchanged for an editor, so the default stays today behaviour', async () => {
+    // The control. `readOnly` defaults to false and the card's other host
+    // passes nothing — if that default ever flipped, every existing caller
+    // would silently lose its save button.
+    const wrapper = await mountCard({ is_enabled: false })
+
+    expect(wrapper.find('[data-test="split-readonly"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('บันทึกการแบ่งคอมฯ')
   })
 })

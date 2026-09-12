@@ -4,14 +4,29 @@
  * co-agent commission split (human decision D2, 2026-08-12: per company, not
  * a platform config, so a company can turn it on without a deploy).
  *
- * WHERE IT LIVES. Mounted on ThemeSettingsView ("ตั้งค่าระบบ"), directly under
- * the team-visibility card, because that is where this codebase already keeps
- * per-company `*_settings` switches (video processing, team visibility) — one
- * card, one endpoint, one save button each. Deliberately NOT a new screen and
- * NOT a seventh tab on CommissionPlansView: that screen configures RATES per
- * plan type, whereas this is a company-wide feature switch, and it is a
- * tab-lazy screen where a money switch would be one click further from the
- * other kill switches an admin goes looking for.
+ * WHERE IT LIVES — AND WHY THAT ANSWER CHANGED TWICE.
+ *
+ * It began inlined on ThemeSettingsView, beside the other per-company
+ * `*_settings` switches (video processing, team visibility) — one card, one
+ * endpoint, one save button each. TASK-202 gave it its own submenu page so it
+ * had a findable name. On 2026-09-12 the owner asked the obvious question
+ * about that page ("ยังจำเป็นต้องใช้หน้านี้ไหม เพราะเรานำไปรวมกันแล้ว") and it
+ * was folded into CommissionPlansView's STEP 4 (ส่วนเพิ่มเติม).
+ *
+ * The original docblock argued against exactly that, and the argument is
+ * recorded here rather than deleted because it was right about the screen it
+ * was written for: CommissionPlansView was then six peer tabs configuring
+ * RATES per plan type, and a company-wide feature switch buried in one of them
+ * would have been further from the other kill switches, not closer. That
+ * screen no longer exists. It is a four-step flow whose fourth step is
+ * literally named "ส่วนเพิ่มเติม" and already listed this switch — as a link
+ * out to a 59-line page that was nothing but a shell around this component.
+ * A whole route, menu entry and page for one boolean is the kind of thing the
+ * step redesign exists to remove.
+ *
+ * This component did not change shape in the move, which is the point of it
+ * being a component: the host supplies scope (companyId), role (isSuperAdmin)
+ * and now write permission (readOnly).
  *
  * WHY IT IS ITS OWN COMPONENT while its two neighbours are inlined: the §6
  * pre-enable warning below is the only piece of TASK-174's UI with real
@@ -42,6 +57,21 @@ const props = defineProps<{
    */
   companyId: number | null
   isSuperAdmin: boolean
+  /**
+   * 2026-09-12 — hide every write control, showing only the current state.
+   *
+   * Needed by the move into CommissionPlansView, whose house rule since the
+   * owner's 2026-09-11 decision is that a control a Company Admin cannot use
+   * is not shown at all ("อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน"). This
+   * setting is Ability::SettingsCommissionSplitUpdate, which sits in the
+   * Super Admin row alone — so the toggle and the save button here would have
+   * walked a Company Admin into a 403 on a money switch.
+   *
+   * Optional, defaulting to false, so the card's other host (and its own
+   * tests) keep today's behaviour unchanged. This is a DISPLAY decision only:
+   * the write is refused server-side whatever this prop says.
+   */
+  readOnly?: boolean
 }>()
 
 /** A Super Admin must pick a company first; a Company Admin always has one. */
@@ -178,6 +208,18 @@ watch(() => props.companyId, load, { immediate: true })
 
     <div v-if="ready">
       <p v-if="loading" class="text-xs text-slate-400">กำลังโหลด...</p>
+      <!--
+        READ-ONLY: the state, and nothing that could change it. Not a disabled
+        toggle — a switch an admin can see but not move reads as "broken", and
+        the honest message is that this is somebody else's decision to make.
+      -->
+      <div v-else-if="readOnly" class="flex items-center gap-2.5" data-test="split-readonly">
+        <span
+          class="text-xs font-extrabold px-2.5 py-1 rounded-full"
+          :class="saved.is_enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+        >{{ saved.is_enabled ? 'เปิดอยู่' : 'ปิดอยู่' }}</span>
+        <span class="text-xs text-slate-400">แก้ไขได้เฉพาะผู้ดูแลระบบ — ติดต่อผู้ดูแลระบบหากต้องการเปลี่ยน</span>
+      </div>
       <form v-else class="space-y-4" @submit.prevent="save">
         <div class="flex items-start gap-3">
           <button

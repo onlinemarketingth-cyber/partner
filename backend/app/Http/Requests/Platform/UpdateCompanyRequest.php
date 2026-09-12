@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Platform;
 
+use App\Enums\CommissionBasis;
 use App\Enums\CommissionPlanType;
+use App\Models\Company;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Enum;
@@ -19,7 +21,7 @@ class UpdateCompanyRequest extends FormRequest
      */
     public function rules(): array
     {
-        /** @var \App\Models\Company $company */
+        /** @var Company $company */
         $company = $this->route('company');
 
         return [
@@ -28,6 +30,19 @@ class UpdateCompanyRequest extends FormRequest
             'is_active' => ['sometimes', 'boolean'],
             // ADR-006 Round 3/4 — see StoreCompanyRequest's comment.
             'commission_plan_type' => ['sometimes', new Enum(CommissionPlanType::class)],
+            /*
+             * 2026-09-12 (owner: "ทำแผน PV") — the other half of the same
+             * sentence: commission_plan_type says WHO is paid, this says
+             * what a percentage is a percentage OF (the sale price, or the
+             * product's PV). Super-Admin-only by virtue of living on this
+             * endpoint at all, which is the 2026-09-11 decision that every
+             * commission setting is.
+             *
+             * No `nullable`: there is no "unset" basis. A company either
+             * pays on price or on points, and the column defaults to
+             * 'price' so the question is always already answered.
+             */
+            'commission_basis' => ['sometimes', new Enum(CommissionBasis::class)],
             // ADR-017 (TASK-054) — BR-7 admin-editable payment collection
             // config, shown on the public /pay/{token} page. All nullable.
             'payment_promptpay_id' => ['sometimes', 'nullable', 'string', 'max:255'],

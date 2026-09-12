@@ -12,6 +12,17 @@
  *   • the Wizard's first step   → PUT /products/{id} to write the plan type,
  *     refused by ProductPolicy::update for a shared OR linked product.
  *
+ * ── 2026-09-12 — THE THIRD ONE NO LONGER EXISTS ──
+ *
+ * The Setup Wizard was deleted from CommissionPlansView, and with it the only
+ * control on that screen that wrote `commission_plan_type`. The human's reason:
+ * a company runs ONE plan type and varies the percentages, so the plan type is
+ * a company decision (step 2), not a per-product one. The tests that pinned the
+ * wizard's read-only plan-type field and its "sends no PUT /products" behaviour
+ * went with it — there is no longer a code path on this screen for them to
+ * describe. The Super-Admin-only per-product override lives on ProductEditView
+ * and is covered by that view's own specs.
+ *
  * The distinction that made this delicate was ADR-040's: commission stayed PER
  * COMPANY, so a Company Admin absolutely could set their own rate on a product
  * they could not otherwise touch. Hiding the rule button whenever the product
@@ -55,13 +66,12 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const get = vi.fn()
-const put = vi.fn()
 
 vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
     post: vi.fn(),
-    put: (...args: unknown[]) => put(...args),
+    put: vi.fn(),
     patch: vi.fn(),
     delete: vi.fn(),
     postForm: vi.fn(),
@@ -174,39 +184,23 @@ async function showProducts(wrapper: Wrapper) {
 
 const buttonTexts = (w: Wrapper) => w.findAll('button').map((b) => b.text().trim())
 
-/**
- * The wizard button ON A PRODUCT ROW, which preselects that product — not
- * step 3's "เปิดตัวช่วยตั้งค่า (Wizard)", which opens it empty. The distinction
- * matters: an empty wizard cannot reach step 1's plan-type field at all, so a
- * test that clicked the wrong one would pass without exercising anything.
- */
-async function openWizardFor(wrapper: Wrapper) {
-  const button = wrapper.findAll('button').find((b) => b.text().trim() === 'Wizard')
-  if (!button) throw new Error('ไม่พบปุ่ม Wizard บนแถวสินค้าในขั้นที่ 3')
-  await button.trigger('click')
-  await flushPromises()
-}
-
 function beSuperAdmin() {
   useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
 }
 
 beforeEach(() => {
   get.mockReset()
-  put.mockReset()
-  put.mockResolvedValue({ data: {} })
 
   const auth = useAuthStore()
   auth.user = { id: 2, name: 'แอดมินบริษัท', role: 'company_admin', company: AIA } as never
 })
 
 describe('CommissionPlansView — a Super Admin, on a product nothing else blocks', () => {
-  it('offers the rate button and the wizard', async () => {
+  it('offers the rate button', async () => {
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([OWN]))
 
     expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราคอมมิชชั่น')
-    expect(buttonTexts(wrapper)).toContain('Wizard')
   })
 })
 
@@ -248,13 +242,11 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
     expect(wrapper.text()).toContain('AIA Own Package')
   })
 
-  it('is offered no rate button and no wizard, on any product', async () => {
+  it('is offered no rate button, on any product', async () => {
     const wrapper = await showProducts(await mountView([OWN, SHARED]))
 
     expect(buttonTexts(wrapper)).not.toContain('+ ตั้งอัตราคอมมิชชั่น')
     expect(buttonTexts(wrapper)).not.toContain('แก้ไขอัตราคอมมิชชั่น')
-    expect(buttonTexts(wrapper)).not.toContain('Wizard')
-    expect(buttonTexts(wrapper)).not.toContain('เปิดตัวช่วยตั้งค่า (Wizard)')
   })
 
   it('says who can set it instead of leaving a blank space', async () => {
@@ -272,29 +264,48 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
   })
 })
 
-describe('CommissionPlansView — the wizard never writes a plan type it may not', () => {
-  it('shows the plan type read-only for a shared product', async () => {
+describe('CommissionPlansView — the plan type is shown, never edited, here', () => {
+  /*
+   * The replacement for the two deleted wizard tests, and a narrower promise
+   * than they made: the screen still TELLS the admin which plan a product falls
+   * under (they cannot read a rate without knowing the plan it pays through),
+   * but it offers no way to change it, so there is no PUT /products/{id} left
+   * for ProductPolicy::update to refuse. Editing moved to ProductEditView.
+   */
+  const source = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'CommissionPlansView.vue'),
+    'utf8',
+  )
+
+  it('still shows which plan the product falls under', async () => {
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([SHARED]))
 
-    await openWizardFor(wrapper)
-
-    expect(wrapper.text()).toContain('รูปแบบแผนของสินค้ากลางตั้งโดย Super Admin')
+    expect(wrapper.get('[data-test="product-row-2"]').text()).toContain('แผน Unilevel')
   })
 
-  it('and sends no PUT /products when moving on', async () => {
-    // The 403 itself. Step 1 used to write the product row unconditionally
-    // whenever the dropdown differed from the stored value. A Super Admin is
-    // still refused here: a PLATFORM product's identity is not editable from
-    // a company-scoped screen (ProductPolicy::update, ADR-036 §5/§6).
-    beSuperAdmin()
-    const wrapper = await showProducts(await mountView([SHARED]))
+  it('never writes a plan type from this screen', () => {
+    expect(source).not.toContain('commission_plan_type:')
+  })
 
-    await openWizardFor(wrapper)
-    await wrapper.findAll('button').find((b) => b.text().trim() === 'ถัดไป')!.trigger('click')
-    await flushPromises()
+  it('writes exactly ONE product field from this screen, and it is the PV', () => {
+    /*
+     * 2026-09-12 — this assertion used to be `not.toContain('/products/${')`:
+     * the screen wrote no product field at all once the wizard went. PV made
+     * that false on purpose (step 2 edits every product's PV in one table,
+     * because switching a company to PV makes all of them load-bearing at
+     * once), so the promise is narrowed rather than dropped.
+     *
+     * What it still guarantees is the thing that mattered: exactly one
+     * product write exists here, and it carries one field. A second PUT, or a
+     * second field on this one, is how the per-product plan-type editor comes
+     * back through a side door.
+     */
+    const writes = source.match(/commissionApi\.put\(`\/products\/\$\{[^`]*`, \{([^}]*)\}\)/g) ?? []
 
-    expect(put.mock.calls.filter((c) => String(c[0]).startsWith('/products/'))).toHaveLength(0)
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toContain('pv_satang')
+    expect(writes[0]).not.toContain('commission_plan_type')
   })
 })
 
@@ -326,7 +337,11 @@ describe('CommissionPlansView — the per-row permission is still asked', () => 
     expect(source).toContain('canEditCommissionConfig && canSetCommission(p)')
   })
 
-  it('keeps catalog-linked products out of the wizard by the same row answer', () => {
-    expect(source).toContain('byCompany(products).filter(canSetCommission)')
-  })
+  /*
+   * The companion assertion — "keeps catalog-linked products out of the wizard
+   * by the same row answer", pinning `byCompany(products).filter(canSetCommission)`
+   * in the wizard's product picker — was deleted with the wizard on 2026-09-12.
+   * The row guard above is now the only place the flag is read, and it is the
+   * one that matters: there is no second product list to fall out of.
+   */
 })

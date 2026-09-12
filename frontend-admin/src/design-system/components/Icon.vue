@@ -95,6 +95,13 @@ const PATHS: Record<string, string> = {
     monitor_cog: 'M7 4h4a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z M8 6.4h2 M9 17.6h.01 M3.5 8H2 M4 11.5H1.5 M3.5 15H2 M16.5 10.5a3 3 0 100 6 3 3 0 000-6z M16.5 12.6a.9 .9 0 100 1.8 .9 .9 0 000-1.8z M16.5 10.5V9.2 M16.5 16.5v1.3 M19.5 13.5h1.3 M18.62 11.38l.92-.92 M14.38 15.62l-.92.92 M18.62 15.62l.92.92 M14.38 11.38l-.92-.92',
     branch:    'M9 17a2 2 0 11-4 0 2 2 0 014 0zM15 17a2 2 0 11-4 0 2 2 0 014 0zM12 4v6m0 0a4 4 0 014 4m-4-4a4 4 0 00-4 4',
     key:       'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z',
+    // 2026-09-12 — added for CommissionPlansView's locked step tabs. It had to
+    // be added rather than reused: an unknown name falls back to PATHS.alert
+    // below, so a <Icon name="lock"> without this entry draws a WARNING
+    // TRIANGLE — "something is wrong here" where the screen means "not yet,
+    // finish the step before". A closed padlock (shackle + body), Heroicons
+    // outline like the rest of this set.
+    lock:      'M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z',
     link:      'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1',
     megaphone: 'M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z',
 

@@ -114,6 +114,15 @@ class Product extends Model
         'catalog_item_id',
         'name',
         'price_satang',
+        // 2026-09-12 — PV / commissionable value, on the same integer
+        // satang scale as price (BR-3, see the migration and
+        // App\Enums\CommissionBasis). Only ever READ when the selling
+        // company's commission_basis is 'pv', and only ever through
+        // CommissionBasisResolver — never from this column directly, so
+        // the "no PV set falls back to the sale price" rule has exactly
+        // one home. NULL means "not set yet" and is a warning; 0 means
+        // "pays nothing" and is honoured.
+        'pv_satang',
         'description',
         'spec_description',
         'is_active',
@@ -155,6 +164,7 @@ class Product extends Model
     {
         return [
             'price_satang' => 'integer',
+            'pv_satang' => 'integer',
             'is_active' => 'boolean',
             'commission_plan_type' => CommissionPlanType::class,
             'affiliate_override_mode' => AffiliateOverrideMode::class,

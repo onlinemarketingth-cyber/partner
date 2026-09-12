@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests\Platform;
 
+use App\Enums\CommissionBasis;
 use App\Enums\CommissionPlanType;
+use App\Models\Company;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rules\Enum;
 
@@ -13,7 +15,7 @@ class StoreCompanyRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()->can('create', \App\Models\Company::class);
+        return $this->user()->can('create', Company::class);
     }
 
     /**
@@ -30,6 +32,10 @@ class StoreCompanyRequest extends FormRequest
             // supports it) but has no working CommissionService yet — frontend-admin
             // shows it as "อยู่ระหว่างพัฒนา" (human decision 2026-07-14).
             'commission_plan_type' => ['sometimes', new Enum(CommissionPlanType::class)],
+            // 2026-09-12 — defaults to 'price' at the column (see the
+            // migration); accepted here only so a company can be created
+            // already on PV rather than created and immediately edited.
+            'commission_basis' => ['sometimes', new Enum(CommissionBasis::class)],
         ];
     }
 }

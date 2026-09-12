@@ -51,6 +51,11 @@ class CommissionService
         // Injected rather than resolved inline so this Service keeps
         // asking the same question every endpoint and Resource asks.
         private readonly CommissionSplitSettingService $commissionSplitSettingService,
+        // 2026-09-12 (owner: "ทำแผน PV") — the one place that answers
+        // "a percentage of WHAT". Injected rather than resolved inline so
+        // the readiness banner and this Service cannot disagree about the
+        // missing-PV fallback; see that class's docblock.
+        private readonly CommissionBasisResolver $commissionBasisResolver,
     ) {}
 
     /**
@@ -151,13 +156,16 @@ class CommissionService
         // the DISCOUNTED price when a ProductPricePromotion is active at
         // this exact moment (Complete Payment, BR-4's trigger point) —
         // never a promotion that was active earlier at referral-submission
-        // time, or later after this fires. $productPriceSatang is a single
-        // shared variable that flows into every payout below it (direct
+        // time, or later after this fires. $commissionBaseSatang (below) is
+        // a single shared variable that flows into every payout (direct
         // sale, Unilevel override, Binary volume credit, Matrix/Stairstep/
         // Generation overrides) — so switching it here makes ALL of those
         // consistently promotion-aware with zero changes needed in the 4
         // other Commission*Service classes (see this method's own
         // resolveActivePricePromotion() docblock for the lookup itself).
+        // 2026-09-12 — that variable was renamed from $productPriceSatang
+        // when PV split it in two; a PV company's promotion reaches the
+        // customer's price and stops there, on purpose.
         $appliedPromotion = $this->resolveActivePricePromotion($referral->product, (int) $referral->company_id);
         /*
          * TASK-254 / ADR-040 — the base a commission is computed from is what
@@ -167,10 +175,45 @@ class CommissionService
          * customer paid the company's — a wrong amount in an immutable ledger
          * row (BR-3/BR-4), and one nobody would notice until a payout.
          */
-        $productPriceSatang = $appliedPromotion?->discounted_price_satang
+        $salePriceSatang = $appliedPromotion?->discounted_price_satang
             ?? $this->productPricingService->listPriceSatang($referral->product, (int) $referral->company_id);
 
-        $amountSatang = $this->computeAmount($rule->rate_type, $rule->rate_value, $productPriceSatang);
+        /*
+         * 2026-09-12 (owner: "ทำแผน PV กับการตั้งค่าแบบคอม ขายตรง") — TWO
+         * NUMBERS FROM HERE DOWN, AND THEY ARE NOT INTERCHANGEABLE.
+         *
+         *   $salePriceSatang        what the customer paid. Snapshot only.
+         *   $commissionBaseSatang   what a rate is applied to.
+         *
+         * On a 'price' company they are the same integer and every amount
+         * below is byte-identical to what this method computed before PV
+         * existed — that equality is what makes this change safe to deploy
+         * to live companies without touching their data.
+         *
+         * On a 'pv' company they diverge, and the reason each variable goes
+         * where it goes matters: sale price is what an agent's screen and
+         * every historical report mean by "the sale", so it keeps its
+         * column; PV is what the plan actually pays on, so it is what
+         * reaches CommissionRateCalculator and the five downstream engines.
+         * Overloading one column to carry both would have started showing
+         * points in a field labelled baht (see the ledger migration).
+         *
+         * Note what the PV branch deliberately IGNORES: $appliedPromotion.
+         * A discount moves the price and must not move the commission —
+         * that is the whole reason a company adopts PV, not an oversight.
+         * The promotion id is still snapshotted on every row, because what
+         * the customer paid is still a fact worth keeping.
+         */
+        $saleValue = new SaleValueSnapshot(
+            salePriceSatang: $salePriceSatang,
+            basis: $this->commissionBasisResolver->basisFor($referral->company),
+            baseSatang: $this->commissionBasisResolver->baseSatang($referral->product, $referral->company, $salePriceSatang),
+            appliedPromotion: $appliedPromotion,
+        );
+
+        $commissionBaseSatang = $saleValue->baseSatang;
+
+        $amountSatang = $this->computeAmount($rule->rate_type, $rule->rate_value, $commissionBaseSatang);
 
         // ADR-011/TASK-029/030/031 fix: recordOverrides() (Unilevel),
         // Binary's volume-crediting, Matrix's per-level override payout,
@@ -207,7 +250,7 @@ class CommissionService
 
         if ($effectivePlanType === CommissionPlanType::Affiliate) {
             $affiliateMode = $referral->product->effectiveAffiliateOverrideMode();
-            $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, $affiliateMode, $productPriceSatang, $amountSatang);
+            $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, $affiliateMode, $commissionBaseSatang, $amountSatang);
 
             if ($affiliateOverride && $affiliateMode === AffiliateOverrideMode::Deductive) {
                 // Round the manager's cut first (already done inside
@@ -218,18 +261,28 @@ class CommissionService
             }
         }
 
-        $ledger = $this->recordDirectSale($referral, $tier, $rule, $agentDirectAmountSatang, $productPriceSatang, $appliedPromotion);
+        $ledger = $this->recordDirectSale($referral, $tier, $rule, $agentDirectAmountSatang, $saleValue);
 
+        /*
+         * 2026-09-12 — every engine below takes the COMMISSION BASE, never
+         * the sale price. None of them writes sale_price_satang_at_time
+         * (their rows are tied to a cycle or a level, not to one priced
+         * sale), so the single int each receives is purely "the figure my
+         * rate applies to" — which is exactly what PV redefines. A Binary
+         * company running on PV therefore credits leg VOLUME in PV too,
+         * which is what BV means in every plan this was modelled on, and
+         * what makes a promotion unable to shrink a leg.
+         */
         if ($effectivePlanType === CommissionPlanType::Unilevel) {
-            $this->recordOverrides($referral, $agent, $productPriceSatang, $appliedPromotion);
+            $this->recordOverrides($referral, $agent, $saleValue);
         } elseif ($effectivePlanType === CommissionPlanType::Binary) {
-            $this->binaryCommissionService->creditVolume($referral, $agent, $productPriceSatang);
+            $this->binaryCommissionService->creditVolume($referral, $agent, $commissionBaseSatang);
         } elseif ($effectivePlanType === CommissionPlanType::Matrix) {
-            $this->matrixCommissionService->payDownlineOverrides($referral, $agent, $productPriceSatang);
+            $this->matrixCommissionService->payDownlineOverrides($referral, $agent, $commissionBaseSatang);
         } elseif ($effectivePlanType === CommissionPlanType::StairstepBreakaway) {
-            $this->stairstepCommissionService->payDifferentialOverride($referral, $agent, $productPriceSatang);
+            $this->stairstepCommissionService->payDifferentialOverride($referral, $agent, $commissionBaseSatang);
         } elseif ($effectivePlanType === CommissionPlanType::Generation) {
-            $this->generationCommissionService->payGenerationOverrides($referral, $agent, $productPriceSatang);
+            $this->generationCommissionService->payGenerationOverrides($referral, $agent, $commissionBaseSatang);
         } elseif ($effectivePlanType === CommissionPlanType::Affiliate && $affiliateOverride !== null) {
             $this->createOverrideLedgerRow(
                 $referral,
@@ -237,8 +290,7 @@ class CommissionService
                 $affiliateOverride['managerTier'],
                 $affiliateOverride['rule'],
                 $affiliateOverride['amount_satang'],
-                $productPriceSatang,
-                $appliedPromotion,
+                $saleValue,
                 $agent,
             );
         }
@@ -287,7 +339,7 @@ class CommissionService
      * agent entered. Rows already written keep their history untouched —
      * this method only ever creates (BR-4).
      */
-    private function recordDirectSale(Referral $referral, CertTier $tier, CommissionRule $rule, int $amountSatang, int $productPriceSatang, ?ProductPricePromotion $appliedPromotion): CommissionLedger
+    private function recordDirectSale(Referral $referral, CertTier $tier, CommissionRule $rule, int $amountSatang, SaleValueSnapshot $saleValue): CommissionLedger
     {
         $splitEnabled = $this->commissionSplitSettingService->isEnabledForCompany($referral->company_id);
 
@@ -298,8 +350,7 @@ class CommissionService
                 'referral_id' => $referral->id,
                 'cert_tier_id_at_time' => $tier->id,
                 'product_id' => $referral->product_id,
-                'sale_price_satang_at_time' => $productPriceSatang,
-                'applied_price_promotion_id_at_time' => $appliedPromotion?->id,
+                ...$saleValue->ledgerColumns(),
                 'rate_type_applied' => $rule->rate_type,
                 'rate_applied' => $rule->rate_value,
                 'amount_satang' => $amountSatang,
@@ -318,8 +369,7 @@ class CommissionService
             'referral_id' => $referral->id,
             'cert_tier_id_at_time' => $tier->id,
             'product_id' => $referral->product_id,
-            'sale_price_satang_at_time' => $productPriceSatang,
-            'applied_price_promotion_id_at_time' => $appliedPromotion?->id,
+            ...$saleValue->ledgerColumns(),
             'rate_type_applied' => $rule->rate_type,
             'rate_applied' => $rule->rate_value,
             'amount_satang' => $referringAgentShareSatang,
@@ -334,8 +384,7 @@ class CommissionService
             'referral_id' => $referral->id,
             'cert_tier_id_at_time' => $tier->id,
             'product_id' => $referral->product_id,
-            'sale_price_satang_at_time' => $productPriceSatang,
-            'applied_price_promotion_id_at_time' => $appliedPromotion?->id,
+            ...$saleValue->ledgerColumns(),
             'rate_type_applied' => $rule->rate_type,
             'rate_applied' => $rule->rate_value,
             'amount_satang' => $coAgentShareSatang,
@@ -372,7 +421,7 @@ class CommissionService
      * researched for ADR-006 (a % of the produced premium, paid at
      * every level, not a % of the level below's own commission).
      */
-    private function recordOverrides(Referral $referral, User $sellingAgent, int $productPriceSatang, ?ProductPricePromotion $appliedPromotion): void
+    private function recordOverrides(Referral $referral, User $sellingAgent, SaleValueSnapshot $saleValue): void
     {
         $manager = $sellingAgent->manager;
         $depth = 0;
@@ -394,9 +443,8 @@ class CommissionService
                     $manager,
                     $managerTier,
                     $overrideRule,
-                    $this->computeAmount($overrideRule->rate_type, $overrideRule->rate_value, $productPriceSatang),
-                    $productPriceSatang,
-                    $appliedPromotion,
+                    $this->computeAmount($overrideRule->rate_type, $overrideRule->rate_value, $saleValue->baseSatang),
+                    $saleValue,
                     $sellingAgent,
                 );
             }
@@ -421,7 +469,7 @@ class CommissionService
      *
      * @return array{manager: User, managerTier: CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
      */
-    private function resolveAffiliateOverride(User $sellingAgent, Product $product, AffiliateOverrideMode $mode, int $productPriceSatang, int $agentAmountSatang): ?array
+    private function resolveAffiliateOverride(User $sellingAgent, Product $product, AffiliateOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
     {
         $manager = $sellingAgent->manager;
 
@@ -447,7 +495,7 @@ class CommissionService
         // it's carved out of that same pool rather than paid on top of
         // it — also spec §3.2, and the reason this can't just reuse
         // recordOverrides()'s per-manager math unmodified for this mode.
-        $baseSatang = $mode === AffiliateOverrideMode::Deductive ? $agentAmountSatang : $productPriceSatang;
+        $baseSatang = $mode === AffiliateOverrideMode::Deductive ? $agentAmountSatang : $commissionBaseSatang;
 
         return [
             'manager' => $manager,
@@ -512,7 +560,7 @@ class CommissionService
      * copies of this CommissionLedger::create() call — same fields, same
      * earned_via/override_source_agent_id semantics either way.
      */
-    private function createOverrideLedgerRow(Referral $referral, User $manager, CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, int $productPriceSatang, ?ProductPricePromotion $appliedPromotion, User $sourceAgent): CommissionLedger
+    private function createOverrideLedgerRow(Referral $referral, User $manager, CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, SaleValueSnapshot $saleValue, User $sourceAgent): CommissionLedger
     {
         return CommissionLedger::create([
             'company_id' => $referral->company_id,
@@ -520,8 +568,7 @@ class CommissionService
             'referral_id' => $referral->id,
             'cert_tier_id_at_time' => $managerTier->id,
             'product_id' => $referral->product_id,
-            'sale_price_satang_at_time' => $productPriceSatang,
-            'applied_price_promotion_id_at_time' => $appliedPromotion?->id,
+            ...$saleValue->ledgerColumns(),
             'rate_type_applied' => $overrideRule->rate_type,
             'rate_applied' => $overrideRule->rate_value,
             'amount_satang' => $amountSatang,

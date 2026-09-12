@@ -51,12 +51,32 @@
  * rewrite of them, because the parts were never what the owner complained
  * about.
  *
- * WHAT IT COSTS. Steps are ordered but never blocked (any tab is clickable
- * at any time): an order the UI shows but does not enforce is a hint, and a
- * hint cannot strand an admin who genuinely needs step 4 first. The price is
- * that "ขั้นที่ 3 ยังไม่ครบ" is advice the admin can walk straight past —
- * which is why the readiness banner sits ABOVE the steps on every one of
- * them and says, in money terms, what walking past it means.
+ * ── 2026-09-12 — THE ORDER IS NOW ENFORCED, NOT SUGGESTED ──
+ *
+ * The version above shipped with the steps FREELY CLICKABLE and said so in
+ * this docblock: "an order the UI shows but does not enforce is a hint, and a
+ * hint cannot strand an admin who genuinely needs step 4 first." The owner
+ * looked at the deployed page and rejected exactly that: "หน้านี้มี tab แล้ว
+ * แต่ยังคลิ๊กเลือกได้ทุก tab เลย ตามที่คุยไว้ต้องทำทีละขั้นตอน".
+ *
+ * So a step is reachable only when every step BEFORE it is finished — see
+ * `stepReachable` for the rule and `goToStep` for the single place that
+ * enforces it. The bet the old text made (that the pills would be read) lost
+ * against the thing it was protecting: an admin who lands on step 4 and fills
+ * in a leader rate while step 3 has products with no agent rate has spent
+ * their attention on the upline's share of a commission nobody is being paid.
+ *
+ * WHAT IT COSTS, honestly, because the old comment's worry was not wrong:
+ *   - The admin who came back only to fix step 4 DOES have to satisfy 1–3
+ *     first. That is now the intended cost, not a regression: steps 1–3 being
+ *     satisfied is the precondition for step 4 meaning anything.
+ *   - A locked tab therefore has to explain itself or it is the same dead end
+ *     this redesign exists to remove. It renders a padlock, mutes its colours,
+ *     carries aria-disabled + a title, and prints the blocking step's NAME on
+ *     the tab. It is deliberately NOT natively `disabled`: a disabled button
+ *     suppresses its own tooltip and drops out of the tab order, so the one
+ *     control that most needs to explain itself would be the one that cannot.
+ *   - A READ-ONLY viewer is never gated. See `stepReachable`.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
@@ -85,6 +105,8 @@ import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 // BuddhistDateInput (TASK-199) dropped that affordance, so this restores it
 // consistently everywhere in this file.
 import CalendarDatePicker from '@/design-system/components/CalendarDatePicker.vue'
+// 2026-09-12 — moved in from its own route; see the step-4 block for why.
+import CommissionSplitSettingCard from '@/design-system/components/CommissionSplitSettingCard.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -199,10 +221,21 @@ function canSetCommission(product: ProductOption): boolean {
   return product.permissions?.set_commission_rule === true
 }
 
-/** Whether the product's own plan-type override may be changed (PUT /products). */
-function canEditPlanType(product: ProductOption): boolean {
-  return product.permissions?.update === true
-}
+/*
+ * `canEditPlanType()` LIVED HERE AND WAS DELETED ON 2026-09-12 (human decision).
+ *
+ * It gated the only control on this screen that wrote `commission_plan_type`
+ * onto a product row (PUT /products/{id}, inside the Setup Wizard's first
+ * step). Both are gone: a real company does not run unilevel on one product
+ * and binary on another — it runs ONE plan and varies the PERCENTAGES. So the
+ * plan type is a company-level answer, decided in step 2, and this screen now
+ * only ever reads `effective_plan_type` to tell the admin which plan a product
+ * falls under.
+ *
+ * The per-product override still EXISTS in the database and the API, and its
+ * Super-Admin-only editor still lives on ProductEditView — that is the one
+ * door, deliberately. Do not re-add a second one here.
+ */
 
 /**
  * 2026-09-11 — may THIS viewer change ANY commission number on this screen?
@@ -334,8 +367,9 @@ const planTypeToTab: Partial<Record<CommissionPlanType, Tab>> = {
 }
 /**
  * The ONE lazy-load entry point (was five: goToSettingsTab, the activeTab
- * watcher, the company watcher, onMounted and wizardEnsureStructureLoaded,
- * each with its own copy of the `loadedTabs.has()` test).
+ * watcher, the company watcher, onMounted and the Setup Wizard's own structure
+ * loader — since deleted with the wizard — each with its own copy of the
+ * `loadedTabs.has()` test).
  *
  * Scattering it was survivable while a section could only be reached by
  * clicking its own tab. It stops being survivable now that a step can render
@@ -389,6 +423,13 @@ interface ProductOption {
   name: string
   category?: { id: number; name: string } | null
   price_satang?: number
+  /*
+   * READ-ONLY on this screen since 2026-09-12. `commission_plan_type` is the
+   * product's own override and is only consulted here to say "(สืบทอดจาก
+   * บริษัท)" beside the effective plan, and to infer the company's plan in
+   * `companyPlanType`. Writing it is ProductEditView's job (Super Admin only)
+   * — see the deleted-canEditPlanType note near the top of this file.
+   */
   commission_plan_type?: CommissionPlanType | null
   effective_plan_type?: CommissionPlanType
   // TASK-197 §2.1/§3.4 — this product's locked-in commission rate FORMAT
@@ -396,6 +437,14 @@ interface ProductOption {
   // server-side). Only relevant to the Commission Rules tab's product
   // scope below; category/company-wide scope never reads this.
   commission_rate_type?: RateType | null
+  /*
+   * 2026-09-12 — PV / commissionable value in satang, or null when nobody has
+   * set one. Exposed raw, with no fallback folded in, because this screen has
+   * to tell "worth 0 PV" (a decision) from "no PV yet" (a warning) — only one
+   * of them is a gap. The fallback that does exist lives server-side in
+   * CommissionBasisResolver, where the money is.
+   */
+  pv_satang?: number | null
 }
 /*
  * 2026-09-09 — `company_id` is here so byCompany() can narrow the category
@@ -885,6 +934,16 @@ async function loadReadinessProbe(): Promise<void> {
  * the row they clicked lives, so step 3 is where they land.
  */
 function openRuleFormForProduct(p: ProductOption) {
+  /*
+   * Assigns `activeStep` directly rather than calling goToStep(), and that is
+   * safe for one reason only: its caller (the product card in step 3.2) is
+   * already ON step 3, so this re-asserts the current step rather than
+   * navigating to another one — and the current step is reachable by
+   * definition (see `stepReachable`).
+   * Anything that starts calling this from elsewhere must go through
+   * goToStep() instead, or it will have found a way around the 2026-09-12
+   * gate.
+   */
   activeStep.value = 3
   activeTab.value = 'rules'
   void ensureTabLoaded('rules')
@@ -1160,6 +1219,179 @@ const readinessCounts = computed(() => {
   return c
 })
 
+// ══════════════════════════ Commission basis / PV (2026-09-12) ══════════════════════════
+/*
+ * Owner, 2026-09-12: "ทำแผน PV กับการตั้งค่าแบบคอม ขายตรง เก็บการคิดแบบ % และ
+ * Fix จำนวนเงิน ไว้กับค่าคอมปรกติ".
+ *
+ * WHAT THIS IS. Not a third rate type — % and จำนวนคงที่ are untouched. One
+ * level up: what a percentage is a percentage OF. Either the sale price
+ * (today's behaviour, every existing company) or the product's PV.
+ *
+ * WHY IT SITS IN STEP 2 AND NOWHERE ELSE. It is the same sentence as the plan
+ * type — "how does this company pay" — and the owner's whole complaint about
+ * the old screen was not knowing what to answer first. Two halves of one
+ * question asked on two screens would rebuild exactly that.
+ *
+ * WHY THE PV FIGURES ARE EDITED HERE TOO, rather than one product at a time in
+ * the catalogue. Switching a company to PV makes every product's PV load-
+ * bearing at once, and a company with eleven products would otherwise have to
+ * visit eleven screens to finish one decision — with no page anywhere telling
+ * them how many were left. The same table that asks the question counts the
+ * answers.
+ */
+type CommissionBasis = 'price' | 'pv'
+
+const commissionBasis = ref<CommissionBasis>('price')
+const basisSaving = ref(false)
+const basisError = ref('')
+
+const basisLabels: Record<CommissionBasis, string> = {
+  price: 'ราคาขาย',
+  pv: 'PV (คะแนนสินค้า)',
+}
+
+/**
+ * What "%" is a percentage OF, in the rate form's own words.
+ *
+ * `rateTypeLabels.percentage` stays '% ของยอดขาย' because it is also read by
+ * places that have no company context. This is the one the FORM uses, and it
+ * has to follow the basis: an admin typing 5 into a field labelled "% ของ
+ * ยอดขาย" on a PV company has been told the wrong thing at the exact moment
+ * it matters, and what they produce is a rate that pays a number they never
+ * intended into a ledger nobody may correct.
+ */
+const percentageOptionLabel = computed(() => commissionBasis.value === 'pv' ? '% ของ PV' : '% ของยอดขาย')
+
+/**
+ * Loaded from the company row, not inferred from the products.
+ *
+ * `companyPlanType` above is inferred (a product with no override carries the
+ * company's plan, so any such product answers for it). Nothing equivalent is
+ * true here: the basis lives only on the company, and a screen that guessed it
+ * from whether any product happens to have a PV would tell an admin they were
+ * on PV because somebody typed a number in while evaluating the idea.
+ *
+ * Silent on failure, defaulting to 'price'. A Super Admin on "ทุกบริษัท" has no
+ * single company to ask about and step 2 already refuses to render for them;
+ * anything else that fails here is a read this screen can survive without,
+ * and a red error over the plan chips would be a worse answer than the
+ * default every company actually has.
+ */
+async function loadCommissionBasis(): Promise<void> {
+  const id = effectiveCompanyId.value
+  if (!id) {
+    commissionBasis.value = 'price'
+
+    return
+  }
+  try {
+    const r = await api.get<{ data: { commission_basis?: CommissionBasis } }>(`/companies/${id}`)
+    commissionBasis.value = r.data.commission_basis ?? 'price'
+  } catch {
+    commissionBasis.value = 'price'
+  }
+}
+
+/**
+ * The switch itself — PUT /companies/{id}, which is CompanyPolicy::update and
+ * therefore Super Admin, the same gate `canEditCommissionConfig` already
+ * expresses on every other control here.
+ *
+ * Optimistic assignment is deliberately NOT done: this decides what every
+ * future payout is computed from, and a control that shows the new answer
+ * before the server has taken it would let an admin walk away from a switch
+ * that never happened.
+ */
+async function setCommissionBasis(next: CommissionBasis): Promise<void> {
+  const id = effectiveCompanyId.value
+  if (!id || next === commissionBasis.value || basisSaving.value) return
+
+  basisSaving.value = true
+  basisError.value = ''
+  try {
+    await commissionApi.put(`/companies/${id}`, { commission_basis: next })
+    commissionBasis.value = next
+  } catch (e) {
+    basisError.value = apiErrorMessage(e, 'เปลี่ยนฐานการคำนวณไม่สำเร็จ')
+  } finally {
+    basisSaving.value = false
+  }
+}
+
+/**
+ * Products this company sells that have no PV yet — the gap that makes the
+ * whole feature survivable.
+ *
+ * The server falls back to the sale price when a PV company sells a product
+ * with no PV (CommissionBasisResolver), deliberately: a 0-satang row, or a
+ * refusal to pay, would both be worse. But that fallback is SILENT where it
+ * happens — the rate resolves, the gates pass, a row is written at a number
+ * the rate never meant, into a ledger BR-4 forbids correcting. This list, the
+ * step-2 lock below, and the server's own `point_value_missing` issue are the
+ * three places that make it loud.
+ *
+ * `pv_satang === 0` is NOT in this list. Zero PV is a decision — a bundled
+ * item that pays nobody — and the server honours it (`??`, never `?:`).
+ */
+const productsMissingPointValue = computed<ProductOption[]>(() =>
+  commissionBasis.value === 'pv'
+    ? byCompany(products.value).filter((p) => p.pv_satang === null || p.pv_satang === undefined)
+    : [])
+
+// One draft string per product id, so a half-typed number never touches the
+// row it came from and an abandoned edit costs nothing.
+const pvDrafts = ref<Record<number, string>>({})
+const pvSavingId = ref<number | null>(null)
+const pvError = ref('')
+
+function pvDraftFor(p: ProductOption): string {
+  // A draft of '' is a REAL draft — it is how an admin asks for the PV to be
+  // cleared — so this checks for the key's presence, never for truthiness.
+  const draft = pvDrafts.value[p.id]
+  if (draft !== undefined) return draft
+
+  return p.pv_satang === null || p.pv_satang === undefined ? '' : String(p.pv_satang / 100)
+}
+
+/**
+ * Saves one product's PV. Super-Admin-only server-side — UpdateProductRequest
+ * PROHIBITS the field for anybody else rather than dropping it, so a Company
+ * Admin who somehow reached this control gets a 422 and not a form that
+ * appeared to save. The control is hidden from them anyway
+ * (`canEditCommissionConfig`); the two agree on purpose.
+ *
+ * An empty input clears the PV back to null — a real edit, not a no-op. A PV
+ * entered by mistake has to be removable, and null is what the warning is
+ * about, which makes "clear it" an honest thing to be able to do.
+ */
+async function savePointValue(p: ProductOption): Promise<void> {
+  const raw = pvDraftFor(p).trim()
+  const next = raw === '' ? null : Math.round(Number(raw) * 100)
+
+  if (next !== null && (!Number.isFinite(next) || next < 0)) {
+    pvError.value = 'PV ต้องเป็นตัวเลขไม่ติดลบ'
+
+    return
+  }
+
+  pvSavingId.value = p.id
+  pvError.value = ''
+  try {
+    await commissionApi.put(`/products/${p.id}`, { pv_satang: next })
+    // Patch the loaded row rather than refetching the whole catalogue: the
+    // list is the only reader, and a reload here would blank every other
+    // draft the admin has in progress.
+    const row = products.value.find((x) => x.id === p.id)
+    if (row) row.pv_satang = next
+    delete pvDrafts.value[p.id]
+  } catch (e) {
+    pvError.value = apiErrorMessage(e, 'บันทึก PV ไม่สำเร็จ')
+  } finally {
+    pvSavingId.value = null
+  }
+}
+
 // ══════════════════════════ The 4-step flow (2026-09-11) ══════════════════════════
 /*
  * Everything below re-cuts facts productReadiness() already establishes, per
@@ -1209,12 +1441,84 @@ const leaderRateGaps = computed<ProductOption[]>(() =>
 
 const stepStatuses = computed<Record<Step, StepStatus>>(() => ({
   1: effectiveCompanyId.value ? 'done' : 'incomplete',
-  2: unsetStructuralPlans.value.length ? 'incomplete' : 'done',
+  /*
+   * 2026-09-12 — a missing PV blocks step 2 exactly as a missing structural
+   * setting does, and for the same reason: both let step 3's rates be
+   * written against a base that is not the one the admin thinks they are
+   * configuring. Entering "5%" while three products silently pay on their
+   * price instead of their PV is the precise mistake this step order exists
+   * to make impossible.
+   */
+  2: unsetStructuralPlans.value.length || productsMissingPointValue.value.length ? 'incomplete' : 'done',
   3: step3Complete.value ? 'done' : 'incomplete',
   // Always skippable — see StepStatus above. The banner still says what
   // skipping it costs, which is the honest half of "ข้ามได้".
   4: 'optional',
 }))
+
+// ── Step gating (2026-09-12): "ต้องทำทีละขั้นตอน" ──
+/**
+ * The earliest step that is not finished — the far edge of what may be reached.
+ *
+ * Only 'incomplete' blocks. 'optional' does NOT, which matters for exactly one
+ * step and is worth stating: step 4 is ข้ามได้, so if it ever gained a step 5
+ * that step would not sit behind it. The converse is not true and is the
+ * owner's point — step 4 being optional does not put it in FRONT of step 3.
+ * Optional means "you may leave this empty", never "you may arrive here
+ * early"; step 3 is where the agent's own rate is set, and a leader rate
+ * configured on top of a product that pays nobody is a split of zero.
+ *
+ * null = nothing is incomplete, so nothing is behind a lock.
+ */
+const firstIncompleteStep = computed<Step | null>(
+  () => stepDefs.find((s) => stepStatuses.value[s.step] === 'incomplete')?.step ?? null)
+
+/**
+ * Which of the four tabs may be clicked.
+ *
+ * THE READ-ONLY EXCEPTION, AND WHY IT MUST SURVIVE FUTURE TIDYING.
+ * `canEditCommissionConfig` is Super Admin only (commission config became
+ * Super-Admin-only-to-WRITE on 2026-09-11; reading it was deliberately left
+ * open, because a Company Admin has to be able to see the rates their agents
+ * are paid under). A Company Admin therefore cannot COMPLETE any step here —
+ * every control that would finish one is hidden from them by the house rule
+ * "อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน". Gating them by completion
+ * would leave the whole screen behind a lock they have no way to open, and
+ * for a reason that has nothing to do with them: the gate exists to stop an
+ * EDITOR configuring step 4 before step 3, and they are not editing anything.
+ * So: no edit rights, no gate. Do not "simplify" this clause away — deleting
+ * it reads as a tightening and lands as a lockout of every Company Admin.
+ *
+ * `s === activeStep` is the other clause that looks redundant and is not: a
+ * step can go incomplete UNDER the admin (a rate expires at midnight, another
+ * admin deletes the company default, the company switcher changes company),
+ * and locking the tab somebody is standing on would leave the bar with no
+ * selected tab and no way back to it.
+ */
+const stepReachable = computed<Record<Step, boolean>>(() => {
+  const edge = firstIncompleteStep.value
+  const open = (s: Step): boolean =>
+    !canEditCommissionConfig.value || edge === null || s <= edge || s === activeStep.value
+
+  return { 1: open(1), 2: open(2), 3: open(3), 4: open(4) }
+})
+
+/**
+ * What a locked tab SAYS. A refusal without a reason is the dead end the
+ * whole 4-step redesign was built to remove, so every lock names the step
+ * that has to be finished first, by number AND by name — "ขั้นที่ 3" alone
+ * would make the admin count the tabs to find out which one that is.
+ *
+ * Returns '' for a reachable step so the template can use it as the truthiness
+ * test too, rather than asking the same question twice in two ways.
+ */
+function stepLockHint(step: Step): string {
+  if (stepReachable.value[step]) return ''
+  const blocker = firstIncompleteStep.value
+  if (blocker === null) return ''
+
+  return `ทำขั้นที่ ${blocker} ${stepLabel(blocker)} ให้เสร็จก่อน`
+}
 
 /**
  * The ONE step the admin should go to next, worst-first.
@@ -1252,6 +1556,35 @@ const stepStatuses = computed<Record<Step, StepStatus>>(() => ({
  * had to be one answer, and now is.
  */
 const blockingStep = computed<Step | null>(() => commissionReadiness.blockingStep)
+
+/**
+ * Where the banner's jump button actually goes — which is not always the step
+ * the banner NAMES, and that is the whole reason this computed exists.
+ *
+ * In the ordinary case they are identical: the server's blocking step is the
+ * earliest thing that is wrong, and the earliest thing that is wrong is by
+ * definition reachable. But the two answers come from two places on purpose
+ * (see the block above: the banner is the SERVER's verdict, the pills and
+ * therefore the locks are computed from the rows this screen loaded), and two
+ * sources that are allowed to disagree eventually will — over a rate that
+ * expired at midnight, a product another admin added, a category rule this
+ * screen narrows client-side. When they do, the server can name step 4 while
+ * this screen still counts step 3 as incomplete, and a jump button that
+ * landed on a locked tab would do nothing at all in front of the one person
+ * who opened this screen to fix something.
+ *
+ * So the jump is clamped to the local edge, which `stepReachable` guarantees
+ * is open. It cannot land on a locked step under ANY combination of the two
+ * answers, and it never has to guess which of them is right: the step it
+ * falls back to is the one the admin has to clear before the server's step
+ * could be worked on anyway.
+ */
+const jumpStep = computed<Step | null>(() => {
+  const target = blockingStep.value
+  if (target === null) return null
+
+  return stepReachable.value[target] ? target : (firstIncompleteStep.value ?? target)
+})
 
 /**
  * 'bad' = closed deals pay nobody · 'warn' = they pay, but not everybody.
@@ -1429,6 +1762,23 @@ function stepLabel(step: Step): string {
 }
 const prevStep = computed<Step | null>(() => (activeStep.value > 1 ? ((activeStep.value - 1) as Step) : null))
 const nextStep = computed<Step | null>(() => (activeStep.value < 4 ? ((activeStep.value + 1) as Step) : null))
+/**
+ * Why the next button is refusing, or '' when it is not.
+ *
+ * `prevStep` gets no equivalent and never will: going BACK to change an
+ * answer is the thing the gate must never interfere with. A step behind the
+ * current one is complete (or the current one would not have been reachable),
+ * so it is always open — but the asymmetry is stated here rather than left to
+ * be rediscovered, because "the buttons should match" is a tempting tidy-up.
+ *
+ * The button keeps its name — "ขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย →" — while
+ * disabled. Swapping the label for the refusal would delete the one thing
+ * TASK-034 added to answer "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง"; the refusal is
+ * printed BESIDE it instead, where it adds a reason without removing the
+ * answer.
+ */
+const nextStepBlockedReason = computed<string>(() =>
+  nextStep.value === null ? '' : stepLockHint(nextStep.value))
 
 /**
  * Step 1's own company picker.
@@ -1456,6 +1806,24 @@ function pickCompany(event: Event): void {
  * rendering an empty list it never asked the server about.
  */
 function goToStep(step: Step): void {
+  /*
+   * THE ENFORCEMENT, in one place (2026-09-12).
+   *
+   * Every way into a step goes through here — the tabs, the footer's two
+   * buttons, the banner's jump, the product rows' two "ไปขั้นที่ …" links —
+   * so the gate is one line rather than a condition repeated at six call
+   * sites, where the seventh caller added later would be the one that forgets.
+   * The template still hides or disables the controls that would land here
+   * illegally; this is the backstop that makes that cosmetic rather than
+   * load-bearing.
+   *
+   * Returning silently is safe ONLY because nothing reaches this point without
+   * a visible reason already on screen: a locked tab carries its padlock and
+   * its "ทำขั้นที่ N … ให้เสร็จก่อน" line, and the next button carries the
+   * same sentence beside it.
+   */
+  if (!stepReachable.value[step]) return
+
   activeStep.value = step
   if (step === 2) viewPlan(viewingPlanType.value)
   else if (step === 3 || step === 4) {
@@ -1475,220 +1843,48 @@ function openSimulate(p: ProductOption) {
 function closeSimulate() {
   simulateProduct.value = null
 }
-const simulateResult = computed<{ rule: CommissionRuleItem | null; amountSatang: number } | null>(() => {
+const simulateResult = computed<{ rule: CommissionRuleItem | null; amountSatang: number; baseSatang: number; basis: CommissionBasis } | null>(() => {
   if (!simulateProduct.value) return null
   const rule = resolveRuleFor(simulateProduct.value)
-  if (!rule) return { rule: null, amountSatang: 0 }
   const saleSatang = Math.round(Number(simulateAmountThb.value || 0) * 100)
-  const amountSatang = rule.rate_type === 'percentage' ? Math.round((saleSatang * rule.rate_value) / 10000) : rule.rate_value
-  return { rule, amountSatang }
+  /*
+   * 2026-09-12 — THE SIMULATOR HAS TO MIRROR CommissionBasisResolver, OR IT
+   * LIES ABOUT THE ONE THING IT EXISTS TO ANSWER.
+   *
+   * On a PV company the entered sale amount is not what the rate is applied
+   * to; the product's PV is, and a discount does not move it. A simulator
+   * that kept multiplying the typed figure would show an admin a number the
+   * server will never produce — worse than having no simulator, because they
+   * would go on to set the rate from it.
+   *
+   * The missing-PV fallback to the sale price is mirrored too, and the
+   * readout below names which base was used, so a product that silently
+   * falls back is visible HERE as well as in the step-2 list.
+   */
+  const pv = simulateProduct.value.pv_satang
+  const baseSatang = commissionBasis.value === 'pv' && pv !== null && pv !== undefined ? pv : saleSatang
+
+  if (!rule) return { rule: null, amountSatang: 0, baseSatang, basis: commissionBasis.value }
+
+  const amountSatang = rule.rate_type === 'percentage' ? Math.round((baseSatang * rule.rate_value) / 10000) : rule.rate_value
+
+  return { rule, amountSatang, baseSatang, basis: commissionBasis.value }
 })
 
-// ══════════════════════════ Setup Wizard (TASK-037, human-approved 2026-07-22) ══════════════════════════
-// Human's mumong 3.1: "การ Setup ค่าคอมแยกสินค้า แบบ wizard" — modeled on the
-// CaptivateIQ "Guided Plan Builder" pattern researched earlier this session
-// (step-by-step, one decision per screen). Deliberately reuses every
-// existing form/submit function already defined above (matrixForm,
-// binaryForm, rankSettingsForm, generationSettingsForm, affiliateForm,
-// their submit*Settings() functions, and the same /commission-rules
-// endpoint the Commission Rules tab already uses) — no new backend calls,
-// this is purely a guided sequencing layer over what already shipped and
-// passed UAT-012. Scope-controlled deliberately (ag-lead guardrail —
-// control scope): the wizard only offers % rates per cert tier (not fixed
-// THB) and only the company-wide *settings* singletons (not level-rate /
-// rank-ladder / generation-rule list items) — those stay in "การตั้งค่า
-// ทั้งหมด" as before; the wizard's summary step links there for anything
-// beyond this simplified path.
-type WizardStep = 1 | 2 | 3 | 4
-const wizardOpen = ref(false)
-const wizardStep = ref<WizardStep>(1)
-const wizardProductId = ref<number | ''>('')
-const wizardPlanChoice = ref<'inherit' | CommissionPlanType>('inherit')
-const wizardRateInput = ref<string | number>('')
-const wizardSavingPlanType = ref(false)
-const wizardPlanTypeError = ref('')
-const wizardSavingRates = ref(false)
-const wizardRateError = ref('')
-const wizardSavingStructure = ref(false)
-const wizardStructureError = ref('')
-const wizardStructureEditMode = ref(false)
-
-const wizardProduct = computed<ProductOption | null>(() => byCompany(products.value).find((p) => p.id === wizardProductId.value) ?? null)
-// TASK-198 — same lookup pattern as ruleFormProductRateTypeLocked (§3.4)
-// above, applied at the wizard's own product-selection point (step 1).
-// null/'percentage' → wizard proceeds exactly as before (its rate-entry
-// step, TASK-037, only ever submits 'percentage' by original design).
-// 'fixed_satang' → this product's rate format is already locked to fixed
-// THB by another form (TASK-197 §2.2 enforcement) — letting the user
-// continue to step 2 would only 422 at wizardSaveRates() after they've
-// filled in % values, so block right here instead.
-const wizardProductRateTypeLocked = computed<RateType | null>(() => wizardProduct.value?.commission_rate_type ?? null)
-const wizardProductBlockedFixedSatang = computed(() => wizardProductRateTypeLocked.value === 'fixed_satang')
-const wizardEffectivePlanType = computed<CommissionPlanType | null>(() => {
-  if (!wizardProduct.value) return null
-  return wizardPlanChoice.value === 'inherit' ? (wizardProduct.value.effective_plan_type ?? null) : wizardPlanChoice.value
-})
-function wizardNeedsStructureStep(): boolean {
-  const pt = wizardEffectivePlanType.value
-  return !!pt && !!planTypeToTab[pt]
-}
-function wizardStructureAlreadySet(): boolean {
-  const pt = wizardEffectivePlanType.value
-  if (pt === 'matrix') return !!matrixSettings.value
-  if (pt === 'binary') return !!binarySettings.value
-  if (pt === 'stairstep_breakaway') return !!agentRankSettings.value
-  if (pt === 'generation') return !!generationSettings.value
-  if (pt === 'affiliate') return !!affiliateSettings.value
-  return true
-}
-// Bug found + fixed 2026-07-22 (live-testing): wizardPlanChoice used to
-// default to the literal 'inherit' every time the wizard opened, even for
-// a product that already had its OWN explicit override set. Clicking
-// "ถัดไป" on step 1 without touching the dropdown then wrote
-// commission_plan_type: null back to that product — silently reverting a
-// real per-product override to "inherit from company" (corrupted QA
-// Stairstep Package's plan type from stairstep_breakaway to unilevel
-// during testing; repaired via direct API call, see chat). Fix: always
-// initialize the dropdown from the SELECTED product's actual current
-// commission_plan_type, so "ถัดไป" without touching the field is a no-op.
-watch(wizardProductId, (id) => {
-  const p = byCompany(products.value).find((pp) => pp.id === id)
-  wizardPlanChoice.value = p?.commission_plan_type ?? 'inherit'
-})
-function openWizard(preselectProductId?: number) {
-  wizardOpen.value = true
-  wizardStep.value = 1
-  wizardRateInput.value = ''
-  wizardPlanTypeError.value = ''
-  wizardRateError.value = ''
-  wizardStructureError.value = ''
-  wizardStructureEditMode.value = false
-  wizardProductId.value = preselectProductId ?? ''
-  // Set directly (don't rely solely on the watch above, which won't fire
-  // if the id happens to be unchanged from a previous open) — see bug
-  // note above for why this must reflect the product's REAL current value.
-  const preselected = preselectProductId ? byCompany(products.value).find((pp) => pp.id === preselectProductId) : null
-  wizardPlanChoice.value = preselected?.commission_plan_type ?? 'inherit'
-}
-function closeWizard() {
-  wizardOpen.value = false
-}
-// TASK-198 — the redirect target for a product already locked to
-// fixed_satang: same "+ เพิ่มอัตราคอมตาม tier" flow the product card's own
-// button uses (openRuleFormForProduct, TASK-197 §3.1), just triggered from
-// inside the blocked wizard instead. Closes the wizard first so the admin
-// lands on the real form with nothing else competing for attention.
-function wizardGoToProductRateForm() {
-  if (!wizardProduct.value) return
-  const p = wizardProduct.value
-  closeWizard()
-  openRuleFormForProduct(p)
-}
-function findExactProductRule(productId: number): CommissionRuleItem | undefined {
-  return commissionRules.value.find((r) => r.product?.id === productId)
-}
-async function wizardConfirmProductAndPlan() {
-  if (!wizardProduct.value) {
-    wizardPlanTypeError.value = 'กรุณาเลือกสินค้า'
-    return
-  }
-  wizardSavingPlanType.value = true
-  wizardPlanTypeError.value = ''
-  try {
-    const desired = wizardPlanChoice.value === 'inherit' ? null : wizardPlanChoice.value
-    /*
-     * TASK-245 — `canEditPlanType` as well as "did it change".
-     *
-     * The read-only field above already keeps `desired` equal to the current
-     * value, so this is belt and braces — and it is worth having: the day
-     * somebody adds a code path that sets wizardPlanChoice, the guard that
-     * stops the 403 should be the rule, not a coincidence of the markup.
-     */
-    if (canEditPlanType(wizardProduct.value) && desired !== (wizardProduct.value.commission_plan_type ?? null)) {
-      await commissionApi.put(`/products/${wizardProduct.value.id}`, withCompanyBody({ commission_plan_type: desired }))
-      await loadRulesTabData() // refresh products' effective_plan_type
-    }
-    const existing = wizardProduct.value ? findExactProductRule(wizardProduct.value.id) : undefined
-    wizardRateInput.value = existing ? existing.rate_value / 100 : ''
-    wizardStep.value = 2
-  } catch (e) {
-    wizardPlanTypeError.value = apiErrorMessage(e, 'บันทึกรูปแบบแผนไม่สำเร็จ')
-  } finally {
-    wizardSavingPlanType.value = false
-  }
-}
-async function wizardEnsureStructureLoaded() {
-  const tab = wizardEffectivePlanType.value ? planTypeToTab[wizardEffectivePlanType.value] : undefined
-  // Through the shared entry point (2026-09-11) — this was the fifth copy of
-  // the `loadedTabs.has()` test, and the one most likely to be forgotten.
-  if (tab) await ensureTabLoaded(tab)
-}
-function wizardPrefillStructureForm() {
-  const pt = wizardEffectivePlanType.value
-  if (pt === 'matrix') syncMatrixForm(matrixSettings.value)
-  else if (pt === 'binary') syncBinaryForm(binarySettings.value)
-  else if (pt === 'stairstep_breakaway') syncRankSettingsForm(agentRankSettings.value)
-  else if (pt === 'generation') syncGenerationSettingsForm(generationSettings.value)
-  else if (pt === 'affiliate') syncAffiliateForm(affiliateSettings.value)
-}
-async function wizardSaveRates() {
-  if (!wizardProduct.value) return
-  wizardSavingRates.value = true
-  wizardRateError.value = ''
-  try {
-    const input = wizardRateInput.value
-    if (input !== '' && input !== undefined && input !== null) {
-      const existing = findExactProductRule(wizardProduct.value.id)
-      const payload = withCompanyBody({
-        product_id: wizardProduct.value.id,
-        product_category_id: null,
-        rate_type: 'percentage' as RateType,
-        rate_value: rateValueToBasisOrSatang('percentage', input),
-        effective_from: existing?.effective_from ?? new Date().toISOString().slice(0, 10),
-        effective_to: null,
-      })
-      if (existing) await commissionApi.put(`/commission-rules/${existing.id}`, payload)
-      else await commissionApi.post('/commission-rules', payload)
-    }
-    await loadRulesTabData()
-    if (wizardNeedsStructureStep()) {
-      await wizardEnsureStructureLoaded()
-      wizardPrefillStructureForm()
-      wizardStructureEditMode.value = !wizardStructureAlreadySet()
-      wizardStep.value = 3
-    } else {
-      wizardStep.value = 4
-    }
-  } catch (e) {
-    wizardRateError.value = apiErrorMessage(e, 'บันทึกอัตราไม่สำเร็จ')
-  } finally {
-    wizardSavingRates.value = false
-  }
-}
-async function wizardSaveStructure() {
-  wizardSavingStructure.value = true
-  wizardStructureError.value = ''
-  try {
-    const pt = wizardEffectivePlanType.value
-    if (pt === 'matrix') await submitMatrixSettings()
-    else if (pt === 'binary') await submitBinarySettings()
-    else if (pt === 'stairstep_breakaway') await submitRankSettings()
-    else if (pt === 'generation') await submitGenerationSettings()
-    else if (pt === 'affiliate') await submitAffiliateSettings()
-    wizardStep.value = 4
-  } catch (e) {
-    wizardStructureError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
-  } finally {
-    wizardSavingStructure.value = false
-  }
-}
-function wizardSkipStructure() {
-  wizardStep.value = 4
-}
-const wizardSummaryRate = computed<CommissionRuleItem | null>(() => {
-  if (!wizardProduct.value) return null
-  return findExactProductRule(wizardProduct.value.id) ?? null
-})
+// ══════════════════════════ Setup Wizard — REMOVED 2026-09-12 ══════════════════════════
+// TASK-037's per-product "set this product up step by step" modal used to live
+// here (product → plan type → rate → company structure → summary). It was
+// deleted by human decision once this whole screen became a step flow: the
+// wizard asked the same four questions the four steps now ask, and answered
+// them through a SECOND set of writes to the same endpoints — two code paths
+// onto one set of money numbers, only one of which anybody was still
+// maintaining. Its first step was also the last place that wrote
+// `commission_plan_type` onto a product, which is no longer a per-product
+// decision at all (see the note where canEditPlanType() used to be).
+//
+// Anything it could do is reachable on the path: the plan type in step 2, the
+// per-product rate via "+ ตั้งอัตราคอมมิชชั่น" on the row in step 3, and the
+// company-wide structural settings in step 2's plan chip. Do not re-add it.
 
 // ══════════════════════════ Binary (TASK-029) ══════════════════════════
 type CycleFrequency = 'weekly' | 'biweekly' | 'monthly'
@@ -2125,6 +2321,12 @@ watch(() => activeCompany.companyId, () => {
   // The banner's verdict is per company too — the store caches by company id,
   // so switching back to one already seen this session costs no request.
   void commissionReadiness.ensureLoaded()
+  // 2026-09-12 — the basis belongs to the COMPANY, so it is the one value on
+  // this screen that is guaranteed wrong the instant the switcher moves. Any
+  // half-typed PV belongs to the company that just left, too.
+  pvDrafts.value = {}
+  pvError.value = ''
+  void loadCommissionBasis()
   if (activeTab.value !== 'rules') void ensureTabLoaded(activeTab.value)
   // The rules tab is deliberately NOT refetched: it loads every company's
   // rows once and narrows them with byCompany(). The readiness probe is
@@ -2154,6 +2356,7 @@ onMounted(async () => {
   // steps, and an admin who opened this screen because of the warning should
   // not watch it appear after the rate table has already rendered.
   await commissionReadiness.ensureLoaded()
+  await loadCommissionBasis()
   await ensureTabLoaded('rules')
 })
 /*
@@ -2226,25 +2429,37 @@ watch(companyPlanType, (pt) => {
           {{ readinessDetail }}
         </p>
       </div>
+      <!-- Targets `jumpStep`, not `blockingStep` — see that computed for why
+           the two can differ and why this one can never land on a locked
+           tab. The label follows the target rather than the verdict: a button
+           that says "ไปที่ขั้นที่ 4" and opens step 3 is worse than either. -->
       <button
-        v-if="blockingStep"
+        v-if="jumpStep"
         type="button"
         class="btn-primary shrink-0 h-9"
         :class="readinessLevel === 'warn' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-rose-600 hover:bg-rose-700'"
         data-test="readiness-jump"
-        @click="goToStep(blockingStep!)"
+        @click="goToStep(jumpStep!)"
       >
-        ไปที่ขั้นที่ {{ blockingStep }}
+        ไปที่ขั้นที่ {{ jumpStep }}
       </button>
     </div>
 
     <div class="mt-4 rounded-2xl border border-slate-200 bg-white/95 overflow-hidden">
       <!--
-        The four step tabs. FREELY CLICKABLE, never disabled: the numbering
-        is advice about the order the work makes sense in, not a gate. An
-        admin who came back only to fix step 4 must not have to re-walk 1–3,
-        and a UI that refuses the click cannot explain itself — the pill does
-        that job instead, on every step, all the time.
+        The four step tabs, GATED (2026-09-12) — owner: "ยังคลิ๊กเลือกได้ทุก
+        tab เลย ตามที่คุยไว้ต้องทำทีละขั้นตอน". A step opens only once every
+        step before it is finished; see `stepReachable`, which also carries the
+        read-only exception (a Company Admin cannot complete a step, so they
+        are never gated by completion).
+
+        A locked tab is `aria-disabled`, NOT natively `disabled`, on purpose.
+        The native attribute would suppress the tab's own `title` tooltip and
+        drop it out of the keyboard order — so the one control on this screen
+        that most needs to explain itself would become the one that cannot be
+        reached to read. It stays focusable and clickable, and goToStep()
+        refuses the move, while the padlock, the muted colours and the
+        "ทำขั้นที่ N … ให้เสร็จก่อน" line under the name say why.
       -->
       <div class="flex flex-col sm:flex-row bg-slate-50 border-b border-slate-200" role="tablist">
         <button
@@ -2253,25 +2468,47 @@ watch(companyPlanType, (pt) => {
           type="button"
           role="tab"
           :aria-selected="activeStep === s.step"
+          :aria-disabled="!stepReachable[s.step]"
+          :title="stepLockHint(s.step) || undefined"
           class="flex-1 flex items-center gap-2.5 px-4 py-3.5 text-left border-b-[3px] transition-colors"
-          :class="activeStep === s.step ? 'bg-white border-brand-600' : 'border-transparent hover:bg-slate-100'"
+          :class="[
+            activeStep === s.step ? 'bg-white border-brand-600' : 'border-transparent',
+            stepReachable[s.step] ? (activeStep === s.step ? '' : 'hover:bg-slate-100') : 'cursor-not-allowed bg-slate-100/70',
+          ]"
           :data-test="`step-tab-${s.step}`"
           @click="goToStep(s.step)"
         >
           <span
             class="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[13px] font-extrabold"
-            :class="stepStatuses[s.step] === 'done' ? 'bg-brand-600 text-white' : activeStep === s.step ? 'bg-gold-600 text-white' : 'bg-slate-200 text-slate-500'"
+            :class="!stepReachable[s.step] ? 'bg-slate-200 text-slate-400' : stepStatuses[s.step] === 'done' ? 'bg-brand-600 text-white' : activeStep === s.step ? 'bg-gold-600 text-white' : 'bg-slate-200 text-slate-500'"
           >
-            <Icon v-if="stepStatuses[s.step] === 'done'" name="check" :size="14" />
+            <!-- The padlock outranks the tick and the number: a locked step's
+                 first question is "why can I not click this", not "which
+                 number is it". A locked step can never be 'done' anyway. -->
+            <Icon v-if="!stepReachable[s.step]" name="lock" :size="14" :data-test="`step-lock-icon-${s.step}`" />
+            <Icon v-else-if="stepStatuses[s.step] === 'done'" name="check" :size="14" />
             <template v-else>{{ s.step }}</template>
           </span>
           <span class="flex-1 min-w-0">
-            <span class="block text-[11px] font-bold text-slate-400">ขั้นที่ {{ s.step }}</span>
-            <span class="block text-[13.5px] font-extrabold" :class="activeStep === s.step ? 'text-slate-900' : 'text-slate-600'">{{ s.label }}</span>
+            <span class="block text-[11px] font-bold" :class="stepReachable[s.step] ? 'text-slate-400' : 'text-slate-300'">ขั้นที่ {{ s.step }}</span>
+            <span
+              class="block text-[13.5px] font-extrabold"
+              :class="!stepReachable[s.step] ? 'text-slate-400' : activeStep === s.step ? 'text-slate-900' : 'text-slate-600'"
+            >{{ s.label }}</span>
+            <!-- The reason, in the tab itself and not only in the tooltip: a
+                 `title` needs a hover that a touch screen does not have, and
+                 this is the sentence that turns a refusal into an instruction. -->
+            <span
+              v-if="!stepReachable[s.step]"
+              class="block mt-0.5 text-[11px] font-bold text-amber-700"
+              :data-test="`step-lock-hint-${s.step}`"
+            >
+              🔒 {{ stepLockHint(s.step) }}
+            </span>
           </span>
           <span
             class="shrink-0 text-[11px] font-bold rounded-full px-2.5 py-1"
-            :class="stepStatuses[s.step] === 'done' ? 'bg-emerald-100 text-emerald-700' : stepStatuses[s.step] === 'incomplete' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'"
+            :class="!stepReachable[s.step] ? 'bg-slate-200 text-slate-400' : stepStatuses[s.step] === 'done' ? 'bg-emerald-100 text-emerald-700' : stepStatuses[s.step] === 'incomplete' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'"
             :data-test="`step-pill-${s.step}`"
           >
             {{ stepStatusLabels[stepStatuses[s.step]] }}
@@ -2428,6 +2665,150 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
+                ═══ ฐานการคำนวณ / PV (2026-09-12) ═══
+
+                The second half of "how does this company pay", and it sits
+                directly under the plan chips because it is the same question:
+                the plan says WHO is paid, this says what the % is a % OF.
+                Splitting them across two screens is what the 4-step redesign
+                exists to undo.
+
+                Both cards state the consequence in the sentence an admin
+                actually cares about — what happens when you discount —
+                because that is the only difference they will ever notice,
+                and the reason a company picks one over the other.
+              -->
+              <div class="rounded-2xl border border-slate-200 bg-white px-4 py-4" data-test="basis-card">
+                <p class="text-[15px] font-extrabold text-slate-900">ค่าคอมคิดจากอะไร</p>
+                <p class="mt-1 text-[12.5px] text-slate-500">
+                  เลือกได้อย่างเดียวทั้งบริษัท — ส่วน % และจำนวนคงที่ยังตั้งได้รายสินค้าเหมือนเดิมในขั้นที่ 3
+                </p>
+
+                <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                  <button
+                    v-for="b in (['price', 'pv'] as CommissionBasis[])"
+                    :key="b"
+                    type="button"
+                    class="text-left rounded-xl border px-4 py-3.5 transition-colors"
+                    :class="b === commissionBasis
+                      ? 'border-brand-600 bg-brand-50'
+                      : canEditCommissionConfig
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-200 bg-slate-50 cursor-default'"
+                    :disabled="!canEditCommissionConfig || basisSaving"
+                    :data-test="`basis-option-${b}`"
+                    @click="setCommissionBasis(b)"
+                  >
+                    <span class="flex items-center gap-2">
+                      <Icon v-if="b === commissionBasis" name="check" :size="14" class="text-brand-600" />
+                      <span class="text-[14px] font-extrabold" :class="b === commissionBasis ? 'text-brand-700' : 'text-slate-700'">
+                        {{ basisLabels[b] }}
+                      </span>
+                      <span v-if="b === 'price'" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600">ค่าเริ่มต้น</span>
+                    </span>
+                    <span class="mt-1.5 block text-[12.5px] text-slate-500">
+                      <template v-if="b === 'price'">% คิดจากยอดที่ลูกค้าจ่ายจริง — ลดราคาเมื่อไร ค่าคอมลดตาม</template>
+                      <template v-else>% คิดจาก PV ที่กำหนดไว้ให้สินค้าแต่ละตัว — ลดราคาแล้วค่าคอมไม่ลดตาม</template>
+                    </span>
+                  </button>
+                </div>
+
+                <p v-if="basisError" class="mt-2 text-[12.5px] font-bold text-rose-600">{{ basisError }}</p>
+                <p v-if="!canEditCommissionConfig" class="mt-2 text-[12.5px] text-slate-400">
+                  เปลี่ยนได้เฉพาะผู้ดูแลระบบ — ติดต่อผู้ดูแลระบบหากต้องการแก้ไข
+                </p>
+                <p class="mt-2 text-[12.5px] text-slate-400">
+                  การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+                </p>
+              </div>
+
+              <!--
+                ═══ THE PV TABLE ═══
+
+                Only rendered on the PV basis, and that is the whole design:
+                a company on ราคาขาย never meets PV at all, so nothing about
+                this feature is opt-out.
+
+                Every sellable product is listed, not just the ones missing a
+                PV. A list of gaps shrinks to nothing and then vanishes, which
+                is exactly when an admin needs to see what the numbers ARE —
+                and comparing PV against price across the whole catalogue is
+                how anybody notices they typed 100 where they meant 1,000.
+              -->
+              <div v-if="commissionBasis === 'pv'" class="rounded-2xl border border-slate-200 bg-white px-4 py-4" data-test="pv-table">
+                <div class="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p class="text-[15px] font-extrabold text-slate-900">PV ของแต่ละสินค้า</p>
+                    <p class="mt-1 text-[12.5px] text-slate-500">
+                      PV คือ "มูลค่าที่ใช้คิดค่าคอม" ของสินค้า ตั้งเป็นบาทเหมือนราคา เช่น ราคา 8,900 แต่ให้ PV 1,000
+                    </p>
+                  </div>
+                  <span
+                    v-if="productsMissingPointValue.length"
+                    class="shrink-0 text-[12px] font-extrabold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800"
+                    data-test="pv-missing-count"
+                  >
+                    ยังไม่ได้กำหนด {{ productsMissingPointValue.length }} รายการ
+                  </span>
+                </div>
+
+                <p v-if="pvError" class="mt-2 text-[12.5px] font-bold text-rose-600">{{ pvError }}</p>
+
+                <div class="mt-3 divide-y divide-slate-100">
+                  <div
+                    v-for="p in byCompany(products)"
+                    :key="p.id"
+                    class="flex flex-wrap items-center gap-3 py-2.5"
+                    :data-test="`pv-row-${p.id}`"
+                  >
+                    <div class="flex-1 min-w-0">
+                      <p class="text-[13.5px] font-bold text-slate-800 truncate">{{ p.name }}</p>
+                      <p class="text-[12px] text-slate-400">
+                        ราคาขาย {{ p.price_satang === undefined ? '—' : formatSatang(p.price_satang) }}
+                        <span
+                          v-if="p.pv_satang === null || p.pv_satang === undefined"
+                          class="font-bold text-amber-700"
+                        >· ยังไม่ได้กำหนด PV ระบบจะคิดจากราคาขายไปก่อน</span>
+                      </p>
+                    </div>
+
+                    <template v-if="canEditCommissionConfig">
+                      <input
+                        :value="pvDraftFor(p)"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="PV"
+                        class="w-28 px-3 py-1.5 rounded-lg border text-sm"
+                        :class="p.pv_satang === null || p.pv_satang === undefined ? 'border-amber-300 bg-amber-50' : 'border-slate-200'"
+                        :data-test="`pv-input-${p.id}`"
+                        @input="pvDrafts[p.id] = ($event.target as HTMLInputElement).value"
+                        @keyup.enter="savePointValue(p)"
+                      />
+                      <button
+                        type="button"
+                        class="btn-secondary h-9"
+                        :disabled="pvSavingId === p.id"
+                        :data-test="`pv-save-${p.id}`"
+                        @click="savePointValue(p)"
+                      >
+                        {{ pvSavingId === p.id ? 'กำลังบันทึก…' : 'บันทึก' }}
+                      </button>
+                    </template>
+                    <!-- Read-only viewer: the number, never the input. Same
+                         house rule as every other write control here. -->
+                    <span v-else class="text-[13.5px] font-bold text-slate-700">
+                      {{ p.pv_satang === null || p.pv_satang === undefined ? '—' : formatSatang(p.pv_satang) }}
+                    </span>
+                  </div>
+                </div>
+
+                <p class="mt-3 text-[12.5px] text-slate-400">
+                  เว้นว่างไว้แล้วกดบันทึก = ล้างค่า PV ของสินค้านั้น
+                </p>
+              </div>
+
+              <!--
                 ═══ THE STRUCTURAL SECTIONS, RE-POINTED ═══
 
                 Binary / Matrix / อันดับ / Generation / Affiliate below are
@@ -2439,22 +2820,19 @@ watch(companyPlanType, (pt) => {
                 the plan chip that needs them, which is the only moment they
                 mean anything.
 
-                `!wizardOpen` on each is belt and braces for a real hazard
-                rather than a reachable bug today: the Setup Wizard's own
-                structure step binds the SAME refs (binaryForm, matrixForm,
-                rankSettingsForm, generationSettingsForm, affiliateForm) via
-                wizardPrefillStructureForm(), so two simultaneous renders
-                would be two editors of one object. The wizard can only be
-                opened from step 3 and its overlay covers the tab bar, so the
-                two cannot currently coexist — this guard is what keeps that
-                true if either entry point moves.
+                Each also carried `&& !wizardOpen` until 2026-09-12, guarding
+                against the Setup Wizard's structure step binding the SAME refs
+                (binaryForm, matrixForm, rankSettingsForm,
+                generationSettingsForm, affiliateForm) in a second live editor.
+                The wizard is gone, so these forms are once again the only
+                editors of those refs and the guard had nothing left to guard.
               -->
               <div v-if="viewingPlanType === 'unilevel'" class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12.5px] text-slate-500">
                 Unilevel ไม่มีค่าตั้งระดับบริษัทให้กรอกในขั้นนี้ — ทุกอย่างมาจากอัตราในขั้นที่ 3 และอัตราหัวหน้าทีมในขั้นที่ 4
               </div>
 
               <!-- ═══════════ Binary ═══════════ -->
-              <div v-else-if="viewingPlanType === 'binary' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-binary">
+              <div v-else-if="viewingPlanType === 'binary'" class="pt-2 border-t border-slate-100" data-test="plan-structure-binary">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Binary</h3>
                 <div v-if="binaryError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ binaryError }}</div>
                 <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-4 gap-3" @submit.prevent="submitBinarySettings">
@@ -2516,7 +2894,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!-- ═══════════ Matrix ═══════════ -->
-              <div v-else-if="viewingPlanType === 'matrix' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-matrix">
+              <div v-else-if="viewingPlanType === 'matrix'" class="pt-2 border-t border-slate-100" data-test="plan-structure-matrix">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Matrix</h3>
                 <div v-if="matrixError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ matrixError }}</div>
                 <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 sm:grid-cols-3 gap-3" @submit.prevent="submitMatrixSettings">
@@ -2574,7 +2952,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!-- ═══════════ Agent Ranks / Stairstep-Breakaway ═══════════ -->
-              <div v-else-if="viewingPlanType === 'stairstep_breakaway' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-ranks">
+              <div v-else-if="viewingPlanType === 'stairstep_breakaway'" class="pt-2 border-t border-slate-100" data-test="plan-structure-ranks">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผนอันดับ (Stairstep)</h3>
                 <div v-if="rankError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ rankError }}</div>
                 <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRankSettings">
@@ -2624,7 +3002,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!-- ═══════════ Generation ═══════════ -->
-              <div v-else-if="viewingPlanType === 'generation' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-generation">
+              <div v-else-if="viewingPlanType === 'generation'" class="pt-2 border-t border-slate-100" data-test="plan-structure-generation">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผน Generation</h3>
                 <div v-if="generationError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ generationError }}</div>
                 <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitGenerationSettings">
@@ -2657,7 +3035,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!-- ═══════════ Affiliate ═══════════ -->
-              <div v-else-if="viewingPlanType === 'affiliate' && !wizardOpen" class="pt-2 border-t border-slate-100" data-test="plan-structure-affiliate">
+              <div v-else-if="viewingPlanType === 'affiliate'" class="pt-2 border-t border-slate-100" data-test="plan-structure-affiliate">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผนพันธมิตร (Affiliate)</h3>
                 <div v-if="affiliateError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ affiliateError }}</div>
                 <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitAffiliateSettings">
@@ -2687,6 +3065,18 @@ watch(companyPlanType, (pt) => {
             <div>
               <p class="text-[17px] font-extrabold text-slate-900">ตัวแทนผู้ขายได้กี่เปอร์เซ็นต์</p>
               <p class="mt-1 text-[13px] text-slate-500">ขั้นเดียวในหน้านี้ที่ขาดไม่ได้ — ถ้าไม่มีอัตราที่ใช้ได้ ดีลที่ปิดได้จะไม่มีใครได้เงิน</p>
+              <!--
+                2026-09-12 — "5%" means two different amounts of money
+                depending on the answer given one step earlier, and this is
+                the screen where somebody types it. Stating the base here is
+                what stops a rate meant as "5% of PV" being entered by
+                somebody picturing 5% of the price. Only shown on PV, where
+                it is news; on ราคาขาย it is what every label already says.
+              -->
+              <p v-if="commissionBasis === 'pv'" class="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-extrabold text-brand-700 bg-brand-50 border border-brand-200 rounded-lg px-2.5 py-1.5" data-test="step3-basis-note">
+                <Icon name="info" :size="14" />
+                บริษัทนี้คิด % จาก PV ของสินค้า ไม่ใช่จากราคาขาย (ตั้งไว้ในขั้นที่ 2)
+              </p>
             </div>
 
             <EmptyState
@@ -2843,16 +3233,20 @@ watch(companyPlanType, (pt) => {
                              refused, ADR-036 §5/§6) while
                              `canEditCommissionConfig` answers for the VIEWER.
                              Either one refusing means the server would, so the
-                             button must not be there to click. -->
-                        <template v-if="canEditCommissionConfig && canSetCommission(p)">
-                          <button type="button" class="px-3 py-1.5 rounded-lg text-brand-700 border border-brand-200 bg-brand-50 text-xs font-bold hover:bg-brand-100 flex items-center gap-1" @click="openWizard(p.id)">
-                            <Icon name="sparkles" :size="12" />
-                            Wizard
-                          </button>
-                          <button type="button" class="btn-primary" @click="openRuleFormForProduct(p)">
-                            {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
-                          </button>
-                        </template>
+                             button must not be there to click.
+
+                             The row's "Wizard" button sat beside this one under
+                             the same condition until 2026-09-12; the `template`
+                             that grouped the pair went with it, so the test
+                             now sits on the one button that is left. -->
+                        <button
+                          v-if="canEditCommissionConfig && canSetCommission(p)"
+                          type="button"
+                          class="btn-primary"
+                          @click="openRuleFormForProduct(p)"
+                        >
+                          {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
+                        </button>
                         <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="การตั้งอัตราค่าคอมเป็นสิทธิ์ของ Super Admin">
                           ตั้งค่าโดย Super Admin
                         </span>
@@ -2877,9 +3271,23 @@ watch(companyPlanType, (pt) => {
                       <!-- Points at the STEP that owns the gap, which is the
                            whole reason the steps exist: a structural gap is
                            step 2's, a leader-rate gap is step 4's, and
-                           neither is fixable from here. -->
+                           neither is fixable from here.
+
+                           2026-09-12 — both are now also conditioned on the
+                           target being REACHABLE, and this is the one place
+                           where the gate bites something real: this panel IS
+                           step 3, so "ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม" is
+                           offered from inside a step that may itself be
+                           incomplete (this product has a rate; another one in
+                           the list may not). goToStep() would refuse it, so
+                           the button is not drawn rather than drawn dead. The
+                           readiness message it sits beside still names the
+                           gap, and the banner above still names the step to
+                           clear first — so nothing is hidden, only the false
+                           promise of a one-click fix that is not available
+                           yet. -->
                       <button
-                        v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false"
+                        v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false && stepReachable[2]"
                         type="button"
                         class="font-bold whitespace-nowrap hover:underline"
                         :data-test="`jump-structure-${p.id}`"
@@ -2888,7 +3296,7 @@ watch(companyPlanType, (pt) => {
                         ไปขั้นที่ 2 ตั้งโครงสร้าง →
                       </button>
                       <button
-                        v-else-if="productReadiness(p).level === 'warn'"
+                        v-else-if="productReadiness(p).level === 'warn' && stepReachable[4]"
                         type="button"
                         class="font-bold whitespace-nowrap hover:underline"
                         :data-test="`jump-leader-${p.id}`"
@@ -2908,13 +3316,9 @@ watch(companyPlanType, (pt) => {
                   <button type="button" class="btn-secondary" data-test="add-category-rate" @click="openCreateRuleFormWithScope('category')">
                     + เพิ่มอัตราของหมวดหมู่
                   </button>
-                  <!-- TASK-037's guided builder, kept reachable from the step
-                       whose numbers it writes (it sets a product's plan type
-                       and then its rate). -->
-                  <button type="button" class="btn-secondary flex items-center gap-1.5" data-test="open-wizard" @click="openWizard()">
-                    <Icon name="sparkles" :size="14" />
-                    เปิดตัวช่วยตั้งค่า (Wizard)
-                  </button>
+                  <!-- TASK-037's "เปิดตัวช่วยตั้งค่า (Wizard)" stood here and
+                       was removed 2026-09-12: these two buttons and the row
+                       buttons above ARE the guided path now. -->
                 </div>
               </div>
             </template>
@@ -3005,32 +3409,54 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
-                CARDS 2 and 3 live on OTHER ROUTES and are linked, not
-                embedded. Said plainly on the card rather than discovered by
-                clicking: both screens carry unsaved state of their own, and
-                an admin halfway through step 4 deserves to know that the
-                click leaves this page.
+                ═══ CARD 2 — EMBEDDED, NOT LINKED (2026-09-12) ═══
+
+                Owner: "ยังจำเป็นต้องใช้หน้านี้ไหม เพราะเรานำไปรวมกันแล้ว" — asked
+                about /commission-split-settings, and the honest answer was
+                that it had NOT been merged: this spot held a link card, and
+                the switch still lived on a 59-line page that was nothing but
+                a shell around CommissionSplitSettingCard. A route, a menu
+                entry and a full page for one boolean is exactly what the step
+                redesign exists to remove, so the card moved here and the page
+                is gone (its URL now redirects to this screen).
+
+                Embedded rather than linked because the old reason for linking
+                does not apply to it: the warning about leaving mid-step was
+                written for screens carrying unsaved state of their own, and
+                this card's entire state is one toggle it loads and saves by
+                itself.
+
+                `readOnly` rather than letting the card render its own toggle:
+                Ability::SettingsCommissionSplitUpdate is Super-Admin-only, and
+                this screen's rule is that a control a Company Admin cannot use
+                is not shown at all.
               -->
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <RouterLink
-                  :to="{ name: 'commission-split-settings' }"
-                  class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
-                  data-test="link-split-settings"
-                >
-                  <p class="text-[15px] font-extrabold text-slate-900">คอมมิชชั่นตัวแทนร่วม</p>
-                  <p class="mt-1 text-[12.5px] text-slate-500">แบ่งค่าคอมของดีลเดียวให้ตัวแทนมากกว่าหนึ่งคน ตามสัดส่วนที่ตั้งไว้</p>
-                  <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คอมมิชชั่นตัวแทนร่วม" →</p>
-                </RouterLink>
-                <RouterLink
-                  :to="{ name: 'commission-withdrawals' }"
-                  class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
-                  data-test="link-withdrawal-settings"
-                >
-                  <p class="text-[15px] font-extrabold text-slate-900">ยอดขั้นต่ำในการเบิก</p>
-                  <p class="mt-1 text-[12.5px] text-slate-500">ตัวแทนต้องมียอดสะสมถึงเท่าไหร่จึงจะกดขอเบิกค่าคอมได้</p>
-                  <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คำขอเบิกค่าคอม" →</p>
-                </RouterLink>
+              <div data-test="split-setting-embedded">
+                <CommissionSplitSettingCard
+                  :key="effectiveCompanyId ?? 'own'"
+                  :company-id="effectiveCompanyId"
+                  :is-super-admin="isSuperAdmin"
+                  :read-only="!canEditCommissionConfig"
+                />
               </div>
+
+              <!--
+                CARD 3 STAYS A LINK, and the difference from card 2 is the
+                point: "คำขอเบิกค่าคอม" is a working screen an admin uses to
+                approve real withdrawals — the minimum is one field on it, not
+                the whole of it. Pulling that field over here would leave two
+                places to change one number. Said plainly on the card rather
+                than discovered by clicking.
+              -->
+              <RouterLink
+                :to="{ name: 'commission-withdrawals' }"
+                class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
+                data-test="link-withdrawal-settings"
+              >
+                <p class="text-[15px] font-extrabold text-slate-900">ยอดขั้นต่ำในการเบิก</p>
+                <p class="mt-1 text-[12.5px] text-slate-500">ตัวแทนต้องมียอดสะสมถึงเท่าไหร่จึงจะกดขอเบิกค่าคอมได้</p>
+                <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คำขอเบิกค่าคอม" →</p>
+              </RouterLink>
 
               <!-- Carried over from the setup hub the overview tab used to
                    host, so the entry point does not disappear with the tab. -->
@@ -3064,8 +3490,36 @@ watch(companyPlanType, (pt) => {
           ← ขั้นที่ {{ prevStep }} {{ stepLabel(prevStep!) }}
         </button>
         <div v-if="nextStep" class="ml-auto flex items-center gap-3.5">
-          <span class="text-[12.5px] text-slate-400">ขั้นถัดไป:</span>
-          <button type="button" class="btn-primary" data-test="step-next" @click="goToStep(nextStep!)">
+          <!-- Disabled, and SAYING SO in words, rather than silently doing
+               nothing: "the button did nothing" is the same complaint as
+               "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง" in a different costume. The
+               button keeps the next step's NAME — that is the answer this
+               footer exists to give — and the reason is printed beside it.
+
+               Natively `disabled` here, unlike the step tabs above, and the
+               difference is not an oversight. This button is a SHORTCUT to a
+               move the tab bar also offers; the tab is the move itself. A
+               dropped shortcut costs a keyboard user nothing, because the tab
+               is still there to focus and still announces its own lock — so
+               here the strongest refusal the platform has is the right one,
+               and up there it would hide the explanation. -->
+          <span
+            v-if="nextStepBlockedReason"
+            class="text-[12.5px] font-bold text-amber-700"
+            data-test="step-next-blocked"
+          >
+            🔒 {{ nextStepBlockedReason }}
+          </span>
+          <span v-else class="text-[12.5px] text-slate-400">ขั้นถัดไป:</span>
+          <button
+            type="button"
+            class="btn-primary"
+            :class="nextStepBlockedReason ? 'opacity-50 cursor-not-allowed' : ''"
+            :disabled="!!nextStepBlockedReason"
+            :title="nextStepBlockedReason || undefined"
+            data-test="step-next"
+            @click="goToStep(nextStep!)"
+          >
             ขั้นที่ {{ nextStep }} {{ stepLabel(nextStep!) }} →
           </button>
         </div>
@@ -3152,7 +3606,7 @@ watch(companyPlanType, (pt) => {
             <div>
               <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
               <select v-model="overrideForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                <option value="percentage">% ของยอดขาย</option>
+                <option value="percentage">{{ percentageOptionLabel }}</option>
                 <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
               </select>
             </div>
@@ -3229,7 +3683,7 @@ watch(companyPlanType, (pt) => {
             <div v-if="showRuleFormRateTypeSelector">
               <label class="text-sm font-bold text-slate-500">รูปแบบอัตรา</label>
               <select v-model="ruleForm.rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" @change="recheckRuleCap">
-                <option value="percentage">% ของยอดขาย</option>
+                <option value="percentage">{{ percentageOptionLabel }}</option>
                 <option value="fixed_satang">จำนวนคงที่ (บาท)</option>
               </select>
             </div>
@@ -3248,7 +3702,7 @@ watch(companyPlanType, (pt) => {
               <!-- TASK-197 §3.4 — when the selector above is hidden (locked-in
                    product format), tell the admin which unit their number
                    means instead of leaving them to guess. -->
-              <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ rateTypeLabels[effectiveRuleFormRateType] }}</p>
+              <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ effectiveRuleFormRateType === 'percentage' ? percentageOptionLabel : rateTypeLabels.fixed_satang }}</p>
               <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
             </div>
             <div>
@@ -3470,190 +3924,21 @@ watch(companyPlanType, (pt) => {
               <p class="text-xs text-slate-400 mt-1">
                 อิงตามกฎ: {{ ruleScopeLabel(simulateResult.rule) }} · {{ formatRate(simulateResult.rule.rate_type, simulateResult.rule.rate_value) }}
               </p>
+              <!-- Only shown on a PV company: on 'price' the base IS the
+                   figure the admin just typed, and repeating it back would be
+                   noise. -->
+              <p v-if="simulateResult.basis === 'pv'" class="text-xs font-bold text-brand-600 mt-1" data-test="simulate-basis">
+                คิดจาก {{ formatSatang(simulateResult.baseSatang) }}
+                <span v-if="simulateProduct.pv_satang === null || simulateProduct.pv_satang === undefined" class="text-amber-700">
+                  (สินค้านี้ยังไม่ได้กำหนด PV — ระบบใช้ราคาขายไปก่อน)
+                </span>
+                <span v-else>(PV ของสินค้า)</span>
+              </p>
             </template>
             <p v-else class="text-xs text-rose-600">ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้กับสินค้านี้</p>
             <p class="text-xs text-slate-400 mt-2">
               * ตัวอย่างนี้แสดงเฉพาะคอมมิชชั่นทางตรงจากยอดขาย ไม่รวมโครงสร้าง Override/Matrix/Generation/อันดับ ซึ่งคำนวณจริงที่ฝั่งเซิร์ฟเวอร์เมื่อมีการขายจริงเท่านั้น
             </p>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ตัวช่วยตั้งค่าคอมมิชชั่นสินค้า (Setup Wizard, TASK-037) — opened from step 3 -->
-    <div v-if="wizardOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4" @click.self="closeWizard">
-      <div class="w-full max-w-lg bg-white rounded-2xl shadow-lg p-5 max-h-[90vh] overflow-y-auto">
-        <div class="flex items-center justify-between mb-3">
-          <p class="text-sm font-bold text-slate-900">ตัวช่วยตั้งค่าคอมมิชชั่นสินค้า</p>
-          <button class="text-slate-400 hover:text-slate-600" @click="closeWizard">
-            <Icon name="x" :size="18" />
-          </button>
-        </div>
-        <div class="flex items-center gap-1.5 mb-4">
-          <div v-for="s in [1, 2, 3, 4]" :key="s" class="h-1.5 flex-1 rounded-full" :class="s <= wizardStep ? 'bg-brand-600' : 'bg-slate-200'"></div>
-        </div>
-
-        <!-- Step 1: เลือกสินค้า + ยืนยันรูปแบบแผน -->
-        <div v-if="wizardStep === 1" class="space-y-3">
-          <div>
-            <label class="text-sm font-bold text-slate-500">สินค้า</label>
-            <select v-model="wizardProductId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="" disabled>เลือกสินค้า</option>
-              <!-- TASK-245 — the wizard's first step writes the product's plan
-                   type and its last writes a commission rule, so a product it
-                   may not do EITHER to has no business in the list. -->
-              <option v-for="p in byCompany(products).filter(canSetCommission)" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
-          </div>
-          <!-- TASK-198 — this product's commission_rate_type is already locked
-               to fixed_satang by another form (TASK-197 §2.2); the wizard's
-               rate-entry step only ever submits 'percentage', so letting the
-               admin continue would just 422 at the end. Block here instead of
-               at submit time. -->
-          <div v-if="wizardProduct && wizardProductBlockedFixedSatang" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 space-y-2">
-            <p>สินค้านี้ตั้งค่าคอมมิชชั่นเป็นแบบจำนวนเงินคงที่ (บาท) แล้ว ใช้ Wizard นี้ไม่ได้ กรุณาไปที่ฟอร์ม "ตั้งอัตราคอมมิชชั่น" ของสินค้านี้แทน</p>
-            <button class="font-bold hover:underline" @click="wizardGoToProductRateForm">ไปที่ฟอร์มตั้งอัตราคอมมิชชั่น →</button>
-          </div>
-          <div v-else-if="wizardProduct">
-            <label class="text-sm font-bold text-slate-500">รูปแบบแผนคอมมิชชั่น</label>
-            <!-- TASK-245 — the plan type lives on the PRODUCT row, so changing
-                 it is PUT /products/{id}, which is refused for a shared or
-                 catalog-linked product. The rest of the wizard (the rate, and
-                 the structure it sits in) is this company's own and carries on
-                 — so the field is shown read-only rather than the wizard being
-                 taken away. -->
-            <select
-              v-if="canEditPlanType(wizardProduct)"
-              v-model="wizardPlanChoice"
-              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
-            >
-              <option value="inherit">สืบทอดจากบริษัท{{ wizardProduct.effective_plan_type ? ' (' + planTypeLabels[wizardProduct.effective_plan_type] + ')' : '' }}</option>
-              <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }} (กำหนดเฉพาะสินค้านี้)</option>
-            </select>
-            <template v-else>
-              <p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-700">
-                {{ wizardProduct.effective_plan_type ? planTypeLabels[wizardProduct.effective_plan_type] : 'สืบทอดจากบริษัท' }}
-              </p>
-              <p class="mt-1 text-[11px] text-slate-400">รูปแบบแผนของสินค้ากลางตั้งโดย Super Admin — อัตราคอมมิชชั่นในขั้นถัดไปยังเป็นของบริษัทคุณตามเดิม</p>
-            </template>
-          </div>
-          <div v-if="wizardPlanTypeError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ wizardPlanTypeError }}</div>
-          <div v-if="!wizardProductBlockedFixedSatang" class="flex justify-end">
-            <button :disabled="!wizardProduct || wizardSavingPlanType" class="btn-primary" @click="wizardConfirmProductAndPlan">
-              {{ wizardSavingPlanType ? 'กำลังบันทึก...' : 'ถัดไป' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Step 2: อัตราคอมมิชชั่น (flat-rate ต่อสินค้า, ADR-035) -->
-        <div v-else-if="wizardStep === 2" class="space-y-3">
-          <p class="text-xs text-slate-400">
-            ใส่อัตรา % สำหรับสินค้านี้ (เว้นว่างได้ถ้ายังไม่ตั้งตอนนี้) — ต้องการอัตราคงที่ (บาท) แทน % ให้ปิด Wizard แล้วใช้ "+ เพิ่มอัตราของสินค้า" ในขั้นที่ 3 แทน
-          </p>
-          <div class="flex items-center gap-3">
-            <span class="text-sm font-bold text-slate-700 w-28 shrink-0">อัตราคอมมิชชั่น</span>
-            <input v-model="wizardRateInput" type="number" min="0" step="0.01" placeholder="% เช่น 10" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-          </div>
-          <div v-if="wizardRateError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ wizardRateError }}</div>
-          <div class="flex justify-between">
-            <button class="btn-secondary" @click="wizardStep = 1">ย้อนกลับ</button>
-            <button :disabled="wizardSavingRates" class="btn-primary" @click="wizardSaveRates">
-              {{ wizardSavingRates ? 'กำลังบันทึก...' : 'ถัดไป' }}
-            </button>
-          </div>
-        </div>
-
-        <!-- Step 3: การตั้งค่าระดับบริษัท (เฉพาะแผนที่ต้องการ) -->
-        <div v-else-if="wizardStep === 3" class="space-y-3">
-          <div class="px-3 py-2 rounded-lg bg-amber-50 text-amber-700 text-xs">
-            {{ wizardEffectivePlanType ? planTypeLabels[wizardEffectivePlanType] : '' }} ต้องมีค่าตั้งไว้ระดับบริษัท — การแก้ไขนี้จะมีผลกับสินค้าอื่นที่ใช้แผนเดียวกันด้วย
-          </div>
-
-          <template v-if="!wizardStructureEditMode">
-            <p class="text-sm text-slate-600">มีค่าตั้งไว้อยู่แล้วในระดับบริษัท ใช้ค่าเดิมต่อได้เลย หรือแก้ไขถ้าต้องการ</p>
-            <button class="text-xs font-bold text-brand-600 hover:underline" @click="wizardStructureEditMode = true">แก้ไขค่า</button>
-          </template>
-
-          <template v-else>
-            <div v-if="wizardEffectivePlanType === 'matrix'" class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">ความกว้าง (Width)</label>
-                <input v-model="matrixForm.width" type="number" min="1" max="100" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">ความลึก (Depth)</label>
-                <input v-model="matrixForm.depth" type="number" min="1" max="100" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-            </div>
-            <div v-else-if="wizardEffectivePlanType === 'binary'" class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">อัตรา Matched (%)</label>
-                <input v-model="binaryForm.matched_rate_value_input" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">รอบคำนวณ</label>
-                <select v-model="binaryForm.cycle_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="weekly">รายสัปดาห์</option>
-                  <option value="biweekly">ทุก 2 สัปดาห์</option>
-                  <option value="monthly">รายเดือน</option>
-                </select>
-              </div>
-            </div>
-            <div v-else-if="wizardEffectivePlanType === 'stairstep_breakaway'" class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">หน้าต่างคำนวณยอดย้อนหลัง (วัน)</label>
-                <input v-model="rankSettingsForm.trailing_window_days" type="number" min="1" max="3650" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <div>
-                <label class="text-sm font-bold text-slate-500">ความถี่คำนวณอันดับใหม่</label>
-                <select v-model="rankSettingsForm.recalculation_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-                  <option value="daily">รายวัน</option>
-                  <option value="weekly">รายสัปดาห์</option>
-                  <option value="monthly">รายเดือน</option>
-                </select>
-              </div>
-              <p class="col-span-2 text-xs text-slate-400">บันไดอันดับแต่ละขั้นตั้งเพิ่มเติมได้ที่ขั้นที่ 2 → ชิป "อันดับ (Stairstep)"</p>
-            </div>
-            <div v-else-if="wizardEffectivePlanType === 'generation'" class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">ความลึกสูงสุด (Generation)</label>
-                <input v-model="generationSettingsForm.max_generation_depth" type="number" min="1" max="50" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-              <p class="col-span-2 text-xs text-slate-400">อัตราตาม Generation แต่ละขั้นตั้งเพิ่มเติมได้ที่ขั้นที่ 2 → ชิป "Generation"</p>
-            </div>
-            <div v-else-if="wizardEffectivePlanType === 'affiliate'" class="grid grid-cols-2 gap-3">
-              <div>
-                <label class="text-sm font-bold text-slate-500">หน้าต่างนับเครดิต (วัน)</label>
-                <input v-model="affiliateForm.attribution_window_days" type="number" min="1" max="3650" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
-              </div>
-            </div>
-          </template>
-
-          <div v-if="wizardStructureError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ wizardStructureError }}</div>
-          <div class="flex justify-between">
-            <button class="btn-secondary" @click="wizardStep = 2">ย้อนกลับ</button>
-            <div class="flex gap-2">
-              <button v-if="!wizardStructureEditMode" class="btn-secondary" @click="wizardSkipStructure">ใช้ค่าเดิม</button>
-              <button v-else :disabled="wizardSavingStructure" class="btn-primary" @click="wizardSaveStructure">
-                {{ wizardSavingStructure ? 'กำลังบันทึก...' : 'บันทึกและถัดไป' }}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Step 4: สรุป -->
-        <div v-else-if="wizardStep === 4" class="space-y-3">
-          <div class="flex items-center gap-2 text-emerald-600">
-            <Icon name="check_circle" :size="20" />
-            <p class="text-sm font-bold">ตั้งค่าเสร็จเรียบร้อย</p>
-          </div>
-          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm">
-            <p class="font-bold text-slate-900">{{ wizardProduct?.name }} — {{ wizardEffectivePlanType ? planTypeLabels[wizardEffectivePlanType] : '' }}</p>
-            <p v-if="wizardSummaryRate" class="mt-2 text-xs text-slate-500">อัตราคอมมิชชั่น: {{ formatRate(wizardSummaryRate.rate_type, wizardSummaryRate.rate_value) }}</p>
-            <p v-else class="text-xs text-slate-400 mt-2">ยังไม่ได้ตั้งอัตราคอมมิชชั่นสำหรับสินค้านี้</p>
-          </div>
-          <div class="flex justify-end">
-            <button class="btn-primary" @click="closeWizard">เสร็จสิ้น</button>
           </div>
         </div>
       </div>

@@ -42,6 +42,31 @@ class UpdateProductRequest extends FormRequest
             'category_id' => ['sometimes', 'integer', $this->taxonomyRule('product_categories', $companyId)],
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'price_satang' => ['sometimes', 'required', 'integer', 'min:0'],
+            /*
+             * 2026-09-12 — PV / commissionable value, satang scale (BR-3).
+             *
+             * SUPER ADMIN ONLY, and prohibited rather than silently
+             * stripped for a Company Admin. This is commission
+             * configuration: the owner's 2026-09-11 decision moved every
+             * commission setting behind Super Admin, and PV decides what
+             * a percentage is a percentage of, which is as load-bearing
+             * as the percentage itself. A quietly-ignored field would
+             * show a Company Admin a saved form and a number that never
+             * changed — the worst of the three possible behaviours, and
+             * the same reasoning CommissionLedger uses for throwing
+             * rather than returning false.
+             *
+             * Explicit null clears it back to "not set", which the
+             * readiness banner then reports — see the pv_satang migration
+             * for why null and 0 must stay different.
+             */
+            'pv_satang' => [
+                'sometimes',
+                'nullable',
+                Rule::prohibitedIf(fn () => ! $this->user()->isSuperAdmin()),
+                'integer',
+                'min:0',
+            ],
             'description' => $this->richTextRules(15000),
             'spec_description' => $this->richTextRules(15000), // ADR-008 — free-text spec narrative, additive alongside description
             'is_active' => ['sometimes', 'boolean'],

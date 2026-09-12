@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CommissionBasis;
 use App\Enums\CommissionPlanType;
 use App\Models\Concerns\HasTrackedLink;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -34,6 +35,14 @@ class Company extends Model
         'slug',
         'is_active',
         'commission_plan_type',
+        // 2026-09-12 — the second half of "how does this company pay":
+        // commission_plan_type says WHO is paid, this says what a
+        // percentage is a percentage OF (the sale price, or the product's
+        // PV). Defaults to 'price' for every company that never touches
+        // it. Never read this column directly from calculation code — go
+        // through CommissionBasisResolver, which owns the missing-PV
+        // fallback that must not be duplicated.
+        'commission_basis',
         // ADR-017 (TASK-054) — BR-7 admin-editable payment collection
         // config, shown on the public /pay/{token} page. All nullable.
         'payment_promptpay_id',
@@ -70,6 +79,7 @@ class Company extends Model
             // read back from MySQL is never a numeric string in comparisons.
             'min_withdrawal_satang' => 'integer',
             'commission_plan_type' => CommissionPlanType::class,
+            'commission_basis' => CommissionBasis::class,
             // TASK-056 P2 bugfix — deliberately NOT in $fillable: only
             // ClientCategoryService::ensureDefaults() ever writes this, a
             // client request must never be able to set/clear it directly.

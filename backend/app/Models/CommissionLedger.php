@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CommissionBasis;
 use App\Enums\CommissionEarnedVia;
 use App\Enums\CommissionRateType;
 use App\Enums\PaymentStatus;
@@ -111,6 +112,14 @@ class CommissionLedger extends Model
         // referrals.
         'sale_price_satang_at_time',
         'applied_price_promotion_id_at_time',
+        // 2026-09-12 — which base this row's rate was applied to, and the
+        // exact figure. On a PV company these differ from
+        // sale_price_satang_at_time, and without them the row's own
+        // arithmetic stops checking out in a table BR-4 forbids anyone
+        // from correcting. NULL on every row written before that date,
+        // which reads as 'price' — see the migration.
+        'commission_basis_at_time',
+        'commission_base_satang_at_time',
         'rate_type_applied',
         'rate_applied',
         'amount_satang',
@@ -140,6 +149,8 @@ class CommissionLedger extends Model
             'rate_applied' => 'integer',
             'amount_satang' => 'integer',
             'sale_price_satang_at_time' => 'integer',
+            'commission_basis_at_time' => CommissionBasis::class,
+            'commission_base_satang_at_time' => 'integer',
             'payment_status' => PaymentStatus::class,
             'paid_at' => 'datetime',
             'earned_via' => CommissionEarnedVia::class,

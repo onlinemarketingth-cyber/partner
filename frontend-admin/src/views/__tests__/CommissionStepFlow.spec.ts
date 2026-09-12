@@ -246,19 +246,198 @@ describe('CommissionPlansView — the four steps are named and in order', () => 
     expect(wrapper.text()).toContain('ตัวแทนผู้ขายได้กี่เปอร์เซ็นต์')
   })
 
-  it('never disables a step tab — the order is advice, not a gate', async () => {
+  it('opens every step once nothing is left incomplete', async () => {
     /*
-     * An admin who came back only to add a leader rate must not be made to
-     * re-walk steps 1–3, and a click that silently does nothing cannot explain
-     * itself. The pills carry the "you are not finished" message instead.
+     * The counterpart to the gating tests below, and the reason they are not
+     * simply "steps 2–4 are always locked": with a company picked, a plan that
+     * needs no structure and every product resolving to a rate, there is
+     * nothing in front of any step, so all four open. A gate that never opens
+     * would pass every "step 4 is locked" assertion in this file.
      */
-    const wrapper = await mountView()
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
-    for (const step of [1, 2, 3, 4]) {
-      expect(wrapper.get(`[data-test="step-tab-${step}"]`).attributes('disabled')).toBeUndefined()
+    for (const step of [1, 2, 3, 4] as const) {
+      expect(wrapper.get(`[data-test="step-tab-${step}"]`).attributes('aria-disabled')).toBe('false')
     }
 
     await goToStep(wrapper, 4)
+    expect(wrapper.find('[data-test="step-panel-4"]').exists()).toBe(true)
+  })
+})
+
+/**
+ * ── 2026-09-12: THE ORDER IS ENFORCED, NOT DISPLAYED ──
+ *
+ * The owner looked at the deployed 4-step screen and said: "หน้านี้มี tab แล้ว
+ * แต่ยังคลิ๊กเลือกได้ทุก tab เลย ตามที่คุยไว้ต้องทำทีละขั้นตอน".
+ *
+ * The shipped version had made the opposite bet deliberately — the tabs were
+ * numbered and pilled but freely clickable, on the reasoning that "an order
+ * the UI shows but does not enforce is a hint, and a hint cannot strand an
+ * admin who genuinely needs step 4 first". That bet lost. A step-4 leader rate
+ * entered while step 3 has products with no agent rate at all is a carefully
+ * configured share of a commission that nobody is being paid — so the tabs are
+ * now a gate, and this block is what keeps it one.
+ *
+ * Four properties, each of which a plausible "cleanup" would break on its own:
+ *
+ *   1. A STEP PAST THE FIRST INCOMPLETE ONE DOES NOT OPEN. Not "looks muted":
+ *      the click has to fail to swap the panel, because the panel is the thing
+ *      that lets the wrong work be done.
+ *   2. GOING BACK IS NEVER BLOCKED. This is the half the old design was right
+ *      about, and the half most likely to be lost by a gate written as
+ *      "activeStep can only increase". Changing an answer on a finished step
+ *      must always be one click away.
+ *   3. A LOCK EXPLAINS ITSELF. A disabled control with no reason is the same
+ *      dead end as six silent peer tabs — the original complaint in a new
+ *      costume. The lock names the step to finish, by number and by name.
+ *   4. A READ-ONLY VIEWER IS NOT GATED AT ALL. See that describe block for why
+ *      this is not an inconsistency but the one thing that stops the gate from
+ *      locking a whole role out of a screen it may only read.
+ */
+describe('CommissionPlansView — a step opens only when the ones before it are done', () => {
+  it('does not open step 4 while step 3 has a product with no rate', async () => {
+    /*
+     * The owner's sentence, as an assertion. The fixture is the ordinary bad
+     * state: a company is picked (step 1 done), the plan is Unilevel so there
+     * is no structure to set (step 2 done), and the single product resolves to
+     * nothing (step 3 ยังไม่ครบ). Step 4 must not open — and the proof is the
+     * PANEL, not the styling: a muted tab that still swaps the panel on click
+     * would satisfy every visual assertion and none of the point.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    expect(wrapper.get('[data-test="step-tab-4"]').attributes('aria-disabled')).toBe('true')
+
+    await goToStep(wrapper, 4)
+
+    expect(wrapper.find('[data-test="step-panel-4"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="step-panel-1"]').exists()).toBe(true)
+  })
+
+  it('keeps step 4 behind step 3 even though step 4 is ข้ามได้', async () => {
+    /*
+     * "Optional" answers "may I leave this empty", never "may I arrive here
+     * early" — and the pill saying ข้ามได้ is exactly what would tempt someone
+     * to special-case step 4 out of the gate. Step 4 is where the LEADER is
+     * paid; step 3 is where the agent who closed the deal is paid. Skipping
+     * forward to split a commission that does not exist is the trip this
+     * refuses.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    expect(pill(wrapper, 4)).toBe('ข้ามได้')
+    expect(wrapper.get('[data-test="step-tab-4"]').attributes('aria-disabled')).toBe('true')
+  })
+
+  it('locks every step after the first incomplete one, not just the next', async () => {
+    /*
+     * With no company chosen, step 1 itself is incomplete, so 2, 3 AND 4 are
+     * all behind it. A gate implemented as "the step after the current one"
+     * would leave steps 3 and 4 open here and pass the test above.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+    useActiveCompanyStore().selectedId = null
+    await flushPromises()
+
+    expect(pill(wrapper, 1)).toBe('ยังไม่ครบ')
+    for (const step of [2, 3, 4] as const) {
+      expect(wrapper.get(`[data-test="step-tab-${step}"]`).attributes('aria-disabled')).toBe('true')
+    }
+  })
+
+  it('lets a finished step be reopened, so changing an answer is never blocked', async () => {
+    /*
+     * The one thing the old free-for-all got right, kept explicitly. An admin
+     * who reaches step 3 and realises they picked the wrong company, or the
+     * wrong plan, must be able to walk back and fix it — a gate that only
+     * counts upwards turns a typo on step 1 into a reason to reload the page.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 3)
+    expect(wrapper.find('[data-test="step-panel-3"]').exists()).toBe(true)
+
+    expect(wrapper.get('[data-test="step-tab-1"]').attributes('aria-disabled')).toBe('false')
+    await goToStep(wrapper, 1)
+    expect(wrapper.find('[data-test="step-panel-1"]').exists()).toBe(true)
+
+    // ...and the back button in the footer, which is the same move by another
+    // control, is never disabled either.
+    await goToStep(wrapper, 3)
+    expect(wrapper.get('[data-test="step-back"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-test="step-back"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="step-panel-2"]').exists()).toBe(true)
+  })
+
+  it('names the step that has to be finished first, on the locked tab itself', async () => {
+    /*
+     * The lock's whole justification. "ขั้นที่ 3" alone would make the admin
+     * count tabs to find out which step that is, so the hint carries the
+     * NUMBER AND THE NAME — the same wording in the tab and in the title, so a
+     * touch user (no hover, no tooltip) is told as much as a mouse user.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    const tab = wrapper.get('[data-test="step-tab-4"]')
+    expect(wrapper.get('[data-test="step-lock-hint-4"]').text())
+      .toContain('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
+    expect(tab.attributes('title')).toBe('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
+    expect(wrapper.find('[data-test="step-lock-icon-4"]').exists()).toBe(true)
+
+    // A reachable step carries neither, so the padlock keeps meaning something.
+    expect(wrapper.find('[data-test="step-lock-hint-2"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="step-tab-2"]').attributes('title')).toBeUndefined()
+  })
+
+  it('leaves the locked tab focusable rather than natively disabled', async () => {
+    /*
+     * Deliberate, and the sort of thing a later "use the real disabled
+     * attribute" patch would undo: a natively disabled button suppresses its
+     * own tooltip and leaves the tab order, so the one control that most needs
+     * to explain itself would be the one nobody can reach to read. It is
+     * aria-disabled + a refusal in goToStep() instead.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    expect(wrapper.get('[data-test="step-tab-4"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="step-tab-4"]').attributes('aria-disabled')).toBe('true')
+  })
+})
+
+describe('CommissionPlansView — the next button will not walk into a locked step', () => {
+  it('disables itself while the step you are on is not finished', async () => {
+    /*
+     * The footer is the other way into a step, and a gate on the tabs alone
+     * would be a gate with a door beside it. Disabled AND saying so: "the
+     * button did nothing" is the same complaint as
+     * "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง" wearing a different hat.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    await goToStep(wrapper, 3)
+
+    const next = wrapper.get('[data-test="step-next"]')
+    expect(next.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="step-next-blocked"]').text())
+      .toContain('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
+    // It still NAMES step 4 — the refusal is printed beside the answer, not
+    // instead of it, because the name is what TASK-034 added this footer for.
+    expect(next.text()).toContain('ขั้นที่ 4 ส่วนเพิ่มเติม')
+  })
+
+  it('advances normally once the current step is finished', async () => {
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 3)
+
+    const next = wrapper.get('[data-test="step-next"]')
+    expect(next.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="step-next-blocked"]').exists()).toBe(false)
+
+    await next.trigger('click')
+    await flushPromises()
     expect(wrapper.find('[data-test="step-panel-4"]').exists()).toBe(true)
   })
 })
@@ -327,7 +506,10 @@ describe('CommissionPlansView — the next button names the next step', () => {
   })
 
   it('offers no next button on the last step', async () => {
-    const wrapper = await mountView()
+    // Fully configured on purpose: step 4 is only REACHABLE once step 3 is
+    // done (2026-09-12's gate), so a fixture with no rates would never get
+    // here and the assertion would pass for the wrong reason.
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 4)
 
@@ -483,6 +665,48 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
 
     expect(wrapper.find('[data-test="step-panel-3"]').exists()).toBe(true)
   })
+
+  it('cannot jump into a locked step when the server and the screen disagree', async () => {
+    /*
+     * The jump is the one control that could land on a locked tab, because it
+     * is aimed by a DIFFERENT answer from the one the locks are computed from.
+     * That split is on purpose (see the block above: the banner is the
+     * server's verdict so it matches every other page; the pills stay local so
+     * they can say what is wrong with a specific row) — and two sources
+     * allowed to disagree eventually will, over a rate that expired at
+     * midnight or a product added in another tab.
+     *
+     * This fixture forces that disagreement: the server names step 4, while
+     * the rows this screen loaded still leave step 3 incomplete. Unclamped,
+     * the button would say "ไปที่ขั้นที่ 4" and then do nothing at all, in
+     * front of the one person who opened this screen to fix something. It is
+     * clamped to the earliest incomplete step instead — which is both
+     * reachable and the step they would have had to clear anyway.
+     */
+    const wrapper = await mountView({
+      products: [product()],
+      rules: [],
+      readiness: {
+        state: 'incomplete',
+        blocking_step: 4,
+        products_total: 1,
+        products_covered: 1,
+        issues: [{ code: 'leader_rate_missing', label: 'สินค้า 1 รายการยังไม่มีอัตราหัวหน้าทีม', count: 1 }],
+        can_fix: true,
+      },
+    })
+
+    // The banner still reports the server's sentence...
+    expect(wrapper.get('[data-test="readiness-detail"]').text()).toContain('ติดอยู่ที่ขั้นที่ 4')
+    // ...but the button promises only the step it can actually open.
+    expect(wrapper.get('[data-test="readiness-jump"]').text()).toContain('ไปที่ขั้นที่ 3')
+
+    await wrapper.get('[data-test="readiness-jump"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="step-panel-3"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="step-panel-4"]').exists()).toBe(false)
+  })
 })
 
 describe('CommissionPlansView — step 2 shows the plan without switching to it', () => {
@@ -591,13 +815,50 @@ describe('CommissionPlansView — step 3 says which layer each rate came from', 
 })
 
 describe('CommissionPlansView — step 4 is honest about leaving the page', () => {
-  it('links the two settings that live on other routes and says so', async () => {
+  it('links the setting that lives on a working screen, and says so', async () => {
+    /*
+     * 2026-09-12 — this used to assert TWO link cards. The co-agent split was
+     * one of them, and the owner's question about its page ("ยังจำเป็นต้องใช้
+     * หน้านี้ไหม") ended with it being embedded here instead — that page was a
+     * shell around one component and one boolean.
+     *
+     * The withdrawal minimum stays a link, and the difference is the reason
+     * this test still exists: "คำขอเบิกค่าคอม" is a screen an admin uses to
+     * approve real withdrawals, and the minimum is one field on it. Pulling
+     * that field over here would leave two places to change one number.
+     */
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 4)
 
-    expect(wrapper.get('[data-test="link-split-settings"]').text()).toContain('ตั้งค่าที่หน้าจออื่น')
     expect(wrapper.get('[data-test="link-withdrawal-settings"]').text()).toContain('ตั้งค่าที่หน้าจออื่น')
+    expect(wrapper.find('[data-test="link-split-settings"]').exists()).toBe(false)
+  })
+
+  it('holds the co-agent split switch itself, rather than pointing at it', async () => {
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 4)
+
+    expect(wrapper.find('[data-test="split-setting-embedded"]').exists()).toBe(true)
+  })
+
+  it('hides the split switch controls from a Company Admin rather than 403ing them', async () => {
+    /*
+     * The hole this closed. On its own page the card rendered its toggle and
+     * save button for anybody who could reach the route — but the ability
+     * behind it (SettingsCommissionSplitUpdate) went Super-Admin-only on
+     * 2026-09-11, so a Company Admin pressing save got a 403 on a money
+     * switch. Moving the card into this screen brought it under this screen's
+     * rule, and `readOnly` is how the rule is applied.
+     */
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+    await goToStep(wrapper, 4)
+
+    expect(wrapper.get('[data-test="split-setting-embedded"]').text()).toContain('ติดต่อผู้ดูแลระบบ')
+    expect(wrapper.find('[data-test="split-setting-embedded"] form').exists()).toBe(false)
   })
 
   it('keeps the leader rate itself editable in place', async () => {
@@ -626,7 +887,9 @@ describe('CommissionPlansView — a Company Admin sees every step and no write c
     'add-company-default',
     'add-product-rate',
     'add-category-rate',
-    'open-wizard',
+    // 'open-wizard' was here until 2026-09-12; the Setup Wizard it opened was
+    // deleted from CommissionPlansView (a second write path onto the same
+    // numbers the four steps already write).
     'add-leader-rate',
   ]
 
@@ -680,5 +943,43 @@ describe('CommissionPlansView — a Company Admin sees every step and no write c
     const wrapper = await mountAsCompanyAdmin()
 
     expect(wrapper.find('[data-test="readiness-banner"]').exists()).toBe(true)
+  })
+
+  it('is not gated by the step order, because they cannot complete a step', async () => {
+    /*
+     * 2026-09-12's gate has exactly one exception, and this is it. Every
+     * control that would FINISH a step here is Super Admin's — the test above
+     * asserts all nine of them are hidden from a Company Admin — so a Company
+     * Admin can never make step 3 complete, and gating steps behind completion
+     * would lock them out of the entire screen permanently, for a reason that
+     * has nothing to do with them. They open this page to READ the rates their
+     * agents are paid under; there is no wrong order in which to read.
+     *
+     * The fixture is deliberately the WORST state — no rules at all, so every
+     * step past 1 would be locked for an editor — and none of it locks here.
+     * A change that "tidies up" the canEditCommissionConfig clause in
+     * stepReachable will fail on this test rather than in front of a customer.
+     */
+    useAuthStore().user = { id: 2, name: 'แอดมินบริษัท', role: 'company_admin', company: AIA } as never
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    // The state that would lock an editor out...
+    expect(pill(wrapper, 3)).toBe('ยังไม่ครบ')
+
+    // ...locks nothing here: no padlock, no aria-disabled, no hint, on any tab.
+    for (const step of [1, 2, 3, 4] as const) {
+      const tab = wrapper.get(`[data-test="step-tab-${step}"]`)
+      expect(tab.attributes('aria-disabled')).toBe('false')
+      expect(tab.attributes('title')).toBeUndefined()
+      expect(wrapper.find(`[data-test="step-lock-hint-${step}"]`).exists()).toBe(false)
+      expect(wrapper.find(`[data-test="step-lock-icon-${step}"]`).exists()).toBe(false)
+    }
+
+    // And the step furthest behind the gate genuinely opens.
+    await goToStep(wrapper, 4)
+    expect(wrapper.find('[data-test="step-panel-4"]').exists()).toBe(true)
+
+    // The footer agrees with the tabs — one rule, not two.
+    expect(wrapper.find('[data-test="step-next-blocked"]').exists()).toBe(false)
   })
 })

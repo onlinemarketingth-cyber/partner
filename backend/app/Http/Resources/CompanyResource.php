@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\CommissionBasis;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -18,6 +19,11 @@ class CompanyResource extends JsonResource
             'slug' => $this->slug,
             'is_active' => $this->is_active,
             'commission_plan_type' => $this->commission_plan_type?->value,
+            // 2026-09-12 — 'price' or 'pv'. Coalesced rather than made
+            // nullable in the payload: a company read back before the
+            // column existed is a price-basis company, and the screen must
+            // not have to know that.
+            'commission_basis' => ($this->commission_basis ?? CommissionBasis::Price)->value,
             // ADR-017 (TASK-054) — BR-7 admin-editable payment collection config.
             'payment_promptpay_id' => $this->payment_promptpay_id,
             'payment_bank_name' => $this->payment_bank_name,
