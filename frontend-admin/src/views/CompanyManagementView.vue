@@ -117,10 +117,27 @@ async function toggleActive(company: CompanyItem) {
   }
 }
 
+/**
+ * 2026-09-12 — writes through PUT /commission-settings, not PUT /companies.
+ *
+ * `commission_plan_type` left the companies resource that day. Two reasons,
+ * both recorded in full on CommissionSettingService: it is not the same
+ * question as "may you administer this company" (and borrowing that gate would
+ * hand the power to change who gets paid to anybody ever granted company
+ * administration), and while the write lived there, step 2 of the commission
+ * screen could only LINK here to change a plan — a bounce the owner reported
+ * as "ทำให้ UI สับสน".
+ *
+ * This screen keeps its dropdown: a platform owner looking at every tenant at
+ * once is a real view, and it is the same actor behind the same Ability. What
+ * changed is which door it knocks on, so there is exactly one.
+ */
 async function changePlanType(company: CompanyItem, planType: CommissionPlanType) {
   if (planType === company.commission_plan_type) return
   try {
-    await api.put(`/companies/${company.id}`, { commission_plan_type: planType })
+    // company_id is required here (the endpoint scopes a Super Admin by it),
+    // where PUT /companies/{id} carried the company in the path.
+    await api.put('/commission-settings', { company_id: company.id, commission_plan_type: planType })
     await loadCompanies()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'

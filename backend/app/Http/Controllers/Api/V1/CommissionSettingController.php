@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\CommissionBasis;
+use App\Enums\CommissionPlanType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Commission\UpdateCommissionSettingRequest;
 use App\Http\Resources\CommissionSettingResource;
@@ -10,8 +11,9 @@ use App\Services\Commission\CommissionSettingService;
 use Illuminate\Http\Request;
 
 /**
- * 2026-09-12 — "how is commission calculated for this company": the basis
- * (sale price or PV) and the plan type.
+ * 2026-09-12 — "how does this company pay": the plan type (who gets paid) and
+ * the basis (what a percentage is a percentage of). Both readable, both
+ * writable, one door each.
  *
  * Same shape as CommissionSplitSettingController and the other per-company
  * commission settings. It exists so the admin commission screen stops reading
@@ -54,9 +56,19 @@ class CommissionSettingController extends Controller
             ? $request->integer('company_id')
             : $request->user()->company_id;
 
-        return new CommissionSettingResource($service->updateBasis(
+        /*
+         * Each field is passed as null when ABSENT, never as a default. A
+         * request that carries only the plan type must not quietly re-assert a
+         * basis it never mentioned — on this endpoint that would mean one
+         * control silently overwriting the other's value.
+         */
+        $basis = $request->validated('commission_basis');
+        $planType = $request->validated('commission_plan_type');
+
+        return new CommissionSettingResource($service->update(
             $companyId,
-            CommissionBasis::from($request->validated('commission_basis')),
+            $basis === null ? null : CommissionBasis::from($basis),
+            $planType === null ? null : CommissionPlanType::from($planType),
             $request->user(),
         ));
     }

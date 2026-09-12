@@ -288,13 +288,27 @@ describe('CommissionPlansView — the lock note speaks to the reader it is about
   })
 })
 
-describe('CommissionPlansView — the plan type is shown, never edited, here', () => {
+describe("CommissionPlansView — the PRODUCT's plan type is shown, never edited, here", () => {
   /*
-   * The replacement for the two deleted wizard tests, and a narrower promise
-   * than they made: the screen still TELLS the admin which plan a product falls
-   * under (they cannot read a rate without knowing the plan it pays through),
-   * but it offers no way to change it, so there is no PUT /products/{id} left
-   * for ProductPolicy::update to refuse. Editing moved to ProductEditView.
+   * TWO DIFFERENT COLUMNS SHARE THIS NAME, and keeping them apart is what this
+   * block is for.
+   *
+   *   products.commission_plan_type   a per-product OVERRIDE, nullable.
+   *                                   Removed from this screen on 2026-09-12
+   *                                   (a company runs one plan and varies the
+   *                                   percentages); edited on ProductEditView,
+   *                                   Super Admin only.
+   *
+   *   companies.commission_plan_type  the company's plan. Edited HERE, on step
+   *                                   2, since later the same day — that is
+   *                                   what step 2 is FOR, and the link-out it
+   *                                   replaced was a dead end the owner
+   *                                   reported as "ทำให้ UI สับสน".
+   *
+   * So a bare "this screen never writes commission_plan_type" assertion, which
+   * is what stood here for a few hours, is now wrong in a way that would push
+   * somebody to delete the step-2 button to make it pass. The tests below say
+   * which column they mean.
    */
   const source = fs.readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'CommissionPlansView.vue'),
@@ -308,8 +322,26 @@ describe('CommissionPlansView — the plan type is shown, never edited, here', (
     expect(wrapper.get('[data-test="product-row-2"]').text()).toContain('แผน Unilevel')
   })
 
-  it('never writes a plan type from this screen', () => {
-    expect(source).not.toContain('commission_plan_type:')
+  it('never writes a plan type onto a PRODUCT from this screen', () => {
+    // The product write is covered exactly below (one PUT, one field, and
+    // that field is the PV); this is the same promise stated as the string a
+    // re-introduction would have to contain.
+    expect(source).not.toContain('/products/${p.id}`, { commission_plan_type')
+    // `function` is load-bearing: the note explaining WHERE canEditPlanType()
+    // used to live still mentions it by name, and a bare substring check
+    // would fail on the comment that exists to stop it being re-added.
+    expect(source).not.toContain('function canEditPlanType')
+  })
+
+  it("writes the COMPANY's plan type through commission's own endpoint", () => {
+    /*
+     * The positive half, and it belongs next to the negative one: without it,
+     * a future edit that deleted step 2's plan switch to "tidy up the plan
+     * type handling" would leave the test above passing and the screen unable
+     * to do the thing it exists for.
+     */
+    expect(source).toContain("'/commission-settings'")
+    expect(source).toContain('commission_plan_type: viewingPlanType.value')
   })
 
   it('writes exactly ONE product field from this screen, and it is the PV', () => {

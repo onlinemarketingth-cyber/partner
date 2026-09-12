@@ -1355,6 +1355,54 @@ async function loadCompanySettings(): Promise<void> {
  * before the server has taken it would let an admin walk away from a switch
  * that never happened.
  */
+const planSwitching = ref(false)
+const planSwitchError = ref('')
+
+/**
+ * Switch the company onto the plan currently being VIEWED (step 2's chips).
+ *
+ * 2026-09-12 — replaces the link-out to /companies. See the button's own
+ * comment in the template for the owner's report that produced it.
+ *
+ * Writes through the same endpoint and the same Ability as the basis
+ * (PUT /commission-settings), which is what let this become a button at all:
+ * the plan type used to be CompanyPolicy::update and therefore somebody
+ * else's screen.
+ *
+ * `companyPlanTypeFromServer` is assigned from the RESPONSE rather than from
+ * `viewingPlanType`. They should be the same value and the difference matters
+ * anyway: what the screen goes on to draw — which structural section step 2
+ * shows, which plan step 4 says pays the upline — has to be what the server
+ * actually stored, not what this function asked for.
+ */
+async function useViewedPlan(): Promise<void> {
+  const id = effectiveCompanyId.value
+  if (!id || planSwitching.value || viewingPlanType.value === companyPlanType.value) return
+
+  planSwitching.value = true
+  planSwitchError.value = ''
+  try {
+    const r = await commissionApi.put<{ data: { commission_plan_type?: CommissionPlanType | null } }>(
+      '/commission-settings',
+      withCompanyBody({ commission_plan_type: viewingPlanType.value }),
+    )
+    companyPlanTypeFromServer.value = r.data.commission_plan_type ?? null
+    /*
+     * The new plan's structural settings (Binary's cycle, Matrix's width,
+     * Generation's depth …) have never been fetched for this company, and
+     * step 2 is about to render that section. Without this the admin switches
+     * to Matrix and is shown an empty form that looks configured.
+     */
+    await loadReadinessProbe()
+    const tab = planTypeToTab[viewingPlanType.value]
+    if (tab) await ensureTabLoaded(tab)
+  } catch (e) {
+    planSwitchError.value = apiErrorMessage(e, 'เปลี่ยนแผนไม่สำเร็จ')
+  } finally {
+    planSwitching.value = false
+  }
+}
+
 async function setCommissionBasis(next: CommissionBasis): Promise<void> {
   const id = effectiveCompanyId.value
   if (!id || next === commissionBasis.value || basisSaving.value) return
@@ -2751,12 +2799,18 @@ watch(companyPlanType, (pt) => {
               message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนคอมมิชชั่น"
             />
             <template v-else>
+              <!-- px-9 (36px side padding), owner 2026-09-12. The six labels
+                   run from "Binary" to "พันธมิตร (Affiliate)", and at the old
+                   18px the long ones read as a cramped block of text rather
+                   than a pill. Vertical padding is unchanged — the complaint
+                   was about the sides — and the row still wraps, so wider
+                   chips cost layout nothing. -->
               <div class="flex flex-wrap gap-2.5">
                 <button
                   v-for="pt in planChipOrder"
                   :key="pt"
                   type="button"
-                  class="inline-flex items-center gap-2 text-[13.5px] rounded-full px-4.5 py-2.5 border transition-colors"
+                  class="inline-flex items-center gap-2 text-[13.5px] rounded-full px-9 py-2.5 border transition-colors"
                   :class="pt === companyPlanType
                     ? 'font-extrabold text-white bg-brand-600 border-brand-600'
                     : pt === viewingPlanType
@@ -2784,19 +2838,44 @@ watch(companyPlanType, (pt) => {
                   <p class="mt-1 text-[13px] text-slate-500">{{ planExplainers[viewingPlanType].how }}</p>
                   <p class="mt-2 text-[12.5px] font-bold text-brand-600">{{ planExplainers[viewingPlanType].affects }}</p>
                 </div>
-                <!-- Switching the company ONTO a plan is CompanyPolicy::update
-                     (Super Admin only) and lives on another screen, so this is
-                     a link-out and is hidden from anybody who would be refused
-                     when they got there. -->
-                <RouterLink
-                  v-if="canEditCommissionConfig"
-                  :to="{ name: 'company-management' }"
-                  class="btn-secondary shrink-0 h-9"
-                  data-test="change-plan-link"
+                <!--
+                  2026-09-12 (owner): "ผมกดเปลี่ยนแผน แล้วเด้งไปรูปที่ 1 ทำให้
+                  UI สับสน".
+
+                  This was a RouterLink to /companies, because switching a
+                  company onto a plan was CompanyPolicy::update and this screen
+                  could not perform it. That is a dead end dressed as a button:
+                  step 2's entire job is "which plan does this company run",
+                  and pressing its only action threw the admin onto a different
+                  screen to finish.
+
+                  The write moved to PUT /commission-settings
+                  (Ability::SettingsCommissionPlanUpdate), so the link is now
+                  the switch. It appears only on a plan the company is NOT on —
+                  on the current plan there is nothing to apply, and a button
+                  that re-saves the status quo is just a way to be unsure
+                  whether you pressed it.
+                -->
+                <button
+                  v-if="canEditCommissionConfig && viewingPlanType !== companyPlanType"
+                  type="button"
+                  class="btn-primary shrink-0 h-9"
+                  :disabled="planSwitching"
+                  data-test="use-this-plan"
+                  @click="useViewedPlan"
                 >
-                  เปลี่ยนแผน
-                </RouterLink>
+                  {{ planSwitching ? 'กำลังเปลี่ยน…' : `ใช้แผน ${planTypeLabels[viewingPlanType]}` }}
+                </button>
+                <span
+                  v-else-if="viewingPlanType === companyPlanType"
+                  class="shrink-0 text-[12.5px] font-extrabold text-brand-600"
+                  data-test="plan-in-use"
+                >
+                  แผนที่ใช้อยู่
+                </span>
               </div>
+
+              <p v-if="planSwitchError" class="text-[12.5px] font-bold text-rose-600" data-test="plan-switch-error">{{ planSwitchError }}</p>
 
               <div class="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
                 <Icon name="alert" :size="15" class="shrink-0 mt-0.5 text-amber-700" />

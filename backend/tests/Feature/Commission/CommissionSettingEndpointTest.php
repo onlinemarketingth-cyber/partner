@@ -131,22 +131,92 @@ class CommissionSettingEndpointTest extends TestCase
         $this->assertSame(CommissionBasis::Price, $company->fresh()->commission_basis);
     }
 
-    public function test_the_plan_type_cannot_be_written_here(): void
+    public function test_a_super_admin_may_switch_the_plan_type_here(): void
     {
-        // One column, one write door. The plan type is READ by this endpoint
-        // because the screen must show it, and changed on the companies
-        // resource where it already lives.
+        /*
+         * 2026-09-12 — this test asserted the OPPOSITE earlier the same day
+         * ("the plan type cannot be written here"), and the reversal is the
+         * decision, not a drift.
+         *
+         * The plan type lived on the companies resource, so step 2 of the
+         * commission screen — the screen whose entire job is "which plan does
+         * this company run" — could only offer a LINK to /companies. The owner
+         * pressed it, was thrown onto another screen, and reported it as
+         * "ทำให้ UI สับสน". The link existed only because the write was
+         * somewhere else; moving the write is what let it become a button.
+         */
         $company = Company::factory()->create(['commission_plan_type' => CommissionPlanType::Unilevel]);
 
         $this->actingAs(User::factory()->superAdmin()->create())
-            ->putJson(self::ENDPOINT, [
-                'company_id' => $company->id,
-                'commission_basis' => 'pv',
-                'commission_plan_type' => 'binary',
-            ])
+            ->putJson(self::ENDPOINT, ['company_id' => $company->id, 'commission_plan_type' => 'binary'])
+            ->assertOk()
+            ->assertJsonPath('data.commission_plan_type', 'binary');
+
+        $this->assertSame(CommissionPlanType::Binary, $company->fresh()->commission_plan_type);
+    }
+
+    public function test_writing_one_field_leaves_the_other_alone(): void
+    {
+        /*
+         * Step 2 has two separate controls on one endpoint, so this is the
+         * mistake that would be easy to make and invisible to catch: a plan
+         * switch that also re-asserts a default basis would silently move a PV
+         * company back onto price, and the admin would see only the thing they
+         * asked for.
+         */
+        $company = Company::factory()->create([
+            'commission_basis' => CommissionBasis::PointValue,
+            'commission_plan_type' => CommissionPlanType::Unilevel,
+        ]);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->putJson(self::ENDPOINT, ['company_id' => $company->id, 'commission_plan_type' => 'matrix'])
             ->assertOk();
 
+        $this->assertSame(CommissionBasis::PointValue, $company->fresh()->commission_basis, 'the basis was never mentioned and must not move');
+        $this->assertSame(CommissionPlanType::Matrix, $company->fresh()->commission_plan_type);
+    }
+
+    public function test_a_body_that_sets_neither_field_is_refused(): void
+    {
+        // An endpoint whose only job is to set these two must not accept a
+        // request that sets neither and report success — that is an admin
+        // walking away from a switch that never flipped.
+        $company = Company::factory()->create();
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->putJson(self::ENDPOINT, ['company_id' => $company->id])
+            ->assertStatus(422);
+    }
+
+    public function test_a_company_admin_may_not_switch_the_plan_type(): void
+    {
+        $company = Company::factory()->create(['commission_plan_type' => CommissionPlanType::Unilevel]);
+
+        $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $company->id]))
+            ->putJson(self::ENDPOINT, ['commission_plan_type' => 'binary'])
+            ->assertForbidden();
+
         $this->assertSame(CommissionPlanType::Unilevel, $company->fresh()->commission_plan_type);
+    }
+
+    public function test_switching_the_plan_type_is_audited(): void
+    {
+        // Same reasoning as the basis: it changes who is paid on every future
+        // sale, and the ledger rows already written do not move (BR-4), so the
+        // moment of the switch is the only thing that explains the difference.
+        $company = Company::factory()->create(['commission_plan_type' => CommissionPlanType::Unilevel]);
+        $admin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($admin)
+            ->putJson(self::ENDPOINT, ['company_id' => $company->id, 'commission_plan_type' => 'generation'])
+            ->assertOk();
+
+        $log = AuditLog::withoutGlobalScopes()->where('action', 'commission_plan_type.updated')->first();
+
+        $this->assertNotNull($log);
+        $this->assertSame('unilevel', $log->old_values['commission_plan_type']);
+        $this->assertSame('generation', $log->new_values['commission_plan_type']);
     }
 
     public function test_an_unknown_basis_is_refused(): void

@@ -39,12 +39,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
+const put = vi.fn()
 
 vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
     post: vi.fn(),
-    put: vi.fn(),
+    put: (...args: unknown[]) => put(...args),
     patch: vi.fn(),
     delete: vi.fn(),
     postForm: vi.fn(),
@@ -216,6 +217,8 @@ const pill = (w: Wrapper, step: number) => w.get(`[data-test="step-pill-${step}"
 
 beforeEach(() => {
   get.mockReset()
+  put.mockReset()
+  put.mockResolvedValue({ data: {} })
   useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
 })
 
@@ -1127,5 +1130,81 @@ describe("CommissionPlansView — step 1 reports the company's real plan (2026-0
     const wrapper = await mountView({ products: [product({ commission_plan_type: null, effective_plan_type: 'binary' })] })
 
     expect(wrapper.get('[data-test="step-panel-1"]').text()).toContain('Binary')
+  })
+})
+
+describe('CommissionPlansView — step 2 changes the plan, instead of pointing at it (2026-09-12)', () => {
+  /*
+   * Owner: "ผมกดเปลี่ยนแผน แล้วเด้งไปรูปที่ 1 ทำให้ UI สับสน — แก้ที่หน้าใน
+   * รูปที่ 2 ได้เลย".
+   *
+   * "เปลี่ยนแผน" was a RouterLink to /companies, because writing
+   * companies.commission_plan_type was CompanyPolicy::update and this screen
+   * could not perform it. That is a dead end dressed as a button: step 2's
+   * entire job is "which plan does this company run", and pressing its only
+   * action threw the admin onto a different screen to finish the sentence.
+   *
+   * The write moved to PUT /commission-settings, behind
+   * Ability::SettingsCommissionPlanUpdate — the same door and the same gate as
+   * the commission basis beside it — which is what let the link become a
+   * switch.
+   */
+  async function viewPlan(wrapper: Wrapper, plan: string) {
+    await goToStep(wrapper, 2)
+    await wrapper.get(`[data-test="plan-chip-${plan}"]`).trigger('click')
+    await flushPromises()
+  }
+
+  it('no longer sends the admin to another screen', async () => {
+    const wrapper = await mountView({ companyPlanType: 'unilevel' })
+    await goToStep(wrapper, 2)
+
+    expect(wrapper.find('[data-test="change-plan-link"]').exists()).toBe(false)
+  })
+
+  it('switches the company onto the plan being viewed', async () => {
+    const wrapper = await mountView({ companyPlanType: 'unilevel' })
+    await viewPlan(wrapper, 'matrix')
+
+    await wrapper.get('[data-test="use-this-plan"]').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/commission-settings', { commission_plan_type: 'matrix', company_id: 2 })
+  })
+
+  it('offers no switch on the plan the company already runs', async () => {
+    /*
+     * A button that re-saves the status quo is only a way to be unsure whether
+     * you pressed it. The chip the company is on says so instead.
+     */
+    const wrapper = await mountView({ companyPlanType: 'unilevel' })
+    await viewPlan(wrapper, 'unilevel')
+
+    expect(wrapper.find('[data-test="use-this-plan"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="plan-in-use"]').text()).toContain('แผนที่ใช้อยู่')
+  })
+
+  it('offers a Company Admin no switch at all', async () => {
+    // The house rule since 2026-09-11: a control they cannot use is not shown,
+    // because a 403 on a money switch is worse than no button.
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+
+    const wrapper = await mountView({ companyPlanType: 'unilevel' })
+    await viewPlan(wrapper, 'matrix')
+
+    expect(wrapper.find('[data-test="use-this-plan"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="change-plan-link"]').exists()).toBe(false)
+  })
+
+  it('says so when the switch fails, rather than looking as though it worked', async () => {
+    put.mockRejectedValueOnce(new Error('boom'))
+
+    const wrapper = await mountView({ companyPlanType: 'unilevel' })
+    await viewPlan(wrapper, 'matrix')
+
+    await wrapper.get('[data-test="use-this-plan"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="plan-switch-error"]').text()).toContain('เปลี่ยนแผนไม่สำเร็จ')
   })
 })

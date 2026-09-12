@@ -236,7 +236,7 @@ class AbilityCatalogueTest extends TestCase
          */
         /*
          * 2026-09-12 — 37/25. ONE ability added, SUPER ADMIN ONLY:
-         * Ability::SettingsCommissionBasisUpdate, behind PUT
+         * Ability::SettingsCommissionPlanUpdate, behind PUT
          * /commission-settings.
          *
          * THE JUSTIFICATION THIS ASSERTION EXISTS TO FORCE. The obvious
@@ -266,8 +266,8 @@ class AbilityCatalogueTest extends TestCase
         // Super Admin's alone, said out loud rather than left to the count:
         // the whole point of the case existing is that it did NOT ride along
         // with company administration.
-        $this->assertContains(Ability::SettingsCommissionBasisUpdate, $superAdmin);
-        $this->assertNotContains(Ability::SettingsCommissionBasisUpdate, $companyAdmin);
+        $this->assertContains(Ability::SettingsCommissionPlanUpdate, $superAdmin);
+        $this->assertNotContains(Ability::SettingsCommissionPlanUpdate, $companyAdmin);
 
         // Held by both, so it adds no divergence to the filtered comparison at
         // the foot of this test — asserted here so "both" is a statement
@@ -344,7 +344,7 @@ class AbilityCatalogueTest extends TestCase
                     && $a !== Ability::SettingsAgentRankUpdate
                     && $a !== Ability::SettingsAffiliateAttributionUpdate
                     && $a !== Ability::SettingsCommissionSplitUpdate
-                    && $a !== Ability::SettingsCommissionBasisUpdate,
+                    && $a !== Ability::SettingsCommissionPlanUpdate,
             )),
             $companyAdmin,
         );

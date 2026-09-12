@@ -188,13 +188,19 @@ enum Ability: string
     /**
      * From Commission/UpdateCommissionSettingRequest.php (2026-09-12).
      *
-     * The WIDEST-reaching single field in the commission configuration: it
-     * decides what every percentage in the company is a percentage of (the
-     * sale price, or the product's PV). Its own ability rather than
-     * CompanyPolicy::update, which is "may you rename this company" — the two
-     * answer the same today and are not the same question.
+     * The two COMPANY-LEVEL commission decisions: which plan the company runs
+     * (`commission_plan_type` — who gets paid) and which base its percentages
+     * apply to (`commission_basis` — a percentage of what). Between them they
+     * are the widest-reaching fields in the whole configuration: one write
+     * changes the amount of every future payout on every product.
+     *
+     * Its own ability rather than CompanyPolicy::update, which is "may you
+     * rename this company, change its bank account, delete it". The two answer
+     * the same today and are not the same question — borrowing company
+     * administration for this would mean anybody ever granted that silently
+     * received the power to change how everybody is paid.
      */
-    case SettingsCommissionBasisUpdate = 'settings.commission_basis.update';
+    case SettingsCommissionPlanUpdate = 'settings.commission_plan.update';
 
     /** From Catalog/UpdateVideoProcessingSettingRequest.php:14. */
     case SettingsVideoProcessingUpdate = 'settings.video_processing.update';

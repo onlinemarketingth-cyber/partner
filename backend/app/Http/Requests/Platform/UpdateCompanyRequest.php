@@ -2,11 +2,9 @@
 
 namespace App\Http\Requests\Platform;
 
-use App\Enums\CommissionPlanType;
 use App\Models\Company;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\Rules\Enum;
 
 class UpdateCompanyRequest extends FormRequest
 {
@@ -27,16 +25,28 @@ class UpdateCompanyRequest extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'slug' => ['sometimes', 'required', 'string', 'max:255', 'alpha_dash', Rule::unique('companies', 'slug')->ignore($this->route('company'))],
             'is_active' => ['sometimes', 'boolean'],
-            // ADR-006 Round 3/4 — see StoreCompanyRequest's comment.
-            'commission_plan_type' => ['sometimes', new Enum(CommissionPlanType::class)],
             /*
-             * `commission_basis` was accepted here for a few hours on
-             * 2026-09-12 and was moved to PUT /commission-settings the same
-             * day. Two doors onto one column is two gates to keep in step,
-             * and these two are not the same question: this endpoint asks
-             * "may you administer this company", and the basis asks "may you
-             * change what every percentage in it is a percentage of". Do not
-             * add it back here.
+             * `commission_plan_type` AND `commission_basis` are both gone from
+             * here as of 2026-09-12. Both are written by PUT
+             * /commission-settings now, behind
+             * Ability::SettingsCommissionPlanUpdate.
+             *
+             * Two doors onto one column is two gates to keep in step, and
+             * these are not the same question: this endpoint asks "may you
+             * administer this company — rename it, change its bank account,
+             * delete it", and those two ask "may you change who gets paid and
+             * what they are paid a percentage of". They answer the same today
+             * and nothing makes them keep agreeing.
+             *
+             * The plan type's removal also has a UI reason. It was the only
+             * thing forcing step 2 of the commission screen to send an admin
+             * to /companies to change the plan — a bounce the owner reported
+             * as "ทำให้ UI สับสน" on 2026-09-12. Moving the write let the link
+             * become a button.
+             *
+             * StoreCompanyRequest still accepts the plan type: provisioning a
+             * tenant with a plan is not an edit of an existing value.
+             * Do not add either back here.
              */
             // ADR-017 (TASK-054) — BR-7 admin-editable payment collection
             // config, shown on the public /pay/{token} page. All nullable.

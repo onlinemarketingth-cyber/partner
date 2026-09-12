@@ -39,14 +39,22 @@ use App\Models\User;
  * endpoint, its own Ability. The earlier read through the platform CRUD
  * resource was the odd one out.
  *
- * ── WHY THE WRITE IS NARROWER THAN THE READ ──
+ * ── BOTH FIELDS, AND WHY THE PLAN TYPE JOINED THEM ──
  *
- * Only `commission_basis` is writable here. `commission_plan_type` is read
- * and returned, because the screen has to SHOW which plan the company runs,
- * but changing it stays where it already lives (CompanyManagementView, via
- * the companies resource). Two doors onto one column is the thing this class
- * exists to stop; adding a second one while removing another would be a poor
- * trade.
+ * `commission_basis` moved here first. `commission_plan_type` followed the
+ * same day, for a reason that showed up as a UI complaint rather than an
+ * architectural one: the owner pressed "เปลี่ยนแผน" on step 2 of the
+ * commission screen and was thrown onto /companies to finish
+ * ("ทำให้ UI สับสน"). That link existed only because the write lived behind
+ * CompanyPolicy::update and the screen could not perform it. Moving the write
+ * removed the reason for the link, and the two fields are the same sentence
+ * anyway — "how does this company pay": the plan says who gets paid, the basis
+ * says what a percentage is a percentage of.
+ *
+ * `PUT /companies/{id}` no longer accepts the plan type. One column, one write
+ * door — CommissionBasisVisibilityTest is the tripwire on the closed one.
+ * Company CREATION still carries it, which is a different operation: a tenant
+ * is provisioned with a plan, it is not an edit of an existing value.
  */
 class CommissionSettingService
 {
@@ -75,44 +83,84 @@ class CommissionSettingService
     }
 
     /**
+     * Writes whichever of the two was supplied, audits whichever actually
+     * changed, and returns the settled state.
+     *
+     * Nullable parameters mean "not supplied", never "clear it" — neither
+     * column is nullable and neither has an unset state. The Form Request
+     * refuses a call that supplies neither, so a no-op here is a no-op the
+     * caller asked for (saving the value already in place), not an empty
+     * request that silently succeeded.
+     *
      * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null}
      */
-    public function updateBasis(int $companyId, CommissionBasis $basis, ?User $actor = null): array
+    public function update(int $companyId, ?CommissionBasis $basis = null, ?CommissionPlanType $planType = null, ?User $actor = null): array
     {
         $company = Company::findOrFail($companyId);
-        $before = $company->commission_basis ?? CommissionBasis::Price;
 
-        if ($before !== $basis) {
-            $company->update(['commission_basis' => $basis]);
+        if ($basis !== null) {
+            $this->applyChange(
+                $company,
+                'commission_basis',
+                ($company->commission_basis ?? CommissionBasis::Price)->value,
+                $basis->value,
+                'commission_basis.updated',
+                $actor,
+            );
+        }
 
-            /*
-             * Section 6 — "record every action that affects money [or]
-             * commission." This one decides what EVERY percentage in the
-             * company is a percentage of, which makes it the widest-reaching
-             * single field in the commission configuration: one write changes
-             * the amount of every future payout on every product.
-             *
-             * Audited for the same reason CommissionSplitSettingService
-             * audits its flag and the other per-company settings services do
-             * not — those do not move money, and these two do. The rows
-             * already written are untouched (BR-4); what changes is every
-             * calculation from this moment on, and this is the only record of
-             * when "this moment" was.
-             */
-            if ($actor) {
-                AuditLog::create([
-                    'company_id' => $companyId,
-                    'actor_user_id' => $actor->id,
-                    'action' => 'commission_basis.updated',
-                    'auditable_type' => Company::class,
-                    'auditable_id' => $company->id,
-                    'old_values' => ['commission_basis' => $before->value],
-                    'new_values' => ['commission_basis' => $basis->value],
-                    'ip_address' => request()?->ip(),
-                ]);
-            }
+        if ($planType !== null) {
+            $this->applyChange(
+                $company,
+                'commission_plan_type',
+                $company->commission_plan_type?->value,
+                $planType->value,
+                'commission_plan_type.updated',
+                $actor,
+            );
         }
 
         return $this->forCompany($companyId);
+    }
+
+    /**
+     * Section 6 — "record every action that affects money [or] commission."
+     *
+     * These two are audited where the other per-company settings services are
+     * not, and the line is the same one CommissionSplitSettingService draws:
+     * those do not move money, and these do. Between them they decide who is
+     * paid and what they are paid a percentage of, so one write changes the
+     * amount of every future payout on every product.
+     *
+     * Rows already in the ledger are untouched (BR-4), which is precisely why
+     * the MOMENT of the switch has to be recorded somewhere — it is the only
+     * thing that explains why two rows for the same product, a week apart, do
+     * not agree.
+     *
+     * Nothing is written and nothing is logged when the value did not move: an
+     * audit trail padded with writes that changed nothing is one nobody reads.
+     */
+    private function applyChange(Company $company, string $column, ?string $before, string $after, string $action, ?User $actor): void
+    {
+        if ($before === $after) {
+            return;
+        }
+
+        $company->update([$column => $after]);
+
+        if (! $actor) {
+            return;
+        }
+
+        AuditLog::create([
+            'company_id' => $company->id,
+            'actor_user_id' => $actor->id,
+            'action' => $action,
+            'auditable_type' => Company::class,
+            'auditable_id' => $company->id,
+            'old_values' => [$column => $before],
+            'new_values' => [$column => $after],
+            'ip_address' => request()?->ip(),
+        ]);
     }
 }
