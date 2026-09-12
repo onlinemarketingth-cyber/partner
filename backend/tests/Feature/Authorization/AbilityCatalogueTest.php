@@ -234,8 +234,40 @@ class AbilityCatalogueTest extends TestCase
          * and told to contact the platform owner rather than handed a button
          * that 403s.
          */
-        $this->assertCount(36, $superAdmin);
+        /*
+         * 2026-09-12 — 37/25. ONE ability added, SUPER ADMIN ONLY:
+         * Ability::SettingsCommissionBasisUpdate, behind PUT
+         * /commission-settings.
+         *
+         * THE JUSTIFICATION THIS ASSERTION EXISTS TO FORCE. The obvious
+         * alternative was no new ability at all: `commission_basis` is a
+         * column on `companies`, so PUT /companies/{id} and
+         * CompanyPolicy::update would have carried it for free, and the count
+         * would not have moved. That is exactly why it needed a line here.
+         *
+         * The two gates answer the same today and are not the same question.
+         * CompanyPolicy::update is "may you rename this company, change its
+         * bank account, delete it". This is "may you change what every
+         * percentage in this company is a percentage of" — one write that
+         * moves the amount of every future payout on every product. Borrowing
+         * company administration for it would mean anybody ever granted that,
+         * for any reason, silently received this too, with nothing in any diff
+         * to say so.
+         *
+         * Super Admin only, and no matching *View: reading the basis is not
+         * gated at all (GET /commission-settings is open to any authenticated
+         * caller, scoped to their own company by the Controller). An agent
+         * asking "how am I paid" is the most reasonable question on this
+         * system, and Company Admin's count is therefore unchanged at 25.
+         */
+        $this->assertCount(37, $superAdmin);
         $this->assertCount(25, $companyAdmin);
+
+        // Super Admin's alone, said out loud rather than left to the count:
+        // the whole point of the case existing is that it did NOT ride along
+        // with company administration.
+        $this->assertContains(Ability::SettingsCommissionBasisUpdate, $superAdmin);
+        $this->assertNotContains(Ability::SettingsCommissionBasisUpdate, $companyAdmin);
 
         // Held by both, so it adds no divergence to the filtered comparison at
         // the foot of this test — asserted here so "both" is a statement
@@ -288,13 +320,16 @@ class AbilityCatalogueTest extends TestCase
         $this->assertContains(Ability::SettingsCommissionSplitUpdate, $superAdmin);
         $this->assertNotContains(Ability::SettingsCommissionSplitUpdate, $companyAdmin);
 
-        // Company Admin's list is Super Admin's minus exactly those TEN
+        // Company Admin's list is Super Admin's minus exactly those ELEVEN
         // cases — no other divergence exists today. Enumerated rather than
         // derived, so a new Super-Admin-only grant cannot slip into the
         // platform unnoticed: adding one here is a deliberate edit somebody
         // has to justify, which is the whole purpose of this assertion. The
-        // six on the second half of this list are the 2026-09-11 commission
+        // six in the middle of this list are the 2026-09-11 commission
         // rate decision; see the count note above for why and what it cost.
+        // The last is 2026-09-12's commission BASIS, which is a write that
+        // moves every future payout and deliberately did not ride along with
+        // CompanyPolicy::update.
         $this->assertEqualsCanonicalizing(
             array_values(array_filter(
                 $superAdmin,
@@ -308,7 +343,8 @@ class AbilityCatalogueTest extends TestCase
                     && $a !== Ability::SettingsCommissionGenerationUpdate
                     && $a !== Ability::SettingsAgentRankUpdate
                     && $a !== Ability::SettingsAffiliateAttributionUpdate
-                    && $a !== Ability::SettingsCommissionSplitUpdate,
+                    && $a !== Ability::SettingsCommissionSplitUpdate
+                    && $a !== Ability::SettingsCommissionBasisUpdate,
             )),
             $companyAdmin,
         );

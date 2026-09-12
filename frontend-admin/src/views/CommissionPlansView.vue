@@ -1243,6 +1243,26 @@ const readinessCounts = computed(() => {
 type CommissionBasis = 'price' | 'pv'
 
 const commissionBasis = ref<CommissionBasis>('price')
+/**
+ * `companies.commission_plan_type`, straight from the company row.
+ *
+ * null means "not read yet / could not be read", never "this company has no
+ * plan" — every company has one (the column defaults to unilevel). See
+ * companyPlanType for what the screen does with that distinction.
+ */
+const companyPlanTypeFromServer = ref<CommissionPlanType | null>(null)
+/**
+ * The read failed, so the screen does not know which base this company pays
+ * on — and says so, instead of showing the default as though it were the
+ * answer.
+ *
+ * This flag is the whole defence. `commissionBasis` must hold SOMETHING for
+ * the template to bind to, and a screen that rendered that as the SELECTED
+ * option would state a wrong answer about somebody's money with no way for
+ * the reader to tell. While this is true, step 2 shows the error and neither
+ * option is marked chosen.
+ */
+const basisUnknown = ref(false)
 const basisSaving = ref(false)
 const basisError = ref('')
 
@@ -1264,32 +1284,64 @@ const basisLabels: Record<CommissionBasis, string> = {
 const percentageOptionLabel = computed(() => commissionBasis.value === 'pv' ? '% ของ PV' : '% ของยอดขาย')
 
 /**
- * Loaded from the company row, not inferred from the products.
+ * GET /commission-settings — commission's OWN endpoint, not the platform
+ * companies resource.
  *
- * `companyPlanType` above is inferred (a product with no override carries the
- * company's plan, so any such product answers for it). Nothing equivalent is
- * true here: the basis lives only on the company, and a screen that guessed it
- * from whether any product happens to have a PV would tell an admin they were
- * on PV because somebody typed a number in while evaluating the idea.
+ * ── WHY NOT /companies/{id}, WHICH ALSO CARRIES BOTH FIELDS ──
  *
- * Silent on failure, defaulting to 'price'. A Super Admin on "ทุกบริษัท" has no
- * single company to ask about and step 2 already refuses to render for them;
- * anything else that fails here is a read this screen can survive without,
- * and a red error over the plan chips would be a worse answer than the
- * default every company actually has.
+ * It did, for a few hours on 2026-09-12, and it worked by leaning on an
+ * exception: `routes/api.php` described the companies resource as "Super Admin
+ * only end to end", which is true of index/store/update/destroy and NOT of
+ * show, where CompanyPolicy::view also allows a user to read their OWN
+ * company. This whole screen balanced on that one clause.
+ *
+ * The owner's point: somebody tightening that clause — on the strength of the
+ * comment right above it — would break nothing visible. No exception, no
+ * failing test near the change. This function would catch the 403 and the
+ * screen would render its defaults, showing 'ราคาขาย' as the selected basis at
+ * a company that pays on PV. A confident, wrong answer about how somebody's
+ * agents are paid.
+ *
+ * ── AND WHY FAILURE IS NOW LOUD ──
+ *
+ * Moving the endpoint removes the likely cause; `basisUnknown` removes the
+ * BEHAVIOUR that made it dangerous. Whatever goes wrong — a 403, a 500, a
+ * dropped connection — this function no longer converts "I could not find
+ * out" into "it is ราคาขาย". Step 2 renders the question instead of an
+ * answer.
+ *
+ * The plan type is still read here rather than inferred from the products:
+ * see companyPlanType for the case the inference cannot answer.
  */
-async function loadCommissionBasis(): Promise<void> {
+async function loadCompanySettings(): Promise<void> {
   const id = effectiveCompanyId.value
   if (!id) {
+    /*
+     * No company asked about is not a failed read. A Super Admin on
+     * "ทุกบริษัท" has no single answer and step 2 already refuses to render
+     * for them, so this is deliberately NOT `basisUnknown` — a red error
+     * over a state whose only problem is "pick a company first" is the kind
+     * of warning that teaches people to ignore warnings.
+     */
     commissionBasis.value = 'price'
+    companyPlanTypeFromServer.value = null
+    basisUnknown.value = false
 
     return
   }
   try {
-    const r = await api.get<{ data: { commission_basis?: CommissionBasis } }>(`/companies/${id}`)
+    const r = await api.get<{ data: { commission_basis?: CommissionBasis; commission_plan_type?: CommissionPlanType | null } }>(
+      `/commission-settings${companyQuery()}`,
+    )
     commissionBasis.value = r.data.commission_basis ?? 'price'
+    companyPlanTypeFromServer.value = r.data.commission_plan_type ?? null
+    basisUnknown.value = false
   } catch {
-    commissionBasis.value = 'price'
+    // Left NULL, not defaulted: the screen does not know the plan, and
+    // companyPlanType falls back to the inference rather than asserting one
+    // nobody confirmed.
+    companyPlanTypeFromServer.value = null
+    basisUnknown.value = true
   }
 }
 
@@ -1310,8 +1362,11 @@ async function setCommissionBasis(next: CommissionBasis): Promise<void> {
   basisSaving.value = true
   basisError.value = ''
   try {
-    await commissionApi.put(`/companies/${id}`, { commission_basis: next })
+    await commissionApi.put('/commission-settings', withCompanyBody({ commission_basis: next }))
     commissionBasis.value = next
+    // A successful write is also a successful read: whatever made the load
+    // fail, the screen now knows the answer, because it just set it.
+    basisUnknown.value = false
   } catch (e) {
     basisError.value = apiErrorMessage(e, 'เปลี่ยนฐานการคำนวณไม่สำเร็จ')
   } finally {
@@ -1641,20 +1696,33 @@ const readinessDetail = computed(() => {
 const planChipOrder: CommissionPlanType[] = ['unilevel', 'binary', 'matrix', 'stairstep_breakaway', 'generation', 'affiliate']
 
 /**
- * The plan THIS COMPANY is on, read out of data the screen already has.
+ * The plan THIS COMPANY is on.
  *
- * A product with no `commission_plan_type` of its own inherits the company's,
- * so that product's `effective_plan_type` IS the company's answer — no extra
- * request, and no second copy of the value to drift out of step with
- * CompanyManagementView (which is still the only place it can be CHANGED).
+ * 2026-09-12 — THE SERVER'S ANSWER FIRST, THE INFERENCE ONLY AS A FALLBACK.
  *
- * null when every product carries its own override, or there are no products
- * yet. That is left as null rather than defaulted to Unilevel on purpose:
- * BR-7's rule against guessing a business value applies to what the screen
- * ASSERTS as much as to what it submits.
+ * This used to be inferred alone: a product with no `commission_plan_type` of
+ * its own inherits the company's, so that product's `effective_plan_type` IS
+ * the company's answer, and reading it cost no extra request. The inference is
+ * sound, and it has one hole — a company where EVERY product carries its own
+ * override answers `null`, and step 1 then reports "ยังไม่ทราบ" about a value
+ * the company definitely has. The owner hit exactly that ("ระบบต้องดึงข้อมูลที่
+ * ถูกต้องมาแสดงในทุกขั้นตอนให้ถูกต้อง", 2026-09-12) on a company showing
+ * ยังไม่ทราบ while steps 1–3 all read เสร็จแล้ว.
+ *
+ * The fix costs nothing new: this screen already fetches GET /companies/{id}
+ * for `commission_basis`, and `commission_plan_type` is on the same row. So
+ * the authoritative value is used when it is known, and the inference stays
+ * underneath it for the one moment it still matters — the first render, before
+ * that request lands, where the products are already in hand.
+ *
+ * Still null rather than defaulted to Unilevel when neither can answer: BR-7's
+ * rule against guessing a business value applies to what the screen ASSERTS as
+ * much as to what it submits.
  */
 const companyPlanType = computed<CommissionPlanType | null>(() =>
-  byCompany(products.value).find((p) => !p.commission_plan_type && p.effective_plan_type)?.effective_plan_type ?? null)
+  companyPlanTypeFromServer.value
+  ?? byCompany(products.value).find((p) => !p.commission_plan_type && p.effective_plan_type)?.effective_plan_type
+  ?? null)
 
 /** Which plan's details are on screen in step 2 — not necessarily the one in use. */
 const viewingPlanType = ref<CommissionPlanType>('unilevel')
@@ -1794,7 +1862,35 @@ function pickCompany(event: Event): void {
   const value = (event.target as HTMLSelectElement).value
 
   void activeCompany.requestCompany(value === '' ? null : Number(value))
+  // 2026-09-12 — the picker closes itself once it has an answer. Leaving it
+  // open would make "which company am I configuring" a question with two
+  // controls showing at once, which is the state this change removes.
+  editingCompany.value = false
 }
+
+/**
+ * 2026-09-12 (owner): the company is READ by default and changed on purpose.
+ *
+ * Step 1 used to carry a bare <select> pinned to the far right of the card,
+ * as far from the company name as the row allowed — so the page's single most
+ * load-bearing fact ("everything in steps 2–4 belongs to THIS company") sat at
+ * one end and the control that changes it at the other. Worse, a select is
+ * always armed: a stray scroll or an arrow key on a focused control silently
+ * re-points every step behind it.
+ *
+ * Now the name is a name, with "เปลี่ยนบริษัท" beside it; the picker appears
+ * under the name, where the value it changes is, and only after somebody asked
+ * for it.
+ */
+const editingCompany = ref(false)
+
+/**
+ * A Super Admin on "ทุกบริษัท" has nothing to read, so there is nothing to put
+ * behind a button — the picker is the content of the card, open from the
+ * start. Without this clause the first thing they would see is
+ * "ยังไม่ได้เลือกบริษัท" and a button they have to find.
+ */
+const showCompanyPicker = computed(() => isSuperAdmin.value && (editingCompany.value || activeCompany.requiresCompanyPick))
 
 /**
  * Moving between steps also arranges for the panel's data to exist.
@@ -2326,7 +2422,7 @@ watch(() => activeCompany.companyId, () => {
   // half-typed PV belongs to the company that just left, too.
   pvDrafts.value = {}
   pvError.value = ''
-  void loadCommissionBasis()
+  void loadCompanySettings()
   if (activeTab.value !== 'rules') void ensureTabLoaded(activeTab.value)
   // The rules tab is deliberately NOT refetched: it loads every company's
   // rows once and narrows them with byCompany(). The readiness probe is
@@ -2356,7 +2452,7 @@ onMounted(async () => {
   // steps, and an admin who opened this screen because of the warning should
   // not watch it appear after the rate table has already rendered.
   await commissionReadiness.ensureLoaded()
-  await loadCommissionBasis()
+  await loadCompanySettings()
   await ensureTabLoaded('rules')
 })
 /*
@@ -2537,38 +2633,83 @@ watch(companyPlanType, (pt) => {
               header stays in sync and the company-change watcher below
               keeps working unchanged.
             -->
-            <div class="rounded-xl border border-slate-200 p-4 flex flex-wrap items-end gap-4">
-              <div class="min-w-0">
-                <p class="text-[11px] font-bold text-slate-400">บริษัทที่กำลังตั้งค่า</p>
+            <div class="rounded-xl border border-slate-200 p-4">
+              <p class="text-[11px] font-bold text-slate-400">บริษัทที่กำลังตั้งค่า</p>
+
+              <!-- READING. The name, and one button that says what it does. -->
+              <div v-if="!showCompanyPicker" class="mt-0.5 flex flex-wrap items-center gap-3">
                 <p class="text-lg font-extrabold text-slate-900" data-test="step1-company-name">
                   {{ activeCompany.companyName ?? 'ยังไม่ได้เลือกบริษัท' }}
                 </p>
-              </div>
-              <div v-if="isSuperAdmin" class="ml-auto min-w-[220px]">
-                <label class="text-sm font-bold text-slate-500" for="step1-company">เปลี่ยนบริษัท</label>
-                <select
-                  id="step1-company"
-                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
-                  :value="activeCompany.companyId ?? ''"
-                  data-test="step1-company-select"
-                  @change="pickCompany"
+                <button
+                  v-if="isSuperAdmin"
+                  type="button"
+                  class="btn-secondary h-8 inline-flex items-center gap-1.5"
+                  data-test="step1-company-edit"
+                  @click="editingCompany = true"
                 >
-                  <option value="" disabled>เลือกบริษัท</option>
-                  <option v-for="c in activeCompany.companies" :key="c.id" :value="c.id">{{ c.name }}</option>
-                </select>
+                  <Icon name="edit" :size="13" /> เปลี่ยนบริษัท
+                </button>
               </div>
-              <p v-else class="ml-auto text-[12.5px] text-slate-400">บริษัทของคุณถูกกำหนดจากบัญชีผู้ใช้ เปลี่ยนที่นี่ไม่ได้</p>
+
+              <!-- CHANGING. Directly UNDER the name it replaces, not across
+                   the card from it: the control and the value it changes are
+                   the same fact, and an admin re-pointing four steps of
+                   configuration should be looking at one thing. -->
+              <div v-else class="mt-1.5 max-w-sm">
+                <label class="text-[12.5px] font-bold text-slate-500" for="step1-company">เลือกบริษัทที่จะตั้งค่า</label>
+                <div class="mt-1 flex items-center gap-2">
+                  <select
+                    id="step1-company"
+                    class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+                    :value="activeCompany.companyId ?? ''"
+                    data-test="step1-company-select"
+                    @change="pickCompany"
+                  >
+                    <option value="" disabled>เลือกบริษัท</option>
+                    <option v-for="c in activeCompany.companies" :key="c.id" :value="c.id">{{ c.name }}</option>
+                  </select>
+                  <!-- No cancel while nothing is picked: there is no previous
+                       answer to go back to, and a button that closes onto
+                       "ยังไม่ได้เลือกบริษัท" only hides the one thing left to do. -->
+                  <button
+                    v-if="!activeCompany.requiresCompanyPick"
+                    type="button"
+                    class="text-[12.5px] font-bold text-slate-500 hover:text-slate-700 shrink-0"
+                    data-test="step1-company-cancel"
+                    @click="editingCompany = false"
+                  >
+                    ยกเลิก
+                  </button>
+                </div>
+                <p class="mt-1.5 text-[12px] text-slate-400">เปลี่ยนแล้วขั้นที่ 2–4 จะโหลดข้อมูลของบริษัทใหม่ทันที</p>
+              </div>
+
+              <p v-if="!isSuperAdmin" class="mt-1 text-[12.5px] text-slate-400">บริษัทของคุณถูกกำหนดจากบัญชีผู้ใช้ เปลี่ยนที่นี่ไม่ได้</p>
             </div>
 
             <!--
-              Shown to EVERYONE, not only to the Company Admin it constrains:
-              a Super Admin who cannot see this sentence has no way to know
-              what the person they are configuring for will actually be able
-              to do with the screen afterwards.
+              2026-09-12 (owner, logged in as Super Admin): "ไม่ต้องขึ้นคำเตือนนี้".
+              This used to render for everyone, on the argument that a Super
+              Admin needs to know what the person they are configuring for will
+              be able to do. That argument was wrong in the way permission
+              notices usually are: it is addressed in the second person to
+              somebody it does not describe. A Super Admin reading "แก้ไขได้
+              เฉพาะ Super Admin" on a screen they are actively editing learns
+              nothing and, for a moment, wonders whether something is blocked.
+
+              It now appears only for the reader it is ABOUT, and says so in
+              the second person. Not deleted outright: a Company Admin who is
+              simply shown a screen with no buttons has no way to tell
+              "read-only by design" from "broken".
             -->
-            <div class="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3" data-test="commission-lock-note">
+            <div
+              v-if="!canEditCommissionConfig"
+              class="flex items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3"
+              data-test="commission-lock-note"
+            >
               <Icon name="eye" :size="16" class="shrink-0 mt-0.5 text-slate-400" />
-              <p class="text-[12.5px] text-slate-500">แก้ไขได้เฉพาะ Super Admin · ผู้ดูแลบริษัทเปิดดูได้แต่กดแก้ไม่ได้</p>
+              <p class="text-[12.5px] text-slate-500">คุณเปิดดูได้ทุกขั้นตอนแต่แก้ไขไม่ได้ — การตั้งค่าคอมมิชชั่นแก้ไขได้เฉพาะ Super Admin · ติดต่อผู้ดูแลระบบหากต้องการเปลี่ยน</p>
             </div>
 
             <div v-if="effectiveCompanyId" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -2684,23 +2825,40 @@ watch(companyPlanType, (pt) => {
                   เลือกได้อย่างเดียวทั้งบริษัท — ส่วน % และจำนวนคงที่ยังตั้งได้รายสินค้าเหมือนเดิมในขั้นที่ 3
                 </p>
 
+                <!--
+                  2026-09-12 — WHEN THE READ FAILED, THE SCREEN SAYS SO.
+                  Rendering the fallback as the selected option would state a
+                  wrong answer about somebody's money in exactly the same
+                  typeface as a right one; there is no way for a reader to
+                  tell the two apart, which is what makes it worse than an
+                  error. Neither option is marked, and the switch is locked
+                  until a real value arrives.
+                -->
+                <div v-if="basisUnknown" class="mt-3 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3" data-test="basis-unknown">
+                  <Icon name="alert" :size="16" class="shrink-0 mt-0.5 text-rose-600" />
+                  <div class="min-w-0">
+                    <p class="text-[13px] font-extrabold text-rose-700">อ่านค่าฐานการคำนวณไม่สำเร็จ</p>
+                    <p class="mt-0.5 text-[12.5px] text-rose-700">ระบบยังไม่ทราบว่าบริษัทนี้คิดค่าคอมจากราคาขายหรือ PV จึงยังไม่แสดงค่าที่เลือกไว้ — โหลดหน้านี้ใหม่อีกครั้ง หากยังไม่หายให้แจ้งผู้ดูแลระบบ</p>
+                  </div>
+                </div>
+
                 <div class="mt-3 grid gap-3 sm:grid-cols-2">
                   <button
                     v-for="b in (['price', 'pv'] as CommissionBasis[])"
                     :key="b"
                     type="button"
                     class="text-left rounded-xl border px-4 py-3.5 transition-colors"
-                    :class="b === commissionBasis
+                    :class="!basisUnknown && b === commissionBasis
                       ? 'border-brand-600 bg-brand-50'
-                      : canEditCommissionConfig
+                      : canEditCommissionConfig && !basisUnknown
                         ? 'border-slate-200 bg-white hover:border-slate-300'
                         : 'border-slate-200 bg-slate-50 cursor-default'"
-                    :disabled="!canEditCommissionConfig || basisSaving"
+                    :disabled="!canEditCommissionConfig || basisSaving || basisUnknown"
                     :data-test="`basis-option-${b}`"
                     @click="setCommissionBasis(b)"
                   >
                     <span class="flex items-center gap-2">
-                      <Icon v-if="b === commissionBasis" name="check" :size="14" class="text-brand-600" />
+                      <Icon v-if="!basisUnknown && b === commissionBasis" name="check" :size="14" class="text-brand-600" />
                       <span class="text-[14px] font-extrabold" :class="b === commissionBasis ? 'text-brand-700' : 'text-slate-700'">
                         {{ basisLabels[b] }}
                       </span>

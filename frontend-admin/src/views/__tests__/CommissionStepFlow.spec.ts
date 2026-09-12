@@ -151,6 +151,13 @@ interface Fixture {
   overrides?: unknown[]
   readiness?: Readiness
   /**
+   * `companies.commission_plan_type` as GET /companies/{id} reports it —
+   * the AUTHORITATIVE answer since 2026-09-12. `undefined` means the row came
+   * back without one, which is how these tests exercise the inference that
+   * used to be the only source.
+   */
+  companyPlanType?: string
+  /**
    * Paths whose response is the empty string. 204/'' is how every structural
    * settings singleton says "never configured" (see
    * CommissionBinarySettingController's own note on why it is not a null
@@ -160,13 +167,15 @@ interface Fixture {
 }
 
 async function mountView(fixture: Fixture = {}) {
-  const { products = [product()], rules = [], overrides = [], unconfigured = [], readiness = READY } = fixture
+  const { products = [product()], rules = [], overrides = [], unconfigured = [], readiness = READY, companyPlanType } = fixture
 
   get.mockImplementation(async (path: string) => {
     // Before the `unconfigured` check: a readiness verdict is never '' — the
     // endpoint always answers, even for a company that has configured nothing.
     if (path.startsWith('/commission-readiness')) return readiness
     if (unconfigured.some((u) => path.startsWith(u))) return ''
+    // 2026-09-12 — commission's own endpoint (see CommissionSettingService).
+    if (path.startsWith('/commission-settings')) return { data: { commission_plan_type: companyPlanType } }
     if (path.startsWith('/companies')) return { data: [AIA] }
     if (path.startsWith('/products')) return { data: products }
     if (path.startsWith('/commission-rules')) return { data: rules }
@@ -981,5 +990,142 @@ describe('CommissionPlansView — a Company Admin sees every step and no write c
 
     // The footer agrees with the tabs — one rule, not two.
     expect(wrapper.find('[data-test="step-next-blocked"]').exists()).toBe(false)
+  })
+})
+
+describe('CommissionPlansView — step 1 reads the company, and changes it on purpose (2026-09-12)', () => {
+  /*
+   * Owner: "เปลี่ยนตำแหน่ง Ui จากซ้ายสุดมาไว้ ใต้ชื่อบริษัททางด้านซ้าย และใช้
+   * การกดปุ่ม edit ถึงเปลี่ยนบริษัท".
+   *
+   * The old card put a bare <select> at the far right — the page's single most
+   * load-bearing fact ("everything in steps 2–4 belongs to THIS company") at
+   * one end of the row and the control that re-points it at the other. A
+   * select is also always armed: a stray scroll or an arrow key on a focused
+   * control silently re-points four steps of configuration.
+   */
+  it('shows the name and an edit button, not a live picker', async () => {
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="step1-company-name"]').text()).toContain('AIA')
+    expect(wrapper.find('[data-test="step1-company-edit"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="step1-company-select"]').exists()).toBe(false)
+  })
+
+  it('reveals the picker only after the edit button is pressed', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-test="step1-company-edit"]').trigger('click')
+
+    expect(wrapper.find('[data-test="step1-company-select"]').exists()).toBe(true)
+  })
+
+  it('closes again on cancel, without changing anything', async () => {
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-test="step1-company-edit"]').trigger('click')
+    await wrapper.get('[data-test="step1-company-cancel"]').trigger('click')
+
+    expect(wrapper.find('[data-test="step1-company-select"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="step1-company-name"]').text()).toContain('AIA')
+  })
+
+  it('opens the picker by itself when there is no company to read', async () => {
+    /*
+     * A Super Admin on "ทุกบริษัท" has nothing to read, so there is nothing to
+     * put behind a button. Without this the first thing they would see is
+     * "ยังไม่ได้เลือกบริษัท" and a button they have to find — a dead end on the
+     * step whose entire job is picking a company.
+     */
+    const wrapper = await mountView()
+    useActiveCompanyStore().selectedId = null
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="step1-company-select"]').exists()).toBe(true)
+    // And no cancel: there is no previous answer to go back to.
+    expect(wrapper.find('[data-test="step1-company-cancel"]').exists()).toBe(false)
+  })
+
+  it('shows a Company Admin the name with no way to change it', async () => {
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="step1-company-name"]').text()).toContain('AIA')
+    expect(wrapper.find('[data-test="step1-company-edit"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="step1-company-select"]').exists()).toBe(false)
+    // And it says WHY, rather than leaving a name with no affordance and no
+    // explanation — the same reason the lock note still exists for them.
+    expect(wrapper.get('[data-test="step-panel-1"]').text()).toContain('ถูกกำหนดจากบัญชีผู้ใช้')
+  })
+
+  it("resolves a Company Admin's company from their account, with nothing to pick", async () => {
+    /*
+     * Owner, 2026-09-12: "แล้ว company admin เข้ามาหน้านี้ ในขั้นตอนที่ 1 แล้ว
+     * ปุ่ม edit จะเป็นอย่างไรและจะดึง company ที่ดูแลมาอัตโนมัติไหม".
+     *
+     * It does, and step 1 is therefore ALREADY DONE for them the moment the
+     * screen opens — there is no decision left on it. The store pins
+     * `companyId` to `auth.user.company.id` for anybody who is not a Super
+     * Admin (every request is scoped server-side by TenantScope regardless,
+     * BR-6), so the selectedId below is deliberately set to something else:
+     * if the screen ever read it for a Company Admin, this would catch it.
+     */
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+
+    const wrapper = await mountView()
+    useActiveCompanyStore().selectedId = 999
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="step1-company-name"]').text()).toContain('AIA')
+    expect(pill(wrapper, 1)).toContain('เสร็จแล้ว')
+    // Never the "กรุณาเลือกบริษัทก่อน" state: that is a Super-Admin-only
+    // condition (requiresCompanyPick), and a Company Admin cannot be in it.
+    expect(wrapper.get('[data-test="step-panel-1"]').text()).not.toContain('ยังไม่ได้เลือกบริษัท')
+  })
+})
+
+describe("CommissionPlansView — step 1 reports the company's real plan (2026-09-12)", () => {
+  /*
+   * Owner: "ระบบต้องดึงข้อมูลที่ถูกต้องมาแสดงในทุกขั้นตอนให้ถูกต้อง", on a
+   * company whose step 1 read "แผนคอมมิชชั่นของบริษัท: ยังไม่ทราบ" while steps
+   * 1–3 all read เสร็จแล้ว.
+   *
+   * The screen used to INFER the plan: a product with no override of its own
+   * carries the company's, so that product answers for the company. Sound, and
+   * with one hole — a company where every product carries an override answers
+   * null, and the screen then claims not to know a value the company certainly
+   * has. GET /companies/{id} was already being fetched for the commission
+   * basis and carries the plan type on the same row.
+   */
+  it('reads the plan from the company row', async () => {
+    const wrapper = await mountView({ companyPlanType: 'matrix', products: [product({ effective_plan_type: 'matrix' })] })
+
+    expect(wrapper.get('[data-test="step-panel-1"]').text()).toContain('Matrix')
+  })
+
+  it('no longer says ยังไม่ทราบ when every product carries its own override', async () => {
+    /*
+     * THE EXACT SCREEN THE OWNER PHOTOGRAPHED. Every product has its own
+     * commission_plan_type, so the inference has nothing to read — and before
+     * this change that printed "ยังไม่ทราบ" about a company that is plainly on
+     * a plan.
+     */
+    const wrapper = await mountView({
+      companyPlanType: 'unilevel',
+      products: [product({ commission_plan_type: 'unilevel', effective_plan_type: 'unilevel' })],
+    })
+
+    const panel = wrapper.get('[data-test="step-panel-1"]').text()
+    expect(panel).not.toContain('ยังไม่ทราบ')
+    expect(panel).toContain('Unilevel')
+  })
+
+  it('falls back to the inference when the company row cannot answer', async () => {
+    // The control, and the reason the old code is still underneath: the
+    // products are in hand on the first render, before that request lands.
+    const wrapper = await mountView({ products: [product({ commission_plan_type: null, effective_plan_type: 'binary' })] })
+
+    expect(wrapper.get('[data-test="step-panel-1"]').text()).toContain('Binary')
   })
 })

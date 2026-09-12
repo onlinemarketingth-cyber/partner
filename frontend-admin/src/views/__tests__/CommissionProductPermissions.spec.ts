@@ -257,10 +257,34 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
   })
 
   it('is told the rule up front, on ขั้นที่ 1, rather than finding it by clicking', async () => {
+    /*
+     * 2026-09-12 — the wording moved into the second person when the note
+     * stopped being shown to everyone (the owner, editing as Super Admin, was
+     * being told that only a Super Admin may edit). What the note has to do is
+     * unchanged and is why it still exists: a screen with every button removed
+     * and no sentence explaining it reads as broken, not as read-only.
+     */
     const wrapper = await mountView([OWN])
 
-    expect(wrapper.get('[data-test="commission-lock-note"]').text())
-      .toContain('แก้ไขได้เฉพาะ Super Admin · ผู้ดูแลบริษัทเปิดดูได้แต่กดแก้ไม่ได้')
+    const note = wrapper.get('[data-test="commission-lock-note"]').text()
+    expect(note).toContain('เปิดดูได้ทุกขั้นตอนแต่แก้ไขไม่ได้')
+    expect(note).toContain('ติดต่อผู้ดูแลระบบ')
+  })
+})
+
+describe('CommissionPlansView — the lock note speaks to the reader it is about', () => {
+  it('is not shown to a Super Admin, who is the one doing the editing', async () => {
+    /*
+     * Owner, 2026-09-12: "ผม Login เป็น super admin อยู่ แต่ขึ้น ไม่ต้องขึ้น
+     * คำเตือนนี้". A permission notice addressed in the second person to
+     * somebody it does not describe is worse than no notice: on a screen they
+     * are actively editing, it reads for a moment as though something is
+     * blocked.
+     */
+    beSuperAdmin()
+    const wrapper = await mountView([OWN])
+
+    expect(wrapper.find('[data-test="commission-lock-note"]').exists()).toBe(false)
   })
 })
 

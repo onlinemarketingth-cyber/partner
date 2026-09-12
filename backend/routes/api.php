@@ -39,6 +39,7 @@ use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
 use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
 use App\Http\Controllers\Api\V1\CommissionReadinessController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
+use App\Http\Controllers\Api\V1\CommissionSettingController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
 use App\Http\Controllers\Api\V1\CommissionWithdrawalRequestController;
 use App\Http\Controllers\Api\V1\CommissionWithdrawalSettingController;
@@ -771,6 +772,21 @@ Route::prefix('v1')->group(function () {
         Route::get('/commission-split-settings', [CommissionSplitSettingController::class, 'show']);
         Route::put('/commission-split-settings', [CommissionSplitSettingController::class, 'update']);
 
+        /*
+         * 2026-09-12 — the company-level commission BASIS (sale price or PV)
+         * and, read-only, its plan type.
+         *
+         * These two are columns on `companies`, and the admin commission
+         * screen first read them with GET /companies/{id}. That leaned on
+         * CompanyPolicy::view's own-company clause — see the note on the
+         * companies resource further down, which used to claim the whole
+         * resource was Super Admin only and is now accurate. The screen no
+         * longer depends on it: this is commission's own door, with its own
+         * Ability (SettingsCommissionBasisUpdate) for the write.
+         */
+        Route::get('/commission-settings', [CommissionSettingController::class, 'show']);
+        Route::put('/commission-settings', [CommissionSettingController::class, 'update']);
+
         // TASK-052 / ADR-015 — chart-based Agent Dashboard metrics (totals,
         // 6-month series, pipeline funnel, cert/lead-source distributions,
         // top agents). Company Admin / Super Admin only (enforced in Controller).
@@ -1297,8 +1313,25 @@ Route::prefix('v1')->group(function () {
         Route::get('/announcement-settings', [AnnouncementSettingController::class, 'show']);
         Route::put('/announcement-settings', [AnnouncementSettingController::class, 'update']);
 
-        // Platform / Admin management (Phase 7). companies is Super
-        // Admin only end to end (CompanyPolicy). users ("Manage Agents")
+        /*
+         * Platform / Admin management (Phase 7).
+         *
+         * companies is Super Admin only for index/store/update/destroy
+         * (CompanyPolicy) — but NOT for show: CompanyPolicy::view has always
+         * also allowed a user to read their OWN company, and this comment
+         * claimed otherwise until 2026-09-12. It was not a harmless
+         * inaccuracy. The admin commission screen was reading a company's
+         * commission basis through this resource, so a future reader
+         * tightening view() to isSuperAdmin() on the strength of this very
+         * sentence would have broken nothing visibly and left a Company Admin
+         * at a PV company reading 'ราคาขาย' as their basis.
+         *
+         * That screen now uses /commission-settings instead, so the own-
+         * company read is no longer load-bearing for it. The clause is still
+         * there and still used (GET /me's neighbours), so the description is
+         * corrected rather than the behaviour.
+         */
+        // users ("Manage Agents")
         // is Company Admin's own team (agent + company_admin roles,
         // TenantScope narrows it automatically) or Super Admin across
         // every company — see UserPolicy/UserController for the full

@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests\Platform;
 
-use App\Enums\CommissionBasis;
 use App\Enums\CommissionPlanType;
 use App\Models\Company;
 use Illuminate\Foundation\Http\FormRequest;
@@ -32,10 +31,15 @@ class StoreCompanyRequest extends FormRequest
             // supports it) but has no working CommissionService yet — frontend-admin
             // shows it as "อยู่ระหว่างพัฒนา" (human decision 2026-07-14).
             'commission_plan_type' => ['sometimes', new Enum(CommissionPlanType::class)],
-            // 2026-09-12 — defaults to 'price' at the column (see the
-            // migration); accepted here only so a company can be created
-            // already on PV rather than created and immediately edited.
-            'commission_basis' => ['sometimes', new Enum(CommissionBasis::class)],
+            /*
+             * `commission_basis` was accepted here for a few hours on
+             * 2026-09-12 and was moved to PUT /commission-settings the same
+             * day. Two doors onto one column is two gates to keep in step,
+             * and these two are not the same question: this endpoint asks
+             * "may you administer this company", and the basis asks "may you
+             * change what every percentage in it is a percentage of". Do not
+             * add it back here.
+             */
         ];
     }
 }

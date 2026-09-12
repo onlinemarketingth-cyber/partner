@@ -100,15 +100,21 @@ const READY = {
   can_fix: true,
 }
 
-async function mountView(opts: { basis?: 'price' | 'pv'; products?: unknown[] } = {}) {
-  const { basis = 'price', products = [product()] } = opts
+async function mountView(opts: { basis?: 'price' | 'pv'; products?: unknown[]; failSettings?: boolean } = {}) {
+  const { basis = 'price', products = [product()], failSettings = false } = opts
 
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/commission-readiness')) return READY
-    // The SINGLE-company read this screen makes for the basis, which is a
-    // different shape from the list the switcher loads — checked first so the
-    // looser `/companies` prefix below cannot swallow it.
-    if (/^\/companies\/\d+$/.test(path)) return { data: { ...AIA, commission_basis: basis } }
+    // 2026-09-12 — commission's own endpoint, not the platform companies
+    // resource. See CommissionSettingService for why that dependency was
+    // removed rather than documented.
+    if (path.startsWith('/commission-settings')) {
+      // Any failure at all — 403 from a tightened policy, 500, a dropped
+      // connection. The screen's response must be the same for all of them.
+      if (failSettings) throw new Error('unreachable')
+
+      return { data: { commission_basis: basis } }
+    }
     if (path.startsWith('/companies')) return { data: [AIA] }
     if (path.startsWith('/products')) return { data: products }
     if (path.startsWith('/commission-rules')) return { data: [COMPANY_RULE] }
@@ -244,14 +250,85 @@ describe('PV — step 2', () => {
     expect(put).toHaveBeenCalledWith('/products/1', { pv_satang: null })
   })
 
-  it('switches the whole company basis through the company endpoint', async () => {
+  it("switches the basis through commission's own endpoint, not the companies resource", async () => {
+    /*
+     * 2026-09-12 — this asserted PUT /companies/2 for a few hours. Both the
+     * read and the write moved to /commission-settings the same day, so the
+     * screen stops depending on CompanyPolicy's own-company clause and the
+     * write sits behind a commission ability rather than "may you rename this
+     * company". See CommissionSettingService for the whole reasoning.
+     *
+     * Pinned as an exact call because the endpoint IS the point of the change:
+     * a future edit that quietly routes it back through the companies
+     * resource would otherwise look identical from the outside.
+     */
     const wrapper = await mountView({ basis: 'price' })
     await goToStep(wrapper, 2)
 
     await wrapper.get('[data-test="basis-option-pv"]').trigger('click')
     await flushPromises()
 
-    expect(put).toHaveBeenCalledWith('/companies/2', { commission_basis: 'pv' })
+    expect(put).toHaveBeenCalledWith('/commission-settings', { commission_basis: 'pv', company_id: 2 })
+  })
+})
+
+describe('PV — a basis the screen could not read is never rendered as an answer', () => {
+  /*
+   * THE FAILURE MODE THIS BLOCK EXISTS FOR, and it is not a crash.
+   *
+   * `commissionBasis` has to hold something for the template to bind to. Until
+   * 2026-09-12 a failed read set it to 'price' and the screen drew ราคาขาย as
+   * the selected option — in the same typeface, with the same tick, as a real
+   * answer. An admin at a PV company would read a confident, wrong statement
+   * about how their agents are paid, with nothing on screen to suggest
+   * otherwise.
+   *
+   * Loud beats plausible. Every path that could fail — 403, 500, dropped
+   * connection — now lands here.
+   */
+  it('says it could not read the basis instead of showing the default', async () => {
+    const wrapper = await mountView({ failSettings: true })
+
+    await goToStep(wrapper, 2)
+
+    expect(wrapper.get('[data-test="basis-unknown"]').text()).toContain('อ่านค่าฐานการคำนวณไม่สำเร็จ')
+  })
+
+  it('marks NEITHER option as chosen', async () => {
+    // The tick and the highlight are the assertion the reader actually makes.
+    // Leaving them on 'price' is the whole bug: it is not a missing warning,
+    // it is a wrong answer rendered as a right one.
+    const wrapper = await mountView({ failSettings: true })
+
+    await goToStep(wrapper, 2)
+
+    expect(wrapper.get('[data-test="basis-option-price"]').classes().join(' ')).not.toContain('border-brand-600')
+    expect(wrapper.get('[data-test="basis-option-pv"]').classes().join(' ')).not.toContain('border-brand-600')
+  })
+
+  it('refuses to let a Super Admin switch it blind', async () => {
+    /*
+     * A switch that works while the CURRENT value is unknown is how somebody
+     * "fixes" a company onto the basis it was already on, or off the one it
+     * needed — an unreadable state is not a state to make decisions from.
+     */
+    const wrapper = await mountView({ failSettings: true })
+
+    await goToStep(wrapper, 2)
+
+    expect(wrapper.get('[data-test="basis-option-pv"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('shows a real answer again as soon as one can be read', async () => {
+    // The control: the error state is transient, not sticky. Without this a
+    // screen that had failed once and then never recovered would pass every
+    // assertion above.
+    const wrapper = await mountView({ basis: 'pv' })
+
+    await goToStep(wrapper, 2)
+
+    expect(wrapper.find('[data-test="basis-unknown"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="basis-option-pv"]').classes().join(' ')).toContain('border-brand-600')
   })
 })
 

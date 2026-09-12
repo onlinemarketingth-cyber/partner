@@ -185,6 +185,17 @@ enum Ability: string
     /** From Commission/UpdateCommissionSplitSettingRequest.php:20. */
     case SettingsCommissionSplitUpdate = 'settings.commission_split.update';
 
+    /**
+     * From Commission/UpdateCommissionSettingRequest.php (2026-09-12).
+     *
+     * The WIDEST-reaching single field in the commission configuration: it
+     * decides what every percentage in the company is a percentage of (the
+     * sale price, or the product's PV). Its own ability rather than
+     * CompanyPolicy::update, which is "may you rename this company" — the two
+     * answer the same today and are not the same question.
+     */
+    case SettingsCommissionBasisUpdate = 'settings.commission_basis.update';
+
     /** From Catalog/UpdateVideoProcessingSettingRequest.php:14. */
     case SettingsVideoProcessingUpdate = 'settings.video_processing.update';
 

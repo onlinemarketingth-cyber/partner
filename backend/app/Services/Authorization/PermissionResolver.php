@@ -245,6 +245,7 @@ class PermissionResolver
             Ability::SettingsCommissionGenerationUpdate,
             Ability::SettingsAgentRankUpdate,
             Ability::SettingsCommissionSplitUpdate,
+            Ability::SettingsCommissionBasisUpdate,
             Ability::SettingsVideoProcessingUpdate,
             Ability::SettingsAffiliateAttributionUpdate,
             Ability::SettingsAnnouncementUpdate,
