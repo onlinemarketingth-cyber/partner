@@ -75,6 +75,25 @@ export interface CommissionReadinessPayload {
  */
 const DISMISS_KEY_PREFIX = 'commissionReadiness.dismissed'
 
+/**
+ * WHICH WARNING was dismissed — a fourth dimension, added 2026-09-13.
+ *
+ * The banner (surface `undefined`) keeps the key it has always written, so no
+ * admin loses a dismissal to this change. `startHere` is CommissionPlansView's
+ * once-a-day "this company cannot pay anybody yet" modal, and it gets its OWN
+ * suffix rather than sharing the banner's key on purpose: the two are not the
+ * same promise. "ปิดไว้ก่อน" on a modal means "not this interruption, now"; the
+ * strip above every page is the safety net that must survive it, and silencing
+ * it as a side effect of closing a dialog is precisely how a company buys a
+ * month of the silence this whole store exists to break.
+ *
+ * The KEY SCHEME is deliberately still one scheme — same prefix, same company
+ * and state dimensions, same "the date is the value" trick (see above) — so
+ * every dismissal in this app still expires by itself and none of them
+ * accumulates a dead key per day.
+ */
+export type CommissionReadinessSurface = 'startHere'
+
 function today(): string {
   // Local date, not toISOString(): the admin's "tomorrow" is Bangkok's, and
   // UTC would bring the banner back at 07:00 for anyone in +07.
@@ -85,8 +104,10 @@ function today(): string {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
-function dismissKey(companyKey: string, state: CommissionReadinessState): string {
-  return `${DISMISS_KEY_PREFIX}:${companyKey}:${state}`
+function dismissKey(companyKey: string, state: CommissionReadinessState, surface?: CommissionReadinessSurface): string {
+  const base = `${DISMISS_KEY_PREFIX}:${companyKey}:${state}`
+
+  return surface ? `${base}:${surface}` : base
 }
 
 export const useCommissionReadinessStore = defineStore('commissionReadiness', () => {
@@ -125,16 +146,30 @@ export const useCommissionReadinessStore = defineStore('commissionReadiness', ()
    */
   const dismissalTick = ref(0)
 
-  const dismissedToday = computed<boolean>(() => {
-    // Referenced so the computed re-runs after dismiss(); the value itself is
+  /**
+   * "Has THIS warning already been waved away today, for this company, in this
+   * state" — asked by the banner (no surface) and by any other warning that
+   * needs the same once-a-day rule.
+   *
+   * A plain function rather than a second computed per surface, and it is
+   * still safe to call from inside one: it READS `dismissalTick`, `state` and
+   * `companyKey`, so a computed that calls it tracks all three and re-runs when
+   * any of them moves. That is what keeps a caller from mirroring localStorage
+   * in a ref of its own — a second copy of the truth that goes stale the moment
+   * another tab writes.
+   */
+  function dismissedTodayFor(surface?: CommissionReadinessSurface): boolean {
+    // Referenced so callers re-run after dismiss(); the value itself is
     // meaningless.
     void dismissalTick.value
 
     const current = state.value
     if (current === null || current === 'ready') return false
 
-    return readStored(dismissKey(companyKey.value, current)) === today()
-  })
+    return readStored(dismissKey(companyKey.value, current, surface)) === today()
+  }
+
+  const dismissedToday = computed<boolean>(() => dismissedTodayFor())
 
   /**
    * The one question the banner asks.
@@ -215,12 +250,17 @@ export const useCommissionReadinessStore = defineStore('commissionReadiness', ()
     }
   }
 
-  /** Hide until tomorrow, for this company and this state only. */
-  function dismiss(): void {
+  /**
+   * Hide until tomorrow, for this company, this state and this surface only.
+   *
+   * `dismiss()` with no argument is the banner's own dismissal and writes the
+   * key it always has.
+   */
+  function dismiss(surface?: CommissionReadinessSurface): void {
     const current = state.value
     if (current === null || current === 'ready') return
 
-    writeStored(dismissKey(companyKey.value, current), today())
+    writeStored(dismissKey(companyKey.value, current, surface), today())
     dismissalTick.value++
   }
 
@@ -250,6 +290,7 @@ export const useCommissionReadinessStore = defineStore('commissionReadiness', ()
     productsTotal,
     productsCovered,
     dismissedToday,
+    dismissedTodayFor,
     shouldShow,
     ensureLoaded,
     refresh,

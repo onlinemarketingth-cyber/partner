@@ -1271,7 +1271,9 @@ function productReadiness(p: ProductOption): { level: ReadinessLevel; message: s
 
 const readinessCounts = computed(() => {
   const c = { ok: 0, warn: 0, bad: 0 }
-  for (const p of byCompany(products.value)) c[productReadiness(p).level]++
+  // Sellable only, so this breakdown and the server's banner count the same
+  // things — see sellableProducts().
+  for (const p of sellableProducts.value) c[productReadiness(p).level]++
 
   return c
 })
@@ -1496,7 +1498,10 @@ async function setCommissionBasis(next: CommissionBasis): Promise<void> {
  */
 const productsMissingPointValue = computed<ProductOption[]>(() =>
   commissionBasis.value === 'pv'
-    ? byCompany(products.value).filter((p) => p.pv_satang === null || p.pv_satang === undefined)
+    // Sellable only: a product this company does not sell cannot pay anybody
+    // the wrong amount, so a missing PV on it is not a gap. See
+    // sellableProducts() for the lock this prevents.
+    ? sellableProducts.value.filter((p) => p.pv_satang === null || p.pv_satang === undefined)
     : [])
 
 // One draft string per product id, so a half-typed number never touches the
@@ -1677,6 +1682,38 @@ async function toggleSelling(p: ProductOption): Promise<void> {
   }
 }
 
+/**
+ * The products this company ACTUALLY SELLS — the set every readiness verdict
+ * on this screen is judged against.
+ *
+ * ── THE DIVERGENCE THIS CLOSES (2026-09-13) ──
+ *
+ * CommissionReadinessService::sellableProducts() has always filtered the
+ * server's verdict through Product::isSellableBy(). This screen did not: every
+ * computed below counted `byCompany(products)` whole. While nothing here could
+ * switch selling on or off, that was invisible. The moment the per-company
+ * selling toggle landed in step 3 it stopped being invisible — and it is
+ * visible in the owner's own screenshot, where the banner says "สินค้า 3 จาก 3"
+ * above a list holding four rows, one of them ปิดขาย.
+ *
+ * The consequence is worse than a wrong number. Step 3 stays ยังไม่ครบ and step
+ * 4 stays LOCKED over a product this company does not sell — a lock whose only
+ * key is setting a rate for something nobody will ever buy here. That is the
+ * dead end the whole 4-step redesign exists to remove.
+ *
+ * `!== false` and not `=== true`: a payload without the field (an older
+ * response, a test fixture) counts as sellable. The safe direction for a
+ * warning is to raise one too many, never to go quiet about a product that IS
+ * on sale and pays nobody.
+ *
+ * THE LIST ITSELF IS NOT NARROWED — step 3 still shows every product, closed
+ * ones greyed and fully editable, because the owner asked for exactly that
+ * ("ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม"). Showing everything and judging only what is
+ * sold are different questions; this is the second one.
+ */
+const sellableProducts = computed<ProductOption[]>(
+  () => byCompany(products.value).filter((p) => p.is_sellable_here !== false))
+
 // ══════════════════════════ The 4-step flow (2026-09-11) ══════════════════════════
 /*
  * Everything below re-cuts facts productReadiness() already establishes, per
@@ -1693,7 +1730,11 @@ async function toggleSelling(p: ProductOption): Promise<void> {
 
 /** In-use plan types whose company-wide structure is confirmed MISSING (step 2). */
 const unsetStructuralPlans = computed<CommissionPlanType[]>(() => {
-  const inUse = new Set(byCompany(products.value).map((p) => p.effective_plan_type).filter(Boolean) as CommissionPlanType[])
+  // "In use" means in use for something this company SELLS — see
+  // sellableProducts(). loadReadinessProbe() deliberately still probes the
+  // wider set: an extra probe costs one request and, because the check below
+  // is `=== false`, an unprobed plan can never raise an alarm.
+  const inUse = new Set(sellableProducts.value.map((p) => p.effective_plan_type).filter(Boolean) as CommissionPlanType[])
 
   // `=== false` and not `!`: loadReadinessProbe() leaves a key UNDEFINED when
   // its probe could not answer, and "unknown" must never raise an alarm.
@@ -1702,16 +1743,35 @@ const unsetStructuralPlans = computed<CommissionPlanType[]>(() => {
 
 /** Products with no rate that resolves TODAY — the money-losing set (step 3). */
 const productsMissingAgentRate = computed<ProductOption[]>(() =>
-  byCompany(products.value).filter((p) => !resolveRuleFor(p)))
+  sellableProducts.value.filter((p) => !resolveRuleFor(p)))
 
 /*
  * Step 3 is complete when every product resolves to exactly ONE live rate.
  * Overlaps count as incomplete for the same reason productReadiness ranks
  * them beside "no rule at all": the money still moves, at an amount nobody
  * chose and nobody can predict, into a ledger that cannot be corrected (BR-4).
+ *
+ * ── AND THE COMPANY DEFAULT IS REQUIRED EVEN WHEN NOTHING IS MISSING TODAY ──
+ *
+ * 2026-09-13, owner, about a company whose every product happens to carry its
+ * own rate: "แดงตลอด ผมยังอยากให้ตั้งค่าบริษัทอยู่ดี".
+ *
+ * Without this clause such a company reads เสร็จแล้ว while standing one row
+ * away from paying nobody: the next product anybody adds — from the catalogue
+ * screen, from an import, from another admin in another tab — arrives with no
+ * rate of its own and nothing underneath it to fall through to, and the sale
+ * that follows is silent (CommissionService logs and returns null rather than
+ * blocking the deal). The company default is not a convenience, it is the
+ * safety net for the product that does not exist yet.
+ *
+ * THE SERVER ALREADY SAYS THE SAME THING. CommissionReadinessService reports
+ * `company_default_missing` with `blocking_step: 3` as of 2026-09-13, so the
+ * app-shell banner, this screen's banner and this pill now give one verdict.
+ * Do not re-derive this rule differently here — two answers about whether
+ * anybody is being paid is the failure the readiness store was built to end.
  */
 const step3Complete = computed(() =>
-  productsMissingAgentRate.value.length === 0 && conflictingRuleIds.value.size === 0)
+  subStepThreeOneDone.value && productsMissingAgentRate.value.length === 0 && conflictingRuleIds.value.size === 0)
 
 /**
  * Unilevel/Affiliate products with nobody set to pay the upline (step 4).
@@ -1721,7 +1781,7 @@ const step3Complete = computed(() =>
  * them here would invent a gap that does not exist.
  */
 const leaderRateGaps = computed<ProductOption[]>(() =>
-  byCompany(products.value).filter((p) =>
+  sellableProducts.value.filter((p) =>
     (p.effective_plan_type === 'unilevel' || p.effective_plan_type === 'affiliate') && !resolveOverrideFor(p)))
 
 const stepStatuses = computed<Record<Step, StepStatus>>(() => ({
@@ -1922,6 +1982,80 @@ const readinessDetail = computed(() => {
   return labels ? `${stuck}${labels}` : stuck.replace(/ · $/, '')
 })
 
+/**
+ * ── "เริ่มตรงนี้" — THE ONE MODAL THAT MAY INTERRUPT THIS SCREEN (2026-09-13) ──
+ *
+ * A nag modal was DELETED from this file on 2026-09-11 (see the
+ * RESOLUTION_ORDER_NOTE block): it auto-opened on every entry to explain the
+ * resolution order, and it had to go because a modal that appears every visit
+ * is dismissed unread — and because the thing it said is now drawn permanently
+ * behind it, which is strictly more than interrupting ever achieved.
+ *
+ * WHY THIS ONE IS NOT THAT ONE, condition by condition:
+ *
+ *   · IT IS NOT ABOUT SOMETHING ALREADY ON SCREEN. The old modal repeated the
+ *     ladder it covered up. This one says a thing the screen behind it cannot:
+ *     that RIGHT NOW, a deal closing pays nobody.
+ *   · 'missing' ONLY, never 'incomplete'. Amber means somebody is still paid;
+ *     interrupting for it would spend the interruption on the cheaper problem
+ *     and teach the admin to close this dialog by reflex.
+ *   · ONCE PER DAY PER COMPANY, through the readiness store's own dismissal
+ *     mechanism (same prefix, same per-company/per-state/per-day rule, its own
+ *     surface so closing it never silences the app-shell banner). Every visit
+ *     after the first is a visit it does not appear on — which is the exact
+ *     property the deleted one lacked.
+ *   · ONLY FOR SOMEBODY WHO CAN FIX IT. Commission config is Super Admin's to
+ *     write; telling a Company Admin in a dialog they must dismiss that their
+ *     company cannot pay anybody is an interruption with no action attached.
+ *   · IT IS SHORT, AND ITS PRIMARY BUTTON IS THE PATH. One sentence and a
+ *     button that puts them where the work is — the screen behind it now says
+ *     what to do first, so there is nothing to explain here.
+ */
+const START_HERE_SURFACE = 'startHere' as const
+
+/**
+ * Closed for THIS visit. The daily flag lives in the store (localStorage);
+ * this is the half that has to be a ref because "I just closed it" is not a
+ * fact about the day, and re-reading storage would re-open it on the next
+ * reactive tick.
+ */
+const startHereClosed = ref(false)
+
+const showStartHereModal = computed(() =>
+  canEditCommissionConfig.value
+  && commissionReadiness.state === 'missing'
+  && !startHereClosed.value
+  && !commissionReadiness.dismissedTodayFor(START_HERE_SURFACE))
+
+/**
+ * BOTH buttons write the daily dismissal, and only one of them navigates.
+ *
+ * "ปิดไว้ก่อน" obviously does. So does the primary, deliberately: an admin who
+ * pressed "go and set it up" has acknowledged this at least as firmly as one
+ * who waved it away, and re-interrupting them on the next entry — after a
+ * company switch, after a reload — would rebuild the every-visit modal this
+ * one is careful not to be. The state is still 'missing' until it is fixed, so
+ * the banner above every page keeps saying so all day; nothing goes silent.
+ */
+function dismissStartHereForToday(): void {
+  commissionReadiness.dismiss(START_HERE_SURFACE)
+  startHereClosed.value = true
+}
+
+/**
+ * The primary action: close, then land on the step that owns the gap.
+ *
+ * Clamped exactly as the banner's jump is (see `jumpStep`), because goToStep()
+ * refuses an unreachable step and a primary button that visibly does nothing is
+ * the dead end this whole screen exists to remove. Step 3 is the destination
+ * whenever it is open; when it is not, the local edge is the step that has to
+ * be cleared before step 3 could be worked on at all.
+ */
+function goFixCommission(): void {
+  dismissStartHereForToday()
+  goToStep(stepReachable.value[3] ? 3 : (firstIncompleteStep.value ?? 3))
+}
+
 // ── Step 2: which plan, and what that plan means ──
 const planChipOrder: CommissionPlanType[] = ['unilevel', 'binary', 'matrix', 'stairstep_breakaway', 'generation', 'affiliate']
 
@@ -2022,6 +2156,63 @@ const companyDefaultRules = computed<CommissionRuleItem[]>(() => {
   const now = new Date()
 
   return byCompany(commissionRules.value).filter((r) => !r.product && !r.product_category && isRuleActiveOn(r, now))
+})
+
+/**
+ * ── STEP 3 HAS AN ORDER OF ITS OWN NOW (2026-09-13) ──
+ *
+ * Owner, looking at a company with nothing configured: "ตอนนี้แดงไปหมด หาไม่เจอ
+ * ต้องทำอะไรก่อนหลัง". Six red things at once — the banner, the 3.1 panel, and
+ * one warning on each of four product rows in 3.2.
+ *
+ * WHAT WAS ACTUALLY WRONG. Red was doing two jobs: "this is broken" AND "you
+ * are here". A colour that answers two questions answers neither, and the
+ * second job was the one the admin needed. Worse, the four red rows were not
+ * four problems. They were ONE problem — no company default — quoted four
+ * times, because with no default nothing resolves for anything. Repeating a
+ * warning once per row about a single cause is exactly what drowns the warning
+ * that matters.
+ *
+ * THE RULE THIS ENCODES: at most ONE red thing on screen at a time, and it
+ * belongs to the thing you must do NOW. So red stays "broken", a BRAND-coloured
+ * frame plus a ทำตรงนี้ก่อน badge says "you are here", and 3.2 — every one of
+ * whose warnings is downstream of 3.1 — is muted and locked until 3.1 exists.
+ *
+ * The one red thing that is NOT suppressed with them is the overlapping-rules
+ * panel at the top of this step: two live rates fighting over one scope is a
+ * different cause with a different cure (delete a row), not an echo of 3.1.
+ */
+const subStepThreeOneDone = computed(() => companyDefaultRules.value.length > 0)
+
+/**
+ * 3.2 is readable but inert until 3.1 exists.
+ *
+ * NOT exempted for a read-only viewer, and that is not the same call as
+ * `stepReachable`'s Company-Admin exception. That exception exists because
+ * gating a whole SCREEN on completion would lock a reader out of everything
+ * they came to read. Nothing is withheld here: every row, its rate, the layer
+ * it came from and its selling state all still render while locked. What goes
+ * quiet is the four-times-repeated warning and controls a reader never had.
+ */
+const subStepThreeTwoLocked = computed(() => !subStepThreeOneDone.value)
+
+/**
+ * 3.1's one-line summary once it is done — the VALUE, not the explanation.
+ *
+ * A finished sub-step earns a line, not a panel: the "ตาข่ายกันพลาด" sentence
+ * is teaching material for somebody who has not done it yet, and leaving it up
+ * afterwards is how a screen ends up shouting all its instructions at once,
+ * which is the complaint this whole change answers. More than one live default
+ * is a collision, not a rate, so it says the count and lets the ซ้อนทับ badge
+ * on the rows below say which ones.
+ */
+const companyDefaultSummary = computed<string>(() => {
+  const rows = companyDefaultRules.value
+  if (rows.length > 1) return `${rows.length} อัตราซ้อนทับกัน`
+
+  const only = rows[0]
+
+  return only ? formatRate(only.rate_type, only.rate_value) : ''
 })
 
 /** 'ตั้งเฉพาะสินค้านี้' / 'ใช้อัตราหมวดหมู่' / 'ใช้ค่าเริ่มต้นบริษัท' — the badge in 3.2. */
@@ -3683,11 +3874,38 @@ watch(companyPlanType, (pt) => {
                 </p>
               </div>
 
-              <!-- ── 3.1 ค่าเริ่มต้นทั้งบริษัท ── -->
-              <div data-test="step3-company-default">
+              <!-- ── 3.1 ค่าเริ่มต้นทั้งบริษัท ──
+                   THE FRAME IS BRAND, NOT ROSE, AND THAT IS THE WHOLE FIX.
+                   Red already means "this is broken" on this screen (the panel
+                   inside this frame is red, and says so in one sentence). If
+                   the frame were red too, the colour would be answering "what
+                   is wrong" and "where do I start" at once — which is the
+                   condition the owner described as แดงไปหมด หาไม่เจอต้องทำอะไร
+                   ก่อนหลัง. One colour, one job: brand ring + ทำตรงนี้ก่อน is
+                   "you are here", and it moves to 3.2 the moment this is done.
+                   See `subStepThreeOneDone`. -->
+              <div
+                data-test="step3-company-default"
+                class="rounded-2xl transition-colors"
+                :class="subStepThreeOneDone ? '' : 'border-2 border-brand-500 ring-4 ring-brand-100 bg-brand-50/30 px-4 py-3.5'"
+              >
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="text-[13.5px] font-extrabold text-slate-900">3.1 ตั้งค่าเริ่มต้นทั้งบริษัทก่อน</span>
-                  <span class="text-[11.5px] text-slate-400">ตาข่ายกันพลาด — สินค้าที่ยังไม่ได้ตั้งเรตจะตกลงมาใช้ค่านี้</span>
+                  <span
+                    v-if="!subStepThreeOneDone"
+                    class="text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-brand-600 text-white"
+                    data-test="substep-focus-3-1"
+                  >
+                    ทำตรงนี้ก่อน
+                  </span>
+                  <span v-if="!subStepThreeOneDone" class="text-[11.5px] text-slate-400">ตาข่ายกันพลาด — สินค้าที่ยังไม่ได้ตั้งเรตจะตกลงมาใช้ค่านี้</span>
+                  <!-- Done: one quiet line carrying the rate itself. The rows
+                       below still render with their แก้ไข/ลบ — collapsing the
+                       EXPLANATION must never collapse the ability to change
+                       the number it explained. -->
+                  <span v-else class="text-[11.5px] font-bold text-emerald-700" data-test="substep-3-1-summary">
+                    ตั้งไว้แล้ว {{ companyDefaultSummary }} — สินค้าที่ไม่ได้แยกเรตใช้ค่านี้
+                  </span>
                   <span
                     class="ml-auto text-[11px] font-bold rounded-full px-2.5 py-1"
                     :class="companyDefaultRules.length ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
@@ -3752,14 +3970,51 @@ watch(companyPlanType, (pt) => {
                 </div>
               </div>
 
-              <!-- ── 3.2 สินค้าที่มาร์จิ้นต่างจริง ── -->
-              <div data-test="step3-products">
+              <!-- ── 3.2 สินค้าที่มาร์จิ้นต่างจริง ──
+                   LOCKED UNTIL 3.1 EXISTS, and the lock is what removes five
+                   of the six red things: with no company default NOTHING
+                   resolves, so every row here was repeating 3.1's sentence
+                   once per product. The rows stay readable (a rate that IS set
+                   per product still shows, and so does whether the company
+                   sells it) — only the echo and the controls go. -->
+              <div
+                data-test="step3-products"
+                class="rounded-2xl transition-colors"
+                :class="subStepThreeTwoLocked
+                  ? 'border border-slate-200 bg-slate-50/70 px-4 py-3.5 opacity-60'
+                  : 'border-2 border-brand-500 ring-4 ring-brand-100 bg-brand-50/20 px-4 py-3.5'"
+              >
                 <div class="flex flex-wrap items-center gap-2 mb-2">
                   <span class="text-[13.5px] font-extrabold text-slate-900">3.2 แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง</span>
-                  <span class="text-[11.5px] text-slate-400">
+                  <!-- Not "ทำตรงนี้ก่อน": 3.2 is an exception list, not a duty
+                       — its own subtitle already says ไม่ต้องแยกทุกตัว. A badge
+                       that ORDERED an optional refinement would be the same
+                       lie as marking step 4 ยังไม่ครบ for being skippable, and
+                       it is how a badge stops being read. -->
+                  <span
+                    v-if="!subStepThreeTwoLocked"
+                    class="text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700 border border-brand-200"
+                    data-test="substep-focus-3-2"
+                  >
+                    ทำต่อได้ตรงนี้
+                  </span>
+                  <span v-if="!subStepThreeTwoLocked" class="text-[11.5px] text-slate-400">
                     ไม่ต้องแยกทุกตัว — ที่ไม่แยกจะใช้{{ companyDefaultRules[0] ? ` ${formatRate(companyDefaultRules[0].rate_type, companyDefaultRules[0].rate_value)} ` : 'ค่าเริ่มต้น' }}ข้างบน
                   </span>
                 </div>
+
+                <!-- ONE line, and it names the cure rather than the refusal.
+                     A lock with no way out is the dead end the 4-step redesign
+                     exists to remove — see stepLockHint() for the same rule one
+                     level up. -->
+                <p
+                  v-if="subStepThreeTwoLocked"
+                  class="mb-2.5 inline-flex items-center gap-2 text-[12.5px] font-bold text-slate-500"
+                  data-test="substep-3-2-lock"
+                >
+                  <Icon name="lock" :size="14" class="shrink-0 text-slate-400" />
+                  ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด
+                </p>
 
                 <!-- A failed switch has to say so where the switch is. Same
                      shape as pvError one step over — a visible line, never a
@@ -3792,7 +4047,7 @@ watch(companyPlanType, (pt) => {
                     v-for="p in sellingFirstProducts"
                     :key="p.id"
                     class="rounded-xl border px-4 py-3 transition-colors"
-                    :class="productReadiness(p).level === 'bad'
+                    :class="!subStepThreeTwoLocked && productReadiness(p).level === 'bad'
                       ? 'border-rose-200 bg-rose-50'
                       : (p.is_sellable_here ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50/60')"
                     :data-test="`product-row-${p.id}`"
@@ -3802,7 +4057,7 @@ watch(companyPlanType, (pt) => {
                       <div class="flex-1 min-w-[200px]">
                         <p
                           class="text-sm font-bold"
-                          :class="productReadiness(p).level === 'bad'
+                          :class="!subStepThreeTwoLocked && productReadiness(p).level === 'bad'
                             ? 'text-rose-800'
                             : (p.is_sellable_here ? 'text-slate-900' : 'text-slate-400')"
                         >{{ p.name }}</p>
@@ -3811,14 +4066,32 @@ watch(companyPlanType, (pt) => {
                           · แผน {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}<span v-if="!p.commission_plan_type"> (สืบทอดจากบริษัท)</span>
                         </p>
                       </div>
-                      <span class="text-sm font-extrabold" :class="resolveRuleFor(p) ? 'text-brand-700' : 'text-rose-600'" :data-test="`product-rate-${p.id}`">
-                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : 'ยังไม่มีอัตรา' }}
+                      <!-- A rate this product genuinely has still shows while
+                           3.2 is locked — 3.1 missing does not make a
+                           product-scoped 5% untrue. What is suppressed is the
+                           RED "ยังไม่มีอัตรา", four copies of which were the
+                           owner's แดงไปหมด: with no company default that is
+                           every row, saying what the framed panel above
+                           already says once. A dash is the honest quiet
+                           version — nothing resolves yet, and the screen has
+                           already told you why. -->
+                      <span
+                        class="text-sm font-extrabold"
+                        :class="resolveRuleFor(p) ? 'text-brand-700' : (subStepThreeTwoLocked ? 'text-slate-400' : 'text-rose-600')"
+                        :data-test="`product-rate-${p.id}`"
+                      >
+                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : (subStepThreeTwoLocked ? '—' : 'ยังไม่มีอัตรา') }}
                       </span>
                       <!-- WHICH LAYER the number came from. Without it, "3.00%"
                            on a product row is indistinguishable from a rate
                            somebody chose for that product, and deleting the
-                           company default silently changes it. -->
+                           company default silently changes it.
+                           Absent entirely while locked AND unresolved: the
+                           badge's only text in that state is ยังไม่มีอัตรา, so
+                           keeping it would reinstate the repetition in a
+                           smaller font. -->
                       <span
+                        v-if="resolveRuleFor(p) || !subStepThreeTwoLocked"
                         class="text-[11px] font-bold rounded-full px-2.5 py-1"
                         :class="resolveRuleFor(p) ? (resolveRuleFor(p)!.product ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500') : 'bg-rose-100 text-rose-700'"
                         :data-test="`product-layer-${p.id}`"
@@ -3840,6 +4113,18 @@ watch(companyPlanType, (pt) => {
                           Shown only where it will actually work — see
                           canToggleSelling() for why that is a per-row question
                           on one branch and a role on the other.
+
+                          2026-09-13 — AND IT IS NOT DISABLED BY 3.2'S LOCK,
+                          unlike every other control in this row. Owner's
+                          explicit decision: opening a product for sale is a
+                          CATALOGUE action, not a commission one. Locking it
+                          for a commission reason would invent a new dead end —
+                          an admin who came here to close a product they must
+                          not sell would be told to go and set a commission
+                          rate first, which has nothing to do with what they
+                          asked for. Do not "tidy" this into the same
+                          :disabled as its neighbours; the read-only pill below
+                          is exempt for the same reason.
                         -->
                         <button
                           v-if="canToggleSelling(p)"
@@ -3896,7 +4181,18 @@ watch(companyPlanType, (pt) => {
                         >
                           {{ p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย' }}
                         </span>
-                        <button type="button" class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50" @click="openSimulate(p)">
+                        <!-- Inert while 3.2 is locked: a simulator whose every
+                             answer is "ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้" is not a
+                             preview, it is a fourth way to be told the one
+                             thing 3.1 already says. -->
+                        <button
+                          type="button"
+                          class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                          :disabled="subStepThreeTwoLocked"
+                          :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน' : ''"
+                          :data-test="`simulate-${p.id}`"
+                          @click="openSimulate(p)"
+                        >
                           ทดสอบคำนวณ
                         </button>
                         <!-- TASK-245's per-row question AND the 2026-09-11 role
@@ -3911,10 +4207,24 @@ watch(companyPlanType, (pt) => {
                              the same condition until 2026-09-12; the `template`
                              that grouped the pair went with it, so the test
                              now sits on the one button that is left. -->
+                        <!--
+                             DISABLED BY THE SUB-STEP LOCK, NOT HIDDEN BY IT,
+                             and the difference is the house rule's own line:
+                             things a viewer may never do are hidden ("อันไหน
+                             สิทธิ์ company admin ทำไม่ได้ต้องซ่อน"), things
+                             they may do LATER are shown refusing, exactly as
+                             the step tabs and the footer's next button already
+                             do. Hiding it would delete the evidence that this
+                             is where the per-product rate is set, which is the
+                             one thing 3.2 is for.
+                        -->
                         <button
                           v-if="canEditCommissionConfig && canSetCommission(p)"
                           type="button"
-                          class="btn-primary"
+                          class="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                          :disabled="subStepThreeTwoLocked"
+                          :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                          :data-test="`product-rate-button-${p.id}`"
                           @click="openRuleFormForProduct(p)"
                         >
                           {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
@@ -3926,16 +4236,33 @@ watch(companyPlanType, (pt) => {
                     </div>
 
                     <!-- An expired rate is not the same gap as a missing one;
-                         see expiredRuleFor()'s docblock. -->
+                         see expiredRuleFor()'s docblock.
+
+                         THE ONE PER-ROW LINE THAT SURVIVES THE LOCK, because
+                         it is the one that is not an echo of 3.1: it carries a
+                         DATE nothing else on this screen knows, and it sends
+                         the admin to the row that needs one field changed
+                         instead of to a duplicate. It gives up red while
+                         locked, though — red belongs to the thing you must do
+                         now, and while 3.1 is missing that is 3.1. -->
                     <p
                       v-if="!resolveRuleFor(p) && expiredRuleFor(p)"
-                      class="mt-2 text-[12.5px] font-bold text-rose-700"
+                      class="mt-2 text-[12.5px] font-bold"
+                      :class="subStepThreeTwoLocked ? 'text-amber-700' : 'text-rose-700'"
                       :data-test="`product-expired-${p.id}`"
                     >
                       อัตราหมดอายุ {{ formatDate(expiredRuleFor(p)!.effective_to!) }} — ปิดการขายแล้วไม่มีใครได้เงิน
                     </p>
+                    <!-- Everything below is suppressed while locked. The 'bad'
+                         message is verbatim what 3.1 says, once per product;
+                         the 'warn' ones (leader rate, plan structure) are
+                         advice about the share of a commission that is not
+                         being paid at all yet, which is advice nobody can act
+                         on in a useful order. They come back the moment 3.1
+                         exists, per row, for the rows that genuinely have a
+                         problem. -->
                     <div
-                      v-else-if="productReadiness(p).level !== 'ok'"
+                      v-else-if="!subStepThreeTwoLocked && productReadiness(p).level !== 'ok'"
                       class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
                       :class="productReadiness(p).level === 'bad' ? 'bg-rose-100/60 text-rose-700' : 'bg-amber-50 text-amber-700'"
                     >
@@ -3977,15 +4304,33 @@ watch(companyPlanType, (pt) => {
                         ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม →
                       </button>
                     </div>
-                    <p v-else class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
+                    <p v-else-if="!subStepThreeTwoLocked" class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
                   </div>
                 </div>
 
+                <!-- Same lock, same reasoning as the per-row rate button: a
+                     product- or category-scoped rate written before the
+                     company default exists is an exception to a rule that has
+                     not been decided yet, and 3.1 is the decision. -->
                 <div v-if="canEditCommissionConfig" class="flex flex-wrap gap-2.5 mt-3">
-                  <button type="button" class="btn-primary" data-test="add-product-rate" @click="openCreateRuleFormWithScope('product')">
+                  <button
+                    type="button"
+                    class="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
+                    :disabled="subStepThreeTwoLocked"
+                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                    data-test="add-product-rate"
+                    @click="openCreateRuleFormWithScope('product')"
+                  >
                     + เพิ่มอัตราของสินค้า
                   </button>
-                  <button type="button" class="btn-secondary" data-test="add-category-rate" @click="openCreateRuleFormWithScope('category')">
+                  <button
+                    type="button"
+                    class="btn-secondary disabled:opacity-40 disabled:cursor-not-allowed"
+                    :disabled="subStepThreeTwoLocked"
+                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                    data-test="add-category-rate"
+                    @click="openCreateRuleFormWithScope('category')"
+                  >
                     + เพิ่มอัตราของหมวดหมู่
                   </button>
                   <!-- TASK-037's "เปิดตัวช่วยตั้งค่า (Wizard)" stood here and
@@ -4219,6 +4564,50 @@ watch(companyPlanType, (pt) => {
       carry their own permission check — a Company Admin has no way to open
       one, and a second check here would be a second thing to keep in step.
     -->
+
+    <!--
+      "ยังจ่ายค่าคอมให้ใครไม่ได้" — the ONE modal on this screen that opens by
+      itself (2026-09-13). Every condition that keeps it from becoming the nag
+      deleted on 2026-09-11 lives in `showStartHereModal`; read that before
+      widening any of them.
+
+      DELIBERATELY SHORT. The screen behind it now says what to do first — 3.1
+      is framed, 3.2 is locked with one line naming the cure — so a paragraph
+      here would be a paragraph covering the answer it repeats. Title, one
+      consequence, one button onto the path.
+    -->
+    <div
+      v-if="showStartHereModal"
+      class="fixed inset-0 z-[1100] bg-black/60 flex items-center justify-center p-4"
+      data-test="start-here-modal"
+    >
+      <div class="w-full max-w-md rounded-2xl bg-white shadow-2xl p-5">
+        <div class="flex items-start gap-3">
+          <Icon name="alert" :size="20" class="shrink-0 mt-0.5 text-rose-600" />
+          <div class="min-w-0">
+            <p class="text-[16px] font-extrabold text-slate-900" data-test="start-here-title">
+              บริษัทนี้ยังจ่ายค่าคอมให้ใครไม่ได้
+            </p>
+            <p class="mt-1 text-[13px] text-slate-500">
+              ดีลที่ปิดได้ตอนนี้จะไม่มีใครได้เงิน และค่าคอมที่ไม่ได้ลงบัญชีไว้ ย้อนกลับไปแก้ทีหลังไม่ได้
+            </p>
+          </div>
+        </div>
+        <div class="mt-4 flex items-center justify-end gap-4">
+          <button
+            type="button"
+            class="text-[13px] font-bold text-slate-400 hover:text-slate-600"
+            data-test="start-here-dismiss"
+            @click="dismissStartHereForToday"
+          >
+            ปิดไว้ก่อน
+          </button>
+          <button type="button" class="btn-primary" data-test="start-here-go" @click="goFixCommission">
+            ไปตั้งค่าตอนนี้
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- อัตราหัวหน้าทีม — opened from step 4 -->
     <!-- TASK-216 r2 — a real modal (human, 2026-08-20: "ทำไมไม่เป็น modal

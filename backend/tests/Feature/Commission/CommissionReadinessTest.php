@@ -178,6 +178,105 @@ class CommissionReadinessTest extends TestCase
     }
 
     // -----------------------------------------------------------------
+    // 1a. The company-wide default is REQUIRED (2026-09-13)
+    // -----------------------------------------------------------------
+
+    /**
+     * Owner, 2026-09-13: "แดงตลอด ผมยังอยากให้ตั้งค่าบริษัทอยู่ดี" — asked
+     * about the case where every product carries its own rate and the company
+     * has no fallback at all.
+     *
+     * Nothing is unpaid in that state, so it is deliberately NOT red: a deal
+     * closing right now does pay somebody, and red is reserved for the one
+     * sentence "ดีลที่ปิดได้จะไม่มีใครได้เงิน". It is incomplete, and the
+     * reason is the NEXT product — the moment somebody adds one it has no rate
+     * and nothing catches it, because the safety net 3.1 exists to be was
+     * never hung.
+     *
+     * Asked on the SERVER as well as the screen on purpose. Without this the
+     * banner would say ready while the settings screen showed 3.1 red, which
+     * is the two-answers-about-money problem this whole Service exists to
+     * remove.
+     */
+    public function test_a_company_whose_products_are_all_individually_covered_is_still_incomplete_without_a_default(): void
+    {
+        [$company, $product] = $this->companyWithProduct();
+
+        // A rate for the one product, and no company-wide default anywhere.
+        CommissionRule::factory()->create([
+            'company_id' => $company->id,
+            'product_id' => $product->id,
+            'product_category_id' => null,
+            'cert_tier_id' => null,
+            'rate_type' => CommissionRateType::Percentage,
+            'rate_value' => 300,
+            'effective_from' => now()->subYear()->toDateString(),
+            'effective_to' => null,
+        ]);
+        $this->companyDefaultOverrideRule($company);
+
+        $response = $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $company->id]))
+            ->getJson(self::ENDPOINT)
+            ->assertOk();
+
+        $response->assertJsonPath('state', 'incomplete');
+        $response->assertJsonPath('blocking_step', 3);
+        // Coverage is genuinely complete — this is not a coverage complaint.
+        $response->assertJsonPath('products_covered', 1);
+        $this->assertContains(
+            'company_default_missing',
+            array_column($response->json('issues'), 'code'),
+        );
+    }
+
+    public function test_a_company_with_a_default_is_not_nagged_about_one(): void
+    {
+        // The control. Without it the assertion above would also pass against
+        // a Service that reported the issue unconditionally, which would make
+        // every company permanently incomplete.
+        [$company] = $this->companyWithProduct();
+        $this->companyDefaultRule($company);
+        $this->companyDefaultOverrideRule($company);
+
+        $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $company->id]))
+            ->getJson(self::ENDPOINT)
+            ->assertOk()
+            ->assertJsonPath('state', 'ready')
+            ->assertJsonPath('issues', []);
+    }
+
+    public function test_an_expired_default_does_not_count_as_having_one(): void
+    {
+        /*
+         * The same trap this endpoint exists for, one level in: a row exists,
+         * so a `count() > 0` check would call it configured. It lapsed last
+         * month, resolveCommissionRule() will not find it, and the safety net
+         * is not there.
+         */
+        [$company, $product] = $this->companyWithProduct();
+        $this->companyDefaultRule($company, [
+            'effective_from' => now()->subYears(2)->toDateString(),
+            'effective_to' => now()->subMonth()->toDateString(),
+        ]);
+        CommissionRule::factory()->create([
+            'company_id' => $company->id,
+            'product_id' => $product->id,
+            'product_category_id' => null,
+            'cert_tier_id' => null,
+            'rate_type' => CommissionRateType::Percentage,
+            'rate_value' => 300,
+            'effective_from' => now()->subYear()->toDateString(),
+            'effective_to' => null,
+        ]);
+        $this->companyDefaultOverrideRule($company);
+
+        $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $company->id]))
+            ->getJson(self::ENDPOINT)
+            ->assertOk()
+            ->assertJsonPath('state', 'incomplete');
+    }
+
+    // -----------------------------------------------------------------
     // 1b. PV (2026-09-12)
     // -----------------------------------------------------------------
 

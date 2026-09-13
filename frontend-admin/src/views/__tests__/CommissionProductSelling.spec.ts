@@ -139,8 +139,11 @@ const READY = {
   can_fix: true,
 }
 
-async function mountView(opts: { products?: unknown[] } = {}) {
-  const { products = [ownedProduct()] } = opts
+async function mountView(opts: { products?: unknown[]; rules?: unknown[] } = {}) {
+  // `rules` added 2026-09-13: the readiness block below needs a company with
+  // NO company-wide default, which the shared COMPANY_RULE fixture would
+  // otherwise always supply.
+  const { products = [ownedProduct()], rules = [COMPANY_RULE] } = opts
 
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/commission-readiness')) return READY
@@ -150,7 +153,7 @@ async function mountView(opts: { products?: unknown[] } = {}) {
     // `/products?company_id=…` for a Super Admin, because `is_sellable_here`
     // has no answer without a company to resolve it against.
     if (path.startsWith('/products')) return { data: products }
-    if (path.startsWith('/commission-rules')) return { data: [COMPANY_RULE] }
+    if (path.startsWith('/commission-rules')) return { data: rules }
     if (path.startsWith('/commission-override-rules')) return { data: [LEADER_RULE] }
 
     return { data: [] }
@@ -178,6 +181,8 @@ async function mountView(opts: { products?: unknown[] } = {}) {
 }
 
 type Wrapper = Awaited<ReturnType<typeof mountView>>
+
+const pill = (w: Wrapper, step: number) => w.get(`[data-test="step-pill-${step}"]`).text()
 
 async function goToStep(wrapper: Wrapper, step: 1 | 2 | 3 | 4) {
   await wrapper.get(`[data-test="step-tab-${step}"]`).trigger('click')
@@ -384,5 +389,114 @@ describe('step 3 — a Company Admin sees the state, and only works the switch t
 
     expect(wrapper.find('[data-test="selling-switch-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="selling-state-1"]').text()).toBe('เปิดขาย')
+  })
+})
+
+describe('A product this company does not sell is shown, but never judged (2026-09-13)', () => {
+  /*
+   * THE LOCK THIS PREVENTS.
+   *
+   * CommissionReadinessService has always judged only products
+   * Product::isSellableBy() says the company can sell. This screen judged all
+   * of them. While nothing here could switch selling on or off, the difference
+   * was invisible — and it is visible in the owner's own screenshot, where the
+   * banner reads "สินค้า 3 จาก 3" above a list of four rows, one of them ปิดขาย.
+   *
+   * Left alone, step 3 would stay ยังไม่ครบ and step 4 would stay LOCKED over a
+   * product nobody here will ever buy, with no way to open it except setting a
+   * rate for it. Showing every product and judging only the sold ones are
+   * different questions, and both answers have to be right.
+   */
+  const RATE_FOR_PRODUCT_1 = {
+    id: 10,
+    company_id: AIA.id,
+    cert_tier: null,
+    product: { id: 1, name: 'AIA Health Plus' },
+    product_category: null,
+    rate_type: 'percentage',
+    rate_value: 300,
+    effective_from: '2020-01-01',
+    effective_to: null,
+    renewal_rate_type: null,
+    renewal_rate_value: null,
+    renewal_recurs: false,
+  }
+
+  it('never judges a closed product, and never blames step 3 on it', async () => {
+    /*
+     * 2026-09-13 — THIS ASSERTION MOVED, AND THE MOVE IS THE POINT.
+     *
+     * It used to read `pill(3) === 'เสร็จแล้ว'` on exactly this fixture: one
+     * selling product with its own rate, one CLOSED product with none. Step 3
+     * is now ยังไม่ครบ here for a reason that has nothing to do with the closed
+     * row — the company has no ค่าเริ่มต้นทั้งบริษัท at all, which the owner
+     * asked to be required even when every product happens to carry its own
+     * rate ("แดงตลอด ผมยังอยากให้ตั้งค่าบริษัทอยู่ดี"): a company without one
+     * is one new product away from paying nobody.
+     *
+     * So the narrowing is asserted where it is still visible — the per-product
+     * readiness breakdown, which counts sellableProducts() and nothing else —
+     * and the step-3 verdict is asserted to be ABOUT 3.1, by naming the panel
+     * that is framed and the sub-step that is locked. A regression that
+     * re-broadened the narrowing would put the closed row into ต้องแก้ here.
+     */
+    const wrapper = await mountView({
+      products: [
+        ownedProduct({ id: 1, is_sellable_here: true }),
+        ownedProduct({ id: 2, name: 'ไม่ได้ขายที่นี่', is_sellable_here: false }),
+      ],
+      rules: [RATE_FOR_PRODUCT_1],
+    })
+
+    const counts = wrapper.get('[data-test="step1-readiness-counts"]').text()
+    expect(counts).toContain('พร้อม 1')
+    expect(counts).not.toContain('ต้องแก้')
+
+    // ...and what step 3 is waiting for is 3.1, not the closed row.
+    await goToStep(wrapper, 3)
+    expect(wrapper.find('[data-test="substep-focus-3-1"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="substep-3-2-lock"]').text()).toContain('3.1')
+  })
+
+  it('opens step 3 once the company default exists, closed row and all', async () => {
+    // The other half: the closed product must not be what keeps step 3 shut
+    // after 3.1 is answered.
+    const wrapper = await mountView({
+      products: [
+        ownedProduct({ id: 1, is_sellable_here: true }),
+        ownedProduct({ id: 2, name: 'ไม่ได้ขายที่นี่', is_sellable_here: false }),
+      ],
+      rules: [RATE_FOR_PRODUCT_1, COMPANY_RULE],
+    })
+
+    expect(pill(wrapper, 3)).toContain('เสร็จแล้ว')
+  })
+
+  it('still holds step 3 open when a SELLING product has no rate', async () => {
+    // The control: the narrowing must not turn the gate off altogether.
+    const wrapper = await mountView({
+      products: [
+        ownedProduct({ id: 1, is_sellable_here: true }),
+        ownedProduct({ id: 2, name: 'ขายอยู่ ไม่มีเรต', is_sellable_here: true }),
+      ],
+      rules: [RATE_FOR_PRODUCT_1],
+    })
+
+    expect(pill(wrapper, 3)).toContain('ยังไม่ครบ')
+  })
+
+  it('still LISTS the closed product, so its rate can be set before it opens', async () => {
+    // The owner's own requirement: "ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม". Judging it
+    // and hiding it are two different mistakes; neither is made here.
+    const wrapper = await mountView({
+      products: [
+        ownedProduct({ id: 1, is_sellable_here: true }),
+        ownedProduct({ id: 2, name: 'ไม่ได้ขายที่นี่', is_sellable_here: false }),
+      ],
+      rules: [RATE_FOR_PRODUCT_1],
+    })
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="step-panel-3"]').text()).toContain('ไม่ได้ขายที่นี่')
   })
 })

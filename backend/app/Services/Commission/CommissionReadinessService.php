@@ -284,6 +284,36 @@ class CommissionReadinessService
         $total = $products->count();
         $covered = $total - $uncovered;
 
+        /*
+         * 2026-09-13 (owner: "แดงตลอด ผมยังอยากให้ตั้งค่าบริษัทอยู่ดี").
+         *
+         * THE COMPANY-WIDE DEFAULT IS NOW REQUIRED, NOT MERELY ADVISABLE.
+         *
+         * It was possible — and still is, through the copy feature or legacy
+         * data — for every product to carry its own rate while the company has
+         * no fallback at all. Nothing is unpaid in that state, so this is
+         * never RED: a deal closing right now does pay somebody, and red is
+         * reserved for the sentence "ดีลที่ปิดได้จะไม่มีใครได้เงิน".
+         *
+         * But it is a gap the owner wants closed, and the reason is the next
+         * product. The moment somebody adds one, it has no rate and nothing
+         * catches it — the safety net that step 3.1 exists to be was never
+         * hung. So it counts as incomplete, and the settings screen locks 3.2
+         * behind it (CommissionPlansView's `subStepThreeOneDone`).
+         *
+         * ASKED HERE rather than only on the screen, deliberately: without
+         * this, the banner would say ready while the screen showed 3.1 red —
+         * the two-answers-about-money problem this whole Service exists to
+         * remove.
+         */
+        $companyDefaultMissing = ! CommissionRule::withoutGlobalScopes()
+            ->where('company_id', $companyId)
+            ->whereNull('product_id')
+            ->whereNull('product_category_id')
+            ->where('effective_from', '<=', now())
+            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
+            ->exists();
+
         $expired = $this->countRulesOutsideToday($companyId, 'expired');
         $future = $this->countRulesOutsideToday($companyId, 'future');
         $overlapping = $this->countOverlappingLiveRules($companyId);
@@ -296,6 +326,14 @@ class CommissionReadinessService
                 'code' => 'products_without_rate',
                 'label' => "สินค้า {$uncovered} จาก {$total} รายการยังไม่มีอัตราค่าคอมที่ใช้ได้",
                 'count' => $uncovered,
+            ];
+        }
+
+        if ($companyDefaultMissing) {
+            $issues[] = [
+                'code' => 'company_default_missing',
+                'label' => 'ยังไม่มีค่าเริ่มต้นทั้งบริษัท — สินค้าที่เพิ่มใหม่จะไม่มีอัตราใดรองรับ',
+                'count' => 1,
             ];
         }
 
@@ -350,7 +388,7 @@ class CommissionReadinessService
 
         $state = $this->resolveState($total, $covered, $issues);
 
-        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps, $pointValueGaps), $total, $covered, $issues, $canFix);
+        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps, $pointValueGaps, $companyDefaultMissing), $total, $covered, $issues, $canFix);
     }
 
     /**
@@ -399,13 +437,13 @@ class CommissionReadinessService
      *
      * @param  list<string>  $unsetStructures
      */
-    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps, int $pointValueGaps): ?int
+    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps, int $pointValueGaps, bool $companyDefaultMissing): ?int
     {
         if ($state === 'ready') {
             return null;
         }
 
-        if ($uncovered > 0 || $overlapping > 0) {
+        if ($uncovered > 0 || $overlapping > 0 || $companyDefaultMissing) {
             return 3;
         }
 
