@@ -14,6 +14,7 @@ use App\Models\CommissionRule;
 use App\Models\Product;
 use App\Models\ProductPricePromotion;
 use App\Models\Referral;
+use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
 use Illuminate\Support\Facades\DB;
@@ -144,7 +145,7 @@ class CommissionService
         // reach this point at all — ReferralService::submit() already
         // gates on it, this is defense-in-depth) — it no longer feeds
         // resolveCommissionRule(), which is flat-rate by scope only now.
-        $rule = $this->resolveCommissionRule($referral->product);
+        $rule = $this->resolveCommissionRule($referral->product, (int) $referral->company_id);
 
         if (! $rule) {
             Log::warning("CommissionService: no commission recorded for referral {$referral->id} — no active commission_rule for product {$referral->product_id} (or its category, or a company-wide default). Configure one in Product Catalog (BR-2).");
@@ -250,7 +251,7 @@ class CommissionService
 
         if ($effectivePlanType === CommissionPlanType::Affiliate) {
             $affiliateMode = $referral->product->effectiveAffiliateOverrideMode();
-            $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, $affiliateMode, $commissionBaseSatang, $amountSatang);
+            $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, (int) $referral->company_id, $affiliateMode, $commissionBaseSatang, $amountSatang);
 
             if ($affiliateOverride && $affiliateMode === AffiliateOverrideMode::Deductive) {
                 // Round the manager's cut first (already done inside
@@ -429,7 +430,7 @@ class CommissionService
         // property of the PRODUCT, identical for every manager in the
         // chain, so re-querying it per hop would be the same answer at N
         // times the cost.
-        $overrideRule = $this->resolveOverrideRule($referral->product);
+        $overrideRule = $this->resolveOverrideRule($referral->product, (int) $referral->company_id);
 
         while ($manager !== null && $depth < self::MAX_OVERRIDE_CHAIN_DEPTH) {
             // Still required, and still per-manager: holding a cert tier
@@ -469,7 +470,7 @@ class CommissionService
      *
      * @return array{manager: User, managerTier: CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
      */
-    private function resolveAffiliateOverride(User $sellingAgent, Product $product, AffiliateOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
+    private function resolveAffiliateOverride(User $sellingAgent, Product $product, int $companyId, AffiliateOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
     {
         $manager = $sellingAgent->manager;
 
@@ -483,7 +484,7 @@ class CommissionService
             return null;
         }
 
-        $overrideRule = $this->resolveOverrideRule($product);
+        $overrideRule = $this->resolveOverrideRule($product, $companyId);
 
         if (! $overrideRule) {
             return null;
@@ -532,9 +533,14 @@ class CommissionService
      * rows can no longer coexist unambiguously — see
      * commission:collapse-override-tiers.
      */
-    private function resolveOverrideRule(Product $product): ?CommissionOverrideRule
+    private function resolveOverrideRule(Product $product, int $companyId): ?CommissionOverrideRule
     {
-        $baseQuery = fn () => CommissionOverrideRule::where('effective_from', '<=', now())
+        // Same fix, same day, same reasoning as resolveCommissionRule() above —
+        // and it had to be the same fix: a leader paid at another company's
+        // override rate is the identical defect one level up the chain.
+        $baseQuery = fn () => CommissionOverrideRule::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('effective_from', '<=', now())
             ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
             ->orderByDesc('effective_from');
 
@@ -636,9 +642,44 @@ class CommissionService
      * would silently stop finding renewal rates for any referral whose
      * original sale was priced via a category/company-default rule.
      */
-    public function resolveCommissionRule(Product $product): ?CommissionRule
+    public function resolveCommissionRule(Product $product, int $companyId): ?CommissionRule
     {
-        $baseQuery = fn () => CommissionRule::where('effective_from', '<=', now())
+        /*
+         * SECURITY / MONEY FIX 2026-09-12 — THE COMPANY IS NAMED OUT LOUD.
+         *
+         * This query used to be `CommissionRule::where(...)` and relied on
+         * TenantScope to narrow it. That is correct in exactly one situation —
+         * a request made by an authenticated Company Admin — and a no-op in
+         * the two that matter most:
+         *
+         *   · a GATEWAY-confirmed payment has no authenticated user at all, so
+         *     the scope narrows nothing;
+         *   · a SUPER ADMIN is exempt from TenantScope by design (Section 5),
+         *     so an admin-confirmed payment is unscoped too.
+         *
+         * In both, the lookup ran across EVERY company's rules and
+         * `orderByDesc('effective_from')` picked whichever happened to sort
+         * first. On a platform-owned product — one row that every company
+         * sells, ADR-040 — that is not a rare collision, it is the normal
+         * case: several companies each hold their own rate for the same
+         * product_id.
+         *
+         * The owner found it from the other end on 2026-09-12: a 5% rate set
+         * for Thai Life appeared on AIA's screen. The screen's own bug was
+         * cosmetic; this one paid a real agent at a rate nobody at their
+         * company had ever set, into a row BR-4 forbids correcting.
+         * ExplainCommissionGapCommand has warned about this exact condition
+         * since 2026-09-11 ("อัตราที่ระบบหาเจอเป็นของบริษัทอื่น") — the
+         * warning was right and nothing had acted on it.
+         *
+         * withoutGlobalScope(TenantScope::class) + an explicit company_id, so
+         * the answer no longer depends on WHO is asking. Named rather than
+         * `withoutGlobalScopes()` so that a scope added to this model later
+         * (a soft delete, say) is not silently stripped along with it.
+         */
+        $baseQuery = fn () => CommissionRule::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('effective_from', '<=', now())
             ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
             ->orderByDesc('effective_from');
 

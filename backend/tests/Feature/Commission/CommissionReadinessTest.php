@@ -369,7 +369,7 @@ class CommissionReadinessTest extends TestCase
 
         foreach ([$productScoped, $categoryScoped, $fallback, $uncovered] as $product) {
             $this->assertSame(
-                $commissions->resolveCommissionRule($product)?->id,
+                $commissions->resolveCommissionRule($product, (int) $company->id)?->id,
                 $resolve->invoke($service, $product, (int) $company->id)?->id,
                 "readiness and CommissionService disagree about product #{$product->id} — the banner would lie about money",
             );
@@ -378,7 +378,7 @@ class CommissionReadinessTest extends TestCase
         // Control: the live company-wide row really is the one both sides
         // land on for the fallback product, so the assertion above is not
         // two nulls agreeing.
-        $this->assertSame($liveDefault->id, $commissions->resolveCommissionRule($fallback)?->id);
+        $this->assertSame($liveDefault->id, $commissions->resolveCommissionRule($fallback, (int) $company->id)?->id);
     }
 
     // -----------------------------------------------------------------

@@ -1208,3 +1208,66 @@ describe('CommissionPlansView — step 2 changes the plan, instead of pointing a
     expect(wrapper.get('[data-test="plan-switch-error"]').text()).toContain('เปลี่ยนแผนไม่สำเร็จ')
   })
 })
+
+describe("CommissionPlansView — one company's rate never shows as another's (2026-09-12)", () => {
+  /*
+   * Owner: "ผมทดสอบ Almod Chips ปรับค่าคอมให้เป็น 5% แล้วเปลี่ยนบริษัทดู 5%
+   * ทุกบริษัท คือที่ตั้งใจคือ thai life อย่างเดียว".
+   *
+   * The rules list is fetched UNSCOPED — every company's rows in one request,
+   * each reader narrowing them with byCompany(). Every reader did except
+   * resolveRuleFor(), so a rate belonging to another company was resolved,
+   * displayed, and counted toward this company's readiness. Because products
+   * are shared across companies (ADR-040), that is not an edge case; it is the
+   * normal shape of the data.
+   *
+   * The same defect existed one layer down in CommissionService, where it paid
+   * real money at the wrong rate (CrossCompanyRateIsolationTest). This is the
+   * screen half.
+   */
+  const OTHER_COMPANY_RULE = {
+    id: 99,
+    company_id: 777,
+    cert_tier: null,
+    product: { id: 1, name: 'AIA Health Plus' },
+    product_category: null,
+    rate_type: 'percentage',
+    rate_value: 500,
+    effective_from: '2020-01-01',
+    effective_to: null,
+    renewal_rate_type: null,
+    renewal_rate_value: null,
+    renewal_recurs: false,
+  }
+
+  it('does not show a rate that belongs to a different company', async () => {
+    const wrapper = await mountView({ products: [product()], rules: [OTHER_COMPANY_RULE] })
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="step-panel-3"]').text()).not.toContain('5.00%')
+  })
+
+  it('counts the product as UNCOVERED when only another company has a rate for it', async () => {
+    /*
+     * The half that decides whether the admin is warned at all. A borrowed
+     * rate does not merely display wrongly — it makes step 3 read เสร็จแล้ว
+     * and silences the banner about a company that will pay nobody.
+     */
+    const wrapper = await mountView({ products: [product()], rules: [OTHER_COMPANY_RULE] })
+
+    expect(pill(wrapper, 3)).toContain('ยังไม่ครบ')
+  })
+
+  it('still shows the rate that does belong to this company', async () => {
+    // The control: the filter narrows, it does not blank the screen.
+    const wrapper = await mountView({
+      products: [product()],
+      rules: [OTHER_COMPANY_RULE, { ...OTHER_COMPANY_RULE, id: 100, company_id: AIA.id, rate_value: 300 }],
+    })
+    await goToStep(wrapper, 3)
+
+    const panel = wrapper.get('[data-test="step-panel-3"]').text()
+    expect(panel).toContain('3.00%')
+    expect(panel).not.toContain('5.00%')
+  })
+})

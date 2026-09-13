@@ -47,15 +47,20 @@ use Illuminate\Support\Collection;
  *  5. Everything passed and there is still no ledger row — which should be
  *     impossible, and is therefore the answer worth knowing about.
  *
- * ── AND ONE THING IT CHECKS THAT THE SERVICE DOES NOT ──
+ * ── THE CROSS-COMPANY CHECK, AND WHY IT IS NOW A REGRESSION GUARD ──
  *
- * WHOSE rule was found. CommissionRule carries TenantScope, and
- * resolveCommissionRule() leans on it instead of filtering by company
- * itself. On an admin-confirmed payment there is an authenticated user and
- * the scope narrows correctly; on a GATEWAY-confirmed one there is no user
- * at all, the scope becomes a no-op, and the same lookup can return another
- * company's rule. This prints both answers side by side so that difference
- * is visible rather than theoretical.
+ * This command used to be the only thing that could SEE a defect it could not
+ * fix: resolveCommissionRule() leaned on TenantScope, which is a no-op for a
+ * Super Admin and for a gateway confirmation, so the lookup could return
+ * another company's rule and pay an agent at a rate nobody at their company
+ * had set. The warning below said so from 2026-09-11 and nothing acted on it
+ * until the owner hit the same bug through the admin screen on 2026-09-12.
+ *
+ * resolveCommissionRule() now takes the company as an argument
+ * (CrossCompanyRateIsolationTest), so the two answers compared below agree by
+ * construction. The comparison is KEPT rather than deleted: it costs one query
+ * per order and it is the only thing that would notice the day somebody makes
+ * the resolver ambient again.
  */
 class ExplainCommissionGapCommand extends Command
 {
@@ -203,7 +208,7 @@ class ExplainCommissionGapCommand extends Command
             return 'ไม่พบสินค้าของรายการอ้างอิงนี้';
         }
 
-        $asServiceSees = $commissions->resolveCommissionRule($product);
+        $asServiceSees = $commissions->resolveCommissionRule($product, (int) $order->company_id);
         $ownCompanyRule = $this->ruleForCompany($product, (int) $order->company_id);
 
         if ($ownCompanyRule === null) {

@@ -100,7 +100,13 @@ class DispatchDueRenewalCommissions extends Command
                 // anymore.
                 $originalProduct = Product::withoutGlobalScopes()->find($originalLedger->product_id);
                 $rule = $originalProduct
-                    ? $commissionService->resolveCommissionRule($originalProduct)
+                    // 2026-09-12 — the company is named explicitly now; see
+                    // resolveCommissionRule()'s own note for the cross-company
+                    // payout that made it necessary. A renewal runs from the
+                    // scheduler with no authenticated user at all, which is
+                    // precisely the condition where TenantScope narrowed
+                    // nothing.
+                    ? $commissionService->resolveCommissionRule($originalProduct, (int) $referral->company_id)
                     : null;
 
                 if (! $rule || ! $rule->renewal_rate_type) {

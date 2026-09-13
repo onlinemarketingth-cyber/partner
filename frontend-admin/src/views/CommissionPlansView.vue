@@ -420,6 +420,26 @@ interface ProductOption {
    * that one is invisible from here — its company_id is still this company.
    */
   permissions?: { update: boolean, delete: boolean, set_commission_rule: boolean }
+  /*
+   * TASK-256 / ADR-040 — read by step 3's on/off switch, and the flag that
+   * decides WHICH ENDPOINT that switch writes to.
+   *
+   * A shared product's on-sale state belongs to the company
+   * (company_product_settings); a company-owned product's IS its own
+   * `is_active`. Two routes, two policies — see toggleSelling().
+   *
+   * Optional because it is a field this screen did not use until 2026-09-12,
+   * and absent has to read as "not shared": that sends the write to the
+   * per-row-permission branch, which is the one that fails closed.
+   */
+  is_shared?: boolean
+  /**
+   * Whether the SCOPED company sells this product. Never inherited, and
+   * resolved server-side against `?company_id=`
+   * (CompanyScopeFilter::contextCompanyId) — which is why loadRulesTabData()
+   * now sends one.
+   */
+  is_sellable_here?: boolean
   name: string
   category?: { id: number; name: string } | null
   price_satang?: number
@@ -707,7 +727,24 @@ async function deleteRule(r: CommissionRuleItem) {
 async function loadRulesTabData() {
   const [r, p, pc, o] = await Promise.all([
     api.get<{ data: CommissionRuleItem[] }>('/commission-rules'),
-    api.get<{ data: ProductOption[] }>('/products'),
+    /*
+     * The ONE scoped read on this screen, and only since 2026-09-12.
+     *
+     * `is_sellable_here` has no answer without a company to resolve it
+     * against: CompanyScopeFilter::contextCompanyId() reads `?company_id=`
+     * for a Super Admin, who belongs to no company, so an unscoped fetch
+     * reports every shared product as "not for sale" no matter which company
+     * the header is on — the exact state step 3's new switch exists to show
+     * and change. A Company Admin was always fine; the Super Admin, the only
+     * actor who may work that switch on a shared row, was not.
+     *
+     * Narrowing loses nothing byCompany() was keeping: ProductController's
+     * filter runs with `includePlatformWide: true`, so the shared rows come
+     * back alongside the company's own. byCompany() below is left in place
+     * over the result — it is still the truth for the "ทุกบริษัท" view, where
+     * companyQuery() is empty.
+     */
+    api.get<{ data: ProductOption[] }>(`/products${companyQuery()}`),
     // Unscoped on purpose, like every other list on this screen: byCompany()
     // does the narrowing client-side because it must KEEP the platform rows,
     // and that needs each row's own company_id.
@@ -978,7 +1015,27 @@ function isRuleActiveOn(r: CommissionRuleItem, date: Date): boolean {
 // no new backend call.
 function resolveRuleFor(product: ProductOption): CommissionRuleItem | null {
   const now = new Date()
-  const candidates = commissionRules.value.filter((r) => isRuleActiveOn(r, now))
+  /*
+   * byCompany() — ADDED 2026-09-12, AND IT IS NOT COSMETIC.
+   *
+   * Owner: "ผมทดสอบ Almod Chips ปรับค่าคอมให้เป็น 5% แล้วเปลี่ยนบริษัทดู 5%
+   * ทุกบริษัท คือที่ตั้งใจคือ thai life อย่างเดียว".
+   *
+   * This list is loaded UNSCOPED on purpose — every company's rows arrive in
+   * one request and each reader narrows them (see loadRulesTabData). Every
+   * other reader on this screen already did: conflictingRuleIds,
+   * activeOverrideRules, productsMissingAgentRate. This one did not, so a rate
+   * belonging to Thai Life was resolved, displayed and counted as AIA's. The
+   * products are shared (ADR-040), so the collision is not an edge case — it
+   * is what the data normally looks like.
+   *
+   * The same defect existed one layer down, in CommissionService, where it
+   * paid real money at another company's rate; that is fixed and pinned by
+   * CrossCompanyRateIsolationTest. Do not "simplify" this call away — the two
+   * fixes have to stay in step, or the screen resumes disagreeing with the
+   * ledger.
+   */
+  const candidates = byCompany(commissionRules.value).filter((r) => isRuleActiveOn(r, now))
   const categoryId = product.category?.id
   return (
     candidates.find((r) => r.product?.id === product.id) ??
@@ -1492,6 +1549,131 @@ async function savePointValue(p: ProductOption): Promise<void> {
     pvError.value = apiErrorMessage(e, 'บันทึก PV ไม่สำเร็จ')
   } finally {
     pvSavingId.value = null
+  }
+}
+
+// ═══════════ Step 3 · เปิด/ปิดขายสินค้า, in the row (2026-09-12, owner) ═══════════
+/*
+ * "ให้แสดงผลเหมือนหน้าสินค้า … เพิ่มการเปิดปิดสินค้าได้เลย จะได้ทำหน้าเดียวจบ
+ * แต่ทำแยกบริษัทได้".
+ *
+ * Step 3 already puts every product in front of the admin, one row each, to
+ * decide what it pays. Sending them to /product-catalog to switch one off and
+ * back here to rate it is the same detour the 4-step flow was built to delete.
+ *
+ * The look is deliberately ProductCatalogView's, not a second dialect of it:
+ * same greyed row, same sort, same switch with the same two words. These are
+ * one control in two places, and an admin should not have to learn it twice.
+ */
+
+/**
+ * Selling first, then by name — SORTED, never filtered.
+ *
+ * A closed product still needs a rate: it is the one somebody is about to
+ * switch back on, and the owner said so outright ("ที่ปิดไว้ก็แก้ไขได้เหมือน
+ * เดิม"). What is on sale is today's work; what is closed is reference.
+ */
+const sellingFirstProducts = computed<ProductOption[]>(() =>
+  /*
+   * `.slice()` BEFORE `.sort()`: byCompany() hands back the SOURCE array
+   * untouched whenever there is nothing to narrow (any Company Admin, and the
+   * "ทุกบริษัท" view), so sorting in place would reorder `products.value`
+   * itself and make each render depend on the last one.
+   *
+   * `localeCompare(…, 'th')` so each half is ordered the way a Thai reader
+   * expects rather than by insertion.
+   */
+  byCompany(products.value).slice().sort((a, b) => {
+    const aSelling = a.is_sellable_here === true
+    const bSelling = b.is_sellable_here === true
+    if (aSelling !== bSelling) return aSelling ? -1 : 1
+
+    return a.name.localeCompare(b.name, 'th')
+  }))
+
+/**
+ * May THIS viewer work THIS row's on/off switch — two different questions,
+ * because the switch writes to two different endpoints.
+ *
+ * SHARED row → PUT /products/{id}/company-settings, whose FormRequest
+ * authorizes on `$user->isSuperAdmin()` and nothing else
+ * (UpdateCompanyProductSettingRequest). There is no row dimension to ask
+ * about, so mirroring the role IS reporting the server's answer — the same
+ * reasoning canEditCommissionConfig sets out at the top of this file.
+ *
+ * COMPANY-OWNED row → PUT /products/{id} under ProductPolicy::update, which
+ * is per row (ADR-036 §5/§6 refuses a catalog-LINKED product that this
+ * company nonetheless owns). The server already answered it in
+ * `permissions.update`; asking the role here instead would be the TASK-245
+ * bug again, silently, because a role check never errors.
+ *
+ * Deliberately NOT gated on `canEditCommissionConfig`: opening a product for
+ * sale is a catalogue decision, not a commission number, and a Company Admin
+ * who owns the product owns that decision.
+ */
+function canToggleSelling(p: ProductOption): boolean {
+  return p.is_shared === true ? isSuperAdmin.value : p.permissions?.update === true
+}
+
+/** The one row whose switch is mid-flight, so only that row goes inert. */
+const sellingSavingId = ref<number | null>(null)
+const sellingError = ref('')
+
+/**
+ * Open or close this product for the company in the header.
+ *
+ * `commissionApi.put`, not `api.put`: this changes WHICH products a company
+ * sells, and the readiness verdict counts products against rates
+ * (`products_total` / `products_covered`). A bare api.put would leave the
+ * banner quoting a count that no longer exists — see commissionApi's docblock.
+ */
+async function toggleSelling(p: ProductOption): Promise<void> {
+  if (sellingSavingId.value === p.id || !canToggleSelling(p)) return
+
+  const next = p.is_sellable_here !== true
+  sellingSavingId.value = p.id
+  sellingError.value = ''
+  try {
+    if (p.is_shared === true) {
+      /*
+       * `company_id` is REQUIRED and cannot be inferred server-side — the only
+       * actor who reaches this branch is a Super Admin, who has no company of
+       * their own to infer from, and guessing would open the wrong tenant's
+       * catalogue. Step 3 renders an EmptyState until one is picked, so it is
+       * never null here in practice; the guard is what makes that true rather
+       * than assumed.
+       *
+       * `is_active` alone, with no `price_satang` key: omitting it means
+       * "leave the price alone", and opening a product for sale must not also
+       * decide what it costs.
+       */
+      if (effectiveCompanyId.value === null) return
+      await commissionApi.put(`/products/${p.id}/company-settings`, {
+        company_id: effectiveCompanyId.value,
+        is_active: next,
+      })
+    } else {
+      /*
+       * A company-owned product has no per-company settings row, and the
+       * endpoint above 422s for it on purpose (ProductController::
+       * updateCompanySetting) — its price and its on/off switch live on the
+       * product itself, and a second place to set them is how the two
+       * disagree. Selling it IS `is_active` (Product::isSellableBy).
+       */
+      await commissionApi.put(`/products/${p.id}`, { is_active: next })
+    }
+    /*
+     * Patch the loaded row, never refetch. Step 2 holds a PV draft per product
+     * id while the admin types, and reloading the catalogue from here would
+     * blank every one of them mid-edit — the same reason savePointValue()
+     * gives, one step over.
+     */
+    const row = products.value.find((x) => x.id === p.id)
+    if (row) row.is_sellable_here = next
+  } catch (e) {
+    sellingError.value = apiErrorMessage(e, 'เปิด/ปิดขายสินค้าไม่สำเร็จ')
+  } finally {
+    sellingSavingId.value = null
   }
 }
 
@@ -3422,6 +3604,11 @@ watch(companyPlanType, (pt) => {
                   </span>
                 </div>
 
+                <!-- A failed switch has to say so where the switch is. Same
+                     shape as pvError one step over — a visible line, never a
+                     silently reverted row. -->
+                <p v-if="sellingError" class="mb-2 text-[12.5px] font-bold text-rose-600" data-test="selling-error">{{ sellingError }}</p>
+
                 <EmptyState v-if="!byCompany(products).length" icon="money" title="ยังไม่มีสินค้า" />
                 <div v-else class="space-y-2">
                   <!--
@@ -3430,18 +3617,39 @@ watch(companyPlanType, (pt) => {
                     the rate that actually resolves, and the layer it came
                     from — and drops the separate view mode that made it a
                     detour.
+
+                    2026-09-12 — and it now says whether the company SELLS the
+                    product, greyed exactly as ProductCatalogView greys it.
+                    Not hidden and not disabled: the reason to look at a closed
+                    row here is to rate it, and the owner asked for that
+                    outright ("ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม"). It is only
+                    visibly not part of today's shop, which the eye sorts far
+                    faster than it reads a status word.
+
+                    A missing rate still wins the row's colour: "nobody gets
+                    paid" outranks "not on sale today" — a closed product can
+                    be reopened in one click, an immutable ledger entry cannot
+                    (BR-4).
                   -->
                   <div
-                    v-for="p in byCompany(products)"
+                    v-for="p in sellingFirstProducts"
                     :key="p.id"
-                    class="rounded-xl border px-4 py-3"
-                    :class="productReadiness(p).level === 'bad' ? 'border-rose-200 bg-rose-50' : 'border-slate-200'"
+                    class="rounded-xl border px-4 py-3 transition-colors"
+                    :class="productReadiness(p).level === 'bad'
+                      ? 'border-rose-200 bg-rose-50'
+                      : (p.is_sellable_here ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50/60')"
                     :data-test="`product-row-${p.id}`"
+                    :data-selling="p.is_sellable_here ? 'open' : 'closed'"
                   >
                     <div class="flex flex-wrap items-center gap-3.5">
                       <div class="flex-1 min-w-[200px]">
-                        <p class="text-sm font-bold" :class="productReadiness(p).level === 'bad' ? 'text-rose-800' : 'text-slate-900'">{{ p.name }}</p>
-                        <p class="text-xs text-slate-400">
+                        <p
+                          class="text-sm font-bold"
+                          :class="productReadiness(p).level === 'bad'
+                            ? 'text-rose-800'
+                            : (p.is_sellable_here ? 'text-slate-900' : 'text-slate-400')"
+                        >{{ p.name }}</p>
+                        <p class="text-xs" :class="p.is_sellable_here ? 'text-slate-400' : 'text-slate-300'">
                           {{ p.category?.name ?? 'ไม่มีหมวดหมู่' }}<span v-if="p.price_satang"> · {{ formatSatang(p.price_satang) }}</span>
                           · แผน {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}<span v-if="!p.commission_plan_type"> (สืบทอดจากบริษัท)</span>
                         </p>
@@ -3461,6 +3669,76 @@ watch(companyPlanType, (pt) => {
                         {{ rateLayerLabel(p) }}
                       </span>
                       <div class="flex items-center gap-2 shrink-0">
+                        <!--
+                          2026-09-12 (owner: "เพิ่มการเปิดปิดสินค้าได้เลย").
+
+                          A switch, not a button labelled "ปิดขาย": a button
+                          states the ACTION it performs, a switch states the
+                          STATE it is in — and the state is what somebody
+                          scanning twenty rows is reading for. It is also the
+                          one control in this row that takes effect the moment
+                          it is touched, with no dialog, which is the shape
+                          people already read a switch as.
+
+                          Shown only where it will actually work — see
+                          canToggleSelling() for why that is a per-row question
+                          on one branch and a role on the other.
+                        -->
+                        <button
+                          v-if="canToggleSelling(p)"
+                          type="button"
+                          class="shrink-0 inline-flex items-center gap-2 disabled:opacity-50"
+                          :disabled="sellingSavingId === p.id"
+                          :data-test="`selling-switch-${p.id}`"
+                          :title="p.is_sellable_here ? 'เปิดขายอยู่ — แตะเพื่อปิดขาย' : 'ปิดขายอยู่ — แตะเพื่อเปิดขาย'"
+                          @click="toggleSelling(p)"
+                        >
+                          <!-- The colour and the WORD say the same thing, which
+                               is what keeps it readable at a glance and still
+                               readable to someone who does not separate these
+                               two blues. -->
+                          <span
+                            class="text-xs font-bold whitespace-nowrap"
+                            :class="p.is_sellable_here ? 'text-brand-700' : 'text-slate-400'"
+                            :data-test="`selling-label-${p.id}`"
+                          >
+                            {{ sellingSavingId === p.id ? 'กำลังบันทึก…' : (p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย') }}
+                          </span>
+                          <!-- The knob is a FLEX CHILD pushed to one end, never
+                               an absolutely positioned span shifted by an
+                               arbitrary Tailwind translate: an arbitrary value
+                               the scanner never saw is absent from the compiled
+                               CSS, so the knob carries the right classes and
+                               simply never moves. That shipped once already —
+                               ProductCatalogView's toggleSellHere() tells the
+                               whole story. -->
+                          <span
+                            class="w-11 h-6 rounded-full border flex items-center p-0.5 transition-colors"
+                            :class="p.is_sellable_here ? 'bg-brand-600 border-brand-600 justify-end' : 'bg-white border-slate-300 justify-start'"
+                          >
+                            <span
+                              class="w-5 h-5 rounded-full shadow-sm transition-colors"
+                              :class="p.is_sellable_here ? 'bg-white' : 'bg-slate-300'"
+                            ></span>
+                          </span>
+                        </button>
+                        <!-- House rule since 2026-09-11: a control somebody
+                             cannot use is not shown — a switch you can see and
+                             cannot move reads as broken, not as forbidden. The
+                             STATE is still news to them (it is why the row is
+                             grey), so it stays as a pill that was never a
+                             control in the first place. -->
+                        <span
+                          v-else
+                          class="shrink-0 text-[11px] font-bold rounded-full px-2.5 py-1 whitespace-nowrap"
+                          :class="p.is_sellable_here ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                          :data-test="`selling-state-${p.id}`"
+                          :title="p.is_shared
+                            ? 'สินค้ากลาง — เปิด/ปิดขายตั้งโดย Super Admin'
+                            : 'เปิด/ปิดขายสินค้านี้ต้องมีสิทธิ์แก้ไขสินค้า'"
+                        >
+                          {{ p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย' }}
+                        </span>
                         <button type="button" class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50" @click="openSimulate(p)">
                           ทดสอบคำนวณ
                         </button>

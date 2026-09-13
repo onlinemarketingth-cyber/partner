@@ -308,7 +308,10 @@ class ProductCatalogTest extends TestCase
             'effective_from' => now()->subDay()->toDateString(),
         ]);
 
-        $resolved = app(CommissionService::class)->resolveCommissionRule($product);
+        // 2026-09-12 — the company is an argument now, not an ambient
+        // scope. See CrossCompanyRateIsolationTest for the payout that made
+        // it one.
+        $resolved = app(CommissionService::class)->resolveCommissionRule($product, (int) $company->id);
 
         $this->assertNotNull($resolved, 'category-scoped rule no longer resolves for a linked product');
         $this->assertSame($rule->id, $resolved->id);

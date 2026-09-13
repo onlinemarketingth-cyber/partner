@@ -344,24 +344,55 @@ describe("CommissionPlansView — the PRODUCT's plan type is shown, never edited
     expect(source).toContain('commission_plan_type: viewingPlanType.value')
   })
 
-  it('writes exactly ONE product field from this screen, and it is the PV', () => {
+  it('writes only the product fields named here, and a plan type is not one of them', () => {
     /*
-     * 2026-09-12 — this assertion used to be `not.toContain('/products/${')`:
-     * the screen wrote no product field at all once the wizard went. PV made
-     * that false on purpose (step 2 edits every product's PV in one table,
-     * because switching a company to PV makes all of them load-bearing at
-     * once), so the promise is narrowed rather than dropped.
+     * 2026-09-12, FIRST NARROWING — this assertion used to be
+     * `not.toContain('/products/${')`: the screen wrote no product field at
+     * all once the wizard went. PV made that false on purpose (step 2 edits
+     * every product's PV in one table, because switching a company to PV makes
+     * all of them load-bearing at once), so the promise was narrowed rather
+     * than dropped: ONE write, ONE field, and that field is the PV.
      *
-     * What it still guarantees is the thing that mattered: exactly one
-     * product write exists here, and it carries one field. A second PUT, or a
-     * second field on this one, is how the per-product plan-type editor comes
-     * back through a side door.
+     * 2026-09-12, SECOND NARROWING — and two more arrived the same day, also
+     * on purpose: step 3's per-row เปิด/ปิดขาย switch, which the owner asked
+     * for outright ("เพิ่มการเปิดปิดสินค้าได้เลย จะได้ทำหน้าเดียวจบ"). It
+     * branches, because the state it writes lives in two different places — a
+     * shared product's is the COMPANY's (company_product_settings), a
+     * company-owned product's is the product's own `is_active`
+     * (Product::isSellableBy).
+     *
+     * So the shape of the promise changes from "one" to "these three, by
+     * name": every product write this screen makes is listed below with
+     * exactly the fields it may carry. An unlisted write, or an extra field on
+     * a listed one, is how the per-product plan-type editor comes back through
+     * a side door — which is the door this test exists to hold shut.
      */
-    const writes = source.match(/commissionApi\.put\(`\/products\/\$\{[^`]*`, \{([^}]*)\}\)/g) ?? []
+    // matchAll, for the CAPTURE GROUP: the body has to be read from group 1
+    // and not re-matched out of the whole hit, because `${p.id}` in the path
+    // is itself a brace pair and a second search finds that one first.
+    const writes = [...source.matchAll(/commissionApi\.put\(`\/products\/\$\{[^`]*`, \{([^}]*)\}\)/g)]
 
-    expect(writes).toHaveLength(1)
-    expect(writes[0]).toContain('pv_satang')
-    expect(writes[0]).not.toContain('commission_plan_type')
+    // Keys only. The VALUES are behaviour and belong in the specs that mount
+    // the screen (CommissionPointValue / CommissionProductSelling); what a
+    // source-text guard can honestly check is which fields exist at all.
+    const fields = writes.map((w) => (w[1] ?? '')
+      .split(',')
+      .map((f) => (f.split(':')[0] ?? '').trim())
+      .filter(Boolean)
+      .sort())
+
+    expect(fields).toEqual([
+      // step 2's PV table — savePointValue()
+      ['pv_satang'],
+      // step 3's switch, SHARED branch: a row in company_product_settings, and
+      // `company_id` is required there because a Super Admin has no company of
+      // their own to infer one from.
+      ['company_id', 'is_active'],
+      // step 3's switch, COMPANY-OWNED branch: the product's own field, since
+      // that row has no per-company settings and the endpoint above 422s for it.
+      ['is_active'],
+    ])
+    expect(writes.map((w) => w[0]).join(' ')).not.toContain('commission_plan_type')
   })
 })
 

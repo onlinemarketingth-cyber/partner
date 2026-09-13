@@ -59,14 +59,16 @@ use Illuminate\Support\Collection;
  * asserts the two answers row by row; if you change resolveCommissionRule(),
  * that test is what tells you this file has to change too.
  *
- * The ONE deliberate difference is the company filter. CommissionRule
- * carries TenantScope and resolveCommissionRule() leans on it instead of
- * filtering by company itself — which is correct where it runs (a request
- * with an authenticated user) and a no-op where there is none. This Service
- * is asked "is COMPANY X ready", including by a Super Admin whose TenantScope
- * filters nothing at all, so it names the company explicitly rather than
- * hoping the ambient scope is the one it wants. Same treatment, same
- * reasoning, as ExplainCommissionGapCommand::ruleForCompany().
+ * There used to be one deliberate difference, and on 2026-09-12 it stopped
+ * being a difference at all. This Service named the company explicitly while
+ * resolveCommissionRule() leaned on TenantScope — correct where that runs with
+ * an authenticated Company Admin, a no-op for a Super Admin (exempt by design)
+ * and for a gateway confirmation (no user at all). The owner surfaced the
+ * consequence that day: a rate set for one company was being applied to
+ * another's sale. resolveCommissionRule() now takes the company as an argument
+ * too, so the two are the same query with the same filters, which is what the
+ * mirror test below has always claimed they were.
+ * See CrossCompanyRateIsolationTest.
  */
 class CommissionReadinessService
 {
