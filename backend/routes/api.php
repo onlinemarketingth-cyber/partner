@@ -37,6 +37,7 @@ use App\Http\Controllers\Api\V1\CommissionLedgerController;
 use App\Http\Controllers\Api\V1\CommissionMatrixLevelRateController;
 use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
 use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
+use App\Http\Controllers\Api\V1\CommissionRateCopyController;
 use App\Http\Controllers\Api\V1\CommissionReadinessController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSettingController;
@@ -784,6 +785,18 @@ Route::prefix('v1')->group(function () {
          * longer depends on it: this is commission's own door, with its own
          * Ability (SettingsCommissionBasisUpdate) for the write.
          */
+        /*
+         * 2026-09-13 — copy one company's live rate table onto another.
+         *
+         * Owner: "ทำไมระบบเราไม่ดึงค่าคอมจากค่าเริ่มต้นมาตั้งเป็นค่าคอม
+         * มาตรฐาน". It does not, and must not: BR-7 forbids inventing a
+         * business value, and a guessed rate is indistinguishable on screen
+         * from a chosen one once it reaches a ledger row nobody may correct.
+         * Copying on request is the answer — the rate is still one a human
+         * picked, from a preview that named every row before it was written.
+         */
+        Route::post('/commission-rules/copy', CommissionRateCopyController::class);
+
         Route::get('/commission-settings', [CommissionSettingController::class, 'show']);
         Route::put('/commission-settings', [CommissionSettingController::class, 'update']);
 

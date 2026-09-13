@@ -2054,6 +2054,146 @@ function expiredRuleFor(p: ProductOption): CommissionRuleItem | null {
   return expired[0] ?? null
 }
 
+/**
+ * ── Step 3.1: COPY another company's rates (2026-09-13) ──
+ *
+ * The owner's question, verbatim in substance: a company that has been live
+ * for a year opens step 3 and sees its rates; a company created this morning
+ * opens the same step and sees the red "ยังไม่มีค่าเริ่มต้นทั้งบริษัท" panel.
+ * Why does the system not just put a default there?
+ *
+ * BECAUSE A GUESSED RATE AND A DECIDED RATE ARE THE SAME ROW (BR-7). The
+ * moment a seeded 3% resolves against a closed deal it becomes a
+ * commission_ledger entry, and a ledger entry cannot be corrected after the
+ * fact (BR-4) — so a number nobody chose would be indistinguishable, both on
+ * this screen and in the payout, from a number somebody argued about. The red
+ * panel is not a gap in the product; it is the system refusing to invent the
+ * one value on this screen that is money.
+ *
+ * What was actually wrong is that the only cure was typing every rate again
+ * for a company whose sibling already has them. So the answer is COPYING,
+ * which is a human deciding "the same as that company" — a decision, with a
+ * source — and never a default. It is one click plus a confirmation, and the
+ * confirmation is the point: the admin reads exactly which rows will be
+ * created before any of them is.
+ *
+ * The preview and the write are the SAME endpoint and differ only by
+ * `dry_run`, so what the admin approved and what the server does cannot drift
+ * apart the way a client-side "what would happen" list would.
+ */
+interface CopyRateEntry {
+  scope: 'company' | 'category' | 'product'
+  label: string
+  rate_type: RateType
+  rate_value: number
+  product_id: number | null
+  product_category_id: number | null
+  /** Thai, server-written, and only ever present on a skipped row. */
+  reason?: string
+}
+interface CopyRatesResult {
+  dry_run: boolean
+  from_company: { id: number; name: string | null }
+  to_company: { id: number; name: string | null }
+  total_to_copy: number
+  agent_rates: { copied: CopyRateEntry[]; skipped: CopyRateEntry[] }
+  leader_rates: { copied: CopyRateEntry[]; skipped: CopyRateEntry[] }
+}
+
+const showCopyRatesModal = ref(false)
+const copyRatesSourceId = ref<number | ''>('')
+const copyRatesPreview = ref<CopyRatesResult | null>(null)
+// Two flags, not one: the preview re-runs every time the source changes, and
+// a single `busy` would leave the confirm button reading "กำลังคัดลอก..."
+// while nothing is being copied yet.
+const copyRatesPreviewing = ref(false)
+const copyRatesCopying = ref(false)
+const copyRatesError = ref('')
+
+/**
+ * Everything except the company being configured — copying onto itself is a
+ * 422, and an option that can only fail is not an option.
+ */
+const copyRatesSourceOptions = computed(() => activeCompany.companies.filter((c) => c.id !== effectiveCompanyId.value))
+
+/**
+ * Agent and leader skips in ONE list. The admin's question about a skipped row
+ * is "why is that rate not coming across", which the `reason` answers on its
+ * own; which table it would have landed in adds nothing to that.
+ */
+const copyRatesSkipped = computed<CopyRateEntry[]>(() =>
+  copyRatesPreview.value ? [...copyRatesPreview.value.agent_rates.skipped, ...copyRatesPreview.value.leader_rates.skipped] : [])
+
+function openCopyRatesModal() {
+  copyRatesSourceId.value = ''
+  copyRatesPreview.value = null
+  copyRatesError.value = ''
+  showCopyRatesModal.value = true
+}
+function closeCopyRatesModal() {
+  showCopyRatesModal.value = false
+}
+
+/**
+ * Fired by picking a source, never by a button: a preview that has to be
+ * asked for separately is a step an admin can skip, and the confirmation is
+ * only worth having if it is already on screen when they reach the button.
+ *
+ * Plain `api.post`, NOT commissionApi — this writes nothing, and re-asking
+ * the server whether commission is configured after a read is the request-per-
+ * request cost commissionApi's docblock declines to pay for every other read
+ * on this screen.
+ */
+async function previewCopyRates() {
+  const from = copyRatesSourceId.value
+  const to = effectiveCompanyId.value
+  copyRatesPreview.value = null
+  copyRatesError.value = ''
+  if (from === '' || to === null) return
+  copyRatesPreviewing.value = true
+  try {
+    const res = await api.post<{ data: CopyRatesResult }>('/commission-rules/copy', {
+      from_company_id: from,
+      to_company_id: to,
+      dry_run: true,
+    })
+    copyRatesPreview.value = res.data
+  } catch (e) {
+    copyRatesError.value = apiErrorMessage(e, 'ดูตัวอย่างไม่สำเร็จ')
+  } finally {
+    copyRatesPreviewing.value = false
+  }
+}
+
+/**
+ * The same call with `dry_run: false`. Through `commissionApi` because this
+ * one creates rate rows — the readiness banner is very likely still saying
+ * "ไม่มีใครได้เงิน" at the top of this very screen, and it is about to be
+ * wrong (see commissionApi's docblock).
+ */
+async function confirmCopyRates() {
+  const from = copyRatesSourceId.value
+  const to = effectiveCompanyId.value
+  if (from === '' || to === null) return
+  copyRatesCopying.value = true
+  copyRatesError.value = ''
+  try {
+    await commissionApi.post('/commission-rules/copy', {
+      from_company_id: from,
+      to_company_id: to,
+      dry_run: false,
+    })
+    // Reload before closing: the modal disappearing is the admin's signal that
+    // the rows behind it are the new ones, so it must not outrun them.
+    await loadRulesTabData()
+    closeCopyRatesModal()
+  } catch (e) {
+    copyRatesError.value = apiErrorMessage(e, 'คัดลอกไม่สำเร็จ')
+  } finally {
+    copyRatesCopying.value = false
+  }
+}
+
 // ── Step navigation ──
 function stepLabel(step: Step): string {
   return stepDefs.find((s) => s.step === step)?.label ?? ''
@@ -3592,6 +3732,23 @@ watch(companyPlanType, (pt) => {
                   >
                     + ตั้งค่าเริ่มต้นทั้งบริษัท
                   </button>
+                  <!-- 2026-09-13 — the second way out of this panel, for the
+                       brand-new company whose sibling already has every rate.
+                       SECONDARY on purpose: typing the number is still the
+                       decision this screen is for, and copying is the shortcut
+                       to a decision somebody already made elsewhere. Needs a
+                       company to copy INTO, so it is gated on
+                       effectiveCompanyId as well as on the Super Admin role
+                       the endpoint itself requires. -->
+                  <button
+                    v-if="canEditCommissionConfig && effectiveCompanyId"
+                    type="button"
+                    class="btn-secondary shrink-0"
+                    data-test="copy-rates-open"
+                    @click="openCopyRatesModal"
+                  >
+                    คัดลอกจากบริษัทอื่น
+                  </button>
                 </div>
               </div>
 
@@ -4047,7 +4204,7 @@ watch(companyPlanType, (pt) => {
     <!--
       ═══════════ PAGE-LEVEL MODALS ═══════════
 
-      All nine of them live HERE, outside every step panel, and that is a
+      All ten of them live HERE, outside every step panel, and that is a
       deliberate change: six of these used to be nested inside the section
       that owned them (three in the rules tab, one each in matrix / อันดับ /
       generation). A `fixed inset-0` overlay is not visually part of its
@@ -4257,6 +4414,139 @@ watch(companyPlanType, (pt) => {
         <p class="text-xs text-slate-500 mb-4">{{ ruleCapGuard.violationMessage.value }}</p>
         <div class="flex justify-end">
           <button class="btn-primary" @click="ruleCapGuard.closeModal">เข้าใจแล้ว</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- คัดลอกอัตราจากบริษัทอื่น — opened from step 3.1 -->
+    <!-- 2026-09-13 — see the `copyRatesPreview` block in the script for why
+         this screen copies on request instead of seeding a default. The modal
+         exists to make the preview UNSKIPPABLE: the rows it lists are about to
+         become commission rates, and a rate that reaches a ledger row cannot
+         be taken back (BR-4). -->
+    <div v-if="showCopyRatesModal" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" data-test="copy-rates-modal" @click.self="closeCopyRatesModal">
+      <div class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col">
+        <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+          <div class="min-w-0">
+            <p class="text-xs font-bold tracking-wide text-brand-700">คัดลอกอัตราค่าคอม</p>
+            <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">
+              คัดลอกมาที่ {{ activeCompany.companyName ?? 'บริษัทนี้' }}
+            </h1>
+          </div>
+          <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="closeCopyRatesModal">
+            <Icon name="x" :size="20" />
+          </button>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+          <!-- The owner's question, answered where it gets asked. -->
+          <p class="text-xs text-slate-500 leading-relaxed">
+            ระบบไม่ตั้งอัตราเริ่มต้นให้เองเด็ดขาด — อัตราที่ระบบเดาให้กับอัตราที่คนตัดสินใจเองหน้าตาเหมือนกันทุกประการ
+            และเมื่อลงบัญชีค่าคอมไปแล้วแก้ย้อนหลังไม่ได้ (BR-4) · การคัดลอกไม่ใช่การเดา เพราะมี "บริษัทต้นทาง" ที่คนเลือกเอง
+          </p>
+
+          <div>
+            <label class="text-sm font-bold text-slate-500">คัดลอกจากบริษัท</label>
+            <select
+              v-model="copyRatesSourceId"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+              data-test="copy-rates-source"
+              @change="previewCopyRates"
+            >
+              <option value="" disabled>เลือกบริษัทต้นทาง</option>
+              <option v-for="c in copyRatesSourceOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
+            </select>
+          </div>
+
+          <!-- Never a silent failure: both the preview and the copy report
+               here, in the one place the admin is looking. -->
+          <div v-if="copyRatesError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700" data-test="copy-rates-error">
+            {{ copyRatesError }}
+          </div>
+
+          <p v-if="copyRatesPreviewing" class="text-xs text-slate-400" data-test="copy-rates-loading">กำลังดูตัวอย่าง...</p>
+
+          <div v-else-if="copyRatesPreview" class="space-y-3" data-test="copy-rates-summary">
+            <p class="text-[13px] font-extrabold text-slate-900">
+              จะสร้างใหม่ {{ copyRatesPreview.total_to_copy }} รายการ —
+              ตัวแทนผู้ขาย {{ copyRatesPreview.agent_rates.copied.length }} · หัวหน้าทีม {{ copyRatesPreview.leader_rates.copied.length }}
+            </p>
+            <!-- Every copy starts today and has no end date, and that is not
+                 guessable from the list — an admin reading "3.00%" here would
+                 otherwise assume the source row's dates came with it. -->
+            <p class="text-xs text-slate-400">ทุกรายการจะเริ่มมีผลวันนี้ และไม่มีวันสิ้นสุด · อัตราที่หมดอายุแล้วในบริษัทต้นทางจะไม่ถูกคัดลอก</p>
+
+            <div v-if="copyRatesPreview.agent_rates.copied.length">
+              <p class="text-xs font-bold text-slate-500 mb-1">อัตราตัวแทนผู้ขาย</p>
+              <div class="space-y-1">
+                <div
+                  v-for="(e, i) in copyRatesPreview.agent_rates.copied"
+                  :key="`agent-${i}`"
+                  class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5"
+                  :data-test="`copy-rates-agent-${i}`"
+                >
+                  <span class="text-[13px] font-bold text-slate-900">{{ e.label }}</span>
+                  <span class="ml-auto text-[13px] font-extrabold text-brand-700">{{ formatRate(e.rate_type, e.rate_value) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="copyRatesPreview.leader_rates.copied.length">
+              <p class="text-xs font-bold text-slate-500 mb-1">อัตราหัวหน้าทีม</p>
+              <div class="space-y-1">
+                <div
+                  v-for="(e, i) in copyRatesPreview.leader_rates.copied"
+                  :key="`leader-${i}`"
+                  class="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5"
+                  :data-test="`copy-rates-leader-${i}`"
+                >
+                  <span class="text-[13px] font-bold text-slate-900">{{ e.label }}</span>
+                  <span class="ml-auto text-[13px] font-extrabold text-amber-700">{{ formatRate(e.rate_type, e.rate_value) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Skipped rows are listed, not counted. "ข้าม 4 รายการ" tells an
+                 admin something is missing; only the row and its reason tell
+                 them whether they still have to go and set it by hand. -->
+            <div v-if="copyRatesSkipped.length" data-test="copy-rates-skipped">
+              <p class="text-xs font-bold text-amber-700 mb-1">ไม่ได้คัดลอก {{ copyRatesSkipped.length }} รายการ</p>
+              <div class="space-y-1">
+                <div
+                  v-for="(e, i) in copyRatesSkipped"
+                  :key="`skipped-${i}`"
+                  class="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5"
+                  :data-test="`copy-rates-skipped-${i}`"
+                >
+                  <span class="text-[13px] font-bold text-amber-900">{{ e.label }}</span>
+                  <span class="text-[12.5px] text-amber-700">{{ e.reason }}</span>
+                  <span class="ml-auto text-[12.5px] font-bold text-amber-600">{{ formatRate(e.rate_type, e.rate_value) }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- A disabled button with no sentence beside it is the dead end
+                 this whole screen exists to remove. -->
+            <p v-if="copyRatesPreview.total_to_copy === 0" class="text-[12.5px] font-bold text-slate-500" data-test="copy-rates-empty">
+              ไม่มีอะไรให้คัดลอก — บริษัทต้นทางไม่มีอัตราที่ยังใช้ได้ หรืออัตราทุกตัวถูกข้ามตามเหตุผลด้านบน (ของเดิมที่นี่จะไม่ถูกทับ)
+            </p>
+          </div>
+        </div>
+
+        <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
+          <button type="button" class="btn-secondary" @click="closeCopyRatesModal">ยกเลิก</button>
+          <!-- The count is IN the label: "ยืนยัน" would make the admin trust
+               a summary they may have scrolled past, while "คัดลอก 5 รายการ"
+               restates what they are approving at the moment they approve it. -->
+          <button
+            type="button"
+            class="btn-primary"
+            :disabled="!copyRatesPreview || copyRatesPreview.total_to_copy === 0 || copyRatesCopying || copyRatesPreviewing"
+            data-test="copy-rates-confirm"
+            @click="confirmCopyRates"
+          >
+            {{ copyRatesCopying ? 'กำลังคัดลอก...' : `คัดลอก ${copyRatesPreview?.total_to_copy ?? 0} รายการ` }}
+          </button>
         </div>
       </div>
     </div>
