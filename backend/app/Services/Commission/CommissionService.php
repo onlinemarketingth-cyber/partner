@@ -4,6 +4,7 @@ namespace App\Services\Commission;
 
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionEarnedVia;
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
 use App\Enums\PaymentStatus;
@@ -11,6 +12,7 @@ use App\Models\CertTier;
 use App\Models\CommissionLedger;
 use App\Models\CommissionOverrideRule;
 use App\Models\CommissionRule;
+use App\Models\Company;
 use App\Models\Product;
 use App\Models\ProductPricePromotion;
 use App\Models\Referral;
@@ -246,14 +248,42 @@ class CommissionService
         // resolveAffiliateOverride()'s docblock for the fail-safe rules
         // (no manager / no passed tier / no matching rule => null, same
         // as Unilevel).
+        /*
+         * 2026-09-13 — WHERE THE LEADER'S SHARE COMES FROM, and why it is
+         * resolved BEFORE the seller's own row is written.
+         *
+         * Owner: "ปรับได้ทั้งหักจากสมชายปิดการขาย และบริษัทจ่ายเพิ่ม". Two of
+         * the three modes take the leader's share OUT of the seller's
+         * commission — and BR-4 forbids editing a ledger row once it exists,
+         * so the deduction has to be known before recordDirectSale() runs, not
+         * after. That is the same constraint TASK-194 already met for
+         * Affiliate; Unilevel now meets it too, which is why its overrides are
+         * RESOLVED here and only WRITTEN further down.
+         */
+        $overrideMode = $this->overrideModeFor($referral->company);
+
         $affiliateOverride = null;
+        $unilevelOverrides = [];
         $agentDirectAmountSatang = $amountSatang;
 
+        if ($effectivePlanType === CommissionPlanType::Unilevel) {
+            $unilevelOverrides = $this->resolveUnilevelOverrides($referral, $agent, $saleValue, $amountSatang, $overrideMode);
+
+            if ($overrideMode->deductsFromSeller()) {
+                // Every manager's cut is rounded on its own first (inside
+                // resolveUnilevelOverrides, via computeAmount) and only the
+                // rounded figures are summed — never round the total, or the
+                // seller's row drifts a satang from the sum of the rows it
+                // paid for (BR-3).
+                $agentDirectAmountSatang = $amountSatang - array_sum(array_column($unilevelOverrides, 'amount_satang'));
+            }
+        }
+
         if ($effectivePlanType === CommissionPlanType::Affiliate) {
-            $affiliateMode = $referral->product->effectiveAffiliateOverrideMode();
+            $affiliateMode = $this->affiliateOverrideModeFor($referral->product, $overrideMode);
             $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, (int) $referral->company_id, $affiliateMode, $commissionBaseSatang, $amountSatang);
 
-            if ($affiliateOverride && $affiliateMode === AffiliateOverrideMode::Deductive) {
+            if ($affiliateOverride && $affiliateMode->deductsFromSeller()) {
                 // Round the manager's cut first (already done inside
                 // resolveAffiliateOverride(), via computeAmount()), THEN
                 // subtract — never round both sides independently, or the
@@ -275,7 +305,7 @@ class CommissionService
          * what makes a promotion unable to shrink a leg.
          */
         if ($effectivePlanType === CommissionPlanType::Unilevel) {
-            $this->recordOverrides($referral, $agent, $saleValue);
+            $this->writeUnilevelOverrides($referral, $agent, $saleValue, $unilevelOverrides, $overrideMode);
         } elseif ($effectivePlanType === CommissionPlanType::Binary) {
             $this->binaryCommissionService->creditVolume($referral, $agent, $commissionBaseSatang);
         } elseif ($effectivePlanType === CommissionPlanType::Matrix) {
@@ -293,6 +323,7 @@ class CommissionService
                 $affiliateOverride['amount_satang'],
                 $saleValue,
                 $agent,
+                $this->affiliateOverrideModeFor($referral->product, $overrideMode),
             );
         }
 
@@ -403,56 +434,175 @@ class CommissionService
     }
 
     /**
-     * TASK-025 (Unilevel manager override, ADR-006): walks the selling
-     * agent's manager_id chain upward with no depth cap (human decision,
-     * ADR-006 Round 2/Addendum). For each manager found, looks up
-     * commission_override_rules by that MANAGER's OWN current
-     * highestPassedCertTier() (not the selling agent's tier — ADR-006
-     * decision). A manager with no configured rate for their tier gets
-     * no row at all — never a $0 row (matches TASK-025's acceptance
-     * criteria). Each override is a new, separate, immutable
-     * commission_ledger row (BR-4) — the original direct-sale row
-     * created above is never touched.
+     * 2026-09-13 — WHO gets a leader override on this sale, and HOW MUCH,
+     * resolved WITHOUT writing anything.
      *
-     * ag-lead judgment call (not explicitly specified in the task spec):
-     * the override rate is applied to the same base as the direct
-     * commission — the product's price_satang — exactly like
-     * commission_rules, not to the downline's commission amount. This
-     * mirrors how "override" works in the real insurance hierarchies
-     * researched for ADR-006 (a % of the produced premium, paid at
-     * every level, not a % of the level below's own commission).
+     * Split out of the old recordOverrides() because two of the three modes
+     * (CommissionOverrideMode) take the leader's share out of the SELLER's
+     * commission, and BR-4 forbids editing the seller's row once written. The
+     * amounts therefore have to be known before recordDirectSale() runs.
+     *
+     * Walks the selling agent's manager_id chain upward with no business depth
+     * cap (human decision, ADR-006 Round 2/Addendum). For each manager: holding
+     * a passed cert tier is what makes them ELIGIBLE (ADR-035 — a gate, never a
+     * rate key), and a manager with no matching rule gets no row at all, never
+     * a 0 row.
+     *
+     * ── THE RUNTIME CAP, AND WHY IT EXISTS EVEN THOUGH CONFIG IS GUARDED ──
+     *
+     * Under DeductFromSale every manager takes a percentage of the SALE out of
+     * a pool that is only the seller's commission. At 2% each against a 3%
+     * seller rate, two managers already exhaust it and a third would make the
+     * seller's row negative. CommissionOverrideRuleService refuses to SAVE a
+     * rate that could do that — but it checks against the chain as it is that
+     * day, and somebody can be given a manager afterwards.
+     *
+     * So the pool is tracked here too and the walk stops when it is empty. The
+     * managers nearest the seller are paid first, which is the only ordering
+     * the walk can offer and also the defensible one: they are the ones who
+     * actually supervise the sale. It is logged, loudly, because a leader
+     * silently receiving nothing is exactly the kind of thing that surfaces as
+     * an accusation weeks later.
+     *
+     * @return list<array{manager: User, tier: CertTier, rule: CommissionOverrideRule, amount_satang: int}>
      */
-    private function recordOverrides(Referral $referral, User $sellingAgent, SaleValueSnapshot $saleValue): void
-    {
-        $manager = $sellingAgent->manager;
-        $depth = 0;
-        // TASK-214 — resolved ONCE, outside the walk: the rate is now a
-        // property of the PRODUCT, identical for every manager in the
-        // chain, so re-querying it per hop would be the same answer at N
-        // times the cost.
+    private function resolveUnilevelOverrides(
+        Referral $referral,
+        User $sellingAgent,
+        SaleValueSnapshot $saleValue,
+        int $agentAmountSatang,
+        CommissionOverrideMode $mode,
+    ): array {
+        // TASK-214 — resolved ONCE, outside the walk: the rate is a property of
+        // the PRODUCT, identical for every manager in the chain, so re-querying
+        // it per hop would be the same answer at N times the cost.
         $overrideRule = $this->resolveOverrideRule($referral->product, (int) $referral->company_id);
 
+        if (! $overrideRule) {
+            return [];
+        }
+
+        $rows = [];
+        $manager = $sellingAgent->manager;
+        $depth = 0;
+        $poolRemaining = $agentAmountSatang;
+
         while ($manager !== null && $depth < self::MAX_OVERRIDE_CHAIN_DEPTH) {
-            // Still required, and still per-manager: holding a cert tier
-            // is what makes a manager ELIGIBLE. Only the rate stopped
-            // depending on which tier it is.
             $managerTier = $manager->highestPassedCertTier();
 
-            if ($managerTier && $overrideRule) {
-                $this->createOverrideLedgerRow(
-                    $referral,
-                    $manager,
-                    $managerTier,
-                    $overrideRule,
-                    $this->computeAmount($overrideRule->rate_type, $overrideRule->rate_value, $saleValue->baseSatang),
-                    $saleValue,
-                    $sellingAgent,
-                );
+            if ($managerTier) {
+                $amount = $this->overrideAmountFor($mode, $overrideRule, $saleValue, $agentAmountSatang);
+
+                if ($mode->deductsFromSeller()) {
+                    $amount = min($amount, max(0, $poolRemaining));
+
+                    if ($amount <= 0) {
+                        Log::warning(
+                            "CommissionService: referral {$referral->id} — the seller's commission was exhausted before manager {$manager->id} "
+                            ."could be paid a leader override (mode {$mode->value}). The chain is deeper than the configured rate allows; "
+                            .'review the leader rate in ขั้นที่ 4.'
+                        );
+
+                        break;
+                    }
+
+                    $poolRemaining -= $amount;
+                }
+
+                $rows[] = [
+                    'manager' => $manager,
+                    'tier' => $managerTier,
+                    'rule' => $overrideRule,
+                    'amount_satang' => $amount,
+                ];
             }
 
             $manager = $manager->manager;
             $depth++;
         }
+
+        return $rows;
+    }
+
+    /**
+     * The one place the three modes turn into a number.
+     *
+     * Additive and DeductFromSale pay the SAME amount — a percentage of the
+     * sale — and differ only in who funds it, which is why they share a branch
+     * here and diverge at the seller's row. DeductFromCommission is the one
+     * that changes the BASE, and the 33x difference between it and
+     * DeductFromSale on identical inputs is the reason
+     * CommissionOverrideMode's cases name their base instead of one of them
+     * being called "deductive".
+     */
+    private function overrideAmountFor(
+        CommissionOverrideMode $mode,
+        CommissionOverrideRule $rule,
+        SaleValueSnapshot $saleValue,
+        int $agentAmountSatang,
+    ): int {
+        return $mode === CommissionOverrideMode::DeductFromCommission
+            ? $this->computeAmount($rule->rate_type, $rule->rate_value, $agentAmountSatang)
+            : $this->computeAmount($rule->rate_type, $rule->rate_value, $saleValue->baseSatang);
+    }
+
+    /**
+     * Writes what resolveUnilevelOverrides() decided. Each override is its own
+     * immutable ledger row (BR-4); the seller's row, already written by now,
+     * is never touched.
+     *
+     * @param  list<array{manager: User, tier: CertTier, rule: CommissionOverrideRule, amount_satang: int}>  $rows
+     */
+    private function writeUnilevelOverrides(
+        Referral $referral,
+        User $sellingAgent,
+        SaleValueSnapshot $saleValue,
+        array $rows,
+        CommissionOverrideMode $mode,
+    ): void {
+        foreach ($rows as $row) {
+            $this->createOverrideLedgerRow(
+                $referral,
+                $row['manager'],
+                $row['tier'],
+                $row['rule'],
+                $row['amount_satang'],
+                $saleValue,
+                $sellingAgent,
+                $mode,
+            );
+        }
+    }
+
+    /**
+     * The company's answer, with 'additive' for a company that has never been
+     * asked — which is every company that existed before 2026-09-13, and is
+     * exactly what Unilevel did unconditionally before that date. Nothing
+     * about the deduct modes is opt-out.
+     */
+    private function overrideModeFor(?Company $company): CommissionOverrideMode
+    {
+        return $company?->commission_override_mode ?? CommissionOverrideMode::Additive;
+    }
+
+    /**
+     * Affiliate's mode, honouring TASK-194's per-PRODUCT column when it is set.
+     *
+     * NULL there now means "use the company's choice" rather than "additive".
+     * That is not a behaviour change: the column's null default meant additive,
+     * and the company column's default is additive too, so every product that
+     * has never been touched resolves exactly as it did. What it buys is one
+     * question with one answer for companies that set the mode once and never
+     * think about it again — while a product that was deliberately given its
+     * own mode keeps it, because somebody chose that on purpose.
+     */
+    private function affiliateOverrideModeFor(Product $product, CommissionOverrideMode $companyMode): CommissionOverrideMode
+    {
+        return match ($product->affiliate_override_mode) {
+            AffiliateOverrideMode::Deductive => CommissionOverrideMode::DeductFromCommission,
+            AffiliateOverrideMode::Additive => CommissionOverrideMode::Additive,
+            default => $companyMode,
+        };
     }
 
     /**
@@ -470,7 +620,7 @@ class CommissionService
      *
      * @return array{manager: User, managerTier: CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
      */
-    private function resolveAffiliateOverride(User $sellingAgent, Product $product, int $companyId, AffiliateOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
+    private function resolveAffiliateOverride(User $sellingAgent, Product $product, int $companyId, CommissionOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
     {
         $manager = $sellingAgent->manager;
 
@@ -496,7 +646,14 @@ class CommissionService
         // it's carved out of that same pool rather than paid on top of
         // it — also spec §3.2, and the reason this can't just reuse
         // recordOverrides()'s per-manager math unmodified for this mode.
-        $baseSatang = $mode === AffiliateOverrideMode::Deductive ? $agentAmountSatang : $commissionBaseSatang;
+        /*
+         * 2026-09-13 — the three modes, via the same helper Unilevel uses, so
+         * "what does 2% mean" has one implementation rather than two that can
+         * drift. DeductFromSale is new here and is the mode that pays the SAME
+         * amount as Additive out of a different pocket — spec §3.2's additive
+         * base, funded by the seller.
+         */
+        $baseSatang = $mode === CommissionOverrideMode::DeductFromCommission ? $agentAmountSatang : $commissionBaseSatang;
 
         return [
             'manager' => $manager,
@@ -566,7 +723,7 @@ class CommissionService
      * copies of this CommissionLedger::create() call — same fields, same
      * earned_via/override_source_agent_id semantics either way.
      */
-    private function createOverrideLedgerRow(Referral $referral, User $manager, CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, SaleValueSnapshot $saleValue, User $sourceAgent): CommissionLedger
+    private function createOverrideLedgerRow(Referral $referral, User $manager, CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, SaleValueSnapshot $saleValue, User $sourceAgent, CommissionOverrideMode $mode): CommissionLedger
     {
         return CommissionLedger::create([
             'company_id' => $referral->company_id,
@@ -577,6 +734,11 @@ class CommissionService
             ...$saleValue->ledgerColumns(),
             'rate_type_applied' => $overrideRule->rate_type,
             'rate_applied' => $overrideRule->rate_value,
+            // 2026-09-13 — BR-4: without this the row cannot explain its own
+            // amount. Under DeductFromCommission a 2% rate on a 10,000 sale
+            // produces 6, not 200, and the setting that says why is a company
+            // toggle somebody may have changed since.
+            'override_mode_at_time' => $mode,
             'amount_satang' => $amountSatang,
             'payment_status' => PaymentStatus::Pending,
             'paid_at' => null,

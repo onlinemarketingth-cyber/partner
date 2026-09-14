@@ -4,6 +4,7 @@ namespace App\Http\Requests\Commission;
 
 use App\Enums\Ability;
 use App\Enums\CommissionBasis;
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -61,7 +62,14 @@ class UpdateCommissionSettingRequest extends FormRequest
             // Either field alone is a valid request — step 2 switches the
             // plan and the basis with two separate controls — but a body
             // carrying neither is not. See the docblock.
-            'commission_basis' => ['required_without:commission_plan_type', Rule::enum(CommissionBasis::class)],
+            'commission_basis' => ['required_without_all:commission_plan_type,commission_override_mode', Rule::enum(CommissionBasis::class)],
+            /*
+             * 2026-09-13 — where the team leader's share comes from. Its own
+             * field rather than a flag on the rate, because it is a COMPANY
+             * promise: an agent must be able to answer "does my leader's cut
+             * come out of mine" once, not per product.
+             */
+            'commission_override_mode' => ['sometimes', Rule::enum(CommissionOverrideMode::class)],
             /*
              * NOT nullable. `companies.commission_plan_type` is NOT NULL with
              * a default, and every company runs exactly one plan; "no plan" is
@@ -72,7 +80,7 @@ class UpdateCommissionSettingRequest extends FormRequest
              * The per-PRODUCT override is the nullable one, and it lives on
              * the products endpoint — different column, different question.
              */
-            'commission_plan_type' => ['required_without:commission_basis', Rule::enum(CommissionPlanType::class)],
+            'commission_plan_type' => ['required_without_all:commission_basis,commission_override_mode', Rule::enum(CommissionPlanType::class)],
         ];
     }
 }

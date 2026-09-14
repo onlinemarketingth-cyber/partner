@@ -32,6 +32,11 @@ class CommissionSettingResource extends JsonResource
         return [
             'commission_basis' => $this['commission_basis']->value,
             'commission_plan_type' => $this['commission_plan_type']?->value,
+            'commission_override_mode' => $this['commission_override_mode']->value,
+            // Never null: a company with no hierarchy answers 0, which is a
+            // real number the screen uses ("no manager chain yet, so no
+            // deduction can happen").
+            'deepest_manager_chain' => $this['deepest_manager_chain'],
         ];
     }
 }

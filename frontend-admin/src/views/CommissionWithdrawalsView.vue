@@ -58,18 +58,24 @@ const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
 const activeCompany = useActiveCompanyStore()
 
 /*
- * The per-company minimum withdrawal, edited here rather than on a settings
- * page of its own: it is one number, and the place an admin thinks about it
- * is the queue where they see what agents are asking for.
+ * 2026-09-13 — THE MINIMUM IS READ HERE AND WRITTEN SOMEWHERE ELSE.
  *
- * EMPTY MEANS NO MINIMUM, and that is a real setting — the field is bound to
- * a string so that "" survives as null instead of collapsing into a 0 that
- * would be saved back as a floor of zero baht.
+ * Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ นำของเก่า
+ * ออกเลย" — the edit now lives on แผนคอมมิชชั่น → ขั้นที่ 4, with every other
+ * commission setting, and the input that used to be on this page is gone.
+ *
+ * The READ stays, deliberately. The original comment on that input argued the
+ * right thing for the wrong control: when an admin wonders "why was that
+ * request refused", the answer is this number and the question gets asked HERE
+ * — so the number is shown here. What it no longer is, is a second place to
+ * change it.
+ *
+ * NULL IS A REAL ANSWER (no minimum) and is rendered as such. `unknown` is the
+ * separate state for a read that failed, because a page that printed "ไม่มี
+ * ขั้นต่ำ" after a 500 would explain a refusal with a fact it does not have.
  */
-const minBaht = ref('')
-const settingLoading = ref(false)
-const settingSaving = ref(false)
-const settingMessage = ref('')
+const minWithdrawalSatang = ref<number | null>(null)
+const minWithdrawalUnknown = ref(false)
 
 const settingCompanyQuery = computed(() =>
   isSuperAdmin.value && activeCompany.companyId ? `?company_id=${activeCompany.companyId}` : '',
@@ -78,51 +84,16 @@ const settingCompanyQuery = computed(() =>
 async function loadSetting(): Promise<void> {
   if (isSuperAdmin.value && !activeCompany.companyId) return
 
-  settingLoading.value = true
   try {
     const res = await api.get<{ min_withdrawal_satang: number | null }>(
       `/commission-withdrawal-settings${settingCompanyQuery.value}`,
     )
-    minBaht.value = res.min_withdrawal_satang === null ? '' : (res.min_withdrawal_satang / 100).toFixed(2)
+    minWithdrawalSatang.value = res.min_withdrawal_satang
+    minWithdrawalUnknown.value = false
   } catch {
     // A settings row that will not load must not take the queue down with
     // it — the queue is the reason this page exists.
-    settingMessage.value = 'โหลดค่าขั้นต่ำไม่สำเร็จ'
-  } finally {
-    settingLoading.value = false
-  }
-}
-
-async function saveSetting(): Promise<void> {
-  if (settingSaving.value) return
-  settingMessage.value = ''
-
-  const trimmed = minBaht.value.trim()
-  let satang: number | null = null
-
-  if (trimmed !== '') {
-    const baht = Number(trimmed)
-
-    if (!Number.isFinite(baht) || baht < 0) {
-      settingMessage.value = 'ยอดขั้นต่ำไม่ถูกต้อง'
-
-      return
-    }
-
-    satang = Math.round(baht * 100)
-  }
-
-  settingSaving.value = true
-  try {
-    await api.put(`/commission-withdrawal-settings${settingCompanyQuery.value}`, {
-      min_withdrawal_satang: satang,
-    })
-    settingMessage.value = satang === null ? 'บันทึกแล้ว — ไม่มีขั้นต่ำ' : 'บันทึกแล้ว'
-  } catch (e) {
-    const parsed = e instanceof ApiError ? (e.body as { errors?: Record<string, string[]> }) : null
-    settingMessage.value = parsed?.errors?.min_withdrawal_satang?.[0] ?? 'บันทึกไม่สำเร็จ'
-  } finally {
-    settingSaving.value = false
+    minWithdrawalUnknown.value = true
   }
 }
 
@@ -265,34 +236,22 @@ watch(() => activeCompany.companyId, () => {
       </button>
     </div>
 
-    <!-- 2026-08-27 — the per-company floor. Deliberately compact and above
-         the queue: it is set once and then rarely touched, but when somebody
-         wonders "why was that request refused", this is the answer and it
-         should be on the same screen. -->
-    <div class="mt-4 bg-white border border-slate-200 rounded-2xl p-4 max-w-xl">
-      <p class="text-sm font-bold text-slate-900">ยอดขั้นต่ำในการเบิก</p>
-      <p class="text-xs text-slate-500 mt-0.5">
-        เว้นว่างไว้ = ไม่มีขั้นต่ำ (ตัวแทนเบิกเท่าไรก็ได้)
+    <!-- 2026-09-13 — the floor, READ-ONLY. It explains refusals, which is why
+         it is on this page at all; it is no longer edited here, which is why
+         there is no input. See the script's own note. -->
+    <div class="mt-4 bg-white border border-slate-200 rounded-2xl px-4 py-3 max-w-xl" data-test="withdrawal-minimum-readout">
+      <p class="text-xs text-slate-500">ยอดขั้นต่ำในการเบิกของบริษัทนี้</p>
+      <p class="text-sm font-bold text-slate-900 mt-0.5">
+        <span v-if="minWithdrawalUnknown" class="text-rose-600">อ่านค่าไม่สำเร็จ</span>
+        <span v-else-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — ตัวแทนเบิกเท่าไรก็ได้</span>
+        <span v-else>{{ formatSatang(minWithdrawalSatang) }}</span>
       </p>
-      <div class="mt-2 flex gap-2">
-        <input
-          v-model="minBaht"
-          type="text"
-          inputmode="decimal"
-          placeholder="เช่น 1000.00"
-          :disabled="settingLoading || (isSuperAdmin && !activeCompany.companyId)"
-          class="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:opacity-60"
-        />
-        <button
-          type="button"
-          :disabled="settingSaving || settingLoading || (isSuperAdmin && !activeCompany.companyId)"
-          class="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold disabled:opacity-50"
-          @click="saveSetting"
-        >
-          {{ settingSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
-        </button>
-      </div>
-      <p v-if="settingMessage" class="mt-1 text-xs font-bold text-slate-600">{{ settingMessage }}</p>
+      <p class="text-xs text-slate-400 mt-1">
+        แก้ไขที่
+        <RouterLink :to="{ name: 'commission-plan-settings' }" class="font-bold text-brand-600 hover:underline" data-test="link-commission-step4">
+          แผนคอมมิชชั่น → ขั้นที่ 4 →
+        </RouterLink>
+      </p>
     </div>
 
     <p v-if="errorMessage" class="mt-4 text-sm font-bold text-rose-600">{{ errorMessage }}</p>

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\CommissionBasis;
 use App\Enums\CommissionEarnedVia;
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Enums\PaymentStatus;
 use App\Models\Scopes\TenantScope;
@@ -120,6 +121,9 @@ class CommissionLedger extends Model
         // which reads as 'price' — see the migration.
         'commission_basis_at_time',
         'commission_base_satang_at_time',
+        // 2026-09-13 — only ever set on an Override row. Without it a leader's
+        // row cannot explain its own amount (see the migration).
+        'override_mode_at_time',
         'rate_type_applied',
         'rate_applied',
         'amount_satang',
@@ -151,6 +155,7 @@ class CommissionLedger extends Model
             'sale_price_satang_at_time' => 'integer',
             'commission_basis_at_time' => CommissionBasis::class,
             'commission_base_satang_at_time' => 'integer',
+            'override_mode_at_time' => CommissionOverrideMode::class,
             'payment_status' => PaymentStatus::class,
             'paid_at' => 'datetime',
             'earned_via' => CommissionEarnedVia::class,

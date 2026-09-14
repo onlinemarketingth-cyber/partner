@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\CommissionBasis;
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Models\Concerns\HasTrackedLink;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -43,6 +44,11 @@ class Company extends Model
         // through CommissionBasisResolver, which owns the missing-PV
         // fallback that must not be duplicated.
         'commission_basis',
+        // 2026-09-13 — where the team leader's share comes from: on top of the
+        // seller's commission, or out of it (and out of WHICH base). See
+        // App\Enums\CommissionOverrideMode — the two deduct modes differ by
+        // 33x on the same inputs, which is why the enum names the base.
+        'commission_override_mode',
         // ADR-017 (TASK-054) — BR-7 admin-editable payment collection
         // config, shown on the public /pay/{token} page. All nullable.
         'payment_promptpay_id',
@@ -80,6 +86,7 @@ class Company extends Model
             'min_withdrawal_satang' => 'integer',
             'commission_plan_type' => CommissionPlanType::class,
             'commission_basis' => CommissionBasis::class,
+            'commission_override_mode' => CommissionOverrideMode::class,
             // TASK-056 P2 bugfix — deliberately NOT in $fillable: only
             // ClientCategoryService::ensureDefaults() ever writes this, a
             // client request must never be able to set/clear it directly.

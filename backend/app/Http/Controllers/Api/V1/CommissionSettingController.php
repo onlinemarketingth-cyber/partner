@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\CommissionBasis;
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Commission\UpdateCommissionSettingRequest;
@@ -64,11 +65,13 @@ class CommissionSettingController extends Controller
          */
         $basis = $request->validated('commission_basis');
         $planType = $request->validated('commission_plan_type');
+        $overrideMode = $request->validated('commission_override_mode');
 
         return new CommissionSettingResource($service->update(
             $companyId,
             $basis === null ? null : CommissionBasis::from($basis),
             $planType === null ? null : CommissionPlanType::from($planType),
+            $overrideMode === null ? null : CommissionOverrideMode::from($overrideMode),
             $request->user(),
         ));
     }

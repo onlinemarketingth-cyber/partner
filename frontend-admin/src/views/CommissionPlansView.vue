@@ -444,6 +444,15 @@ interface ProductOption {
   category?: { id: number; name: string } | null
   price_satang?: number
   /*
+   * 2026-09-13 — what THIS company actually charges: its own price override
+   * if it set one, the platform price if it did not, and the active promotion
+   * above either (ProductResource). Read by step 4's worked example, which
+   * must show the same number the server computes commission from — an
+   * example built on `price_satang` would quietly contradict the ledger at
+   * every company that has ever set its own price.
+   */
+  effective_price_satang?: number
+  /*
    * READ-ONLY on this screen since 2026-09-12. `commission_plan_type` is the
    * product's own override and is only consulted here to say "(สืบทอดจาก
    * บริษัท)" beside the effective plan, and to infer the company's plan in
@@ -1385,22 +1394,39 @@ async function loadCompanySettings(): Promise<void> {
     commissionBasis.value = 'price'
     companyPlanTypeFromServer.value = null
     basisUnknown.value = false
+    overrideMode.value = 'additive'
+    overrideModeUnknown.value = false
+    deepestManagerChain.value = 0
 
     return
   }
   try {
-    const r = await api.get<{ data: { commission_basis?: CommissionBasis; commission_plan_type?: CommissionPlanType | null } }>(
-      `/commission-settings${companyQuery()}`,
-    )
+    const r = await api.get<{
+      data: {
+        commission_basis?: CommissionBasis
+        commission_plan_type?: CommissionPlanType | null
+        commission_override_mode?: CommissionOverrideMode
+        deepest_manager_chain?: number
+      }
+    }>(`/commission-settings${companyQuery()}`)
     commissionBasis.value = r.data.commission_basis ?? 'price'
     companyPlanTypeFromServer.value = r.data.commission_plan_type ?? null
     basisUnknown.value = false
+    overrideMode.value = r.data.commission_override_mode ?? 'additive'
+    // Server-computed and never inferred here: the screen shows the maximum
+    // leader rate from this number, and a guess would print a ceiling the
+    // save-time refusal then disagrees with.
+    deepestManagerChain.value = r.data.deepest_manager_chain ?? 0
+    overrideModeUnknown.value = false
   } catch {
     // Left NULL, not defaulted: the screen does not know the plan, and
     // companyPlanType falls back to the inference rather than asserting one
     // nobody confirmed.
     companyPlanTypeFromServer.value = null
     basisUnknown.value = true
+    // Same reason, one card further on — see overrideModeUnknown.
+    overrideModeUnknown.value = true
+    deepestManagerChain.value = 0
   }
 }
 
@@ -1478,6 +1504,330 @@ async function setCommissionBasis(next: CommissionBasis): Promise<void> {
     basisError.value = apiErrorMessage(e, 'เปลี่ยนฐานการคำนวณไม่สำเร็จ')
   } finally {
     basisSaving.value = false
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-13 — WHERE THE TEAM LEADER'S MONEY COMES FROM (step 4).
+ *
+ * Owner, verbatim: "จุดที่คนเข้าใจผิดบ่อยที่สุด — 2% ไม่ได้หักจาก 300 ของ
+ * สมชาย · เรื่องนี้ต้องทำให้ชัดเจน และปรับได้ทั้งหักจากสมชายปิดการขาย และ
+ * บริษัทจ่ายเพิ่ม [ทำ UI ให้ผู้ใช้เข้าใจก่อนเลือกแบบใดแบบหนึ่ง]".
+ *
+ * The misunderstanding is real and it is arithmetic, not wording: a 2% leader
+ * rate against a 3% seller rate produces THREE different answers depending on
+ * what the 2% is 2% OF and who funds it, and two of those answers differ by
+ * 33x on identical inputs. Nothing on this screen said which one was in force.
+ *
+ * So the choice is explicit (App\Enums\CommissionOverrideMode) and the UI
+ * shows all three ANSWERS, in baht, computed from this company's own rates,
+ * BEFORE anybody picks one. A mode selector that only named the modes would
+ * have reproduced the same misunderstanding with more words.
+ * ═══════════════════════════════════════════════════════════════════════ */
+type CommissionOverrideMode = 'additive' | 'deduct_from_sale' | 'deduct_from_commission'
+const overrideMode = ref<CommissionOverrideMode>('additive')
+/**
+ * Same defence as `basisUnknown`, for the same reason and from the same
+ * request: this decides whether a seller's commission is reduced, and a
+ * screen that rendered the default as the SELECTED answer after a failed
+ * read would state a wrong answer about somebody's pay with no way to tell.
+ */
+const overrideModeUnknown = ref(false)
+/** Server-computed (OverrideDeductionGuard::deepestChain) — never guessed here. */
+const deepestManagerChain = ref(0)
+const overrideModeSaving = ref(false)
+const overrideModeError = ref('')
+
+const overrideModeOptions: Array<{
+  value: CommissionOverrideMode
+  title: string
+  oneLine: string
+  detail: string
+}> = [
+  {
+    value: 'additive',
+    title: 'บริษัทจ่ายเพิ่ม',
+    oneLine: 'ตัวแทนที่ปิดการขายได้เต็ม · หัวหน้าทีมได้เพิ่มจากบริษัท',
+    detail: 'ค่าคอมของหัวหน้าทีมเป็นต้นทุนใหม่ของบริษัท ไม่ไปแตะค่าคอมของคนปิดการขายเลย — ยิ่งสายลึก บริษัทยิ่งจ่ายรวมมากขึ้น',
+  },
+  {
+    value: 'deduct_from_sale',
+    title: 'หักจากตัวแทน — คิด % จากยอดขาย',
+    oneLine: 'หัวหน้าทีมได้ % ของยอดขาย แต่เงินนั้นหักออกจากค่าคอมของคนปิดการขาย',
+    detail: 'ต้นทุนรวมของบริษัทเท่าเดิม แต่เป็นโหมดที่กินโควตาเร็วที่สุด เพราะ % คิดจากยอดขายทั้งก้อนในขณะที่เงินมาจากค่าคอมก้อนเล็ก ๆ ของตัวแทนเท่านั้น',
+  },
+  {
+    value: 'deduct_from_commission',
+    title: 'หักจากตัวแทน — คิด % จากค่าคอมของตัวแทน',
+    oneLine: 'หัวหน้าทีมได้ % ของ "ค่าคอมที่ตัวแทนได้" ไม่ใช่ของยอดขาย',
+    detail: 'ต้นทุนรวมของบริษัทเท่าเดิม และหักน้อยกว่าแบบบนมาก เพราะฐานที่คิด % เล็กกว่า — ถ้าตั้งใจว่า "แบ่งกันเองในทีม" ส่วนใหญ่หมายถึงโหมดนี้',
+  },
+]
+
+const overrideModeLabels: Record<CommissionOverrideMode, string> = {
+  additive: 'บริษัทจ่ายเพิ่ม',
+  deduct_from_sale: 'หักจากตัวแทน (คิดจากยอดขาย)',
+  deduct_from_commission: 'หักจากตัวแทน (คิดจากค่าคอมตัวแทน)',
+}
+
+/**
+ * The same rounding rule the server uses — CommissionRateCalculator::compute().
+ * `rate_value` is BASIS POINTS (500 = 5.00%), which is why the divisor is
+ * 10,000 and not 100. Getting that wrong here would not move any money, but it
+ * would print a worked example that disagrees with the ledger, which on this
+ * particular card is the entire failure being fixed.
+ */
+function computeRateSatang(rateType: RateType, rateValue: number, baseSatang: number): number {
+  return rateType === 'percentage' ? Math.round((baseSatang * rateValue) / 10000) : rateValue
+}
+
+/** Price or PV, exactly as CommissionBasisResolver::baseSatang() picks it. */
+function commissionBaseSatangFor(p: ProductOption): number {
+  const price = p.effective_price_satang ?? p.price_satang ?? 0
+
+  // `??` and never `||`: a product deliberately worth 0 PV is a decision the
+  // server honours, and collapsing it into the price here would show an
+  // example nobody will be paid.
+  return commissionBasis.value === 'pv' ? (p.pv_satang ?? price) : price
+}
+
+/**
+ * The product the example is built on: the one where the deduction BINDS.
+ *
+ * The cheapest commission is the constraint — a leader rate that is
+ * comfortable on a 29,900 package and ruinous on a 590 one is not comfortable.
+ * This is the same product OverrideDeductionGuard reports on, deliberately, so
+ * the number on screen and the number in a refusal are about the same row.
+ */
+const overrideExampleProduct = computed<ProductOption | null>(() => {
+  let best: { product: ProductOption; seller: number } | null = null
+
+  for (const p of sellableProducts.value) {
+    const agentRule = resolveRuleFor(p)
+    const leaderRule = resolveOverrideFor(p)
+    if (!agentRule || !leaderRule) continue
+
+    const base = commissionBaseSatangFor(p)
+    if (base <= 0) continue
+
+    const seller = computeRateSatang(agentRule.rate_type, agentRule.rate_value, base)
+    if (seller <= 0) continue
+
+    if (!best || seller < best.seller) best = { product: p, seller }
+  }
+
+  return best?.product ?? null
+})
+
+interface OverrideModeRow { sellerSatang: number; leaderSatang: number; companyPaysSatang: number }
+
+/**
+ * All three answers, in baht, for ONE sale with ONE leader above it.
+ *
+ * One leader on purpose: it is the owner's own framing ("สมชายปิดการขาย" and
+ * his หัวหน้า) and it is the smallest case where the three modes already
+ * disagree. The real chain depth is shown next to the table rather than folded
+ * into it — multiplying the example by five managers makes the numbers
+ * dramatic and the comparison unreadable.
+ *
+ * ── THE HYPOTHETICAL, AND WHY IT IS NOT A BR-7 VIOLATION ──
+ *
+ * When no product has BOTH an agent rate and a leader rate yet there is
+ * nothing real to compute, and a company in that state is exactly the one that
+ * needs to understand the modes before setting anything. So the card falls
+ * back to a round illustration, LABELLED as one on screen. BR-7 forbids the
+ * system inventing a business value it then acts on — this number is never
+ * saved, never sent, and never resolved against; it is the text of an
+ * explanation. The moment real rates exist the example switches to them.
+ */
+const overrideModeExample = computed(() => {
+  const product = overrideExampleProduct.value
+  const agentRule = product ? resolveRuleFor(product) : null
+  const leaderRule = product ? resolveOverrideFor(product) : null
+  const hypothetical = !product || !agentRule || !leaderRule
+
+  const base = hypothetical ? 1000000 : commissionBaseSatangFor(product!)
+  const sellerRateType: RateType = hypothetical ? 'percentage' : agentRule!.rate_type
+  const sellerRateValue = hypothetical ? 300 : agentRule!.rate_value
+  const leaderRateType: RateType = hypothetical ? 'percentage' : leaderRule!.rate_type
+  const leaderRateValue = hypothetical ? 200 : leaderRule!.rate_value
+
+  const seller = computeRateSatang(sellerRateType, sellerRateValue, base)
+  const leaderOnSale = computeRateSatang(leaderRateType, leaderRateValue, base)
+  const leaderOnCommission = computeRateSatang(leaderRateType, leaderRateValue, seller)
+
+  // CommissionService's runtime pool cap, mirrored: under a deduct mode the
+  // seller's row can never go negative, so a leader rate bigger than the whole
+  // commission pays out the pool and no more. Showing an un-capped number here
+  // would promise the leader money the calculation refuses to write.
+  const capped = (leaderEach: number): number => Math.min(leaderEach, seller)
+
+  const rows: Record<CommissionOverrideMode, OverrideModeRow> = {
+    additive: {
+      sellerSatang: seller,
+      leaderSatang: leaderOnSale,
+      companyPaysSatang: seller + leaderOnSale,
+    },
+    deduct_from_sale: {
+      sellerSatang: seller - capped(leaderOnSale),
+      leaderSatang: capped(leaderOnSale),
+      companyPaysSatang: seller,
+    },
+    deduct_from_commission: {
+      sellerSatang: seller - capped(leaderOnCommission),
+      leaderSatang: capped(leaderOnCommission),
+      companyPaysSatang: seller,
+    },
+  }
+
+  return {
+    hypothetical,
+    productName: hypothetical ? 'สินค้าตัวอย่าง' : product!.name,
+    baseSatang: base,
+    baseLabel: commissionBasis.value === 'pv' ? 'PV' : 'ยอดขาย',
+    sellerRateLabel: formatRate(sellerRateType, sellerRateValue),
+    leaderRateLabel: formatRate(leaderRateType, leaderRateValue),
+    rows,
+  }
+})
+
+/**
+ * The ceiling a leader rate may not cross under a deduct mode, in baht per
+ * level — the same arithmetic OverrideDeductionGuard refuses with, shown
+ * BEFORE anybody types instead of after they save.
+ *
+ * Null when there is no chain (nothing can be exhausted) or when no product
+ * has an agent rate to divide (step 3's problem, and saying it twice in two
+ * places is how a screen ends up nagging).
+ */
+const maxOverridePerLevelSatang = computed<number | null>(() => {
+  if (deepestManagerChain.value <= 0) return null
+
+  let worst: number | null = null
+
+  for (const p of sellableProducts.value) {
+    const agentRule = resolveRuleFor(p)
+    if (!agentRule) continue
+
+    const base = commissionBaseSatangFor(p)
+    if (base <= 0) continue
+
+    const max = Math.floor(computeRateSatang(agentRule.rate_type, agentRule.rate_value, base) / deepestManagerChain.value)
+    if (worst === null || max < worst) worst = max
+  }
+
+  return worst
+})
+
+/**
+ * PUT /commission-settings — the same door, the same Ability
+ * (SettingsCommissionPlanUpdate) as the plan type and the basis beside it.
+ *
+ * Assigned from the RESPONSE, never optimistically: the server refuses a
+ * switch that would make an existing leader rate over-deduct
+ * (CommissionSettingService::assertModeFitsExistingRules), and a card that
+ * showed the new mode before that refusal arrived would leave an admin
+ * believing a switch that never happened.
+ */
+async function setOverrideMode(next: CommissionOverrideMode): Promise<void> {
+  if (!effectiveCompanyId.value || overrideModeSaving.value || next === overrideMode.value) return
+
+  overrideModeSaving.value = true
+  overrideModeError.value = ''
+  try {
+    const r = await commissionApi.put<{ data: { commission_override_mode?: CommissionOverrideMode } }>(
+      '/commission-settings',
+      withCompanyBody({ commission_override_mode: next }),
+    )
+    overrideMode.value = r.data.commission_override_mode ?? next
+    overrideModeUnknown.value = false
+  } catch (e) {
+    overrideModeError.value = apiErrorMessage(e, 'เปลี่ยนโหมดไม่สำเร็จ')
+  } finally {
+    overrideModeSaving.value = false
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-13 — THE WITHDRAWAL MINIMUM, MOVED HERE (step 4).
+ *
+ * Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ นำของเก่า
+ * ออกเลย".
+ *
+ * It used to be a link card pointing at /commission-withdrawals, and the
+ * comment defending that link argued two write doors would be worse. That was
+ * the right worry and the wrong conclusion: the answer is ONE door, and the
+ * door belongs on the setup flow, not in the middle of an approval queue. The
+ * queue keeps a READ-ONLY line saying what the floor is and where it is set —
+ * so "why was that request refused" is still answered where it is asked.
+ *
+ * `/commission-withdrawal-settings` is a different Ability from everything
+ * else on this step (SettingsCommissionWithdrawalUpdate, held by Company Admin
+ * too), so this control is deliberately NOT gated on canEditCommissionConfig.
+ * Hiding it from a Company Admin who is allowed to set it would be the house
+ * rule applied backwards.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const minWithdrawalBaht = ref('')
+const minWithdrawalLoading = ref(false)
+const minWithdrawalSaving = ref(false)
+const minWithdrawalMessage = ref('')
+/** Same loud-failure rule as the basis: a floor that would not load is not "no floor". */
+const minWithdrawalUnknown = ref(false)
+
+async function loadMinWithdrawal(): Promise<void> {
+  if (!effectiveCompanyId.value) {
+    minWithdrawalBaht.value = ''
+    minWithdrawalUnknown.value = false
+
+    return
+  }
+
+  minWithdrawalLoading.value = true
+  minWithdrawalMessage.value = ''
+  try {
+    const r = await api.get<{ min_withdrawal_satang: number | null }>(
+      `/commission-withdrawal-settings${companyQuery()}`,
+    )
+    // EMPTY MEANS NO MINIMUM, and that is a real setting — bound to a string
+    // so "" survives as null instead of collapsing into a 0 that would be
+    // saved back as a floor of zero baht.
+    minWithdrawalBaht.value = r.min_withdrawal_satang === null ? '' : (r.min_withdrawal_satang / 100).toFixed(2)
+    minWithdrawalUnknown.value = false
+  } catch {
+    minWithdrawalUnknown.value = true
+  } finally {
+    minWithdrawalLoading.value = false
+  }
+}
+
+async function saveMinWithdrawal(): Promise<void> {
+  if (!effectiveCompanyId.value || minWithdrawalSaving.value) return
+
+  minWithdrawalMessage.value = ''
+  const trimmed = minWithdrawalBaht.value.trim()
+  let satang: number | null = null
+
+  if (trimmed !== '') {
+    const baht = Number(trimmed)
+
+    if (!Number.isFinite(baht) || baht < 0) {
+      minWithdrawalMessage.value = 'ยอดขั้นต่ำไม่ถูกต้อง'
+
+      return
+    }
+
+    satang = Math.round(baht * 100)
+  }
+
+  minWithdrawalSaving.value = true
+  try {
+    await api.put(`/commission-withdrawal-settings${companyQuery()}`, { min_withdrawal_satang: satang })
+    minWithdrawalMessage.value = satang === null ? 'บันทึกแล้ว — ไม่มีขั้นต่ำ' : 'บันทึกแล้ว'
+    minWithdrawalUnknown.value = false
+  } catch (e) {
+    minWithdrawalMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    minWithdrawalSaving.value = false
   }
 }
 
@@ -2984,6 +3334,11 @@ watch(() => activeCompany.companyId, () => {
   pvDrafts.value = {}
   pvError.value = ''
   void loadCompanySettings()
+  // Step 4's floor is per company too, and it is the one number on this screen
+  // that would be actively misleading if it lagged the switcher — an admin
+  // could save the previous company's floor onto this one.
+  minWithdrawalMessage.value = ''
+  void loadMinWithdrawal()
   if (activeTab.value !== 'rules') void ensureTabLoaded(activeTab.value)
   // The rules tab is deliberately NOT refetched: it loads every company's
   // rows once and narrows them with byCompany(). The readiness probe is
@@ -3014,6 +3369,7 @@ onMounted(async () => {
   // not watch it appear after the rate table has already rendered.
   await commissionReadiness.ensureLoaded()
   await loadCompanySettings()
+  void loadMinWithdrawal()
   await ensureTabLoaded('rules')
 })
 /*
@@ -4346,8 +4702,61 @@ watch(companyPlanType, (pt) => {
             <div>
               <p class="text-[17px] font-extrabold text-slate-900">ส่วนเพิ่มเติม</p>
               <p class="mt-1 text-[13px] text-slate-500">
-                ข้ามได้ทั้งหมด — ระบบจ่ายค่าคอมได้แล้วตั้งแต่จบขั้นที่ 3 · สามอย่างนี้คือส่วนที่จ่ายให้คนอื่นนอกจากตัวแทนที่ปิดการขาย
+                ข้ามได้ทั้งหมด — ระบบจ่ายค่าคอมได้แล้วตั้งแต่จบขั้นที่ 3
               </p>
+            </div>
+
+            <!--
+              THE ALERT THAT SAYS WHAT THIS STEP IS (2026-09-13).
+
+              Owner: "เนื่องจากการ Setup step 4 เป็น Option ควรขึ้นคำอธิบายเป็น
+              Alert ให้ผู้ใช้เข้าใจในกระบวนการ Setup ว่าอะไรทำอะไรบ้าง".
+
+              Steps 1-3 each ask ONE question, so their heading is enough. This
+              step is four unrelated settings that happen to share the property
+              of being optional, and an admin arriving here has no way to tell
+              whether they are looking at something they must finish. Naming
+              the four, saying what each decides, and saying plainly that
+              nothing here blocks a payout is the difference between "optional"
+              as a word and "optional" as something the reader can act on.
+
+              Sky rather than amber deliberately: every amber box on this
+              screen means "something is wrong here". This one means the
+              opposite, and borrowing the warning colour to say "you may stop"
+              is how a screen teaches people to ignore its warnings.
+            -->
+            <div class="rounded-2xl border border-sky-200 bg-sky-50/70 p-4" data-test="step4-intro-alert">
+              <div class="flex items-start gap-2.5">
+                <Icon name="info" :size="18" class="text-sky-600 mt-0.5 shrink-0" />
+                <div class="min-w-0">
+                  <p class="text-[14px] font-extrabold text-sky-900">ขั้นนี้ไม่บังคับ — ข้ามไปได้เลยถ้ายังไม่ต้องใช้</p>
+                  <p class="mt-1 text-[12.5px] text-sky-900/80">
+                    จบขั้นที่ 3 แล้วระบบจ่ายค่าคอมให้ “ตัวแทนที่ปิดการขาย” ได้ครบถ้วน · ขั้นที่ 4 คือการจ่ายให้ <b>คนอื่นนอกจากคนปิดการขาย</b>
+                    และเงื่อนไขการเบิก — ตั้งเมื่อไหร่ก็ได้ ไม่มีอะไรในนี้ที่ทำให้ค่าคอมหยุดจ่าย
+                  </p>
+                  <ul class="mt-2.5 space-y-1.5 text-[12.5px] text-sky-900/90">
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.1</span>
+                      <span><b>อัตราหัวหน้าทีม</b> — หัวหน้าได้เท่าไหร่เมื่อลูกทีมปิดการขาย · ไม่ตั้ง = หัวหน้าไม่ได้อะไร (ตัวแทนยังได้ปกติ)</span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.2</span>
+                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · <b>ตั้งครั้งเดียวใช้ทั้งบริษัท</b></span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.3</span>
+                      <span><b>แบ่งค่าคอมผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.4</span>
+                      <span><b>ยอดขั้นต่ำในการเบิก</b> — ตัวแทนต้องสะสมถึงเท่าไหร่จึงกดขอเบิกได้ · เว้นว่าง = ไม่มีขั้นต่ำ</span>
+                    </li>
+                  </ul>
+                  <p class="mt-2.5 text-[12px] font-bold text-sky-900/70">
+                    ทุกอย่างในขั้นนี้มีผลกับ <b>ดีลที่เกิดหลังจากบันทึก</b> เท่านั้น — รายการที่ลงบัญชีไปแล้วไม่ถูกแก้ย้อนหลัง
+                  </p>
+                </div>
+              </div>
             </div>
 
             <EmptyState
@@ -4366,7 +4775,9 @@ watch(companyPlanType, (pt) => {
               -->
               <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4" data-test="step4-leader-rates">
                 <div class="flex flex-wrap items-center gap-2 mb-1">
-                  <p class="text-[15px] font-extrabold text-slate-900">อัตราหัวหน้าทีม</p>
+                  <p class="text-[15px] font-extrabold text-slate-900">
+                    <span class="text-slate-400 mr-1.5">4.1</span>อัตราหัวหน้าทีม
+                  </p>
                   <span
                     class="text-[11px] font-bold rounded-full px-2.5 py-1"
                     :class="activeOverrideRules.length ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
@@ -4426,6 +4837,166 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
+                ═══ 4.2 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
+
+                Owner, verbatim: "จุดที่คนเข้าใจผิดบ่อยที่สุด — 2% ไม่ได้หักจาก
+                300 ของสมชาย · เรื่องนี้ต้องทำให้ชัดเจน และปรับได้ทั้งหักจาก
+                สมชายปิดการขาย และบริษัทจ่ายเพิ่ม [ทำ UI ให้ผู้ใช้เข้าใจก่อน
+                เลือกแบบใดแบบหนึ่ง]".
+
+                The card shows ALL THREE ANSWERS IN BAHT BEFORE the admin
+                picks, computed from this company's own rates. That ordering is
+                the entire design: a selector that named three modes and left
+                the arithmetic to be discovered at a payout would reproduce the
+                misunderstanding it was built to end. Three named options with
+                three numbers beside them is a choice; three names alone is a
+                guess with extra steps.
+
+                The comparison table is above the buttons for the same reason —
+                you read the consequences, then you choose.
+              -->
+              <div class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4" data-test="step4-override-mode">
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-[15px] font-extrabold text-slate-900">
+                    <span class="text-slate-400 mr-1.5">4.2</span>เงินของหัวหน้าทีมมาจากไหน
+                  </p>
+                  <span
+                    v-if="!overrideModeUnknown"
+                    class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-indigo-100 text-indigo-700"
+                    data-test="override-mode-current"
+                  >
+                    ตอนนี้: {{ overrideModeLabels[overrideMode] }}
+                  </span>
+                </div>
+                <p class="mt-1 text-[12.5px] text-slate-600">
+                  ตั้งครั้งเดียวใช้ทั้งบริษัท · ตัดสินว่าค่าคอมของหัวหน้าทีม (ข้อ 4.1) เป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b>
+                </p>
+
+                <!-- The read failed, so the card does not know. Same defence as
+                     step 2's basis: showing the default as the chosen answer
+                     would state a wrong fact about somebody's pay. -->
+                <div
+                  v-if="overrideModeUnknown"
+                  class="mt-3 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3"
+                  data-test="override-mode-unknown"
+                >
+                  <Icon name="warning" :size="18" class="text-rose-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p class="text-[13px] font-extrabold text-rose-800">อ่านค่าปัจจุบันไม่สำเร็จ</p>
+                    <p class="mt-0.5 text-[12.5px] text-rose-700">
+                      ระบบยังไม่รู้ว่าบริษัทนี้ใช้โหมดไหน จึงยังไม่แสดงว่าอันไหนถูกเลือก — โหลดหน้าใหม่อีกครั้ง
+                    </p>
+                  </div>
+                </div>
+
+                <template v-else>
+                  <!-- THE TABLE. One sale, one leader above the seller. -->
+                  <div class="mt-3 rounded-xl border border-indigo-200 bg-white/90 overflow-hidden" data-test="override-mode-example">
+                    <div class="px-3.5 py-2.5 border-b border-indigo-100 bg-indigo-50/60">
+                      <p class="text-[12.5px] font-bold text-slate-700">
+                        ตัวอย่างจากอัตราจริงของบริษัทนี้ — ขาย “{{ overrideModeExample.productName }}”
+                      </p>
+                      <p class="text-[12px] text-slate-500 mt-0.5">
+                        {{ overrideModeExample.baseLabel }} {{ formatSatang(overrideModeExample.baseSatang) }} ·
+                        ตัวแทน {{ overrideModeExample.sellerRateLabel }} · หัวหน้าทีม {{ overrideModeExample.leaderRateLabel }} · หัวหน้า 1 คน
+                      </p>
+                      <!-- Labelled, not hidden. A company with no rates yet is
+                           exactly the one that has to understand the modes
+                           BEFORE it sets any — so the example falls back to a
+                           round illustration and says so, rather than
+                           disappearing and leaving the choice unexplained. -->
+                      <p v-if="overrideModeExample.hypothetical" class="text-[12px] font-bold text-amber-700 mt-1" data-test="override-example-hypothetical">
+                        ⚠ ยังไม่มีสินค้าที่มีทั้งอัตราตัวแทนและอัตราหัวหน้าทีม — ตัวเลขข้างล่างเป็น <b>ตัวอย่างสมมติ</b> เพื่ออธิบายเท่านั้น
+                      </p>
+                    </div>
+                    <table class="w-full text-[12.5px]">
+                      <thead>
+                        <tr class="text-slate-500 bg-white">
+                          <th class="text-left font-bold px-3.5 py-2">โหมด</th>
+                          <th class="text-right font-bold px-3.5 py-2">คนปิดการขายได้</th>
+                          <th class="text-right font-bold px-3.5 py-2">หัวหน้าทีมได้</th>
+                          <th class="text-right font-bold px-3.5 py-2">บริษัทจ่ายรวม</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="opt in overrideModeOptions"
+                          :key="`row-${opt.value}`"
+                          class="border-t border-slate-100"
+                          :class="opt.value === overrideMode ? 'bg-indigo-50/80 font-bold text-slate-900' : 'text-slate-600'"
+                          :data-test="`override-mode-row-${opt.value}`"
+                        >
+                          <td class="px-3.5 py-2">
+                            {{ opt.title }}
+                            <span v-if="opt.value === overrideMode" class="ml-1 text-[11px] text-indigo-600">← ใช้อยู่</span>
+                          </td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].sellerSatang) }}</td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].leaderSatang) }}</td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].companyPaysSatang) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <!-- The depth, and what it does to the two deduct modes. The
+                       example above deliberately shows ONE leader because that
+                       is the smallest case where the three modes disagree; this
+                       line is where the real chain gets said out loud, because
+                       multiplying the table by five managers makes the numbers
+                       dramatic and the comparison unreadable. -->
+                  <div class="mt-2.5 text-[12.5px] text-slate-600" data-test="override-mode-chain">
+                    <p v-if="deepestManagerChain === 0">
+                      ตอนนี้บริษัทนี้ <b>ยังไม่มีสายงาน</b> (ไม่มีใครมีหัวหน้า) — ยังไม่มีใครได้ค่าคอมหัวหน้าทีม ไม่ว่าจะเลือกโหมดไหน
+                    </p>
+                    <template v-else>
+                      <p>
+                        สายงานลึกที่สุดตอนนี้ <b>{{ deepestManagerChain }} ชั้น</b> — ดีลหนึ่งอาจมีหัวหน้าได้ถึง {{ deepestManagerChain }} คน
+                        และแบบ “หักจากตัวแทน” จะหัก <b>{{ deepestManagerChain }} เท่า</b>ของตัวเลขในตาราง
+                      </p>
+                      <p v-if="maxOverridePerLevelSatang !== null" class="mt-1">
+                        ดังนั้นถ้าเลือกแบบหัก อัตราหัวหน้าทีมจะตั้งได้ไม่เกิน <b>{{ formatSatang(maxOverridePerLevelSatang) }} ต่อชั้น</b>
+                        (คิดจากสินค้าที่ตัวแทนได้ค่าคอมน้อยที่สุด) — เกินกว่านี้ระบบจะไม่ให้บันทึก
+                      </p>
+                    </template>
+                  </div>
+
+                  <!-- THE CHOICE. Hidden entirely from a Company Admin, per the
+                       house rule ("อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน
+                       ไม่ใช่ให้ error 403") — the table above still explains
+                       what their company does, which is the half they are
+                       allowed to know. -->
+                  <div v-if="canEditCommissionConfig && effectiveCompanyId" class="mt-3 grid grid-cols-1 gap-2" data-test="override-mode-picker">
+                    <button
+                      v-for="opt in overrideModeOptions"
+                      :key="`pick-${opt.value}`"
+                      type="button"
+                      class="text-left rounded-xl border px-3.5 py-3 transition-colors disabled:opacity-60"
+                      :class="opt.value === overrideMode
+                        ? 'border-indigo-400 bg-indigo-100/70'
+                        : 'border-slate-200 bg-white hover:border-indigo-300'"
+                      :disabled="overrideModeSaving"
+                      :data-test="`override-mode-pick-${opt.value}`"
+                      @click="setOverrideMode(opt.value)"
+                    >
+                      <span class="flex items-center gap-2">
+                        <Icon v-if="opt.value === overrideMode" name="check" :size="14" class="text-indigo-600" />
+                        <span class="text-[13.5px] font-extrabold text-slate-900">{{ opt.title }}</span>
+                      </span>
+                      <span class="block mt-0.5 text-[12.5px] text-slate-600">{{ opt.oneLine }}</span>
+                      <span class="block mt-1 text-[12px] text-slate-500">{{ opt.detail }}</span>
+                    </button>
+                  </div>
+
+                  <p v-if="overrideModeError" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="override-mode-error">
+                    {{ overrideModeError }}
+                  </p>
+                  <p v-else-if="canEditCommissionConfig" class="mt-2 text-[12px] text-slate-500">
+                    เปลี่ยนโหมดมีผลกับดีลที่เกิดหลังจากนี้เท่านั้น · รายการที่ลงบัญชีไปแล้วเก็บโหมดเดิมไว้กับตัวมันเอง แก้ย้อนหลังไม่ได้
+                  </p>
+                </template>
+              </div>
+
+              <!--
                 ═══ CARD 2 — EMBEDDED, NOT LINKED (2026-09-12) ═══
 
                 Owner: "ยังจำเป็นต้องใช้หน้านี้ไหม เพราะเรานำไปรวมกันแล้ว" — asked
@@ -4449,6 +5020,10 @@ watch(companyPlanType, (pt) => {
                 is not shown at all.
               -->
               <div data-test="split-setting-embedded">
+                <!-- The number lives outside the card because the card is
+                     shared with nothing else on this screen and must not learn
+                     about this step's numbering to be reusable. -->
+                <p class="text-[12px] font-extrabold text-slate-400 mb-1 ml-1">4.3</p>
                 <CommissionSplitSettingCard
                   :key="effectiveCompanyId ?? 'own'"
                   :company-id="effectiveCompanyId"
@@ -4458,22 +5033,66 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
-                CARD 3 STAYS A LINK, and the difference from card 2 is the
-                point: "คำขอเบิกค่าคอม" is a working screen an admin uses to
-                approve real withdrawals — the minimum is one field on it, not
-                the whole of it. Pulling that field over here would leave two
-                places to change one number. Said plainly on the card rather
-                than discovered by clicking.
+                ═══ 4.4 — EDITED HERE NOW, NOT LINKED (2026-09-13) ═══
+
+                Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ
+                นำของเก่าออกเลย".
+
+                This used to be a link card, and the comment defending the link
+                argued that pulling the field over here "would leave two places
+                to change one number". That was the right worry and the wrong
+                conclusion: the answer is ONE place, and the place is the setup
+                flow, not the middle of an approval queue. /commission-
+                withdrawals now shows the floor READ-ONLY with a pointer back
+                here, so "why was that request refused" is still answered where
+                it gets asked — without a second door onto the same column.
+
+                NOT gated on canEditCommissionConfig, unlike everything above
+                it: this writes through SettingsCommissionWithdrawalUpdate,
+                which a Company Admin holds. Hiding a control from somebody the
+                server would let use it is the house rule applied backwards.
               -->
-              <RouterLink
-                :to="{ name: 'commission-withdrawals' }"
-                class="block rounded-2xl border border-slate-200 p-4 hover:bg-slate-50"
-                data-test="link-withdrawal-settings"
-              >
-                <p class="text-[15px] font-extrabold text-slate-900">ยอดขั้นต่ำในการเบิก</p>
-                <p class="mt-1 text-[12.5px] text-slate-500">ตัวแทนต้องมียอดสะสมถึงเท่าไหร่จึงจะกดขอเบิกค่าคอมได้</p>
-                <p class="mt-2 text-[12.5px] font-bold text-brand-600">ตั้งค่าที่หน้าจออื่น — กดแล้วจะออกจากหน้านี้ไปหน้า "คำขอเบิกค่าคอม" →</p>
-              </RouterLink>
+              <div class="rounded-2xl border border-slate-200 bg-white p-4" data-test="step4-withdrawal-minimum">
+                <p class="text-[15px] font-extrabold text-slate-900">
+                  <span class="text-slate-400 mr-1.5">4.4</span>ยอดขั้นต่ำในการเบิก
+                </p>
+                <p class="mt-1 text-[12.5px] text-slate-500">
+                  ตัวแทนต้องมียอดค่าคอมสะสมถึงเท่าไหร่จึงจะกดขอเบิกได้ · <b>เว้นว่าง = ไม่มีขั้นต่ำ</b> (เบิกเท่าไรก็ได้)
+                </p>
+
+                <p v-if="minWithdrawalUnknown" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="withdrawal-min-unknown">
+                  อ่านค่าปัจจุบันไม่สำเร็จ — ยังไม่แสดงตัวเลข เพราะช่องว่างในนี้แปลว่า "ไม่มีขั้นต่ำ" ซึ่งอาจไม่ใช่ค่าจริง
+                </p>
+                <div v-else class="mt-2.5 flex flex-wrap gap-2 max-w-md">
+                  <input
+                    v-model="minWithdrawalBaht"
+                    type="text"
+                    inputmode="decimal"
+                    placeholder="เช่น 1000.00"
+                    :disabled="minWithdrawalLoading || minWithdrawalSaving"
+                    class="flex-1 min-w-[10rem] px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:opacity-60"
+                    data-test="withdrawal-min-input"
+                  />
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    :disabled="minWithdrawalLoading || minWithdrawalSaving"
+                    data-test="withdrawal-min-save"
+                    @click="saveMinWithdrawal"
+                  >
+                    {{ minWithdrawalSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
+                  </button>
+                </div>
+                <p v-if="minWithdrawalMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="withdrawal-min-message">
+                  {{ minWithdrawalMessage }}
+                </p>
+                <p class="mt-2 text-[12px] text-slate-400">
+                  ดูคำขอที่รออนุมัติได้ที่
+                  <RouterLink :to="{ name: 'commission-withdrawals' }" class="font-bold text-brand-600 hover:underline" data-test="link-withdrawal-queue">
+                    คำขอเบิกค่าคอม →
+                  </RouterLink>
+                </p>
+              </div>
 
               <!-- Carried over from the setup hub the overview tab used to
                    host, so the entry point does not disappear with the tab. -->

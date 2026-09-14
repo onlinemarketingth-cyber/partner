@@ -826,25 +826,48 @@ describe('CommissionPlansView — step 3 says which layer each rate came from', 
   })
 })
 
-describe('CommissionPlansView — step 4 is honest about leaving the page', () => {
-  it('links the setting that lives on a working screen, and says so', async () => {
+describe('CommissionPlansView — step 4 finishes the job on one screen', () => {
+  it('edits every step-4 setting here, linking out to none of them', async () => {
     /*
      * 2026-09-12 — this used to assert TWO link cards. The co-agent split was
-     * one of them, and the owner's question about its page ("ยังจำเป็นต้องใช้
-     * หน้านี้ไหม") ended with it being embedded here instead — that page was a
-     * shell around one component and one boolean.
+     * the first to go: the owner's question about its page ("ยังจำเป็นต้องใช้
+     * หน้านี้ไหม") ended with it embedded here, because that page was a shell
+     * around one component and one boolean.
      *
-     * The withdrawal minimum stays a link, and the difference is the reason
-     * this test still exists: "คำขอเบิกค่าคอม" is a screen an admin uses to
-     * approve real withdrawals, and the minimum is one field on it. Pulling
-     * that field over here would leave two places to change one number.
+     * 2026-09-13 — and now the second. The withdrawal minimum was defended as
+     * a link on the grounds that pulling it over "would leave two places to
+     * change one number"; the owner's answer was that the right count is ONE
+     * place and that place is the setup flow ("ปรับมาเป็น UI หน้านี้หน้าเดียว
+     * ให้จบ นำของเก่าออกเลย"). /commission-withdrawals keeps a READ-ONLY
+     * readout — see that view's own spec — so the queue still explains its
+     * own refusals without owning a second write door.
+     *
+     * This test is therefore the tripwire on "no step-4 setting sends the
+     * admin somewhere else to finish it".
      */
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 4)
 
-    expect(wrapper.get('[data-test="link-withdrawal-settings"]').text()).toContain('ตั้งค่าที่หน้าจออื่น')
+    expect(wrapper.find('[data-test="link-withdrawal-settings"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="link-split-settings"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="step4-withdrawal-minimum"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="withdrawal-min-input"]').exists()).toBe(true)
+  })
+
+  it('says the step is optional and names what each part decides', async () => {
+    // Owner: "ควรขึ้นคำอธิบายเป็น Alert ให้ผู้ใช้เข้าใจในกระบวนการ Setup ว่า
+    // อะไรทำอะไรบ้าง". Steps 1-3 ask one question each and their heading
+    // carries it; this step is four unrelated settings whose only shared
+    // property is being skippable, which is not something a heading can say.
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 4)
+
+    const alert = wrapper.get('[data-test="step4-intro-alert"]')
+    expect(alert.text()).toContain('ขั้นนี้ไม่บังคับ')
+    expect(alert.text()).toContain('อัตราหัวหน้าทีม')
+    expect(alert.text()).toContain('ยอดขั้นต่ำในการเบิก')
   })
 
   it('holds the co-agent split switch itself, rather than pointing at it', async () => {

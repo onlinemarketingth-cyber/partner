@@ -2,7 +2,9 @@
 
 namespace App\Services\Commission;
 
+use App\Enums\CommissionRateType;
 use App\Models\CommissionOverrideRule;
+use App\Models\Company;
 use App\Models\User;
 use Illuminate\Validation\ValidationException;
 
@@ -17,6 +19,17 @@ use Illuminate\Validation\ValidationException;
 // rejects the shape it used to allow.
 class CommissionOverrideRuleService
 {
+    /*
+     * 2026-09-13 — injected so both write paths refuse a rate that would
+     * over-deduct. See OverrideDeductionGuard for the arithmetic and for why
+     * the refusal happens HERE rather than only at calculation time: a runtime
+     * cap leaves a leader silently unpaid, and the owner asked for the rate to
+     * be rejected instead ("ห้ามตั้งเรทที่หักเกิน").
+     */
+    public function __construct(
+        private readonly OverrideDeductionGuard $deductionGuard,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $data
      */
@@ -37,6 +50,8 @@ class CommissionOverrideRuleService
             $data['effective_from'],
             $data['effective_to'] ?? null,
         );
+
+        $this->assertDeductionFits($companyId, $data);
 
         return CommissionOverrideRule::create($data);
     }
@@ -63,6 +78,15 @@ class CommissionOverrideRuleService
             $effectiveTo,
             excludeId: $commissionOverrideRule->id,
         );
+
+        // The rate can be raised on an EXISTING row too, so the same refusal
+        // has to sit on both doors. Falls back to the stored values for the
+        // fields this request did not send — an update that only moves a date
+        // must be checked against the rate it keeps, not against nothing.
+        $this->assertDeductionFits((int) $commissionOverrideRule->company_id, [
+            'rate_type' => $data['rate_type'] ?? $commissionOverrideRule->rate_type,
+            'rate_value' => $data['rate_value'] ?? $commissionOverrideRule->rate_value,
+        ]);
 
         $commissionOverrideRule->update($data);
 
@@ -102,6 +126,30 @@ class CommissionOverrideRuleService
                 // exact moment they needed to understand what went wrong.
                 'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าคอมหัวหน้าทีมครอบคลุมช่วงเวลานี้อยู่แล้ว',
             ]);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function assertDeductionFits(int $companyId, array $data): void
+    {
+        $company = Company::find($companyId);
+
+        if (! $company) {
+            return;
+        }
+
+        $rateType = $data['rate_type'] instanceof CommissionRateType
+            ? $data['rate_type']
+            : CommissionRateType::from((string) $data['rate_type']);
+
+        $refusal = $this->deductionGuard->refusalFor($company, $rateType, (int) $data['rate_value']);
+
+        if ($refusal !== null) {
+            // On `rate_value`, so the admin's cursor lands on the field they
+            // have to change — the message names the other two ways out.
+            throw ValidationException::withMessages(['rate_value' => $refusal]);
         }
     }
 }
