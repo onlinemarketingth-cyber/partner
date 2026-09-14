@@ -111,6 +111,8 @@ function leaderRule(over: Record<string, unknown> = {}) {
     product_category: null,
     rate_type: 'percentage',
     rate_value: 200,
+    // null = follow the company, which is where nearly every rate stays.
+    override_mode: null,
     effective_from: '2020-01-01T00:00:00.000000Z',
     effective_to: null,
     ...over,
@@ -333,6 +335,131 @@ describe('CommissionPlansView — step 4.2 is honest when it does not know', () 
     expect(wrapper.get('[data-test="override-mode-unknown"]').text()).toContain('อ่านค่าปัจจุบันไม่สำเร็จ')
     expect(wrapper.find('[data-test="override-mode-current"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="override-mode-picker"]').exists()).toBe(false)
+  })
+})
+
+describe('CommissionPlansView — step 4.1 says what a narrow scope leaves uncovered', () => {
+  it('warns when a product-scoped leader rate is set with no company default', async () => {
+    /*
+     * "ยังไม่ได้ตั้งค่าเริ่มต้นบริษัท แต่ตัวเลือกยังขึ้นมา ควรมีหรือไม่"
+     * (owner, 2026-09-14).
+     *
+     * The narrow scopes stay offered — paying the leader on one product and
+     * nothing else is a real plan, and this whole step is optional, so
+     * removing the option would be the screen inventing a rule nobody set.
+     *
+     * What it must not be is silent. Saved with no company default, every
+     * OTHER product pays the leader nothing, and the admin finds out at a
+     * payout. So the consequence is counted and printed the moment the scope
+     * is picked, with the way out named.
+     */
+    const wrapper = await mountView({ overrideRules: [] })
+    await goToStep4(wrapper)
+    // Opened from 4.1's own + button, which pre-picks the company scope: it
+    // says nothing, because nothing is left uncovered by it.
+    await wrapper.get('[data-test="add-leader-rate-company"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="override-no-company-default"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
+    await flushPromises()
+
+    const note = wrapper.get('[data-test="override-no-company-default"]').text()
+    expect(note).toContain('ยังไม่มีค่าเริ่มต้นทั้งบริษัท')
+    expect(note).toContain('1 รายการ')
+    expect(note).toContain('ค่าเริ่มต้นทั้งบริษัท')
+  })
+
+  it('stays quiet once a company-wide leader rate exists', async () => {
+    // Nothing is uncovered, so the note would be a warning about a situation
+    // that is not happening — which is how a screen teaches people to skip
+    // its warnings.
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-product"]').trigger('click')
+    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="override-no-company-default"]').exists()).toBe(false)
+  })
+})
+
+describe('CommissionPlansView — a leader rate may differ from the company', () => {
+  /*
+   * Owner, 2026-09-14: "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด แต่ตอนนี้
+   * เป็นตัวเลือกการทำงานแบบอย่างเดียว".
+   *
+   * The mode used to be one value for the whole tenant. A company that pays
+   * leaders on top for its flagship package while the team splits the
+   * commission on everything else has a plan, not a contradiction — so the
+   * mode is now a property of the RATE, with the company's as the default.
+   */
+  it('defaults a new rate to following the company, and says so by name', async () => {
+    const wrapper = await mountView({
+      settings: { commission_plan_type: 'unilevel', commission_basis: 'price', commission_override_mode: 'deduct_from_sale', deepest_manager_chain: 1 },
+    })
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-company"]').trigger('click')
+    await flushPromises()
+
+    const select = wrapper.get('[data-test="override-form-mode"]')
+    expect((select.element as HTMLSelectElement).value).toBe('')
+    // The default option NAMES what it follows. "ใช้ค่าเริ่มต้น" alone would
+    // make the admin go and look up what that currently is.
+    expect(select.text()).toContain('หักจากตัวแทน (คิดจากยอดขาย)')
+  })
+
+  it('sends null when the rate follows the company, not the resolved mode', async () => {
+    /*
+     * Null is a MEANING, not a missing value: it keeps following the company
+     * when the company changes its mind. Writing the resolved value instead
+     * would silently freeze every new rate at whatever the company happened to
+     * hold the day it was created.
+     */
+    const wrapper = await mountView({ overrideRules: [] })
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-company"]').trigger('click')
+    await wrapper.get('[data-test="override-form-rate-value"]').setValue('2')
+    await wrapper.get('[data-test="override-form"]').trigger('submit')
+    await flushPromises()
+
+    const body = post.mock.calls.find((c) => c[0] === '/commission-override-rules')?.[1] as Record<string, unknown>
+    expect(body.override_mode).toBeNull()
+  })
+
+  it('sends the chosen mode when the rate opts out of the company setting', async () => {
+    const wrapper = await mountView({ overrideRules: [] })
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-product"]').trigger('click')
+    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
+    await wrapper.get('[data-test="override-form-product"]').setValue('1')
+    await wrapper.get('[data-test="override-form-rate-value"]').setValue('2')
+    await wrapper.get('[data-test="override-form-mode"]').setValue('deduct_from_commission')
+    await wrapper.get('[data-test="override-form"]').trigger('submit')
+    await flushPromises()
+
+    const body = post.mock.calls.find((c) => c[0] === '/commission-override-rules')?.[1] as Record<string, unknown>
+    expect(body.override_mode).toBe('deduct_from_commission')
+    expect(body.product_id).toBe(1)
+  })
+
+  it('labels an inherited row differently from one that chose the same mode', async () => {
+    /*
+     * THE DISTINCTION THE LIST EXISTS TO SHOW. Both rows below resolve to
+     * "บริษัทจ่ายเพิ่ม" today and they are not the same fact: one moves when
+     * the company changes its mind and one does not. A badge that printed only
+     * the resolved mode would make them identical on screen.
+     */
+    const wrapper = await mountView({
+      overrideRules: [
+        leaderRule({ id: 31, override_mode: null }),
+        leaderRule({ id: 32, override_mode: 'additive', product: { id: 1, name: 'AIA Health Plus' } }),
+      ],
+    })
+    await goToStep4(wrapper)
+
+    expect(wrapper.get('[data-test="leader-rule-mode-31"]').text()).toContain('ตามค่าเริ่มต้นบริษัท')
+    expect(wrapper.get('[data-test="leader-rule-mode-32"]').text()).toBe('บริษัทจ่ายเพิ่ม')
   })
 })
 

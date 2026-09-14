@@ -177,6 +177,121 @@ class OverrideDeductionGuardTest extends TestCase
             ->assertStatus(422);
     }
 
+    public function test_a_product_scoped_rate_is_judged_only_against_that_product(): void
+    {
+        /*
+         * 2026-09-14 — the counterpart to "the cheapest product is what binds".
+         *
+         * That test is right for a COMPANY-WIDE rate, which has to come out of
+         * every product's commission. A rate scoped to one product does not:
+         * refusing 2% on a 10,000 package because some 590 add-on could not
+         * fund it would be the guard blocking a configuration nobody asked it
+         * about, and a guard that does that gets routed around.
+         */
+        $company = $this->companyWithChain(depth: 2, mode: CommissionOverrideMode::DeductFromSale);
+
+        // The cheap product that makes the COMPANY-WIDE version of this rate
+        // impossible — 10 baht of commission cannot fund two managers.
+        $cheap = Product::factory()->create(['company_id' => $company->id, 'price_satang' => 59000]);
+        CommissionRule::withoutGlobalScopes()->create([
+            'company_id' => $company->id,
+            'product_id' => $cheap->id,
+            'product_category_id' => null,
+            'rate_type' => CommissionRateType::FixedSatang,
+            'rate_value' => 10,
+            'effective_from' => now()->subDay(),
+        ]);
+
+        $expensive = Product::withoutGlobalScopes()->where('company_id', $company->id)->where('price_satang', 1000000)->firstOrFail();
+
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        // Company-wide: refused, because the cheap product is in scope.
+        $this->actingAs($superAdmin)
+            ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
+                'rate_type' => 'percentage',
+                'rate_value' => 150,
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertStatus(422);
+
+        // Scoped to the expensive product: accepted, because that product's
+        // 300 baht funds two managers at 150 each exactly.
+        $this->actingAs($superAdmin)
+            ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
+                'product_id' => $expensive->id,
+                'rate_type' => 'percentage',
+                'rate_value' => 150,
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertCreated();
+    }
+
+    public function test_a_rate_that_opts_into_deducting_is_checked_even_when_the_company_pays_on_top(): void
+    {
+        /*
+         * Without this, per-scope modes would be a hole straight through the
+         * guard: set the company to "บริษัทจ่ายเพิ่ม", give the rate its own
+         * deducting mode, and nothing would ever measure it against a pool.
+         */
+        $company = $this->companyWithChain(depth: 2, mode: CommissionOverrideMode::Additive);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
+                'rate_type' => 'percentage',
+                'rate_value' => 200,
+                'override_mode' => 'deduct_from_sale',
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('rate_value');
+    }
+
+    public function test_a_rate_that_opts_out_of_deducting_is_not_measured_against_any_pool(): void
+    {
+        // The mirror image: the company deducts, this rate does not, so there
+        // is no pool for it to exhaust and no reason to refuse it.
+        $company = $this->companyWithChain(depth: 2, mode: CommissionOverrideMode::DeductFromSale);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->postJson('/api/v1/commission-override-rules', [
+                'company_id' => $company->id,
+                'rate_type' => 'percentage',
+                'rate_value' => 900,
+                'override_mode' => 'additive',
+                'effective_from' => now()->toDateString(),
+            ])
+            ->assertCreated();
+    }
+
+    public function test_a_rate_with_its_own_mode_never_blocks_a_company_mode_switch(): void
+    {
+        // The switch cannot affect a rate that ignores it, so refusing the
+        // switch on that rate's behalf would be a lock with no key — the same
+        // reason expired rows are excluded.
+        $company = $this->companyWithChain(depth: 2, mode: CommissionOverrideMode::Additive);
+
+        CommissionOverrideRule::withoutGlobalScopes()->create([
+            'company_id' => $company->id,
+            'product_id' => null,
+            'product_category_id' => null,
+            'rate_type' => CommissionRateType::Percentage,
+            'rate_value' => 900,
+            'override_mode' => CommissionOverrideMode::Additive,
+            'effective_from' => now()->subDay(),
+        ]);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->putJson('/api/v1/commission-settings', [
+                'company_id' => $company->id,
+                'commission_override_mode' => 'deduct_from_sale',
+            ])
+            ->assertOk();
+    }
+
     public function test_switching_to_a_deduct_mode_is_refused_when_an_existing_rate_would_over_deduct(): void
     {
         /*

@@ -129,7 +129,7 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     expect(wrapper.text()).toContain(WARNING_HEADLINE)
     expect(wrapper.text()).toContain('12')
     // And it says what the number means, not just the number.
-    expect(wrapper.text()).toContain('จะกลับมาแบ่งคอมมิชชั่นทันทีที่กดบันทึก')
+    expect(wrapper.text()).toContain('จะกลับมาแบ่งค่าคอมทันที')
 
     // Flipping back cancels the intent, so the warning goes with it.
     await toggle(wrapper).trigger('click')
@@ -155,9 +155,9 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     await toggle(wrapper).trigger('click')
 
     expect(wrapper.text()).toContain(WARNING_HEADLINE)
-    expect(wrapper.text()).toContain('ระบบไม่ได้ส่งจำนวนดีลที่ค้างอยู่มาให้')
+    expect(wrapper.text()).toContain('ยังไม่ทราบว่ามีดีลค้างอยู่กี่รายการ')
     // A confident zero here would read as "nothing will change".
-    expect(wrapper.text()).not.toContain('จะกลับมาแบ่งคอมมิชชั่นทันทีที่กดบันทึก')
+    expect(wrapper.text()).not.toContain('จะกลับมาแบ่งค่าคอมทันที')
   })
 
   it('PUTs the new value and re-reads, so the count is never one save out of date', async () => {

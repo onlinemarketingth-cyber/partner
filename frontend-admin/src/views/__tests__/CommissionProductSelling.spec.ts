@@ -455,7 +455,7 @@ describe('A product this company does not sell is shown, but never judged (2026-
     // ...and what step 3 is waiting for is 3.1, not the closed row.
     await goToStep(wrapper, 3)
     expect(wrapper.find('[data-test="substep-focus-3-1"]').exists()).toBe(true)
-    expect(wrapper.get('[data-test="substep-3-2-lock"]').text()).toContain('3.1')
+    expect(wrapper.get('[data-test="substep-3-3-lock"]').text()).toContain('3.1')
   })
 
   it('opens step 3 once the company default exists, closed row and all', async () => {

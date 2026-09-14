@@ -254,18 +254,20 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
     expect(wrapper.find('[data-test="copy-rates-open"]').exists()).toBe(true)
   })
 
-  it('locks 3.2 with one line that names the cure rather than the refusal', async () => {
+  it('locks the product list with one line that names the cure rather than the refusal', async () => {
     // A lock with no way out is the dead end the 4-step redesign exists to
     // remove — the same rule stepLockHint() applies one level up.
     const wrapper = await mountView(noDefault)
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="substep-3-2-lock"]').text())
+    expect(wrapper.get('[data-test="substep-3-3-lock"]').text())
       .toContain('ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด')
     expect(wrapper.get('[data-test="step3-products"]').classes().join(' ')).toContain('opacity-60')
-    // 3.2 is not where you are, so it carries no focus badge.
-    expect(wrapper.find('[data-test="substep-focus-3-2"]').exists()).toBe(false)
+    // The product list is not where you are, so it carries no focus badge.
+    // (It was 3.2 until 2026-09-14, when the category scope took that number
+    // and the products became 3.3 — see the view's own note.)
+    expect(wrapper.find('[data-test="substep-focus-3-3"]').exists()).toBe(false)
   })
 
   it('says nothing on the product rows that 3.1 has not already said', async () => {
@@ -366,7 +368,7 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
   })
 })
 
-describe('CommissionPlansView — once 3.1 is done the attention moves to 3.2', () => {
+describe('CommissionPlansView — once 3.1 is done the attention moves down the ladder', () => {
   const withDefault = { products: [product()], rules: [companyDefaultRule()] }
 
   it('collapses 3.1 to one quiet line without hiding the way to change it', async () => {
@@ -391,7 +393,7 @@ describe('CommissionPlansView — once 3.1 is done the attention moves to 3.2', 
     expect(row.text()).toContain('ลบ')
   })
 
-  it('moves the frame to 3.2 and words its badge as guidance, not as an order', async () => {
+  it('moves the frame to the product list and words its badge as guidance, not as an order', async () => {
     /*
      * 3.2 is an exception list — its own subtitle says ไม่ต้องแยกทุกตัว — so a
      * badge reading ทำตรงนี้ก่อน would be ordering an optional refinement. That
@@ -402,11 +404,11 @@ describe('CommissionPlansView — once 3.1 is done the attention moves to 3.2', 
 
     await goToStep(wrapper, 3)
 
-    const badge = wrapper.get('[data-test="substep-focus-3-2"]').text()
+    const badge = wrapper.get('[data-test="substep-focus-3-3"]').text()
     expect(badge).toBe('ทำต่อได้ตรงนี้')
     expect(badge).not.toContain('ก่อน')
     expect(wrapper.get('[data-test="step3-products"]').classes().join(' ')).toContain('border-brand-500')
-    expect(wrapper.find('[data-test="substep-3-2-lock"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="substep-3-3-lock"]').exists()).toBe(false)
   })
 
   it('gives the rate controls back', async () => {

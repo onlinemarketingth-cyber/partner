@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Commission;
 
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use Illuminate\Foundation\Http\FormRequest;
@@ -39,6 +40,9 @@ class UpdateCommissionOverrideRuleRequest extends FormRequest
             'manager_cert_tier_id' => ['sometimes', 'nullable', 'integer', 'exists:cert_tiers,id'],
             'rate_type' => ['sometimes', 'required', Rule::enum(CommissionRateType::class)],
             'rate_value' => ['sometimes', 'required', 'integer', 'min:0'],
+            // Sending null CLEARS the rate's own mode and puts it back on the
+            // company's — see the store request for why that is a real value.
+            'override_mode' => ['sometimes', 'nullable', Rule::enum(CommissionOverrideMode::class)],
             'effective_from' => ['sometimes', 'required', 'date'],
             'effective_to' => ['nullable', 'date', 'after_or_equal:effective_from'],
         ];

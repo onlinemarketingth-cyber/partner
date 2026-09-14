@@ -166,10 +166,57 @@ class OverrideModeTest extends TestCase
         );
     }
 
+    public function test_a_rate_with_its_own_mode_ignores_the_company_setting(): void
+    {
+        /*
+         * "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด" (owner, 2026-09-14).
+         *
+         * The company pays leaders on top; THIS rate says the team splits the
+         * seller's commission instead. Same sale, same two rates, and the
+         * answer has to be the rate's, not the company's — otherwise the
+         * per-scope setting is a field that renders and does nothing.
+         */
+        $world = $this->world(CommissionOverrideMode::Additive, ruleMode: CommissionOverrideMode::DeductFromCommission);
+
+        $this->sell($world);
+
+        $this->assertSame(29400, $this->directAmount($world), 'seller keeps 300 - 6');
+        $this->assertSame(600, $this->overrideAmount($world), 'leader gets 2% OF THE COMMISSION, not of the sale');
+    }
+
+    public function test_a_rate_with_no_mode_of_its_own_follows_the_company(): void
+    {
+        // The other half of the same rule, and the one that must never break:
+        // null is "follow the company", not "additive". A company on a deduct
+        // mode has to keep deducting for every rate that never opted out.
+        $world = $this->world(CommissionOverrideMode::DeductFromSale, ruleMode: null);
+
+        $this->sell($world);
+
+        $this->assertSame(10000, $this->directAmount($world));
+        $this->assertSame(20000, $this->overrideAmount($world));
+    }
+
+    public function test_a_rate_can_opt_out_of_a_deducting_company_back_onto_the_company_paying(): void
+    {
+        /*
+         * The direction that costs the COMPANY money rather than the agent,
+         * asserted separately because it is the one an owner will actually
+         * reach for: everything is split within the team, except the flagship
+         * package, where the company funds the leader itself.
+         */
+        $world = $this->world(CommissionOverrideMode::DeductFromCommission, ruleMode: CommissionOverrideMode::Additive);
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->directAmount($world), 'seller is left whole');
+        $this->assertSame(20000, $this->overrideAmount($world), 'leader is paid on top');
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────
 
     /** @return array{company: Company, referral: Referral, agent: User} */
-    private function world(CommissionOverrideMode $mode, int $managerCount = 1): array
+    private function world(CommissionOverrideMode $mode, int $managerCount = 1, ?CommissionOverrideMode $ruleMode = null): array
     {
         $company = Company::factory()->create([
             'commission_plan_type' => CommissionPlanType::Unilevel,
@@ -209,6 +256,9 @@ class OverrideModeTest extends TestCase
             'manager_cert_tier_id' => null,
             'rate_type' => CommissionRateType::Percentage,
             'rate_value' => 200,
+            // 2026-09-14 — NULL unless a test asks otherwise, because null is
+            // the state nearly every rate is in: follow the company.
+            'override_mode' => $ruleMode,
             'effective_from' => now()->subDay(),
         ]);
 

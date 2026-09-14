@@ -176,6 +176,11 @@ class CommissionSettingService
      * Only rules that are LIVE are checked. An expired row cannot deduct from
      * anything, and refusing a mode switch because of a rate that stopped
      * applying last year would be a lock with no key.
+     *
+     * 2026-09-14 — and only rules that INHERIT this setting. A rate carrying
+     * its own `override_mode` is not affected by this switch at all, so
+     * blocking the switch on its behalf would refuse a change that cannot
+     * touch it. Its own mode was checked when it was saved, by the same guard.
      */
     private function assertModeFitsExistingRules(Company $company, CommissionOverrideMode $mode): void
     {
@@ -183,14 +188,22 @@ class CommissionSettingService
             return;
         }
 
-        $liveRules = CommissionOverrideRule::withoutGlobalScopes()
+        $liveInheritingRules = CommissionOverrideRule::withoutGlobalScopes()
             ->where('company_id', $company->id)
+            ->whereNull('override_mode')
             ->where('effective_from', '<=', now())
             ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
             ->get();
 
-        foreach ($liveRules as $rule) {
-            $refusal = $this->deductionGuard->refusalFor($company, $rule->rate_type, (int) $rule->rate_value, $mode);
+        foreach ($liveInheritingRules as $rule) {
+            $refusal = $this->deductionGuard->refusalFor(
+                $company,
+                $rule->rate_type,
+                (int) $rule->rate_value,
+                $mode,
+                $rule->product_id,
+                $rule->product_category_id,
+            );
 
             if ($refusal !== null) {
                 throw ValidationException::withMessages([

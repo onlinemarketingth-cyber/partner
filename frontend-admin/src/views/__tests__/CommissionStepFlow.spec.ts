@@ -100,6 +100,25 @@ function companyDefaultRule(over: Record<string, unknown> = {}) {
   }
 }
 
+/** A live CATEGORY-scoped agent rate — step 3.2's box (2026-09-14). */
+function categoryRule(over: Record<string, unknown> = {}) {
+  return {
+    id: 12,
+    company_id: AIA.id,
+    cert_tier: null,
+    product: null,
+    product_category: { id: 7, name: 'Anti Aging' },
+    rate_type: 'percentage',
+    rate_value: 500,
+    effective_from: '2020-01-01',
+    effective_to: null,
+    renewal_rate_type: null,
+    renewal_rate_value: null,
+    renewal_recurs: false,
+    ...over,
+  }
+}
+
 /** A live company-wide LEADER rate — step 4's card. */
 function leaderRule(over: Record<string, unknown> = {}) {
   return {
@@ -896,13 +915,22 @@ describe('CommissionPlansView — step 4 finishes the job on one screen', () => 
     expect(wrapper.find('[data-test="split-setting-embedded"] form').exists()).toBe(false)
   })
 
-  it('keeps the leader rate itself editable in place', async () => {
+  it('keeps the leader rate itself editable in place, in a box per scope', async () => {
+    /*
+     * 2026-09-14 — the single + button became three, one per layer of the
+     * ladder (owner: "แยกเป็น 3 กล่อง"). All three are asserted rather than
+     * just the one that happens to hold a row: an empty layer with no way to
+     * fill it is the exact state that made the category scope invisible.
+     */
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()], overrides: [leaderRule()] })
 
     await goToStep(wrapper, 4)
 
     expect(wrapper.find('[data-test="leader-rule-20"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="add-leader-rate"]').exists()).toBe(true)
+    for (const scope of ['company', 'category', 'product']) {
+      expect(wrapper.find(`[data-test="leader-group-${scope}"]`).exists()).toBe(true)
+      expect(wrapper.find(`[data-test="add-leader-rate-${scope}"]`).exists()).toBe(true)
+    }
   })
 })
 
@@ -925,7 +953,9 @@ describe('CommissionPlansView — a Company Admin sees every step and no write c
     // 'open-wizard' was here until 2026-09-12; the Setup Wizard it opened was
     // deleted from CommissionPlansView (a second write path onto the same
     // numbers the four steps already write).
-    'add-leader-rate',
+    'add-leader-rate-company',
+    'add-leader-rate-category',
+    'add-leader-rate-product',
   ]
 
   async function mountAsCompanyAdmin() {
@@ -1292,5 +1322,64 @@ describe("CommissionPlansView — one company's rate never shows as another's (2
     const panel = wrapper.get('[data-test="step-panel-3"]').text()
     expect(panel).toContain('3.00%')
     expect(panel).not.toContain('5.00%')
+  })
+})
+
+describe('CommissionPlansView — step 3.2 gives the category scope a home', () => {
+  /*
+   * Owner, 2026-09-14: "การตั้งค่าแบบหมวดสินค้า ผมแทบไม่เห็นใน UI เลย".
+   *
+   * The scope was writable and rendered nowhere — 3.1 filters to company-wide
+   * rows, the product list shows products, and a category rate surfaced only
+   * as a badge on whatever happened to resolve to it. A rate you can create
+   * and cannot see still pays real money into a ledger nobody may correct
+   * (BR-4), so these tests exist to keep it on screen.
+   */
+  it('renders a category rate as its own row, with its rate and its reach', async () => {
+    const wrapper = await mountView({
+      products: [product({ category: { id: 7, name: 'Anti Aging' }, is_sellable_here: true })],
+      rules: [companyDefaultRule(), categoryRule()],
+    })
+
+    await goToStep(wrapper, 3)
+
+    const row = wrapper.get('[data-test="category-rule-12"]').text()
+    expect(row).toContain('Anti Aging')
+    expect(row).toContain('5.00%')
+    // The number that answers "I set it and nothing happened".
+    expect(row).toContain('ครอบคลุม 1 สินค้า')
+  })
+
+  it('keeps the row editable and deletable, which is the whole point', async () => {
+    const wrapper = await mountView({
+      products: [product({ category: { id: 7, name: 'Anti Aging' } })],
+      rules: [companyDefaultRule(), categoryRule()],
+    })
+
+    await goToStep(wrapper, 3)
+
+    const row = wrapper.get('[data-test="category-rule-12"]')
+    expect(row.text()).toContain('แก้ไข')
+    expect(row.text()).toContain('ลบ')
+  })
+
+  it('says what an empty category layer MEANS, not just that it is empty', async () => {
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="step3-categories-empty"]').text()).toContain('ค่าเริ่มต้นทั้งบริษัท')
+  })
+
+  it('moves the add button into 3.2 and keeps it locked behind 3.1', async () => {
+    // A category rate written before the company default exists is an
+    // exception to a rule nobody has decided yet — the same lock the product
+    // list carries, now beside the rows it produces instead of two boxes away.
+    const wrapper = await mountView({ products: [product()], rules: [] })
+
+    await goToStep(wrapper, 3)
+
+    const button = wrapper.get('[data-test="step3-categories"] [data-test="add-category-rate"]')
+    expect((button.element as HTMLButtonElement).disabled).toBe(true)
   })
 })

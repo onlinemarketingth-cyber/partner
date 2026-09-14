@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Commission;
 
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
 use App\Models\CommissionOverrideRule;
@@ -61,6 +62,16 @@ class StoreCommissionOverrideRuleRequest extends FormRequest
             ],
             'rate_type' => ['required', Rule::enum(CommissionRateType::class)],
             'rate_value' => ['required', 'integer', 'min:0'],
+            /*
+             * 2026-09-14 — where THIS rate's money comes from, or omitted /
+             * null to follow the company's setting (ขั้นที่ 4's own default).
+             *
+             * `nullable` and not `required`: null is a MEANING here, not a
+             * missing value, and it is the state nearly every rate stays in.
+             * Forcing a choice per rate would make every admin answer a
+             * company-level question once per product.
+             */
+            'override_mode' => ['sometimes', 'nullable', Rule::enum(CommissionOverrideMode::class)],
             'effective_from' => ['required', 'date'],
             'effective_to' => ['nullable', 'date', 'after_or_equal:effective_from'],
         ];

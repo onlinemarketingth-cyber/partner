@@ -260,14 +260,35 @@ class CommissionService
          * Affiliate; Unilevel now meets it too, which is why its overrides are
          * RESOLVED here and only WRITTEN further down.
          */
-        $overrideMode = $this->overrideModeFor($referral->company);
+        $companyOverrideMode = $this->overrideModeFor($referral->company);
 
         $affiliateOverride = null;
         $unilevelOverrides = [];
         $agentDirectAmountSatang = $amountSatang;
 
+        /*
+         * 2026-09-14 — THE MODE IS NOW A PROPERTY OF THE RESOLVED RATE, not of
+         * the company alone, so it cannot be known until that rate is known.
+         *
+         * Hence the rule is resolved HERE rather than inside
+         * resolveUnilevelOverrides() where it used to live: the seller's own
+         * row depends on the mode (two of the three deduct from it), the
+         * seller's row is written before any override row, and BR-4 forbids
+         * fixing it afterwards. Resolve the rate, then the mode, then the
+         * amounts, then write — in that order, once.
+         *
+         * `$overrideMode` stays a single value for the whole chain because a
+         * single RULE serves the whole chain (see resolveUnilevelOverrides):
+         * the rate is a property of the product, identical for every manager
+         * above the sale.
+         */
+        $unilevelOverrideRule = $effectivePlanType === CommissionPlanType::Unilevel
+            ? $this->resolveOverrideRule($referral->product, (int) $referral->company_id)
+            : null;
+        $overrideMode = $this->overrideModeForRule($unilevelOverrideRule, $companyOverrideMode);
+
         if ($effectivePlanType === CommissionPlanType::Unilevel) {
-            $unilevelOverrides = $this->resolveUnilevelOverrides($referral, $agent, $saleValue, $amountSatang, $overrideMode);
+            $unilevelOverrides = $this->resolveUnilevelOverrides($referral, $agent, $saleValue, $amountSatang, $overrideMode, $unilevelOverrideRule);
 
             if ($overrideMode->deductsFromSeller()) {
                 // Every manager's cut is rounded on its own first (inside
@@ -280,7 +301,7 @@ class CommissionService
         }
 
         if ($effectivePlanType === CommissionPlanType::Affiliate) {
-            $affiliateMode = $this->affiliateOverrideModeFor($referral->product, $overrideMode);
+            $affiliateMode = $this->affiliateOverrideModeFor($referral->product, $referral, $companyOverrideMode);
             $affiliateOverride = $this->resolveAffiliateOverride($agent, $referral->product, (int) $referral->company_id, $affiliateMode, $commissionBaseSatang, $amountSatang);
 
             if ($affiliateOverride && $affiliateMode->deductsFromSeller()) {
@@ -323,7 +344,7 @@ class CommissionService
                 $affiliateOverride['amount_satang'],
                 $saleValue,
                 $agent,
-                $this->affiliateOverrideModeFor($referral->product, $overrideMode),
+                $this->affiliateOverrideModeFor($referral->product, $referral, $companyOverrideMode),
             );
         }
 
@@ -472,12 +493,18 @@ class CommissionService
         SaleValueSnapshot $saleValue,
         int $agentAmountSatang,
         CommissionOverrideMode $mode,
+        ?CommissionOverrideRule $overrideRule,
     ): array {
         // TASK-214 — resolved ONCE, outside the walk: the rate is a property of
         // the PRODUCT, identical for every manager in the chain, so re-querying
         // it per hop would be the same answer at N times the cost.
-        $overrideRule = $this->resolveOverrideRule($referral->product, (int) $referral->company_id);
-
+        //
+        // 2026-09-14 — and now resolved one level further out still, by the
+        // caller, because $mode is read off this very rule. Passed in rather
+        // than re-resolved so the mode and the rate provably come from the
+        // same row: two separate lookups could disagree if a rule expires
+        // between them, and the disagreement would be a leader paid at a rate
+        // whose funding the seller's row was never told about.
         if (! $overrideRule) {
             return [];
         }
@@ -586,18 +613,52 @@ class CommissionService
     }
 
     /**
-     * Affiliate's mode, honouring TASK-194's per-PRODUCT column when it is set.
+     * 2026-09-14 — THE ONE PLACE the per-rate mode falls back to the company's.
      *
-     * NULL there now means "use the company's choice" rather than "additive".
-     * That is not a behaviour change: the column's null default meant additive,
-     * and the company column's default is additive too, so every product that
-     * has never been touched resolves exactly as it did. What it buys is one
-     * question with one answer for companies that set the mode once and never
-     * think about it again — while a product that was deliberately given its
-     * own mode keeps it, because somebody chose that on purpose.
+     * `commission_override_rules.override_mode` is nullable and null means
+     * "follow the company", which is a third state and the one nearly every
+     * row is in. Every reader — the calculation, the save-time guard, the
+     * screen — has to coalesce it the same way, so it is coalesced here and
+     * nowhere else: a second copy of this line is how a rate ends up deducting
+     * on one code path and not on another, with an immutable ledger row to
+     * show for it.
+     *
+     * A null RULE also lands here (no leader rate resolves for this product),
+     * and answering with the company's mode is correct and inert: with no rule
+     * there is no override to fund, so nothing is deducted from anybody.
      */
-    private function affiliateOverrideModeFor(Product $product, CommissionOverrideMode $companyMode): CommissionOverrideMode
+    private function overrideModeForRule(?CommissionOverrideRule $rule, CommissionOverrideMode $companyMode): CommissionOverrideMode
     {
+        return $rule?->override_mode ?? $companyMode;
+    }
+
+    /**
+     * Affiliate's mode, across the three places that may answer.
+     *
+     * PRECEDENCE, most specific first:
+     *   1. the resolved leader RATE's own mode (2026-09-14) — somebody set it
+     *      on this exact scope, which is as deliberate as an answer gets;
+     *   2. TASK-194's per-PRODUCT `affiliate_override_mode` column;
+     *   3. the company's setting.
+     *
+     * The rate beats the product column because the rate is what the admin
+     * edits on ขั้นที่ 4 today, while the product column predates that screen
+     * and is set from the catalog. When both are set they were set by two
+     * different people in two different places, and honouring the more recent,
+     * more specific one is the lesser surprise.
+     *
+     * NULL at every level still resolves to the company's choice, which for a
+     * company that has never been asked is Additive — exactly what Affiliate
+     * did before any of this existed.
+     */
+    private function affiliateOverrideModeFor(Product $product, Referral $referral, CommissionOverrideMode $companyMode): CommissionOverrideMode
+    {
+        $ruleMode = $this->resolveOverrideRule($product, (int) $referral->company_id)?->override_mode;
+
+        if ($ruleMode !== null) {
+            return $ruleMode;
+        }
+
         return match ($product->affiliate_override_mode) {
             AffiliateOverrideMode::Deductive => CommissionOverrideMode::DeductFromCommission,
             AffiliateOverrideMode::Additive => CommissionOverrideMode::Additive,

@@ -528,6 +528,17 @@ interface CommissionOverrideRuleItem {
   manager_cert_tier: CertTierOption | null
   rate_type: RateType
   rate_value: number
+  /*
+   * 2026-09-14 — this rate's OWN deduction mode, or null to follow the
+   * company's (ขั้นที่ 4's default).
+   *
+   * Null is sent as null by the API on purpose and must stay null here: the
+   * list has to tell "follows the company" from "was deliberately set to
+   * บริษัทจ่ายเพิ่ม", because the first one moves when the company changes its
+   * mind and the second one does not. Coalescing it on arrival would make
+   * every row unable to explain itself.
+   */
+  override_mode: CommissionOverrideMode | null
   effective_from: string
   effective_to: string | null
 }
@@ -808,6 +819,10 @@ const overrideForm = ref({
   product_category_id: '' as number | '',
   rate_type: 'percentage' as RateType,
   rate_value_input: '' as string | number,
+  // '' = follow the company (the default, and where nearly every rate stays).
+  // Kept as '' rather than null because it is bound to a <select>, whose empty
+  // option value is a string — mapping it to null happens once, on submit.
+  override_mode: '' as CommissionOverrideMode | '',
   effective_from: new Date().toISOString().slice(0, 10),
   effective_to: '',
 })
@@ -822,6 +837,7 @@ function resetOverrideForm(): void {
     product_category_id: '',
     rate_type: 'percentage',
     rate_value_input: '',
+    override_mode: '',
     effective_from: new Date().toISOString().slice(0, 10),
     effective_to: '',
   }
@@ -829,6 +845,20 @@ function resetOverrideForm(): void {
 
 function openCreateOverrideForm(): void {
   resetOverrideForm()
+  showOverrideForm.value = true
+}
+
+/**
+ * 2026-09-14 — open the leader-rate form already pointed at one scope.
+ *
+ * Owner: "แยกเป็น 3 กล่อง". Each of 4.1 / 4.2 / 4.3 owns one layer of the
+ * ladder and has its own + button, so the scope is answered by WHICH BUTTON
+ * was pressed rather than by a dropdown the admin has to notice. Mirrors
+ * openCreateRuleFormWithScope() on the agent side exactly.
+ */
+function openCreateOverrideFormWithScope(scope: RuleScope): void {
+  resetOverrideForm()
+  overrideForm.value.scope = scope
   showOverrideForm.value = true
 }
 
@@ -843,6 +873,7 @@ function openEditOverrideForm(r: CommissionOverrideRuleItem): void {
     // Both units are stored ×100 (basis points / satang), so one inverse
     // covers both — same asymmetry rateValueToBasisOrSatang() relies on.
     rate_value_input: r.rate_value / 100,
+    override_mode: r.override_mode ?? '',
     effective_from: r.effective_from.slice(0, 10),
     effective_to: r.effective_to?.slice(0, 10) ?? '',
   }
@@ -872,6 +903,10 @@ async function submitOverrideRule(): Promise<void> {
       product_category_id: scope === 'category' ? Number(overrideForm.value.product_category_id) : null,
       rate_type: overrideForm.value.rate_type,
       rate_value: rateValueToBasisOrSatang(overrideForm.value.rate_type, overrideForm.value.rate_value_input),
+      // Explicit null for the same reason as the scope columns above: an edit
+      // that puts a rate BACK onto the company's setting has to clear the
+      // column, and an absent key would leave the old mode in place.
+      override_mode: overrideForm.value.override_mode || null,
       effective_from: overrideForm.value.effective_from,
       effective_to: overrideForm.value.effective_to || null,
     }
@@ -1199,6 +1234,108 @@ const activeOverrideRules = computed<CommissionOverrideRuleItem[]>(() => {
     .filter((r) => isOverrideActiveOn(r, now))
     .sort((a, b) => b.effective_from.localeCompare(a.effective_from))
 })
+
+/**
+ * Does a company-wide leader rate exist today — the row every product falls
+ * back to when nothing narrower matches?
+ *
+ * Read by the rate form to say what a product- or category-scoped rate leaves
+ * uncovered. Deliberately NOT used to disable the narrower scopes: paying the
+ * leader on one product and nothing else is a real plan, and step 4 is
+ * optional by design.
+ */
+const hasCompanyWideLeaderRate = computed<boolean>(() =>
+  activeOverrideRules.value.some((r) => !r.product && !r.product_category))
+
+/* ── 2026-09-14 — ONE BOX PER LAYER OF THE LADDER (step 4.1 / 4.2 / 4.3) ──
+ *
+ * Owner: "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด แต่ตอนนี้เป็นตัวเลือกการ
+ * ทำงานแบบอย่างเดียว" and "การตั้งค่าแบบหมวดสินค้า ผมแทบไม่เห็นใน UI เลย".
+ *
+ * Both complaints are the same defect seen from two sides. The three scopes
+ * are a LADDER the server walks — product, then category, then company — and
+ * the screen rendered them as one undifferentiated list produced by one
+ * dropdown. You could not see which layer you had configured, which layer was
+ * empty, or which layer a given row belonged to without reading its label.
+ *
+ * Split into three lists in ladder order (broadest first, because that is the
+ * order they are SET in), each with its own + button that pre-picks its scope.
+ *
+ * Deliberately NOT filtered to active rows: an expired or not-yet-started rate
+ * still has to be findable to be edited or deleted, and hiding it is how a
+ * company ends up with a rate nobody can see that starts paying next month.
+ * The row itself says its dates.
+ */
+const companyLeaderRules = computed<CommissionOverrideRuleItem[]>(() =>
+  byCompany(commissionOverrideRules.value).filter((r) => !r.product && !r.product_category))
+
+const categoryLeaderRules = computed<CommissionOverrideRuleItem[]>(() =>
+  byCompany(commissionOverrideRules.value).filter((r) => !r.product && !!r.product_category))
+
+const productLeaderRules = computed<CommissionOverrideRuleItem[]>(() =>
+  byCompany(commissionOverrideRules.value).filter((r) => !!r.product))
+
+/**
+ * What this row's money actually comes from, said in full.
+ *
+ * A row that FOLLOWS the company says so and names what it is following, so
+ * the badge stays true when the company's own setting changes — printing only
+ * the resolved mode would make an inherited row look like a decision somebody
+ * made about it.
+ */
+/** The row's own subject, without repeating the box's title around it. */
+function leaderRowLabel(r: CommissionOverrideRuleItem): string {
+  if (r.product) return r.product.name
+  if (r.product_category) return r.product_category.name
+
+  return 'ทุกสินค้าที่ไม่ได้ตั้งอัตราเฉพาะ'
+}
+
+/**
+ * The three boxes, in the order they are SET in (broadest first) rather than
+ * the order the server RESOLVES in (narrowest first).
+ *
+ * Those orders are opposite and both are correct: resolution has to try the
+ * most specific match first, and a human has to lay the floor before laying
+ * the exceptions on top of it. The ladder note under the heading says the
+ * resolution order out loud so the difference never has to be inferred.
+ *
+ * A data structure rather than three copies of the same markup: the three
+ * differ only in title, hint and which rows they hold, and three hand-written
+ * copies is how one of them quietly stops getting a fix the other two got.
+ */
+const leaderRateGroups = computed(() => [
+  {
+    scope: 'company' as RuleScope,
+    number: '4.1',
+    title: 'ค่าเริ่มต้นทั้งบริษัท',
+    hint: 'ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้ — ตั้งอันนี้อันเดียวก็ครอบคลุมทั้งบริษัท',
+    empty: 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าคอมเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
+    rows: companyLeaderRules.value,
+  },
+  {
+    scope: 'category' as RuleScope,
+    number: '4.2',
+    title: 'ตามหมวดหมู่สินค้า',
+    hint: 'ใช้กับทุกสินค้าในหมวดนั้น และทับค่าเริ่มต้นทั้งบริษัท',
+    empty: 'ยังไม่ได้ตั้ง — ทุกหมวดใช้ค่าเริ่มต้นทั้งบริษัท',
+    rows: categoryLeaderRules.value,
+  },
+  {
+    scope: 'product' as RuleScope,
+    number: '4.3',
+    title: 'ตามสินค้า',
+    hint: 'ใช้กับสินค้าตัวนั้นตัวเดียว และทับทั้งหมวดหมู่และค่าเริ่มต้น',
+    empty: 'ยังไม่ได้ตั้ง — ทุกสินค้าใช้ค่าของหมวดหมู่หรือค่าเริ่มต้น',
+    rows: productLeaderRules.value,
+  },
+])
+
+function overrideModeLabelFor(r: CommissionOverrideRuleItem): string {
+  return r.override_mode === null
+    ? `ตามค่าเริ่มต้นบริษัท (${overrideModeLabels[overrideMode.value]})`
+    : overrideModeLabels[r.override_mode]
+}
 
 function isOverrideActiveOn(r: CommissionOverrideRuleItem, on: Date): boolean {
   if (new Date(r.effective_from) > on) return false
@@ -2507,6 +2644,32 @@ const companyDefaultRules = computed<CommissionRuleItem[]>(() => {
 
   return byCompany(commissionRules.value).filter((r) => !r.product && !r.product_category && isRuleActiveOn(r, now))
 })
+
+/**
+ * The CATEGORY-scoped agent rates that are live today (step 3.2).
+ *
+ * 2026-09-14 — these had no home on this screen at all until the owner went
+ * looking for one ("การตั้งค่าแบบหมวดสินค้า ผมแทบไม่เห็นใน UI เลย"). They were
+ * creatable and then invisible: 3.1 filters to company-wide rows and the
+ * product list shows products, so a category rate surfaced only as a badge on
+ * whatever resolved to it.
+ */
+const categoryRules = computed<CommissionRuleItem[]>(() => {
+  const now = new Date()
+
+  return byCompany(commissionRules.value).filter((r) => !r.product && !!r.product_category && isRuleActiveOn(r, now))
+})
+
+/**
+ * How many of this company's sellable products a category rate actually
+ * decides — the number that turns "I set it and nothing happened" into a
+ * visible fact instead of a support question.
+ */
+function productsInCategoryCount(categoryId: number | undefined): number {
+  if (!categoryId) return 0
+
+  return sellableProducts.value.filter((p) => p.category?.id === categoryId).length
+}
 
 /**
  * ── STEP 3 HAS AN ORDER OF ITS OWN NOW (2026-09-13) ──
@@ -4326,7 +4489,88 @@ watch(companyPlanType, (pt) => {
                 </div>
               </div>
 
-              <!-- ── 3.2 สินค้าที่มาร์จิ้นต่างจริง ──
+              <!-- ── 3.2 ตามหมวดหมู่สินค้า (NEW, 2026-09-14) ──
+
+                   Owner: "การตั้งค่าแบบหมวดสินค้า ผมแทบไม่เห็นใน UI เลย" — and
+                   he was right in the strongest possible way. The scope was
+                   writable (a "+ เพิ่มอัตราของหมวดหมู่" button existed, down
+                   with the product buttons) and the result was RENDERED
+                   NOWHERE: 3.1 listed company-wide rows, 3.2 listed products,
+                   and a category rate appeared only as a four-word badge on
+                   whichever products happened to resolve to it. No row, no
+                   rate, no dates, no แก้ไข, no ลบ.
+
+                   A rate you can create and cannot see is worse than one you
+                   cannot create: it pays real money, it cannot be corrected
+                   once it reaches a ledger row (BR-4), and the only way to
+                   find it was to guess it existed. So the middle rung of the
+                   ladder gets the same box the other two have, in the position
+                   the ladder puts it.
+
+                   Locked behind 3.1 for the same reason the product box is: a
+                   category rate written before the company default exists is
+                   an exception to a rule nobody has decided yet. -->
+              <div
+                data-test="step3-categories"
+                class="rounded-2xl transition-colors"
+                :class="subStepThreeTwoLocked
+                  ? 'border border-slate-200 bg-slate-50/70 px-4 py-3.5 opacity-60'
+                  : 'border border-slate-200 bg-white px-4 py-3.5'"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-[13.5px] font-extrabold text-slate-900">3.2 ตามหมวดหมู่สินค้า</span>
+                  <span
+                    class="text-[11px] font-bold rounded-full px-2 py-0.5"
+                    :class="categoryRules.length ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-400'"
+                  >{{ categoryRules.length }}</span>
+                  <span class="text-[11.5px] text-slate-400">ไม่บังคับ — ใช้เมื่อทั้งหมวดมาร์จิ้นต่างจากค่าเริ่มต้น</span>
+                  <button
+                    v-if="canEditCommissionConfig"
+                    type="button"
+                    class="ml-auto px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    :disabled="subStepThreeTwoLocked"
+                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                    data-test="add-category-rate"
+                    @click="openCreateRuleFormWithScope('category')"
+                  >
+                    + เพิ่มอัตราของหมวดหมู่
+                  </button>
+                </div>
+
+                <p v-if="!categoryRules.length" class="mt-2 text-[12px] text-slate-400" data-test="step3-categories-empty">
+                  ยังไม่ได้ตั้ง — ทุกหมวดใช้ค่าเริ่มต้นทั้งบริษัทข้างบน
+                </p>
+                <TransitionGroup v-else tag="div" name="list-fade" class="mt-2 space-y-2">
+                  <div
+                    v-for="r in categoryRules"
+                    :key="`category-rule-${r.id}`"
+                    class="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5"
+                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+                    :data-test="`category-rule-${r.id}`"
+                  >
+                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <span v-if="conflictingRuleIds.has(r.id)" class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-rose-100 text-rose-700">ซ้อนทับ</span>
+                    <span class="text-sm font-extrabold text-slate-900">{{ r.product_category?.name }}</span>
+                    <span class="text-sm font-extrabold text-brand-700">{{ formatRate(r.rate_type, r.rate_value) }}</span>
+                    <!-- How many products this row actually decides. A rate
+                         scoped to a category nobody sells from is not an error,
+                         but it is the single most likely reason an admin's
+                         change "did nothing" — so the number is on the row
+                         rather than left to be worked out. -->
+                    <span class="text-xs text-slate-400">
+                      ครอบคลุม {{ productsInCategoryCount(r.product_category?.id) }} สินค้า ·
+                      มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : ' — ไม่มีวันสิ้นสุด' }}
+                      <span v-if="r.renewal_rate_type"> · ต่ออายุ {{ formatRate(r.renewal_rate_type, r.renewal_rate_value!) }}</span>
+                    </span>
+                    <span v-if="canEditCommissionConfig && !subStepThreeTwoLocked" class="ml-auto flex items-center gap-3">
+                      <button class="text-sm font-bold text-brand-700 hover:underline" @click="openEditRuleForm(r)">แก้ไข</button>
+                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRule(r)">ลบ</button>
+                    </span>
+                  </div>
+                </TransitionGroup>
+              </div>
+
+              <!-- ── 3.3 สินค้าที่มาร์จิ้นต่างจริง ──
                    LOCKED UNTIL 3.1 EXISTS, and the lock is what removes five
                    of the six red things: with no company default NOTHING
                    resolves, so every row here was repeating 3.1's sentence
@@ -4341,7 +4585,7 @@ watch(companyPlanType, (pt) => {
                   : 'border-2 border-brand-500 ring-4 ring-brand-100 bg-brand-50/20 px-4 py-3.5'"
               >
                 <div class="flex flex-wrap items-center gap-2 mb-2">
-                  <span class="text-[13.5px] font-extrabold text-slate-900">3.2 แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง</span>
+                  <span class="text-[13.5px] font-extrabold text-slate-900">3.3 แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง</span>
                   <!-- Not "ทำตรงนี้ก่อน": 3.2 is an exception list, not a duty
                        — its own subtitle already says ไม่ต้องแยกทุกตัว. A badge
                        that ORDERED an optional refinement would be the same
@@ -4350,7 +4594,7 @@ watch(companyPlanType, (pt) => {
                   <span
                     v-if="!subStepThreeTwoLocked"
                     class="text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700 border border-brand-200"
-                    data-test="substep-focus-3-2"
+                    data-test="substep-focus-3-3"
                   >
                     ทำต่อได้ตรงนี้
                   </span>
@@ -4366,7 +4610,7 @@ watch(companyPlanType, (pt) => {
                 <p
                   v-if="subStepThreeTwoLocked"
                   class="mb-2.5 inline-flex items-center gap-2 text-[12.5px] font-bold text-slate-500"
-                  data-test="substep-3-2-lock"
+                  data-test="substep-3-3-lock"
                 >
                   <Icon name="lock" :size="14" class="shrink-0 text-slate-400" />
                   ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด
@@ -4679,18 +4923,14 @@ watch(companyPlanType, (pt) => {
                   >
                     + เพิ่มอัตราของสินค้า
                   </button>
-                  <button
-                    type="button"
-                    class="btn-secondary disabled:opacity-40 disabled:cursor-not-allowed"
-                    :disabled="subStepThreeTwoLocked"
-                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
-                    data-test="add-category-rate"
-                    @click="openCreateRuleFormWithScope('category')"
-                  >
-                    + เพิ่มอัตราของหมวดหมู่
-                  </button>
-                  <!-- TASK-037's "เปิดตัวช่วยตั้งค่า (Wizard)" stood here and
-                       was removed 2026-09-12: these two buttons and the row
+                  <!-- "+ เพิ่มอัตราของหมวดหมู่" used to stand here beside the
+                       product button, which is how the category scope became
+                       writable-but-invisible: the control lived in the product
+                       box and the result was rendered nowhere. It now lives in
+                       3.2, next to the rows it creates.
+
+                       TASK-037's "เปิดตัวช่วยตั้งค่า (Wizard)" also stood here
+                       and was removed 2026-09-12: these buttons and the row
                        buttons above ARE the guided path now. -->
                 </div>
               </div>
@@ -4736,19 +4976,23 @@ watch(companyPlanType, (pt) => {
                   </p>
                   <ul class="mt-2.5 space-y-1.5 text-[12.5px] text-sky-900/90">
                     <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.1</span>
-                      <span><b>อัตราหัวหน้าทีม</b> — หัวหน้าได้เท่าไหร่เมื่อลูกทีมปิดการขาย · ไม่ตั้ง = หัวหน้าไม่ได้อะไร (ตัวแทนยังได้ปกติ)</span>
-                    </li>
-                    <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.2</span>
-                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · <b>ตั้งครั้งเดียวใช้ทั้งบริษัท</b></span>
-                    </li>
-                    <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.3</span>
-                      <span><b>แบ่งค่าคอมผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
+                      <span class="font-extrabold shrink-0">4.1–4.3</span>
+                      <span>
+                        <b>อัตราหัวหน้าทีม</b> — หัวหน้าได้เท่าไหร่เมื่อลูกทีมปิดการขาย · แยกเป็น 3 ชั้น
+                        (ค่าเริ่มต้นทั้งบริษัท / ตามหมวดหมู่ / ตามสินค้า) ชั้นที่เจาะจงกว่าทับชั้นที่กว้างกว่า ·
+                        ไม่ตั้งเลย = หัวหน้าไม่ได้อะไร (ตัวแทนยังได้ปกติ)
+                      </span>
                     </li>
                     <li class="flex gap-2">
                       <span class="font-extrabold shrink-0">4.4</span>
+                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · เป็นค่าเริ่มต้น แต่ละอัตราใน 4.1–4.3 ตั้งทับเองได้</span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.5</span>
+                      <span><b>แบ่งค่าคอมผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.6</span>
                       <span><b>ยอดขั้นต่ำในการเบิก</b> — ตัวแทนต้องสะสมถึงเท่าไหร่จึงกดขอเบิกได้ · เว้นว่าง = ไม่มีขั้นต่ำ</span>
                     </li>
                   </ul>
@@ -4767,77 +5011,127 @@ watch(companyPlanType, (pt) => {
             />
             <template v-else>
               <!--
-                CARD 1 — the leader rate. TASK-213 Phase 2 moved this table out
-                of /product-catalog and onto this screen because "an admin
-                asking how much the leader gets opens แผนคอมมิชชั่น and none of
-                the six tabs is it". It is now a named card on a named step,
-                which is the same fix one level further.
+                ═══ 4.1 / 4.2 / 4.3 — ONE BOX PER LAYER OF THE LADDER ═══
+
+                Owner, 2026-09-14: "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด
+                แต่ตอนนี้เป็นตัวเลือกการทำงานแบบอย่างเดียว" and "การตั้งค่าแบบ
+                หมวดสินค้า ผมแทบไม่เห็นใน UI เลย".
+
+                Two reports, one defect. The leader rate is scoped product >
+                category > company — a LADDER the server walks — and this card
+                rendered all three layers as one flat list fed by one dropdown
+                buried in a modal. You could not see which layer you had
+                configured, which was empty, or which one a row belonged to
+                without reading its label; the category layer in particular was
+                effectively invisible, which is exactly what the owner hit.
+
+                Three boxes, in the order a human SETS them (broadest first),
+                each owning one layer and carrying its own + button. The
+                resolution order is the reverse and is stated in words under the
+                heading, because the two orders being opposite is precisely the
+                thing that has to not be guessed.
               -->
               <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4" data-test="step4-leader-rates">
                 <div class="flex flex-wrap items-center gap-2 mb-1">
-                  <p class="text-[15px] font-extrabold text-slate-900">
-                    <span class="text-slate-400 mr-1.5">4.1</span>อัตราหัวหน้าทีม
-                  </p>
+                  <p class="text-[15px] font-extrabold text-slate-900">อัตราหัวหน้าทีม</p>
                   <span
                     class="text-[11px] font-bold rounded-full px-2.5 py-1"
                     :class="activeOverrideRules.length ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
                   >
-                    {{ activeOverrideRules.length ? `${activeOverrideRules.length} อัตรา` : 'ยังไม่ได้ตั้ง' }}
+                    {{ activeOverrideRules.length ? `${activeOverrideRules.length} อัตราที่ใช้อยู่` : 'ยังไม่ได้ตั้ง' }}
                   </span>
-                  <button
-                    v-if="canEditCommissionConfig"
-                    type="button"
-                    class="ml-auto px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100"
-                    data-test="add-leader-rate"
-                    @click="openCreateOverrideForm"
-                  >
-                    + เพิ่มอัตราหัวหน้าทีม
-                  </button>
                 </div>
-                <p class="text-[12.5px] text-slate-500 mb-3">
-                  จ่ายให้หัวหน้าทีมทุกครั้งที่ลูกทีมปิดการขาย · แผน <b>Unilevel</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว ·
-                  ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ &gt; หมวดหมู่ &gt; ค่าเริ่มต้นทั้งบริษัท
+                <p class="text-[12.5px] text-slate-500 mb-1">
+                  จ่ายให้หัวหน้าทีมทุกครั้งที่ลูกทีมปิดการขาย · แผน <b>Unilevel</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว
+                </p>
+                <p class="text-[12.5px] text-amber-800 mb-3">
+                  ถ้าสินค้าหนึ่งเข้าเงื่อนไขหลายกล่อง ระบบใช้ <b>กล่องที่เจาะจงที่สุดเพียงกล่องเดียว</b> — ตามสินค้า ก่อน ตามหมวดหมู่ ก่อน ค่าเริ่มต้นทั้งบริษัท · ไม่เอามาบวกกัน
                 </p>
 
                 <div v-if="leaderRateGaps.length" class="mb-3 px-3 py-2 rounded-lg bg-amber-100/70 text-xs font-bold text-amber-800">
                   สินค้า {{ leaderRateGaps.length }} รายการยังไม่มีอัตราหัวหน้าทีมที่ใช้ได้ — ตัวแทนได้ตามปกติ แต่หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนั้น
                 </div>
 
-                <EmptyState v-if="!byCompany(commissionOverrideRules).length" icon="users" title="ยังไม่มีอัตราหัวหน้าทีม" />
-                <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
+                <div class="space-y-3">
                   <div
-                    v-for="r in byCompany(commissionOverrideRules)"
-                    :key="`leader-${r.id}`"
-                    class="bg-white/95 rounded-xl p-4 flex items-center justify-between gap-3 border"
-                    :class="conflictingOverrideIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-amber-200'"
-                    :data-test="`leader-rule-${r.id}`"
+                    v-for="group in leaderRateGroups"
+                    :key="`leader-group-${group.scope}`"
+                    class="rounded-xl border border-amber-200 bg-white/70 p-3.5"
+                    :data-test="`leader-group-${group.scope}`"
                   >
-                    <div class="min-w-0">
-                      <p class="text-sm font-bold text-slate-900">
-                        <span class="mr-2 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] align-middle">หัวหน้าทีม</span>
-                        <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
-                        {{ overrideScopeLabel(r) }}
-                        <!-- Shown only on legacy rows. A row created after
-                             TASK-214 has no tier, and saying "ทุก tier" on it
-                             would imply a dimension that no longer exists. -->
-                        <span v-if="r.manager_cert_tier" class="ml-1 text-[11px] font-normal text-slate-400">
-                          (เดิมตั้งไว้ที่ tier {{ r.manager_cert_tier.name }} — ไม่ถูกใช้แล้ว)
-                        </span>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <p class="text-[13.5px] font-extrabold text-slate-900">
+                        <span class="text-slate-400 mr-1.5">{{ group.number }}</span>{{ group.title }}
                       </p>
-                      <p class="text-xs text-slate-400">
-                        อัตรา {{ formatRate(r.rate_type, r.rate_value) }} · มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
-                      </p>
+                      <span
+                        class="text-[11px] font-bold rounded-full px-2 py-0.5"
+                        :class="group.rows.length ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-400'"
+                      >{{ group.rows.length }}</span>
+                      <button
+                        v-if="canEditCommissionConfig"
+                        type="button"
+                        class="ml-auto px-3 py-1.5 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100"
+                        :data-test="`add-leader-rate-${group.scope}`"
+                        @click="openCreateOverrideFormWithScope(group.scope)"
+                      >
+                        + เพิ่ม
+                      </button>
                     </div>
-                    <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
-                      <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
-                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
-                    </div>
+                    <p class="mt-0.5 text-[12px] text-slate-500">{{ group.hint }}</p>
+
+                    <!-- An empty layer says what its emptiness MEANS, not just
+                         that it is empty. "ยังไม่มีข้อมูล" on a ladder rung is
+                         the least useful sentence available: the reader's real
+                         question is what happens to the products this rung
+                         would have covered. -->
+                    <p v-if="!group.rows.length" class="mt-2 text-[12px] text-slate-400" :data-test="`leader-group-empty-${group.scope}`">
+                      {{ group.empty }}
+                    </p>
+                    <TransitionGroup v-else tag="div" name="list-fade" class="mt-2 space-y-2">
+                      <div
+                        v-for="r in group.rows"
+                        :key="`leader-${r.id}`"
+                        class="bg-white rounded-lg px-3.5 py-2.5 flex items-center justify-between gap-3 border"
+                        :class="conflictingOverrideIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+                        :data-test="`leader-rule-${r.id}`"
+                      >
+                        <div class="min-w-0">
+                          <p class="text-sm font-bold text-slate-900">
+                            <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
+                            {{ leaderRowLabel(r) }}
+                            <span class="ml-1.5 text-amber-800">{{ formatRate(r.rate_type, r.rate_value) }}</span>
+                            <!-- Shown only on legacy rows. A row created after
+                                 TASK-214 has no tier, and saying "ทุก tier" on it
+                                 would imply a dimension that no longer exists. -->
+                            <span v-if="r.manager_cert_tier" class="ml-1 text-[11px] font-normal text-slate-400">
+                              (เดิมตั้งไว้ที่ tier {{ r.manager_cert_tier.name }} — ไม่ถูกใช้แล้ว)
+                            </span>
+                          </p>
+                          <p class="text-xs text-slate-400">
+                            <!-- The mode belongs on the ROW because it is now a
+                                 property of the row. An inherited one names what
+                                 it is following so the badge stays true when the
+                                 company's own setting moves. -->
+                            <span
+                              class="mr-2 px-1.5 py-0.5 rounded align-middle text-[11px]"
+                              :class="r.override_mode === null ? 'bg-slate-100 text-slate-500' : 'bg-indigo-100 text-indigo-700'"
+                              :data-test="`leader-rule-mode-${r.id}`"
+                            >{{ overrideModeLabelFor(r) }}</span>
+                            มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : '' }}
+                          </p>
+                        </div>
+                        <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
+                          <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
+                          <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
+                        </div>
+                      </div>
+                    </TransitionGroup>
                   </div>
-                </TransitionGroup>
+                </div>
               </div>
 
               <!--
-                ═══ 4.2 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
+                ═══ 4.4 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
 
                 Owner, verbatim: "จุดที่คนเข้าใจผิดบ่อยที่สุด — 2% ไม่ได้หักจาก
                 300 ของสมชาย · เรื่องนี้ต้องทำให้ชัดเจน และปรับได้ทั้งหักจาก
@@ -4858,7 +5152,7 @@ watch(companyPlanType, (pt) => {
               <div class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4" data-test="step4-override-mode">
                 <div class="flex flex-wrap items-center gap-2">
                   <p class="text-[15px] font-extrabold text-slate-900">
-                    <span class="text-slate-400 mr-1.5">4.2</span>เงินของหัวหน้าทีมมาจากไหน
+                    <span class="text-slate-400 mr-1.5">4.4</span>เงินของหัวหน้าทีมมาจากไหน (ค่าเริ่มต้นของบริษัท)
                   </p>
                   <span
                     v-if="!overrideModeUnknown"
@@ -4869,7 +5163,8 @@ watch(companyPlanType, (pt) => {
                   </span>
                 </div>
                 <p class="mt-1 text-[12.5px] text-slate-600">
-                  ตั้งครั้งเดียวใช้ทั้งบริษัท · ตัดสินว่าค่าคอมของหัวหน้าทีม (ข้อ 4.1) เป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b>
+                  ตัดสินว่าค่าคอมของหัวหน้าทีมเป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b> ·
+                  อันนี้คือ <b>ค่าเริ่มต้น</b> — อัตราในข้อ 4.1–4.3 ที่ไม่ได้เลือกโหมดของตัวเองจะใช้อันนี้ แต่แต่ละอัตราตั้งของตัวเองทับได้
                 </p>
 
                 <!-- The read failed, so the card does not know. Same defence as
@@ -5023,7 +5318,7 @@ watch(companyPlanType, (pt) => {
                 <!-- The number lives outside the card because the card is
                      shared with nothing else on this screen and must not learn
                      about this step's numbering to be reusable. -->
-                <p class="text-[12px] font-extrabold text-slate-400 mb-1 ml-1">4.3</p>
+                <p class="text-[12px] font-extrabold text-slate-400 mb-1 ml-1">4.5</p>
                 <CommissionSplitSettingCard
                   :key="effectiveCompanyId ?? 'own'"
                   :company-id="effectiveCompanyId"
@@ -5033,7 +5328,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
-                ═══ 4.4 — EDITED HERE NOW, NOT LINKED (2026-09-13) ═══
+                ═══ 4.6 — EDITED HERE NOW, NOT LINKED (2026-09-13) ═══
 
                 Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ
                 นำของเก่าออกเลย".
@@ -5054,7 +5349,7 @@ watch(companyPlanType, (pt) => {
               -->
               <div class="rounded-2xl border border-slate-200 bg-white p-4" data-test="step4-withdrawal-minimum">
                 <p class="text-[15px] font-extrabold text-slate-900">
-                  <span class="text-slate-400 mr-1.5">4.4</span>ยอดขั้นต่ำในการเบิก
+                  <span class="text-slate-400 mr-1.5">4.6</span>ยอดขั้นต่ำในการเบิก
                 </p>
                 <p class="mt-1 text-[12.5px] text-slate-500">
                   ตัวแทนต้องมียอดค่าคอมสะสมถึงเท่าไหร่จึงจะกดขอเบิกได้ · <b>เว้นว่าง = ไม่มีขั้นต่ำ</b> (เบิกเท่าไรก็ได้)
@@ -5234,7 +5529,7 @@ watch(companyPlanType, (pt) => {
          the row being edited sat further down and often off-screen; the
          overlay removes the question by removing everything else. -->
     <div v-if="showOverrideForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetOverrideForm">
-      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
+      <form data-test="override-form" class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
             <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมหัวหน้าทีม</p>
@@ -5245,13 +5540,53 @@ watch(companyPlanType, (pt) => {
           </button>
         </div>
         <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
+          <!--
+            2026-09-14 — rewritten in the owner's words, not the codebase's.
+            The two lines here used to read "อัตราแยกรายสินค้าได้แล้ว · ลำดับการ
+            ใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ" — a changelog note and an internal
+            cross-reference, neither of which answers the question an admin
+            actually has in front of this dropdown: what does each scope DO,
+            and what happens to the products it does not cover.
+          -->
           <p class="text-xs text-amber-800">
-            จ่ายให้ "หัวหน้าทีม" ทุกครั้งที่ลูกทีมปิดการขาย ·
+            จ่ายให้ <b>หัวหน้าทีม</b> ทุกครั้งที่ลูกทีมปิดการขาย ·
             แผน <b>มาตรฐาน (Unilevel)</b> จ่ายขึ้นไปทั้งสาย · แผน <b>พันธมิตร (Affiliate)</b> จ่ายชั้นเดียว
           </p>
-          <p class="text-xs text-amber-800">
-            <b>อัตราแยกรายสินค้าได้แล้ว</b> · ลำดับการใช้ค่าเหมือนอัตราตัวแทนเป๊ะ ๆ — สินค้าเฉพาะ &gt; หมวดหมู่ &gt; ค่าเริ่มต้นทั้งบริษัท
-          </p>
+          <div class="text-xs text-amber-800 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-1">
+            <p class="font-bold">ขอบเขตทั้ง 3 แบบ ต่างกันตรงที่ "ใช้กับสินค้าไหนบ้าง"</p>
+            <p><b>ค่าเริ่มต้นทั้งบริษัท</b> — ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้</p>
+            <p><b>ตามหมวดหมู่สินค้า</b> — ใช้กับทุกสินค้าในหมวดนั้น และทับค่าเริ่มต้นทั้งบริษัท</p>
+            <p><b>ตามสินค้า</b> — ใช้กับสินค้าตัวนั้นตัวเดียว และทับทั้งหมวดหมู่และค่าเริ่มต้น</p>
+            <p class="text-amber-700">ระบบหยิบมาใช้ <b>อันที่เจาะจงที่สุดเพียงอันเดียว ไม่เอามาบวกกัน</b></p>
+          </div>
+
+          <!--
+            "ยังไม่ได้ตั้งค่าเริ่มต้นบริษัท แต่ตัวเลือกยังขึ้นมา ควรมีหรือไม่"
+            (owner, 2026-09-14).
+
+            The narrow scopes STAY offered: paying the leader on one product
+            and nothing else is a real plan, and this whole step is optional —
+            so refusing the option would be the screen inventing a rule nobody
+            set. What it must not be is SILENT, which is what it was: a
+            product-scoped rate saved with no company default leaves every
+            other product paying the leader nothing, and the admin finds that
+            out at a payout.
+
+            So the consequence is counted and printed at the moment the scope
+            is picked, with the way out named. Same shape as the deduction
+            guard's message: never a refusal without a number.
+          -->
+          <div
+            v-if="overrideForm.scope !== 'company' && !hasCompanyWideLeaderRate"
+            class="text-xs rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-slate-600"
+            data-test="override-no-company-default"
+          >
+            บริษัทนี้ <b>ยังไม่มีค่าเริ่มต้นทั้งบริษัท</b> — ถ้าบันทึกแบบนี้ หัวหน้าทีมจะได้ค่าคอมเฉพาะขอบเขตที่เลือกไว้เท่านั้น
+            <template v-if="leaderRateGaps.length">
+              ส่วนสินค้าอีก <b>{{ leaderRateGaps.length }} รายการ</b> หัวหน้าจะไม่ได้อะไร (ตัวแทนที่ปิดการขายยังได้ตามปกติ)
+            </template>
+            · ถ้าต้องการให้ครอบคลุมทุกสินค้า ให้เลือกขอบเขตเป็น <b>“ค่าเริ่มต้นทั้งบริษัท”</b> ก่อน แล้วค่อยเพิ่มอัตราเฉพาะทีหลัง
+          </div>
           <div v-if="overrideFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ overrideFormError }}</div>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <!-- TASK-214 — the cert-tier picker that used to be here is gone:
@@ -5261,7 +5596,7 @@ watch(companyPlanType, (pt) => {
                  the same way. -->
             <div class="col-span-2">
               <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-              <select v-model="overrideForm.scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <select v-model="overrideForm.scope" data-test="override-form-scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
                 <option value="category">ตามหมวดหมู่สินค้า</option>
                 <option value="product">ตามสินค้า</option>
@@ -5269,7 +5604,7 @@ watch(companyPlanType, (pt) => {
             </div>
             <div v-if="overrideForm.scope === 'product'" class="col-span-2">
               <label class="text-sm font-bold text-slate-500">สินค้า</label>
-              <select v-model="overrideForm.product_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <select v-model="overrideForm.product_id" data-test="override-form-product" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="" disabled>เลือกสินค้า</option>
                 <option v-for="p in products" :key="p.id" :value="p.id">{{ p.name }}</option>
               </select>
@@ -5292,7 +5627,30 @@ watch(companyPlanType, (pt) => {
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">{{ overrideForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
-              <input v-model="overrideForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+              <input v-model="overrideForm.rate_value_input" data-test="override-form-rate-value" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            </div>
+            <!--
+              2026-09-14 — the per-RATE deduction mode (owner: "การตั้งค่าใน
+              Step ที่ 4 ต้องต่างกันทั้งหมด").
+
+              The empty option is FIRST and is the default, because "follow the
+              company" is the answer for nearly every rate and making somebody
+              re-answer a company-level question once per product is how a form
+              gets abandoned. It is also a real, persisted state — not an unset
+              one — so it keeps following the company when the company changes
+              its mind, and the option says so in words.
+            -->
+            <div class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">เงินของหัวหน้าทีมมาจากไหน (เฉพาะอัตรานี้)</label>
+              <select v-model="overrideForm.override_mode" data-test="override-form-mode" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="">ใช้ตามค่าเริ่มต้นของบริษัท — {{ overrideModeLabels[overrideMode] }}</option>
+                <option v-for="opt in overrideModeOptions" :key="`form-mode-${opt.value}`" :value="opt.value">
+                  {{ opt.title }}
+                </option>
+              </select>
+              <p class="mt-1 text-[11.5px] text-slate-400">
+                เลือกอย่างอื่นเพื่อให้อัตรานี้ต่างจากทั้งบริษัท · ดูตัวเลขของแต่ละแบบได้ที่ข้อ 4.4
+              </p>
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
@@ -5312,7 +5670,7 @@ watch(companyPlanType, (pt) => {
         </div>
         <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
           <button type="button" class="btn-secondary" @click="resetOverrideForm">ยกเลิก</button>
-          <button type="submit" :disabled="savingOverride" class="btn-primary">{{ savingOverride ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+          <button type="submit" :disabled="savingOverride" data-test="override-form-submit" class="btn-primary">{{ savingOverride ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
         </div>
       </form>
     </div>

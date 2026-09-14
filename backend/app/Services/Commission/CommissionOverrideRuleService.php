@@ -2,6 +2,7 @@
 
 namespace App\Services\Commission;
 
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Models\CommissionOverrideRule;
 use App\Models\Company;
@@ -86,6 +87,12 @@ class CommissionOverrideRuleService
         $this->assertDeductionFits((int) $commissionOverrideRule->company_id, [
             'rate_type' => $data['rate_type'] ?? $commissionOverrideRule->rate_type,
             'rate_value' => $data['rate_value'] ?? $commissionOverrideRule->rate_value,
+            // array_key_exists, not ??: null is a MEANING here ("follow the
+            // company"), so a request that deliberately clears the rate's own
+            // mode must be checked as clearing it, not as keeping the old one.
+            'override_mode' => array_key_exists('override_mode', $data) ? $data['override_mode'] : $commissionOverrideRule->override_mode,
+            'product_id' => $productId,
+            'product_category_id' => $categoryId,
         ]);
 
         $commissionOverrideRule->update($data);
@@ -144,7 +151,32 @@ class CommissionOverrideRuleService
             ? $data['rate_type']
             : CommissionRateType::from((string) $data['rate_type']);
 
-        $refusal = $this->deductionGuard->refusalFor($company, $rateType, (int) $data['rate_value']);
+        /*
+         * 2026-09-14 — measured against the mode THIS RATE will run under and
+         * the products it can actually reach, not against the company's mode
+         * and every product.
+         *
+         * Both halves matter and they pull in opposite directions: a rate that
+         * opts INTO a deduct mode at a company sitting on Additive has to be
+         * checked (it was not, before), and a rate scoped to one expensive
+         * product must not be refused because some cheap add-on it will never
+         * touch could not fund it.
+         *
+         * `?? null` on override_mode keeps the third state intact: absent means
+         * "follow the company", which is what the guard's own null default
+         * already resolves to.
+         */
+        $mode = $data['override_mode'] ?? null;
+        $mode = $mode instanceof CommissionOverrideMode ? $mode : ($mode === null ? null : CommissionOverrideMode::from((string) $mode));
+
+        $refusal = $this->deductionGuard->refusalFor(
+            $company,
+            $rateType,
+            (int) $data['rate_value'],
+            $mode,
+            $data['product_id'] ?? null,
+            $data['product_category_id'] ?? null,
+        );
 
         if ($refusal !== null) {
             // On `rate_value`, so the admin's cursor lands on the field they

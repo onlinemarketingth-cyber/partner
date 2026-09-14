@@ -36,6 +36,15 @@ class CommissionOverrideRuleResource extends JsonResource
             ]),
             'rate_type' => $this->rate_type?->value,
             'rate_value' => $this->rate_value,
+            /*
+             * 2026-09-14 — NULL IS SENT AS NULL, never coalesced to the
+             * company's value here. The screen has to tell "this rate follows
+             * the company" from "this rate was deliberately set to additive",
+             * because the first one changes when the company changes its mind
+             * and the second one does not. Collapsing them would make the list
+             * unable to explain itself.
+             */
+            'override_mode' => $this->override_mode?->value,
             'effective_from' => $this->effective_from,
             'effective_to' => $this->effective_to,
             'created_at' => $this->created_at,

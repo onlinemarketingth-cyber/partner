@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -43,6 +44,15 @@ class CommissionOverrideRule extends Model
         'manager_cert_tier_id',
         'rate_type',
         'rate_value',
+        /*
+         * 2026-09-14 — where THIS rate's money comes from, or NULL to follow
+         * the company's setting. Null is a third state, not a default: see
+         * the 2026_09_27_090000 migration. Never read it directly for a
+         * payout — CommissionService::overrideModeForRule() owns the
+         * coalesce, and a second copy of that fallback is how a rate ends up
+         * deducting at one call site and not at another.
+         */
+        'override_mode',
         'effective_from',
         'effective_to',
     ];
@@ -52,6 +62,7 @@ class CommissionOverrideRule extends Model
         return [
             'rate_type' => CommissionRateType::class,
             'rate_value' => 'integer',
+            'override_mode' => CommissionOverrideMode::class,
             'effective_from' => 'date',
             'effective_to' => 'date',
         ];

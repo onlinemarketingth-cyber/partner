@@ -196,13 +196,34 @@ watch(() => props.companyId, load, { immediate: true })
     <p class="text-base font-bold text-slate-500 mb-1 flex items-center gap-1.5">
       <Icon name="users" :size="14" /> การแบ่งคอมมิชชั่นกับตัวแทนร่วม
     </p>
-    <p class="text-xs text-slate-400 mb-3 leading-relaxed">
-      เปิดอยู่ = ตัวแทนระบุ "ตัวแทนร่วม" และเปอร์เซ็นต์ที่แบ่งได้ในแต่ละดีล และเมื่อดีลถึงขั้น
-      "ชำระเงินแล้ว" ระบบจะบันทึกคอมมิชชั่นเป็น 2 รายการแทน 1 รายการ · ปิดอยู่ =
-      คอมมิชชั่นเต็มจำนวนเข้าตัวแทนผู้แนะนำคนเดียว และช่องกรอกตัวแทนร่วมจะหายไปทั้งหมดจาก Agent
-      Portal (ข้อมูลที่เคยกรอกไว้ไม่ถูกลบ)
-      (BR-7 — ค่านี้เป็น config ที่แก้ไขได้เสมอ ไม่ hardcode)
+    <!--
+      2026-09-14 — rewritten for the person reading it.
+      Owner: "คำอธิบายอ่านแล้วไม่เข้าใจ ยังเป็นคำอธิบายภาษาคอม และเอางานเราไป
+      แสดงไม่จำเป็น".
+
+      The old text carried "(BR-7 — ค่านี้เป็น config ที่แก้ไขได้เสมอ ไม่
+      hardcode)" and "(BR-4)" straight onto an admin's screen. Those are notes
+      we wrote to ourselves about how the system is built; an admin deciding
+      whether to let two agents share a deal has no use for them, and printing
+      them makes the sentence they are buried in harder to read. They live in
+      the code comments, which is where they were always meant to be.
+
+      "Agent Portal" and "Referral" went for the same reason — product-
+      internal names for "แอปของตัวแทน" and "ส่งรายชื่อลูกค้า".
+    -->
+    <p class="text-xs text-slate-500 mb-3 leading-relaxed">
+      ใช้เมื่อดีลหนึ่งมีตัวแทนช่วยกัน 2 คน เช่น คนหาลูกค้ากับคนปิดการขายเป็นคนละคน
     </p>
+    <div class="text-xs text-slate-500 mb-3 space-y-1">
+      <p>
+        <b class="text-slate-700">เปิด</b> — ตัวแทนใส่ชื่อ “ตัวแทนร่วม” และเลือกสัดส่วนที่แบ่งกันได้เองในแต่ละดีล
+        พอลูกค้าชำระเงิน ระบบจะจ่ายค่าคอมของดีลนั้นแยกให้ 2 คนตามสัดส่วนที่ใส่ไว้
+      </p>
+      <p>
+        <b class="text-slate-700">ปิด</b> — ค่าคอมเต็มจำนวนเข้าตัวแทนคนเดียว และตัวแทนจะไม่เห็นช่องใส่ตัวแทนร่วมเลย
+        (ชื่อที่เคยใส่ไว้ยังเก็บอยู่ ไม่ได้ถูกลบ)
+      </p>
+    </div>
 
     <p v-if="errorMessage" class="mb-2 text-xs font-bold text-rose-600">{{ errorMessage }}</p>
 
@@ -236,9 +257,9 @@ watch(() => props.companyId, load, { immediate: true })
             ></div>
           </button>
           <div class="min-w-0">
-            <p class="text-sm font-bold text-slate-900">เปิดให้ตัวแทนแบ่งคอมมิชชั่นกันเองในดีล</p>
+            <p class="text-sm font-bold text-slate-900">เปิดให้ตัวแทนแบ่งค่าคอมกันเองในดีล</p>
             <p class="text-xs text-slate-400 leading-relaxed">
-              ปิดอยู่ = ตัวแทนจะไม่เห็นเมนูแบ่งคอมฯ ทั้งในหน้าลูกค้าและตอนส่ง Referral
+              ปิดอยู่ = ตัวแทนจะไม่เห็นช่องแบ่งค่าคอม ทั้งในหน้าลูกค้าและตอนส่งรายชื่อลูกค้า
             </p>
           </div>
         </div>
@@ -260,15 +281,14 @@ watch(() => props.companyId, load, { immediate: true })
               กำลังจะเปิดกลับมา — ตรวจสอบดีลที่ค้างอยู่ก่อน
             </p>
             <p v-if="pendingCount !== undefined" class="text-xs text-amber-700 leading-relaxed">
-              มีดีลที่ยังไม่ได้บันทึกคอมมิชชั่น
+              ตอนนี้มีดีลที่ยังไม่ได้จ่ายค่าคอมอยู่
               <span class="font-bold">{{ pendingCount }}</span>
-              รายการ ที่ยังเก็บ "ตัวแทนร่วม" ไว้จากตอนก่อนปิดระบบ —
-              ดีลเหล่านี้จะกลับมาแบ่งคอมมิชชั่นทันทีที่กดบันทึก โดยไม่มีใครแก้ไขดีลนั้นเลย
-              (ข้อมูลถูกเก็บไว้ตั้งใจ ไม่ได้ลบ) ส่วนคอมมิชชั่นที่บันทึกลงบัญชีไปแล้วไม่เปลี่ยน (BR-4)
+              รายการ ที่ยังมีชื่อ “ตัวแทนร่วม” ติดอยู่จากตอนก่อนปิด —
+              พอกดบันทึก ดีลเหล่านี้จะกลับมาแบ่งค่าคอมทันที โดยที่ไม่มีใครไปแก้ดีลนั้นเลย ·
+              ส่วนค่าคอมที่จ่ายไปแล้วไม่เปลี่ยน
             </p>
             <p v-else class="text-xs text-amber-700 leading-relaxed">
-              ระบบไม่ได้ส่งจำนวนดีลที่ค้างอยู่มาให้ จึงยังไม่ทราบว่ามีกี่รายการที่จะกลับมาแบ่งคอมมิชชั่น
-              — โปรดตรวจสอบก่อนเปิด
+              ยังไม่ทราบว่ามีดีลค้างอยู่กี่รายการที่จะกลับมาแบ่งค่าคอม (อ่านตัวเลขไม่ได้) — ตรวจสอบก่อนเปิด
             </p>
           </div>
         </div>

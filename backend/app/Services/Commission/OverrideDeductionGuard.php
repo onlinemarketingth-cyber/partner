@@ -66,9 +66,24 @@ class OverrideDeductionGuard
      * approved under Additive were never measured against any pool, so
      * switching to a deduct mode can break every one of them at once. Null
      * means "the mode this company is actually on" — the rate-form case.
+     *
+     * 2026-09-14 — $productId / $productCategoryId narrow the check to the
+     * products this rate can actually reach. Before per-scope rates that
+     * distinction did not exist: every rule was company-wide in effect, so
+     * measuring against every sellable product was measuring the right set. It
+     * is now wrong in the expensive direction — a 5% leader rate scoped to one
+     * 29,900 package would have been refused because some 590 add-on, which
+     * this rate will never touch, could not fund it. A guard that blocks
+     * configurations it was not asked about teaches people to route around it.
      */
-    public function refusalFor(Company $company, CommissionRateType $rateType, int $rateValue, ?CommissionOverrideMode $assumingMode = null): ?string
-    {
+    public function refusalFor(
+        Company $company,
+        CommissionRateType $rateType,
+        int $rateValue,
+        ?CommissionOverrideMode $assumingMode = null,
+        ?int $productId = null,
+        ?int $productCategoryId = null,
+    ): ?string {
         $mode = $assumingMode ?? $company->commission_override_mode ?? CommissionOverrideMode::Additive;
 
         if (! $mode->deductsFromSeller()) {
@@ -87,7 +102,7 @@ class OverrideDeductionGuard
             return null;
         }
 
-        foreach ($this->sellableProducts($company) as $product) {
+        foreach ($this->productsInScope($company, $productId, $productCategoryId) as $product) {
             $sellerCommission = $this->sellerCommissionSatang($product, $company);
 
             if ($sellerCommission === null) {
@@ -158,13 +173,32 @@ class OverrideDeductionGuard
         return $deepest;
     }
 
-    /** @return Collection<int, Product> */
-    private function sellableProducts(Company $company)
+    /**
+     * The products a rate at this scope can actually be paid on.
+     *
+     * Mirrors CommissionService::resolveOverrideRule()'s ladder from the other
+     * direction: that method asks "which rule applies to this product", this
+     * one asks "which products can this rule reach". The two must describe the
+     * same relationship or the guard measures a rate against money it will
+     * never come out of.
+     *
+     * Note what this deliberately does NOT do: a COMPANY-wide rule is checked
+     * against every sellable product, including ones that also have their own
+     * narrower rate and will therefore never resolve to this one. Being
+     * slightly strict there is the safe direction — the narrow rule can be
+     * deleted tomorrow, and the company-wide rate would then have to fund that
+     * product after all.
+     *
+     * @return Collection<int, Product>
+     */
+    private function productsInScope(Company $company, ?int $productId, ?int $productCategoryId)
     {
         // The same set CommissionReadinessService judges — a product this
         // company does not sell cannot exhaust anything.
         return Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->where(fn ($query) => $query->where('company_id', $company->id)->orWhereNull('company_id'))
+            ->when($productId !== null, fn ($query) => $query->where('id', $productId))
+            ->when($productCategoryId !== null, fn ($query) => $query->where('category_id', $productCategoryId))
             ->get()
             ->filter(fn (Product $product) => $product->isSellableBy((int) $company->id))
             ->values();
