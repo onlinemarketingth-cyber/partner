@@ -5,12 +5,14 @@ namespace App\Http\Requests\Commission;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
 use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductTaxonomy;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class UpdateCommissionOverrideRuleRequest extends FormRequest
 {
     use ValidatesProductOwnership;
+    use ValidatesProductTaxonomy;
 
     public function authorize(): bool
     {
@@ -34,7 +36,30 @@ class UpdateCommissionOverrideRuleRequest extends FormRequest
             ],
             'product_category_id' => [
                 'sometimes', 'nullable', 'integer',
-                Rule::exists('product_categories', 'id')->where('company_id', $companyId),
+                /*
+                 * 2026-09-14 — taxonomyRule(), not a hand-written
+                 * `where('company_id', $companyId)`.
+                 *
+                 * Owner hit this from the screen: "Anti Aging" sat in the
+                 * dropdown, the impact preview listed the three products it
+                 * would change, and บันทึก answered "The selected product
+                 * category id is invalid."
+                 *
+                 * The category is PLATFORM-OWNED (`company_id NULL`, ADR-040
+                 * §1) because the products in it are — a central product
+                 * cannot point at a per-company taxonomy. The old rule
+                 * demanded the category belong to this company, so a
+                 * category-scoped commission rate was IMPOSSIBLE to save for
+                 * any shared catalogue, which is most of them.
+                 *
+                 * This is the identical failure ValidatesProductOwnership was
+                 * written for one field over ("the list offers what the save
+                 * refuses"), and ValidatesProductTaxonomy already carries the
+                 * cure — these Requests simply never adopted it. Another
+                 * company's category stays refused, which was the whole point
+                 * of the original rule.
+                 */
+                $this->taxonomyRule('product_categories', $companyId),
                 Rule::prohibitedIf(fn () => $this->filled('product_id')),
             ],
             'manager_cert_tier_id' => ['sometimes', 'nullable', 'integer', 'exists:cert_tiers,id'],

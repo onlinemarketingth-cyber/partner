@@ -5,6 +5,8 @@ namespace App\Http\Requests\Commission;
 use App\Enums\Ability;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductOwnership;
+use App\Http\Requests\Catalog\Concerns\ValidatesProductTaxonomy;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -27,6 +29,17 @@ use Illuminate\Validation\Rule;
  */
 class PreviewCommissionRateImpactRequest extends FormRequest
 {
+    use ValidatesProductOwnership;
+    use ValidatesProductTaxonomy;
+
+    /** Same resolution as the write Requests: only a Super Admin names a company. */
+    protected function effectiveCompanyId(): ?int
+    {
+        return $this->user()->isSuperAdmin()
+            ? $this->integer('company_id') ?: null
+            : $this->user()->company_id;
+    }
+
     public function authorize(): bool
     {
         return $this->user()->can(Ability::SettingsCommissionPlanUpdate);
@@ -47,8 +60,26 @@ class PreviewCommissionRateImpactRequest extends FormRequest
             'rate_value' => ['required', 'integer', 'min:0'],
             // Same mutual prohibition as the write: at most ONE scope column,
             // both absent = the company-wide default.
-            'product_id' => ['nullable', 'integer', 'exists:products,id', Rule::prohibitedIf(fn () => $this->filled('product_category_id'))],
-            'product_category_id' => ['nullable', 'integer', 'exists:product_categories,id', Rule::prohibitedIf(fn () => $this->filled('product_id'))],
+            /*
+             * 2026-09-14 — the SAME rules as the write, not looser ones.
+             *
+             * These were bare `exists:` checks, and that is how a real bug
+             * stayed hidden for a day: the preview happily reported three
+             * products a platform category would change, and บันทึก then
+             * refused the very same category. A preview that accepts more than
+             * the save is worse than no preview — it is a green light in front
+             * of a closed door.
+             */
+            'product_id' => [
+                'nullable', 'integer',
+                $this->configurableProductRule($this->effectiveCompanyId()),
+                Rule::prohibitedIf(fn () => $this->filled('product_category_id')),
+            ],
+            'product_category_id' => [
+                'nullable', 'integer',
+                $this->taxonomyRule('product_categories', $this->effectiveCompanyId()),
+                Rule::prohibitedIf(fn () => $this->filled('product_id')),
+            ],
             'override_mode' => ['sometimes', 'nullable', Rule::enum(CommissionOverrideMode::class)],
             /*
              * The row being EDITED. Without it an edit reports the rate as the
