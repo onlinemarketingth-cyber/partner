@@ -317,7 +317,10 @@ describe('CommissionPlansView — step 4.2 writes through the commission door', 
     await wrapper.get('[data-test="override-mode-pick-deduct_from_sale"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="override-mode-error"]').exists()).toBe(true)
+    // find(), not get(): get() throws when the element is absent and returns a
+    // wrapper that has no exists() to call, so `get(...).exists()` is a type
+    // error that only `vue-tsc --build` (which type-checks the specs) catches.
+    expect(wrapper.find('[data-test="override-mode-error"]').exists()).toBe(true)
     expect(wrapper.get('[data-test="override-mode-current"]').text()).toContain('บริษัทจ่ายเพิ่ม')
   })
 })
