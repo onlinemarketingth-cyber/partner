@@ -208,9 +208,23 @@ describe('step 3 — which products this company actually sells', () => {
 
     expect(wrapper.get('[data-test="product-row-1"]').attributes('data-selling')).toBe('open')
     expect(wrapper.get('[data-test="product-row-3"]').attributes('data-selling')).toBe('closed')
-    // …and it is a COLOUR, not a status word somebody has to read: the closed
-    // row carries the muted background the catalogue screen uses.
-    expect(wrapper.get('[data-test="product-row-3"]').classes().join(' ')).toContain('bg-slate-50/60')
+    /*
+     * 2026-09-14 — this used to assert the muted `bg-slate-50/60` the
+     * catalogue screen uses, and the mute is what had to go.
+     *
+     * That exact grey was also what a LOCKED box wore, two elements up the
+     * page: one colour answering two questions, which is the mistake red was
+     * making before 2026-09-13 and which the owner hit again from the other
+     * side ("ผมอยากให้การ Lock disable กดเปิดปิด มันชัดเจนกว่านี้").
+     *
+     * "ปิดขายอยู่" is a state the admin chose and can undo in one click, not a
+     * refusal — so it now says so in words, with a dashed border, and the row
+     * stays as readable as any other. The mute is reserved for controls that
+     * genuinely cannot be used.
+     */
+    expect(wrapper.get('[data-test="product-closed-3"]').text()).toBe('ปิดขายอยู่')
+    expect(wrapper.find('[data-test="product-closed-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="product-row-3"]').classes().join(' ')).toContain('border-dashed')
     expect(wrapper.get('[data-test="selling-label-3"]').text()).toBe('ปิดขาย')
   })
 
@@ -455,7 +469,7 @@ describe('A product this company does not sell is shown, but never judged (2026-
     // ...and what step 3 is waiting for is 3.1, not the closed row.
     await goToStep(wrapper, 3)
     expect(wrapper.find('[data-test="substep-focus-3-1"]').exists()).toBe(true)
-    expect(wrapper.get('[data-test="substep-3-3-lock"]').text()).toContain('3.1')
+    expect(wrapper.get('[data-test="substep-3-3-advice"]').text()).toContain('3.1')
   })
 
   it('opens step 3 once the company default exists, closed row and all', async () => {

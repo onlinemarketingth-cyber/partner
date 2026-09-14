@@ -254,19 +254,30 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
     expect(wrapper.find('[data-test="copy-rates-open"]').exists()).toBe(true)
   })
 
-  it('locks the product list with one line that names the cure rather than the refusal', async () => {
-    // A lock with no way out is the dead end the 4-step redesign exists to
-    // remove — the same rule stepLockHint() applies one level up.
+  it('advises about the product list rather than disabling it', async () => {
+    /*
+     * 2026-09-14 — this used to assert a padlock and `opacity-60`.
+     *
+     * Owner: "ผมอยากให้การ Lock disable กดเปิดปิด มันชัดเจนกว่านี้", and the
+     * agreed answer (แนวทาง C) was ONE lock on the screen instead of five.
+     * Disabling this box was doing two jobs and had only earned one: silence
+     * (see the test below — four rows repeating 3.1's single complaint is what
+     * made him say "แดงไปหมด") is worth keeping; REFUSAL is not, because a
+     * product rate written before the company default is unusual, not invalid,
+     * and the server accepts it.
+     *
+     * So the sentence stays and names the consequence, the padlock goes, and
+     * the box stops wearing the same grey as a product that is closed for
+     * sale.
+     */
     const wrapper = await mountView(noDefault)
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="substep-3-3-lock"]').text())
-      .toContain('ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด')
-    expect(wrapper.get('[data-test="step3-products"]').classes().join(' ')).toContain('opacity-60')
-    // The product list is not where you are, so it carries no focus badge.
-    // (It was 3.2 until 2026-09-14, when the category scope took that number
-    // and the products became 3.3 — see the view's own note.)
+    expect(wrapper.get('[data-test="substep-3-3-advice"]').text()).toContain('ค่าเริ่มต้นทั้งบริษัทที่ 3.1')
+    expect(wrapper.get('[data-test="substep-3-3-advice"]').text()).toContain('ไม่มีใครได้เงิน')
+    expect(wrapper.get('[data-test="step3-products"]').classes().join(' ')).not.toContain('opacity-60')
+    // The product list is still not where you are, so it carries no focus badge.
     expect(wrapper.find('[data-test="substep-focus-3-3"]').exists()).toBe(false)
   })
 
@@ -306,22 +317,29 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
     expect(wrapper.get('[data-test="product-row-1"]').text()).toContain('แผน Unilevel')
   })
 
-  it('makes every rate control in 3.2 refuse, visibly, instead of disappearing', async () => {
+  it('leaves every rate control usable, because none of them is actually forbidden', async () => {
     /*
-     * Disabled rather than hidden, deliberately: the house rule hides what a
-     * viewer may NEVER do ("อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน") and
-     * shows what they may do LATER, which is how the step tabs and the footer
-     * button already behave. Hiding these would delete the evidence that 3.2
-     * is where a per-product rate gets set.
+     * 2026-09-14 — the exact inversion of what this test used to assert, and
+     * the reason is worth keeping rather than replacing.
+     *
+     * The old note argued these should be DISABLED rather than hidden, on the
+     * grounds that the house rule hides what a viewer may never do and shows
+     * what they may do later. That reasoning was sound and its premise was
+     * wrong: "later" implied the server would refuse them NOW, and it never
+     * did. A control that refuses something the API accepts is the screen
+     * inventing a rule nobody set — and with five such controls, the one lock
+     * that IS real (3.1, without which a closed deal pays nobody) stopped
+     * standing out, which is precisely what the owner reported.
+     *
+     * The advice line above the list carries the guidance instead.
      */
     const wrapper = await mountView(noDefault)
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-button-1"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="simulate-1"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="add-product-rate"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-test="add-category-rate"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="product-rate-button-1"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="add-product-rate"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="add-category-rate"]').attributes('disabled')).toBeUndefined()
   })
 
   it('leaves the selling switch working, because selling is a catalogue decision', async () => {

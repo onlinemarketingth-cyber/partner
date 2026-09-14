@@ -117,6 +117,18 @@ import CommissionSplitSettingCard from '@/design-system/components/CommissionSpl
  * rather than stopping payment) is the part that must not drift between forms.
  */
 import EffectivePeriodField from '@/design-system/components/EffectivePeriodField.vue'
+/*
+ * 2026-09-14 — the product x layer table (owner's ข้อเสนอ 2). Fed entirely by
+ * GET /commission-resolution; it computes nothing itself. See the component's
+ * own docblock for why that is not an implementation detail.
+ */
+import RateResolutionMatrix, { type ResolutionRow } from '@/design-system/components/RateResolutionMatrix.vue'
+/*
+ * 2026-09-14 — owner's ข้อเสนอ 3. Lives INSIDE both rate forms and updates as
+ * the admin types; see the component's docblock for why it is not a
+ * confirmation step like the copy-rates modal.
+ */
+import RateImpactPreview from '@/design-system/components/RateImpactPreview.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -750,6 +762,7 @@ async function submitRule() {
     // re-fetches products, so the selector correctly disappears on the
     // next "+ เพิ่มกฎคอมมิชชั่น" open for the same product.
     await loadRulesTabData()
+    void loadResolution()
   } catch (e) {
     ruleFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -760,6 +773,9 @@ async function deleteRule(r: CommissionRuleItem) {
   try {
     await commissionApi.delete(`/commission-rules/${r.id}`)
     commissionRules.value = commissionRules.value.filter((x) => x.id !== r.id)
+    // Deleting a rate is the change most likely to drop a product to a
+    // broader rung — or to nobody at all. The table has to say so at once.
+    void loadResolution()
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -958,6 +974,10 @@ async function submitOverrideRule(): Promise<void> {
     }
     resetOverrideForm()
     await loadRulesTabData()
+    // The table is the consequence of what was just saved; leaving it stale
+    // would make the one screen built to show the outcome show the previous
+    // outcome.
+    void loadResolution()
   } catch (e) {
     overrideFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -978,6 +998,7 @@ async function deleteOverrideRule(r: CommissionOverrideRuleItem): Promise<void> 
   try {
     await commissionApi.delete(`/commission-override-rules/${r.id}`)
     commissionOverrideRules.value = commissionOverrideRules.value.filter((x) => x.id !== r.id)
+    void loadResolution()
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -1607,6 +1628,115 @@ async function loadCompanySettings(): Promise<void> {
     deepestManagerChain.value = 0
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-14 — WHAT EACH PRODUCT ACTUALLY PAYS, FROM THE SERVER.
+ *
+ * Owner: "การ setup 3 ระดับ … ส่งผลต่อคำนวณค่าคอมตอน setting ทำได้ไม่ชัดเจน".
+ *
+ * The three edit boxes say what has been SET. This says what HAPPENS — per
+ * product, per rung, in baht. It is a separate request rather than a computed
+ * over `commissionRules` for one reason: this screen already owns a JavaScript
+ * copy of the resolution ladder (`resolveRuleFor`), and the last time that copy
+ * disagreed with the server's, a rate belonging to Thai Life was displayed and
+ * PAID on AIA. A table people read to decide what agents earn is answered by
+ * the code that pays them.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const resolution = ref<{
+  commission_basis?: CommissionBasis
+  max_override_per_level_satang?: number | null
+  products: ResolutionRow[]
+} | null>(null)
+const resolutionLoading = ref(false)
+/** Same loud-failure rule as the basis: no table beats a table that guesses. */
+const resolutionFailed = ref(false)
+
+async function loadResolution(): Promise<void> {
+  if (!effectiveCompanyId.value) {
+    resolution.value = null
+    resolutionFailed.value = false
+
+    return
+  }
+
+  resolutionLoading.value = true
+  try {
+    const r = await api.get<{ data: typeof resolution.value }>(`/commission-resolution${companyQuery()}`)
+    resolution.value = r.data
+    resolutionFailed.value = false
+  } catch {
+    resolution.value = null
+    resolutionFailed.value = true
+  } finally {
+    resolutionLoading.value = false
+  }
+}
+
+const resolutionRows = computed<ResolutionRow[]>(() => resolution.value?.products ?? [])
+
+/**
+ * Open the right rate form for a cell the admin clicked in the table.
+ *
+ * Reuses the EXISTING modals rather than editing in place. A rate is not one
+ * number — it carries a rate type, a period and (for the leader) a deduction
+ * mode, and an inline cell that saved only the percentage would quietly reset
+ * the rest. The click's job is to remove the navigation, not the form.
+ */
+function editFromMatrix(kind: 'agent' | 'leader', payload: { layer: 'company' | 'category' | 'product'; row: ResolutionRow; ruleId: number | null }): void {
+  const { layer, row, ruleId } = payload
+  const existing = ruleId === null
+    ? null
+    : (kind === 'agent'
+      ? byCompany(commissionRules.value).find((r) => r.id === ruleId)
+      : byCompany(commissionOverrideRules.value).find((r) => r.id === ruleId))
+
+  if (kind === 'agent') {
+    if (existing) { openEditRuleForm(existing as CommissionRuleItem); return }
+    openCreateRuleFormWithScope(layer)
+    if (layer === 'product') ruleForm.value.product_id = row.product_id
+    if (layer === 'category' && row.category) ruleForm.value.product_category_id = row.category.id
+
+    return
+  }
+
+  if (existing) { openEditOverrideForm(existing as CommissionOverrideRuleItem); return }
+  openCreateOverrideFormWithScope(layer)
+  if (layer === 'product') overrideForm.value.product_id = row.product_id
+  if (layer === 'category' && row.category) overrideForm.value.product_category_id = row.category.id
+}
+
+/*
+ * The two forms' preview inputs, converted exactly as their SAVE converts them.
+ *
+ * `rateValueToBasisOrSatang` is reused rather than re-derived on purpose: a
+ * preview that rounded differently from the write would be wrong about the one
+ * number the admin is reading it for, and basis points versus percent is the
+ * easiest place in this file to be off by 100.
+ *
+ * NULL while the field is empty, which is what keeps the panel quiet instead of
+ * previewing a rate of zero that nobody typed.
+ */
+function previewRateValue(rateType: RateType, input: string | number): number | null {
+  const trimmed = String(input).trim()
+  if (trimmed === '') return null
+  const value = rateValueToBasisOrSatang(rateType, input)
+
+  return Number.isFinite(value) ? value : null
+}
+
+const ruleFormPreviewValue = computed(() => previewRateValue(effectiveRuleFormRateType.value, ruleForm.value.rate_value_input))
+const overrideFormPreviewValue = computed(() => previewRateValue(overrideForm.value.rate_type, overrideForm.value.rate_value_input))
+
+/** A scope that names nothing yet cannot be previewed without inventing one. */
+const ruleFormPreviewReady = computed(() =>
+  ruleFormPreviewValue.value !== null
+  && (ruleForm.value.scope !== 'product' || !!ruleForm.value.product_id)
+  && (ruleForm.value.scope !== 'category' || !!ruleForm.value.product_category_id))
+
+const overrideFormPreviewReady = computed(() =>
+  overrideFormPreviewValue.value !== null
+  && (overrideForm.value.scope !== 'product' || !!overrideForm.value.product_id)
+  && (overrideForm.value.scope !== 'category' || !!overrideForm.value.product_category_id))
 
 /**
  * The switch itself — PUT /companies/{id}, which is CompanyPolicy::update and
@@ -2780,7 +2910,26 @@ const subStepThreeOneDone = computed(() => companyDefaultRules.value.length > 0)
  * it came from and its selling state all still render while locked. What goes
  * quiet is the four-times-repeated warning and controls a reader never had.
  */
-const subStepThreeTwoLocked = computed(() => !subStepThreeOneDone.value)
+/*
+ * 2026-09-14 — THIS STOPPED BEING A LOCK.
+ *
+ * Owner, on the nine different ways this screen said "you can't": "ผมอยากให้
+ * การ Lock disable กดเปิดปิด มันชัดเจนกว่านี้" — and the agreed shape
+ * (แนวทาง C) was ONE lock on the whole screen, not five.
+ *
+ * Disabling 3.2 and 3.3 was always doing two jobs at once, and only one of
+ * them was earned. The job worth keeping is SILENCE: with no company default
+ * nothing resolves, so every product row was repeating 3.1's single complaint
+ * once per product — four red rows for one cause, which is what made the
+ * owner say "ตอนนี้แดงไปหมด หาไม่เจอต้องทำอะไรก่อนหลัง". The job that was NOT
+ * earned is refusal: a product-scoped rate written before the company default
+ * is unusual, not invalid, and the server accepts it.
+ *
+ * So the warnings stay suppressed and the CONTROLS are open, with one line of
+ * advice instead of a padlock. Renamed from `companyDefaultMissing` so no
+ * future reader re-derives a lock from the name.
+ */
+const companyDefaultMissing = computed(() => !subStepThreeOneDone.value)
 
 /**
  * 3.1's one-line summary once it is done — the VALUE, not the explanation.
@@ -2963,6 +3112,7 @@ async function confirmCopyRates() {
     // Reload before closing: the modal disappearing is the admin's signal that
     // the rows behind it are the new ones, so it must not outrun them.
     await loadRulesTabData()
+    void loadResolution()
     closeCopyRatesModal()
   } catch (e) {
     copyRatesError.value = apiErrorMessage(e, 'คัดลอกไม่สำเร็จ')
@@ -3575,6 +3725,7 @@ watch(() => activeCompany.companyId, () => {
   // could save the previous company's floor onto this one.
   minWithdrawalMessage.value = ''
   void loadMinWithdrawal()
+  void loadResolution()
   if (activeTab.value !== 'rules') void ensureTabLoaded(activeTab.value)
   // The rules tab is deliberately NOT refetched: it loads every company's
   // rows once and narrows them with byCompany(). The readiness probe is
@@ -3606,6 +3757,7 @@ onMounted(async () => {
   await commissionReadiness.ensureLoaded()
   await loadCompanySettings()
   void loadMinWithdrawal()
+  void loadResolution()
   await ensureTabLoaded('rules')
 })
 /*
@@ -4594,10 +4746,7 @@ watch(companyPlanType, (pt) => {
                    an exception to a rule nobody has decided yet. -->
               <div
                 data-test="step3-categories"
-                class="rounded-2xl transition-colors"
-                :class="subStepThreeTwoLocked
-                  ? 'border border-slate-200 bg-slate-50/70 px-4 py-3.5 opacity-60'
-                  : 'border border-slate-200 bg-white px-4 py-3.5'"
+                class="rounded-2xl border border-slate-200 bg-white px-4 py-3.5"
               >
                 <div class="flex flex-wrap items-center gap-2">
                   <span class="text-[13.5px] font-extrabold text-slate-900">3.2 ตามหมวดหมู่สินค้า</span>
@@ -4609,9 +4758,7 @@ watch(companyPlanType, (pt) => {
                   <button
                     v-if="canEditCommissionConfig"
                     type="button"
-                    class="ml-auto px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
-                    :disabled="subStepThreeTwoLocked"
-                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                    class="ml-auto px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 text-xs font-bold hover:bg-slate-50"
                     data-test="add-category-rate"
                     @click="openCreateRuleFormWithScope('category')"
                   >
@@ -4649,7 +4796,7 @@ watch(companyPlanType, (pt) => {
                       มีผล {{ formatDate(r.effective_from) }}{{ r.effective_to ? ` ถึง ${formatDate(r.effective_to)}` : ' — ไม่มีวันสิ้นสุด' }}
                       <span v-if="r.renewal_rate_type"> · ต่ออายุ {{ formatRate(r.renewal_rate_type, r.renewal_rate_value!) }}</span>
                     </span>
-                    <span v-if="canEditCommissionConfig && !subStepThreeTwoLocked" class="ml-auto flex items-center gap-3">
+                    <span v-if="canEditCommissionConfig" class="ml-auto flex items-center gap-3">
                       <button class="text-sm font-bold text-brand-700 hover:underline" @click="openEditRuleForm(r)">แก้ไข</button>
                       <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRule(r)">ลบ</button>
                     </span>
@@ -4667,8 +4814,8 @@ watch(companyPlanType, (pt) => {
               <div
                 data-test="step3-products"
                 class="rounded-2xl transition-colors"
-                :class="subStepThreeTwoLocked
-                  ? 'border border-slate-200 bg-slate-50/70 px-4 py-3.5 opacity-60'
+                :class="companyDefaultMissing
+                  ? 'border border-slate-200 bg-white px-4 py-3.5'
                   : 'border-2 border-brand-500 ring-4 ring-brand-100 bg-brand-50/20 px-4 py-3.5'"
               >
                 <div class="flex flex-wrap items-center gap-2 mb-2">
@@ -4679,28 +4826,33 @@ watch(companyPlanType, (pt) => {
                        lie as marking step 4 ยังไม่ครบ for being skippable, and
                        it is how a badge stops being read. -->
                   <span
-                    v-if="!subStepThreeTwoLocked"
+                    v-if="!companyDefaultMissing"
                     class="text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700 border border-brand-200"
                     data-test="substep-focus-3-3"
                   >
                     ทำต่อได้ตรงนี้
                   </span>
-                  <span v-if="!subStepThreeTwoLocked" class="text-[11.5px] text-slate-400">
+                  <span v-if="!companyDefaultMissing" class="text-[11.5px] text-slate-400">
                     ไม่ต้องแยกทุกตัว — ที่ไม่แยกจะใช้{{ companyDefaultRules[0] ? ` ${formatRate(companyDefaultRules[0].rate_type, companyDefaultRules[0].rate_value)} ` : 'ค่าเริ่มต้น' }}ข้างบน
                   </span>
                 </div>
 
-                <!-- ONE line, and it names the cure rather than the refusal.
-                     A lock with no way out is the dead end the 4-step redesign
-                     exists to remove — see stepLockHint() for the same rule one
-                     level up. -->
+                <!--
+                  2026-09-14 — ADVICE, NOT A PADLOCK.
+                  This was a lock line with a key icon, and it was overstating
+                  its case: a product rate written before the company default
+                  is unusual, not invalid, and the server takes it. What the
+                  admin actually needs to know is the CONSEQUENCE of stopping
+                  here — products they do not list get nothing — and that is a
+                  sentence, not a refusal. The controls below stay open.
+                -->
                 <p
-                  v-if="subStepThreeTwoLocked"
-                  class="mb-2.5 inline-flex items-center gap-2 text-[12.5px] font-bold text-slate-500"
-                  data-test="substep-3-3-lock"
+                  v-if="companyDefaultMissing"
+                  class="mb-2.5 inline-flex items-center gap-2 text-[12.5px] text-slate-500"
+                  data-test="substep-3-3-advice"
                 >
-                  <Icon name="lock" :size="14" class="shrink-0 text-slate-400" />
-                  ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด
+                  <Icon name="info" :size="14" class="shrink-0 text-slate-400" />
+                  แนะนำให้ตั้ง <b>ค่าเริ่มต้นทั้งบริษัทที่ 3.1</b> ก่อน — ไม่อย่างนั้นสินค้าที่ไม่ได้แยกเรตไว้จะไม่มีใครได้เงิน
                 </p>
 
                 <!-- A failed switch has to say so where the switch is. Same
@@ -4734,21 +4886,36 @@ watch(companyPlanType, (pt) => {
                     v-for="p in sellingFirstProducts"
                     :key="p.id"
                     class="rounded-xl border px-4 py-3 transition-colors"
-                    :class="!subStepThreeTwoLocked && productReadiness(p).level === 'bad'
+                    :class="!companyDefaultMissing && productReadiness(p).level === 'bad'
                       ? 'border-rose-200 bg-rose-50'
-                      : (p.is_sellable_here ? 'border-slate-200 bg-white' : 'border-slate-100 bg-slate-50/60')"
+                      : (p.is_sellable_here ? 'border-slate-200 bg-white' : 'border-slate-300 border-dashed bg-white')"
                     :data-test="`product-row-${p.id}`"
                     :data-selling="p.is_sellable_here ? 'open' : 'closed'"
                   >
                     <div class="flex flex-wrap items-center gap-3.5">
                       <div class="flex-1 min-w-[200px]">
+                        <!--
+                          2026-09-14 — A CLOSED PRODUCT IS NO LONGER GREY.
+                          It used to be `bg-slate-50/60` with faded text, which
+                          is the same treatment a LOCKED box wore two elements
+                          up: one colour answering two questions, the exact
+                          mistake red was making before 2026-09-13. "ปิดขายอยู่"
+                          is a state the admin chose and can undo in one click,
+                          not a refusal — so it gets a label and a dashed border,
+                          and the text stays readable.
+                        -->
+                        <span
+                          v-if="p.is_sellable_here === false"
+                          class="mr-2 align-middle text-[11px] font-bold rounded-full px-2 py-0.5 bg-slate-100 text-slate-500"
+                          :data-test="`product-closed-${p.id}`"
+                        >ปิดขายอยู่</span>
                         <p
-                          class="text-sm font-bold"
-                          :class="!subStepThreeTwoLocked && productReadiness(p).level === 'bad'
+                          class="text-sm font-bold inline"
+                          :class="!companyDefaultMissing && productReadiness(p).level === 'bad'
                             ? 'text-rose-800'
-                            : (p.is_sellable_here ? 'text-slate-900' : 'text-slate-400')"
+                            : 'text-slate-900'"
                         >{{ p.name }}</p>
-                        <p class="text-xs" :class="p.is_sellable_here ? 'text-slate-400' : 'text-slate-300'">
+                        <p class="text-xs text-slate-400">
                           {{ p.category?.name ?? 'ไม่มีหมวดหมู่' }}<span v-if="p.price_satang"> · {{ formatSatang(p.price_satang) }}</span>
                           · แผน {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}<span v-if="!p.commission_plan_type"> (สืบทอดจากบริษัท)</span>
                         </p>
@@ -4764,10 +4931,10 @@ watch(companyPlanType, (pt) => {
                            already told you why. -->
                       <span
                         class="text-sm font-extrabold"
-                        :class="resolveRuleFor(p) ? 'text-brand-700' : (subStepThreeTwoLocked ? 'text-slate-400' : 'text-rose-600')"
+                        :class="resolveRuleFor(p) ? 'text-brand-700' : (companyDefaultMissing ? 'text-slate-400' : 'text-rose-600')"
                         :data-test="`product-rate-${p.id}`"
                       >
-                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : (subStepThreeTwoLocked ? '—' : 'ยังไม่มีอัตรา') }}
+                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : (companyDefaultMissing ? '—' : 'ยังไม่มีอัตรา') }}
                       </span>
                       <!-- WHICH LAYER the number came from. Without it, "3.00%"
                            on a product row is indistinguishable from a rate
@@ -4778,7 +4945,7 @@ watch(companyPlanType, (pt) => {
                            keeping it would reinstate the repetition in a
                            smaller font. -->
                       <span
-                        v-if="resolveRuleFor(p) || !subStepThreeTwoLocked"
+                        v-if="resolveRuleFor(p) || !companyDefaultMissing"
                         class="text-[11px] font-bold rounded-full px-2.5 py-1"
                         :class="resolveRuleFor(p) ? (resolveRuleFor(p)!.product ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500') : 'bg-rose-100 text-rose-700'"
                         :data-test="`product-layer-${p.id}`"
@@ -4874,9 +5041,7 @@ watch(companyPlanType, (pt) => {
                              thing 3.1 already says. -->
                         <button
                           type="button"
-                          class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          :disabled="subStepThreeTwoLocked"
-                          :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน' : ''"
+                          class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50"
                           :data-test="`simulate-${p.id}`"
                           @click="openSimulate(p)"
                         >
@@ -4908,9 +5073,7 @@ watch(companyPlanType, (pt) => {
                         <button
                           v-if="canEditCommissionConfig && canSetCommission(p)"
                           type="button"
-                          class="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                          :disabled="subStepThreeTwoLocked"
-                          :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                          class="btn-primary"
                           :data-test="`product-rate-button-${p.id}`"
                           @click="openRuleFormForProduct(p)"
                         >
@@ -4935,7 +5098,7 @@ watch(companyPlanType, (pt) => {
                     <p
                       v-if="!resolveRuleFor(p) && expiredRuleFor(p)"
                       class="mt-2 text-[12.5px] font-bold"
-                      :class="subStepThreeTwoLocked ? 'text-amber-700' : 'text-rose-700'"
+                      :class="companyDefaultMissing ? 'text-amber-700' : 'text-rose-700'"
                       :data-test="`product-expired-${p.id}`"
                     >
                       อัตราหมดอายุ {{ formatDate(expiredRuleFor(p)!.effective_to!) }} — ปิดการขายแล้วไม่มีใครได้เงิน
@@ -4949,7 +5112,7 @@ watch(companyPlanType, (pt) => {
                          exists, per row, for the rows that genuinely have a
                          problem. -->
                     <div
-                      v-else-if="!subStepThreeTwoLocked && productReadiness(p).level !== 'ok'"
+                      v-else-if="!companyDefaultMissing && productReadiness(p).level !== 'ok'"
                       class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
                       :class="productReadiness(p).level === 'bad' ? 'bg-rose-100/60 text-rose-700' : 'bg-amber-50 text-amber-700'"
                     >
@@ -4991,7 +5154,7 @@ watch(companyPlanType, (pt) => {
                         ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม →
                       </button>
                     </div>
-                    <p v-else-if="!subStepThreeTwoLocked" class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
+                    <p v-else-if="!companyDefaultMissing" class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
                   </div>
                 </div>
 
@@ -5002,9 +5165,7 @@ watch(companyPlanType, (pt) => {
                 <div v-if="canEditCommissionConfig" class="flex flex-wrap gap-2.5 mt-3">
                   <button
                     type="button"
-                    class="btn-primary disabled:opacity-40 disabled:cursor-not-allowed"
-                    :disabled="subStepThreeTwoLocked"
-                    :title="subStepThreeTwoLocked ? 'ตั้งค่าเริ่มต้นทั้งบริษัทที่ 3.1 ก่อน แล้วส่วนนี้จะเปิด' : ''"
+                    class="btn-primary"
                     data-test="add-product-rate"
                     @click="openCreateRuleFormWithScope('product')"
                   >
@@ -5021,6 +5182,29 @@ watch(companyPlanType, (pt) => {
                        buttons above ARE the guided path now. -->
                 </div>
               </div>
+
+              <!--
+                THE TABLE (owner's ข้อเสนอ 2, 2026-09-14).
+
+                Placed BELOW the edit boxes and not instead of them, which is
+                the whole shape of the fix: the boxes list the rows that exist
+                — including a category rate that currently covers no product,
+                which has no line in this table at all and would go invisible
+                again, the exact bug that started this. Boxes say what you set;
+                this says what happens.
+              -->
+              <RateResolutionMatrix
+                kind="agent"
+                :rows="resolutionRows"
+                :loading="resolutionLoading"
+                :failed="resolutionFailed"
+                :can-edit="canEditCommissionConfig"
+                :basis-label="commissionBasis === 'pv' ? 'PV' : 'ยอดขาย'"
+                :mode-labels="overrideModeLabels"
+                test-id="step3-resolution"
+                @edit="editFromMatrix('agent', $event)"
+                @retry="loadResolution"
+              />
             </template>
           </section>
 
@@ -5222,6 +5406,29 @@ watch(companyPlanType, (pt) => {
                 </div>
               </div>
 
+
+              <!--
+                THE TABLE (owner's ข้อเสนอ 2, 2026-09-14).
+
+                Placed BELOW the edit boxes and not instead of them, which is
+                the whole shape of the fix: the boxes list the rows that exist
+                — including a category rate that currently covers no product,
+                which has no line in this table at all and would go invisible
+                again, the exact bug that started this. Boxes say what you set;
+                this says what happens.
+              -->
+              <RateResolutionMatrix
+                kind="leader"
+                :rows="resolutionRows"
+                :loading="resolutionLoading"
+                :failed="resolutionFailed"
+                :can-edit="canEditCommissionConfig"
+                :basis-label="commissionBasis === 'pv' ? 'PV' : 'ยอดขาย'"
+                :mode-labels="overrideModeLabels"
+                test-id="step4-resolution"
+                @edit="editFromMatrix('leader', $event)"
+                @retry="loadResolution"
+              />
               <!--
                 ═══ 4.4 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
 
@@ -5744,6 +5951,17 @@ watch(companyPlanType, (pt) => {
                 เลือกอย่างอื่นเพื่อให้อัตรานี้ต่างจากทั้งบริษัท · ดูตัวเลขของแต่ละแบบได้ที่ข้อ 4.4
               </p>
             </div>
+            <RateImpactPreview
+              kind="leader"
+              :company-id="effectiveCompanyId"
+              :rate-type="overrideForm.rate_type"
+              :rate-value="overrideFormPreviewValue"
+              :product-id="overrideForm.scope === 'product' ? Number(overrideForm.product_id) || null : null"
+              :product-category-id="overrideForm.scope === 'category' ? Number(overrideForm.product_category_id) || null : null"
+              :override-mode="overrideForm.override_mode || null"
+              :exclude-rule-id="editingOverrideId"
+              :ready="overrideFormPreviewReady"
+            />
             <EffectivePeriodField
               :from="overrideForm.effective_from"
               :to="overrideForm.effective_to"
@@ -5829,6 +6047,16 @@ watch(companyPlanType, (pt) => {
               <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ effectiveRuleFormRateType === 'percentage' ? percentageOptionLabel : rateTypeLabels.fixed_satang }}</p>
               <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
             </div>
+            <RateImpactPreview
+              kind="agent"
+              :company-id="effectiveCompanyId"
+              :rate-type="effectiveRuleFormRateType"
+              :rate-value="ruleFormPreviewValue"
+              :product-id="ruleForm.scope === 'product' ? Number(ruleForm.product_id) || null : null"
+              :product-category-id="ruleForm.scope === 'category' ? Number(ruleForm.product_category_id) || null : null"
+              :exclude-rule-id="editingRuleId"
+              :ready="ruleFormPreviewReady"
+            />
             <EffectivePeriodField
               :from="ruleForm.effective_from"
               :to="ruleForm.effective_to"

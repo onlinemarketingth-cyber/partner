@@ -38,7 +38,9 @@ use App\Http\Controllers\Api\V1\CommissionMatrixLevelRateController;
 use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
 use App\Http\Controllers\Api\V1\CommissionOverrideRuleController;
 use App\Http\Controllers\Api\V1\CommissionRateCopyController;
+use App\Http\Controllers\Api\V1\CommissionRateImpactController;
 use App\Http\Controllers\Api\V1\CommissionReadinessController;
+use App\Http\Controllers\Api\V1\CommissionResolutionController;
 use App\Http\Controllers\Api\V1\CommissionRuleController;
 use App\Http\Controllers\Api\V1\CommissionSettingController;
 use App\Http\Controllers\Api\V1\CommissionSplitSettingController;
@@ -555,6 +557,31 @@ Route::prefix('v1')->group(function () {
          * create, and a readiness verdict is derived state, never stored.
          */
         Route::get('/commission-readiness', [CommissionReadinessController::class, 'show']);
+
+        /*
+         * 2026-09-14 — the same question as the line above, at a different
+         * grain. Readiness answers "is anybody being paid" in six fields for
+         * a banner that every admin page loads; this answers "what does each
+         * product pay, and from which of the three layers" for the table on
+         * ขั้นที่ 3 and ขั้นที่ 4.
+         *
+         * Same Ability, same single verb, same BR-6 scoping. It is a separate
+         * endpoint because its payload is a COLLECTION — one row per sellable
+         * product — and folding that into the banner's response would put a
+         * catalogue-sized list behind every page load in the console.
+         */
+        Route::get('/commission-resolution', [CommissionResolutionController::class, 'show']);
+
+        /*
+         * 2026-09-14 — what a rate WOULD do, before it does it.
+         *
+         * POST because it carries a body (a whole proposed rate), not because
+         * it writes: this endpoint has no write path at all. Compare
+         * /commission-rules/copy, which pairs a preview and a write behind
+         * `dry_run` and therefore needs a test proving the flag is honoured —
+         * a shape worth avoiding where it is not forced.
+         */
+        Route::post('/commission-rate-impact', [CommissionRateImpactController::class, 'store']);
 
         // ADR-026 (TASK-136) — pipeline templates, READ-ONLY.
         //

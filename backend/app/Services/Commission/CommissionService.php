@@ -19,6 +19,7 @@ use App\Models\Referral;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -756,11 +757,7 @@ class CommissionService
         // Same fix, same day, same reasoning as resolveCommissionRule() above —
         // and it had to be the same fix: a leader paid at another company's
         // override rate is the identical defect one level up the chain.
-        $baseQuery = fn () => CommissionOverrideRule::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $companyId)
-            ->where('effective_from', '<=', now())
-            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
-            ->orderByDesc('effective_from');
+        $baseQuery = $this->liveOverrideRules($companyId);
 
         $rule = $baseQuery()->where('product_id', $product->id)->first();
         if ($rule) {
@@ -775,6 +772,63 @@ class CommissionService
         }
 
         return $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
+    }
+
+    /**
+     * The leader-rate ladder, all three rungs — the twin of
+     * commissionRuleLadder(). See that method for why both shapes exist.
+     *
+     * @return array{product: ?CommissionOverrideRule, category: ?CommissionOverrideRule, company: ?CommissionOverrideRule, winner: ?string}
+     */
+    public function overrideRuleLadder(Product $product, int $companyId): array
+    {
+        $baseQuery = $this->liveOverrideRules($companyId);
+
+        $atProduct = $baseQuery()->where('product_id', $product->id)->first();
+        $atCategory = $product->category_id
+            ? $baseQuery()->whereNull('product_id')->where('product_category_id', $product->category_id)->first()
+            : null;
+        $atCompany = $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
+
+        return [
+            'product' => $atProduct,
+            'category' => $atCategory,
+            'company' => $atCompany,
+            'winner' => $atProduct ? 'product' : ($atCategory ? 'category' : ($atCompany ? 'company' : null)),
+        ];
+    }
+
+    /** @return callable(): Builder<CommissionOverrideRule> */
+    private function liveOverrideRules(int $companyId): callable
+    {
+        return fn () => CommissionOverrideRule::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('effective_from', '<=', now())
+            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
+            ->orderByDesc('effective_from');
+    }
+
+    /**
+     * PUBLIC as of 2026-09-14 so the resolution screen can ask the same
+     * question the payout asks. It was private only because nothing outside
+     * had needed it yet; a second copy of this ladder living in a read model
+     * is exactly what the Thai-Life-rate-on-AIA bug was made of.
+     */
+    public function resolveLeaderRule(Product $product, int $companyId): ?CommissionOverrideRule
+    {
+        return $this->resolveOverrideRule($product, $companyId);
+    }
+
+    /** The company-level default, exposed for the same reason as above. */
+    public function companyOverrideMode(?Company $company): CommissionOverrideMode
+    {
+        return $this->overrideModeFor($company);
+    }
+
+    /** How the mode for THIS product is settled — rule first, then company. */
+    public function effectiveOverrideMode(?CommissionOverrideRule $rule, ?Company $company): CommissionOverrideMode
+    {
+        return $this->overrideModeForRule($rule, $this->overrideModeFor($company));
     }
 
     /**
@@ -900,11 +954,7 @@ class CommissionService
          * `withoutGlobalScopes()` so that a scope added to this model later
          * (a soft delete, say) is not silently stripped along with it.
          */
-        $baseQuery = fn () => CommissionRule::withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $companyId)
-            ->where('effective_from', '<=', now())
-            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
-            ->orderByDesc('effective_from');
+        $baseQuery = $this->liveCommissionRules($companyId);
 
         $rule = $baseQuery()->where('product_id', $product->id)->first();
         if ($rule) {
@@ -919,6 +969,71 @@ class CommissionService
         }
 
         return $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
+    }
+
+    /**
+     * 2026-09-14 — THE SAME LADDER, BUT ALL THREE RUNGS AT ONCE.
+     *
+     * Owner: the admin screen has to show which layer won AND which layers
+     * lost, for every product, because "ทำไมตั้งแล้วไม่เปลี่ยน" is almost
+     * always "a narrower rate is sitting on top of it".
+     *
+     * ── WHY THIS IS NOT resolveCommissionRule() REWRITTEN ──
+     *
+     * resolveCommissionRule() SHORT-CIRCUITS: a product with its own rate
+     * costs one query, and it runs on every confirmed sale. Rewriting it in
+     * terms of this method would make the money path do three queries to
+     * discard two — a real cost paid on the hot path to serve a screen.
+     *
+     * So the two coexist, and what stops them drifting is that they share
+     * liveCommissionRules() (the company scoping, the date window and the
+     * ordering — the parts that were actually wrong in the 2026-09-12 bug)
+     * plus RateLadderAgreementTest, which asserts row by row that this
+     * method's winner IS what resolveCommissionRule() returns. That is the
+     * same discipline CommissionReadinessService already carries.
+     *
+     * @return array{product: ?CommissionRule, category: ?CommissionRule, company: ?CommissionRule, winner: ?string}
+     */
+    public function commissionRuleLadder(Product $product, int $companyId): array
+    {
+        $baseQuery = $this->liveCommissionRules($companyId);
+
+        $atProduct = $baseQuery()->where('product_id', $product->id)->first();
+        // NULL rather than "not found" when the product has no category at
+        // all: the screen has to tell "this rung is empty" from "this rung
+        // does not apply to this product", and a product with no category
+        // skips the middle of the ladder entirely.
+        $atCategory = $product->category_id
+            ? $baseQuery()->whereNull('product_id')->where('product_category_id', $product->category_id)->first()
+            : null;
+        $atCompany = $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
+
+        return [
+            'product' => $atProduct,
+            'category' => $atCategory,
+            'company' => $atCompany,
+            'winner' => $atProduct ? 'product' : ($atCategory ? 'category' : ($atCompany ? 'company' : null)),
+        ];
+    }
+
+    /**
+     * The one place the company scope, the date window and the tie-break live
+     * for agent rates.
+     *
+     * Returned as a CLOSURE, not a query: Eloquent builders are stateful, so
+     * three rungs off one builder would inherit each other's where clauses —
+     * which is a bug that reads as "the category rate mysteriously never
+     * matches".
+     *
+     * @return callable(): Builder<CommissionRule>
+     */
+    private function liveCommissionRules(int $companyId): callable
+    {
+        return fn () => CommissionRule::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $companyId)
+            ->where('effective_from', '<=', now())
+            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
+            ->orderByDesc('effective_from');
     }
 
     // BR-3: satang stays an integer end to end. Shared by direct-sale,

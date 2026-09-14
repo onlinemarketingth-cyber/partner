@@ -1371,16 +1371,22 @@ describe('CommissionPlansView — step 3.2 gives the category scope a home', () 
     expect(wrapper.get('[data-test="step3-categories-empty"]').text()).toContain('ค่าเริ่มต้นทั้งบริษัท')
   })
 
-  it('moves the add button into 3.2 and keeps it locked behind 3.1', async () => {
-    // A category rate written before the company default exists is an
-    // exception to a rule nobody has decided yet — the same lock the product
-    // list carries, now beside the rows it produces instead of two boxes away.
+  it('moves the add button into 3.2, beside the rows it creates', async () => {
+    /*
+     * It used to live two boxes away, with the product buttons, which is how
+     * the category scope became writable-and-invisible in the first place.
+     *
+     * It is NOT disabled while 3.1 is empty (2026-09-14, แนวทาง C): the server
+     * accepts a category rate without a company default, so refusing it here
+     * would be the screen inventing a rule. The advice line on 3.3 carries the
+     * guidance.
+     */
     const wrapper = await mountView({ products: [product()], rules: [] })
 
     await goToStep(wrapper, 3)
 
     const button = wrapper.get('[data-test="step3-categories"] [data-test="add-category-rate"]')
-    expect((button.element as HTMLButtonElement).disabled).toBe(true)
+    expect((button.element as HTMLButtonElement).disabled).toBe(false)
   })
 })
 
@@ -1425,7 +1431,7 @@ describe('CommissionPlansView — a rate outside its dates is marked, never hidd
     await goToStep(wrapper, 3)
 
     expect(wrapper.get('[data-test="company-default-pill"]').text()).toBe('ยังไม่มี')
-    expect(wrapper.find('[data-test="substep-3-3-lock"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="substep-3-3-advice"]').exists()).toBe(true)
   })
 
   it('shows an expired rate too, labelled หมดอายุแล้ว', async () => {
