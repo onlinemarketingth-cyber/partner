@@ -97,16 +97,26 @@ import { useCommissionRateCapGuard } from '@/composables/useCommissionRateCap'
 // TASK-199 — พ.ศ. calendar consistency: same component ProductEditView.vue
 // already uses for effective_from, swapped in here for every date input in
 // this file (was plain native <input type="date">, ค.ศ. only).
-import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
-// Same combo as voucher validity (TASK-189 follow-up v3) / ProductEditView's
-// commission-rule dates (2026-08-17 follow-up) — a real clickable calendar
-// alongside the dropdowns, sharing one v-model. Native <input type="date">
-// used to give a browser calendar icon for free; swapping to
-// BuddhistDateInput (TASK-199) dropped that affordance, so this restores it
-// consistently everywhere in this file.
-import CalendarDatePicker from '@/design-system/components/CalendarDatePicker.vue'
+/*
+ * 2026-09-14 — BuddhistDateInput and CalendarDatePicker are no longer imported
+ * here. Every date on this screen now goes through EffectivePeriodField, which
+ * owns both of them plus the "ใช้ตลอด" default. Importing them directly again
+ * would be a way to add a fifth date control that skips that default — which is
+ * the thing the owner asked to remove.
+ *
+ * (The pair itself is unchanged: a real clickable calendar alongside the Thai
+ * dropdowns, sharing one v-model — TASK-189 v3 / TASK-199.)
+ */
 // 2026-09-12 — moved in from its own route; see the step-4 block for why.
 import CommissionSplitSettingCard from '@/design-system/components/CommissionSplitSettingCard.vue'
+/*
+ * 2026-09-14 — "ใช้ตลอด" is the default and the dates are an option, on every
+ * commission form (owner). One component rather than four copies of the same
+ * two pickers: the pickers were identical everywhere and the RULE about them
+ * (what "always" saves, and that an end date drops the product down the ladder
+ * rather than stopping payment) is the part that must not drift between forms.
+ */
+import EffectivePeriodField from '@/design-system/components/EffectivePeriodField.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -629,6 +639,9 @@ function resetRuleForm() {
     renewal_recurs: false,
   }
   editingRuleId.value = null
+  // A NEW rate's "ใช้ตลอด" means "starts today"; the carried-forward dates
+  // above only matter once the admin opens the ช่วงเวลา option.
+  ruleFormFallbackFrom.value = todayIso()
   showRuleForm.value = false
   ruleFormError.value = ''
   ruleCapGuard.reset()
@@ -642,12 +655,19 @@ function openEditRuleForm(r: CommissionRuleItem) {
     product_category_id: r.product_category?.id ?? '',
     rate_type: r.rate_type,
     rate_value_input: r.rate_type === 'percentage' ? r.rate_value / 100 : r.rate_value / 100,
-    effective_from: r.effective_from,
-    effective_to: r.effective_to ?? '',
+    // Sliced for the same reason openEditOverrideForm() has always sliced:
+    // the API may send a full ISO timestamp, and every consumer of this field
+    // — the date input, the string comparison in EffectivePeriodField — wants
+    // the calendar day.
+    effective_from: r.effective_from.slice(0, 10),
+    effective_to: r.effective_to?.slice(0, 10) ?? '',
     renewal_rate_type: r.renewal_rate_type ?? '',
     renewal_rate_value_input: r.renewal_rate_type ? (r.renewal_rate_value ?? 0) / 100 : '',
     renewal_recurs: r.renewal_recurs,
   }
+  // "ใช้ตลอด" on an EXISTING rate keeps the day it actually began — editing
+  // the percentage must not quietly restamp when the rate started.
+  ruleFormFallbackFrom.value = r.effective_from.slice(0, 10)
   showRuleForm.value = true
 }
 function rateValueToBasisOrSatang(rateType: RateType, input: string | number): number {
@@ -827,6 +847,25 @@ const overrideForm = ref({
   effective_to: '',
 })
 
+/*
+ * 2026-09-14 — what "ใช้ตลอด" resolves `effective_from` to, per form.
+ *
+ * TODAY while creating; the rule's OWN stored start date while editing. A
+ * single shared "today" would re-stamp an existing rate with the current date
+ * every time somebody opened it to change the percentage — quietly rewriting
+ * when that rate began, which is a fact reports and audit rows are read
+ * against. See EffectivePeriodField's docblock.
+ *
+ * Also the signal the field watches to re-derive its mode: it changes exactly
+ * when the parent swaps which record the modal is editing, and never while
+ * somebody is picking a date.
+ */
+const todayIso = (): string => new Date().toISOString().slice(0, 10)
+const overrideFormFallbackFrom = ref(todayIso())
+const ruleFormFallbackFrom = ref(todayIso())
+const levelRateFormFallbackFrom = ref(todayIso())
+const generationRuleFormFallbackFrom = ref(todayIso())
+
 function resetOverrideForm(): void {
   showOverrideForm.value = false
   editingOverrideId.value = null
@@ -838,9 +877,10 @@ function resetOverrideForm(): void {
     rate_type: 'percentage',
     rate_value_input: '',
     override_mode: '',
-    effective_from: new Date().toISOString().slice(0, 10),
+    effective_from: todayIso(),
     effective_to: '',
   }
+  overrideFormFallbackFrom.value = todayIso()
 }
 
 function openCreateOverrideForm(): void {
@@ -877,6 +917,7 @@ function openEditOverrideForm(r: CommissionOverrideRuleItem): void {
     effective_from: r.effective_from.slice(0, 10),
     effective_to: r.effective_to?.slice(0, 10) ?? '',
   }
+  overrideFormFallbackFrom.value = r.effective_from.slice(0, 10)
   showOverrideForm.value = true
 }
 
@@ -2644,6 +2685,38 @@ const companyDefaultRules = computed<CommissionRuleItem[]>(() => {
 
   return byCompany(commissionRules.value).filter((r) => !r.product && !r.product_category && isRuleActiveOn(r, now))
 })
+
+/* ── 2026-09-14 — A RATE THAT IS NOT LIVE *TODAY* IS STILL A RATE ──
+ *
+ * Found while answering "แล้วถ้าผู้ใช้ไม่ตั้งวันเริ่มต้น/หมดอายุสัก 1 อันล่ะ".
+ *
+ * Every list on step 3 filtered to rows that are live RIGHT NOW, which reads
+ * as reasonable and is the same defect as the invisible category scope, one
+ * dimension over. A rule dated to start next month, or one that ended
+ * yesterday, simply vanished from the screen — while still being a row in the
+ * table. And the overlap guard still counts it: the admin is refused with
+ * "ขอบเขตนี้มีอัตราครอบคลุมช่วงเวลานี้อยู่แล้ว", pointing at a row the screen
+ * will not show them and gives them no way to edit or delete.
+ *
+ * So the LISTS show every row and mark the ones that are not live; the GATING
+ * and the pills keep reading the live-today sets, because "is anybody being
+ * paid today" is a different question and a rate that starts in October does
+ * not answer it.
+ */
+const companyDefaultRulesAll = computed<CommissionRuleItem[]>(() =>
+  byCompany(commissionRules.value).filter((r) => !r.product && !r.product_category))
+
+const categoryRulesAll = computed<CommissionRuleItem[]>(() =>
+  byCompany(commissionRules.value).filter((r) => !r.product && !!r.product_category))
+
+/** null while a rate is live today; otherwise why it is not. */
+function ruleDateStatus(r: { effective_from: string; effective_to: string | null }): string | null {
+  const now = new Date()
+  if (now < new Date(r.effective_from)) return 'ยังไม่เริ่ม'
+  if (r.effective_to && now > new Date(r.effective_to)) return 'หมดอายุแล้ว'
+
+  return null
+}
 
 /**
  * The CATEGORY-scoped agent rates that are live today (step 3.2).
@@ -4434,15 +4507,24 @@ watch(companyPlanType, (pt) => {
                   </span>
                 </div>
 
-                <div v-if="companyDefaultRules.length" class="space-y-2">
+                <div v-if="companyDefaultRulesAll.length" class="space-y-2">
                   <div
-                    v-for="r in companyDefaultRules"
+                    v-for="r in companyDefaultRulesAll"
                     :key="r.id"
                     class="flex flex-wrap items-center gap-3.5 rounded-xl border px-4 py-3"
-                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : ruleDateStatus(r) ? 'border-slate-200 bg-slate-50/70' : 'border-slate-200'"
                     :data-test="`company-default-rule-${r.id}`"
                   >
                     <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <!-- Marked, not hidden. A row outside its dates is not
+                         paying anybody today and still blocks a new rate from
+                         being created over it — so it has to be visible and
+                         deletable, with the reason on its face. -->
+                    <span
+                      v-if="ruleDateStatus(r)"
+                      class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-slate-200 text-slate-600"
+                      :data-test="`rule-date-status-${r.id}`"
+                    >{{ ruleDateStatus(r) }}</span>
                     <span v-if="conflictingRuleIds.has(r.id)" class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-rose-100 text-rose-700">ซ้อนทับ</span>
                     <span class="text-sm font-extrabold text-slate-900">ค่าเริ่มต้นทั้งบริษัท</span>
                     <span class="text-sm font-extrabold text-brand-700">{{ formatRate(r.rate_type, r.rate_value) }}</span>
@@ -4522,7 +4604,7 @@ watch(companyPlanType, (pt) => {
                   <span
                     class="text-[11px] font-bold rounded-full px-2 py-0.5"
                     :class="categoryRules.length ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-400'"
-                  >{{ categoryRules.length }}</span>
+                  >{{ categoryRulesAll.length }}</span>
                   <span class="text-[11.5px] text-slate-400">ไม่บังคับ — ใช้เมื่อทั้งหมวดมาร์จิ้นต่างจากค่าเริ่มต้น</span>
                   <button
                     v-if="canEditCommissionConfig"
@@ -4537,18 +4619,23 @@ watch(companyPlanType, (pt) => {
                   </button>
                 </div>
 
-                <p v-if="!categoryRules.length" class="mt-2 text-[12px] text-slate-400" data-test="step3-categories-empty">
+                <p v-if="!categoryRulesAll.length" class="mt-2 text-[12px] text-slate-400" data-test="step3-categories-empty">
                   ยังไม่ได้ตั้ง — ทุกหมวดใช้ค่าเริ่มต้นทั้งบริษัทข้างบน
                 </p>
                 <TransitionGroup v-else tag="div" name="list-fade" class="mt-2 space-y-2">
                   <div
-                    v-for="r in categoryRules"
+                    v-for="r in categoryRulesAll"
                     :key="`category-rule-${r.id}`"
                     class="flex flex-wrap items-center gap-3 rounded-xl border px-4 py-2.5"
-                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : 'border-slate-200'"
+                    :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : ruleDateStatus(r) ? 'border-slate-200 bg-slate-50/70' : 'border-slate-200'"
                     :data-test="`category-rule-${r.id}`"
                   >
                     <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <span
+                      v-if="ruleDateStatus(r)"
+                      class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-slate-200 text-slate-600"
+                      :data-test="`rule-date-status-${r.id}`"
+                    >{{ ruleDateStatus(r) }}</span>
                     <span v-if="conflictingRuleIds.has(r.id)" class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-rose-100 text-rose-700">ซ้อนทับ</span>
                     <span class="text-sm font-extrabold text-slate-900">{{ r.product_category?.name }}</span>
                     <span class="text-sm font-extrabold text-brand-700">{{ formatRate(r.rate_type, r.rate_value) }}</span>
@@ -5097,6 +5184,11 @@ watch(companyPlanType, (pt) => {
                       >
                         <div class="min-w-0">
                           <p class="text-sm font-bold text-slate-900">
+                            <span
+                              v-if="ruleDateStatus(r)"
+                              class="mr-2 px-2 py-0.5 rounded-md bg-slate-200 text-slate-600 text-[11px] align-middle"
+                              :data-test="`leader-rule-date-status-${r.id}`"
+                            >{{ ruleDateStatus(r) }}</span>
                             <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
                             {{ leaderRowLabel(r) }}
                             <span class="ml-1.5 text-amber-800">{{ formatRate(r.rate_type, r.rate_value) }}</span>
@@ -5121,7 +5213,7 @@ watch(companyPlanType, (pt) => {
                           </p>
                         </div>
                         <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
-                          <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditOverrideForm(r)">แก้ไข</button>
+                          <button class="text-sm font-bold text-slate-500 hover:text-slate-700" :data-test="`edit-leader-rule-${r.id}`" @click="openEditOverrideForm(r)">แก้ไข</button>
                           <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
                         </div>
                       </div>
@@ -5652,20 +5744,14 @@ watch(companyPlanType, (pt) => {
                 เลือกอย่างอื่นเพื่อให้อัตรานี้ต่างจากทั้งบริษัท · ดูตัวเลขของแต่ละแบบได้ที่ข้อ 4.4
               </p>
             </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="overrideForm.effective_from" required />
-                <CalendarDatePicker v-model="overrideForm.effective_from" />
-              </div>
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="overrideForm.effective_to" />
-                <CalendarDatePicker v-model="overrideForm.effective_to" />
-              </div>
-            </div>
+            <EffectivePeriodField
+              :from="overrideForm.effective_from"
+              :to="overrideForm.effective_to"
+              @update:to="overrideForm.effective_to = $event"
+              :fallback-from="overrideFormFallbackFrom"
+              :test-id="'override-period'"
+              @update:from="overrideForm.effective_from = $event"
+            />
           </div>
         </div>
         <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
@@ -5743,20 +5829,14 @@ watch(companyPlanType, (pt) => {
               <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ effectiveRuleFormRateType === 'percentage' ? percentageOptionLabel : rateTypeLabels.fixed_satang }}</p>
               <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
             </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="ruleForm.effective_from" required />
-                <CalendarDatePicker v-model="ruleForm.effective_from" />
-              </div>
-            </div>
-            <div>
-              <label class="text-sm font-bold text-slate-500">มีผลถึง (ไม่บังคับ)</label>
-              <div class="mt-1 flex flex-wrap items-start gap-2">
-                <BuddhistDateInput v-model="ruleForm.effective_to" />
-                <CalendarDatePicker v-model="ruleForm.effective_to" />
-              </div>
-            </div>
+            <EffectivePeriodField
+              :from="ruleForm.effective_from"
+              :to="ruleForm.effective_to"
+              @update:to="ruleForm.effective_to = $event"
+              :fallback-from="ruleFormFallbackFrom"
+              :test-id="'rule-period'"
+              @update:from="ruleForm.effective_from = $event"
+            />
           </div>
         </div>
         <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
@@ -5945,13 +6025,13 @@ watch(companyPlanType, (pt) => {
             <label class="text-sm font-bold text-slate-500">{{ levelRateForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
             <input v-model="levelRateForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
-          <div>
-            <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-            <div class="mt-1 flex flex-wrap items-start gap-2">
-              <BuddhistDateInput v-model="levelRateForm.effective_from" required />
-              <CalendarDatePicker v-model="levelRateForm.effective_from" />
-            </div>
-          </div>
+          <EffectivePeriodField
+            :from="levelRateForm.effective_from"
+            :fallback-from="levelRateFormFallbackFrom"
+            :supports-end-date="false"
+            :test-id="'level-rate-period'"
+            @update:from="levelRateForm.effective_from = $event"
+          />
         </div>
         <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
           <!-- TASK-216 r2 — added with the modal conversion: an inline panel
@@ -6042,13 +6122,13 @@ watch(companyPlanType, (pt) => {
             <label class="text-sm font-bold text-slate-500">{{ generationRuleForm.rate_type === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
             <input v-model="generationRuleForm.rate_value_input" type="number" min="0" step="0.01" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
-          <div>
-            <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
-            <div class="mt-1 flex flex-wrap items-start gap-2">
-              <BuddhistDateInput v-model="generationRuleForm.effective_from" required />
-              <CalendarDatePicker v-model="generationRuleForm.effective_from" />
-            </div>
-          </div>
+          <EffectivePeriodField
+            :from="generationRuleForm.effective_from"
+            :fallback-from="generationRuleFormFallbackFrom"
+            :supports-end-date="false"
+            :test-id="'generation-rule-period'"
+            @update:from="generationRuleForm.effective_from = $event"
+          />
         </div>
         <div class="shrink-0 pt-3 mt-1 border-t border-slate-100 flex justify-end gap-2">
           <button type="button" class="btn-secondary" @click="showGenerationRuleForm = false">ยกเลิก</button>

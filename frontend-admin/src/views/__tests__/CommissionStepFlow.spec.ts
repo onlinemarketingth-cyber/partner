@@ -1383,3 +1383,65 @@ describe('CommissionPlansView — step 3.2 gives the category scope a home', () 
     expect((button.element as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+describe('CommissionPlansView — a rate outside its dates is marked, never hidden', () => {
+  /*
+   * 2026-09-14 — found while answering "แล้วถ้าผู้ใช้ไม่ตั้งวันเริ่มต้น/หมดอายุ
+   * สัก 1 อันล่ะ".
+   *
+   * Step 3's lists filtered to rows live RIGHT NOW, so a rate dated to start
+   * next month vanished from the screen — while still being a row in the
+   * table that the overlap guard counts. The admin was refused with
+   * "ขอบเขตนี้มีอัตราครอบคลุมช่วงเวลานี้อยู่แล้ว", about a row the screen
+   * would not show them and gave them no way to edit or delete.
+   *
+   * A refusal pointing at something invisible is the worst shape a refusal
+   * can take, so the rows are shown and labelled instead.
+   */
+  const NEXT_YEAR = `${new Date().getFullYear() + 1}-10-01`
+  const LAST_YEAR = `${new Date().getFullYear() - 1}-01-01`
+
+  it('shows a future-dated company default, labelled ยังไม่เริ่ม', async () => {
+    const wrapper = await mountView({
+      products: [product()],
+      rules: [companyDefaultRule({ id: 40, effective_from: NEXT_YEAR })],
+    })
+
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.find('[data-test="company-default-rule-40"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="rule-date-status-40"]').text()).toBe('ยังไม่เริ่ม')
+  })
+
+  it('still calls 3.1 unfinished while that rate is only scheduled', async () => {
+    // The row being visible must not be mistaken for the job being done: a
+    // rate that starts next October pays nobody today, and "is anybody being
+    // paid" is the question the pill and the lock answer.
+    const wrapper = await mountView({
+      products: [product()],
+      rules: [companyDefaultRule({ id: 40, effective_from: NEXT_YEAR })],
+    })
+
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="company-default-pill"]').text()).toBe('ยังไม่มี')
+    expect(wrapper.find('[data-test="substep-3-3-lock"]').exists()).toBe(true)
+  })
+
+  it('shows an expired rate too, labelled หมดอายุแล้ว', async () => {
+    const wrapper = await mountView({
+      products: [product()],
+      rules: [
+        companyDefaultRule(),
+        companyDefaultRule({ id: 41, effective_from: LAST_YEAR, effective_to: LAST_YEAR }),
+      ],
+    })
+
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="rule-date-status-41"]').text()).toBe('หมดอายุแล้ว')
+    // The live one carries no badge — the label means something only while it
+    // is the exception.
+    expect(wrapper.find('[data-test="rule-date-status-10"]').exists()).toBe(false)
+  })
+})
