@@ -1451,3 +1451,62 @@ describe('CommissionPlansView — a rate outside its dates is marked, never hidd
     expect(wrapper.find('[data-test="rule-date-status-10"]').exists()).toBe(false)
   })
 })
+
+describe('CommissionPlansView — a product row opens a PRODUCT rate, and only that', () => {
+  /*
+   * Owner, 2026-09-14: "ตอนแก้ไขสินค้า ค่าคอมก็ยังมีตัวเลือกให้ปรับที่หมวดและ
+   * บริษัท ซึ่งมันจะทำให้สับสนและทำงานผิดพลาดได้".
+   *
+   * This was the worst surviving instance of the scope being re-asked, because
+   * the modal's own heading names the product: an admin reading "สินค้า: …"
+   * could nudge the first dropdown and save a rate that silently moved every
+   * product in the company.
+   *
+   * The same button also carried a second defect — its label read from
+   * whatever rate RESOLVED, so a product merely inheriting the company default
+   * was offered "แก้ไข" and given a blank create form, while a product with
+   * its own rate was offered "แก้ไข" and sent to create a duplicate the
+   * overlap guard then refused.
+   */
+  it('fixes the scope to this product', async () => {
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 3)
+    await wrapper.get('[data-test="product-rate-button-1"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="rule-form-scope-fixed"]').text()).toContain('ตามสินค้า')
+    expect(wrapper.find('[data-test="rule-form-scope"]').exists()).toBe(false)
+  })
+
+  it('says "ตั้ง" for a product that only inherits, not "แก้ไข"', async () => {
+    // It has a rate — the company default — but it does not have ITS OWN rate,
+    // and only the second one can be edited.
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
+
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.get('[data-test="product-rate-button-1"]').text()).toContain('ตั้งอัตราเฉพาะสินค้านี้')
+  })
+
+  it('edits the existing row instead of creating a duplicate', async () => {
+    /*
+     * The old path called resetRuleForm() and posted a NEW rate, which the
+     * server rejects with "ขอบเขตนี้มีอัตราครอบคลุมช่วงเวลานี้อยู่แล้ว" — a
+     * refusal about the very row the admin believed they were editing.
+     */
+    const ownRule = companyDefaultRule({ id: 55, product: { id: 1, name: 'AIA Health Plus' }, rate_value: 800 })
+    const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule(), ownRule] })
+
+    await goToStep(wrapper, 3)
+    expect(wrapper.get('[data-test="product-rate-button-1"]').text()).toContain('แก้ไขอัตราของสินค้านี้')
+
+    await wrapper.get('[data-test="product-rate-button-1"]').trigger('click')
+    await flushPromises()
+
+    // The rate field is pre-filled from the existing row — proof the form is
+    // editing it rather than starting blank.
+    const input = wrapper.findAll('input[type="number"]')[0]!
+    expect((input.element as HTMLInputElement).value).toBe('8')
+  })
+})

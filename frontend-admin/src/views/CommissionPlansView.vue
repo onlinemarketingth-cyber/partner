@@ -654,6 +654,7 @@ function resetRuleForm() {
   // A NEW rate's "ใช้ตลอด" means "starts today"; the carried-forward dates
   // above only matter once the admin opens the ช่วงเวลา option.
   ruleFormFallbackFrom.value = todayIso()
+  ruleFormScopeLocked.value = false
   showRuleForm.value = false
   ruleFormError.value = ''
   ruleCapGuard.reset()
@@ -680,6 +681,7 @@ function openEditRuleForm(r: CommissionRuleItem) {
   // "ใช้ตลอด" on an EXISTING rate keeps the day it actually began — editing
   // the percentage must not quietly restamp when the rate started.
   ruleFormFallbackFrom.value = r.effective_from.slice(0, 10)
+  ruleFormScopeLocked.value = true
   showRuleForm.value = true
 }
 function rateValueToBasisOrSatang(rateType: RateType, input: string | number): number {
@@ -878,6 +880,26 @@ const overrideForm = ref({
  */
 const todayIso = (): string => new Date().toISOString().slice(0, 10)
 const overrideFormFallbackFrom = ref(todayIso())
+/* ── 2026-09-14 — THE SCOPE IS NOT A QUESTION WHEN IT HAS ALREADY BEEN ANSWERED ──
+ *
+ * Owner: "ผมคลิกเข้ามาที่หน้าหมวดหมู่แล้ว ขอบเขตยังต้องเลือกซ้ำอีกเหรอ
+ * มันไม่ควรแล้วนะครับ".
+ *
+ * He is right, and the redundancy came from the 3-box redesign rather than
+ * surviving it: pressing "+ เพิ่มอัตราของหมวดหมู่" in 3.2, or a cell in the
+ * resolution table, ANSWERS the scope question. Re-asking it in the first
+ * field of the form does three bad things at once — it takes the most
+ * prominent slot for a decision already made, it reads as "you must choose
+ * again", and it is the one field that can silently undo the box the admin
+ * thought they were working in.
+ *
+ * So the scope becomes a STATEMENT with a "เปลี่ยน" escape hatch. Not simply
+ * hidden: an admin who opened the wrong box must be able to correct it
+ * without cancelling and hunting for the right button — a form that locks you
+ * out of your own mistake is the dead end this whole screen keeps removing.
+ */
+const overrideFormScopeLocked = ref(false)
+const ruleFormScopeLocked = ref(false)
 const ruleFormFallbackFrom = ref(todayIso())
 const levelRateFormFallbackFrom = ref(todayIso())
 const generationRuleFormFallbackFrom = ref(todayIso())
@@ -897,12 +919,28 @@ function resetOverrideForm(): void {
     effective_to: '',
   }
   overrideFormFallbackFrom.value = todayIso()
+  overrideFormScopeLocked.value = false
 }
 
-function openCreateOverrideForm(): void {
-  resetOverrideForm()
-  showOverrideForm.value = true
+const ruleScopeLabels: Record<RuleScope, string> = {
+  company: 'ค่าเริ่มต้นทั้งบริษัท',
+  category: 'ตามหมวดหมู่สินค้า',
+  product: 'ตามสินค้า',
 }
+
+/*
+ * 2026-09-14 — openCreateOverrideForm() (no scope) WAS HERE AND IS GONE.
+ *
+ * It was the last caller that opened a rate form without answering the scope,
+ * and it had no caller left of its own: splitting 4.1 into three boxes gave
+ * every + button a scope, and the resolution table's cells carry one too.
+ *
+ * Deleted rather than kept "just in case", deliberately. A dead opener that
+ * leaves the scope unlocked is exactly what somebody wires a new button to six
+ * months from now, quietly reintroducing the thing the owner reported twice in
+ * one day — a form whose most prominent field can move a rate out of the box
+ * it was opened from.
+ */
 
 /**
  * 2026-09-14 — open the leader-rate form already pointed at one scope.
@@ -915,6 +953,7 @@ function openCreateOverrideForm(): void {
 function openCreateOverrideFormWithScope(scope: RuleScope): void {
   resetOverrideForm()
   overrideForm.value.scope = scope
+  overrideFormScopeLocked.value = true
   showOverrideForm.value = true
 }
 
@@ -934,6 +973,7 @@ function openEditOverrideForm(r: CommissionOverrideRuleItem): void {
     effective_to: r.effective_to?.slice(0, 10) ?? '',
   }
   overrideFormFallbackFrom.value = r.effective_from.slice(0, 10)
+  overrideFormScopeLocked.value = true
   showOverrideForm.value = true
 }
 
@@ -1076,10 +1116,17 @@ async function loadReadinessProbe(): Promise<void> {
  * a panel that has nothing to do with what they just saved. Step 3 is where
  * the row they clicked lives, so step 3 is where they land.
  */
+/** This product's OWN live rate, if it has one — not whatever it inherits. */
+function productOwnRule(p: ProductOption): CommissionRuleItem | null {
+  const now = new Date()
+
+  return byCompany(commissionRules.value).find((r) => r.product?.id === p.id && isRuleActiveOn(r, now)) ?? null
+}
+
 function openRuleFormForProduct(p: ProductOption) {
   /*
    * Assigns `activeStep` directly rather than calling goToStep(), and that is
-   * safe for one reason only: its caller (the product card in step 3.2) is
+   * safe for one reason only: its caller (the product card in step 3.3) is
    * already ON step 3, so this re-asserts the current step rather than
    * navigating to another one — and the current step is reachable by
    * definition (see `stepReachable`).
@@ -1090,15 +1137,53 @@ function openRuleFormForProduct(p: ProductOption) {
   activeStep.value = 3
   activeTab.value = 'rules'
   void ensureTabLoaded('rules')
+
+  /*
+   * ── 2026-09-14, BUG 1: "แก้ไข" WAS CREATING, NOT EDITING ──
+   *
+   * The button's label reads from resolveRuleFor(), which answers "what does
+   * this product get paid" — and that answer may come from the CATEGORY or the
+   * COMPANY rung. So on a product that merely inherits, the button said
+   * แก้ไขอัตราคอมมิชชั่น and then opened a blank CREATE form; and on a product
+   * that had its own rate it said the same thing and tried to create a SECOND
+   * one, which the overlap guard rejects with "ขอบเขตนี้มีอัตราครอบคลุมช่วงเวลา
+   * นี้อยู่แล้ว" — a refusal about a row the admin thought they were editing.
+   *
+   * Editing the product's own row when it has one is both the honest reading
+   * of the label and the only version that can succeed.
+   */
+  const own = productOwnRule(p)
+
+  if (own) {
+    openEditRuleForm(own)
+
+    return
+  }
+
+  /*
+   * ── BUG 2: THE SCOPE WAS STILL A DROPDOWN ──
+   *
+   * Owner: "ตอนแก้ไขสินค้า ค่าคอมก็ยังมีตัวเลือกให้ปรับที่หมวดและบริษัท ซึ่งมัน
+   * จะทำให้สับสนและทำงานผิดพลาดได้."
+   *
+   * This is the worst instance of the redundancy fixed elsewhere the same day,
+   * because here the modal's own HEADING names the product: an admin reading
+   * "สินค้า: Almond Chips" could nudge the first dropdown and save a rate that
+   * silently moves every product in the company. Pressing a button on one
+   * product's row answers the scope question as firmly as a question can be
+   * answered.
+   */
   resetRuleForm()
   ruleForm.value.scope = 'product'
   ruleForm.value.product_id = p.id
+  ruleFormScopeLocked.value = true
   showRuleForm.value = true
 }
 /** Step 3's two add buttons ("+ เพิ่มอัตราของสินค้า" / "…ของหมวดหมู่"). */
 function openCreateRuleFormWithScope(scope: RuleScope) {
   resetRuleForm()
   ruleForm.value.scope = scope
+  ruleFormScopeLocked.value = true
   showRuleForm.value = true
 }
 const productPlanTypeCounts = computed<Partial<Record<CommissionPlanType, number>>>(() => {
@@ -5077,7 +5162,11 @@ watch(companyPlanType, (pt) => {
                           :data-test="`product-rate-button-${p.id}`"
                           @click="openRuleFormForProduct(p)"
                         >
-                          {{ resolveRuleFor(p) ? 'แก้ไขอัตราคอมมิชชั่น' : '+ ตั้งอัตราคอมมิชชั่น' }}
+                          <!-- Reads the product's OWN rate, not whatever it
+                               inherits: a product on the company default is
+                               about to GET a rate, not have one edited, and
+                               the two are different promises. -->
+                          {{ productOwnRule(p) ? 'แก้ไขอัตราของสินค้านี้' : '+ ตั้งอัตราเฉพาะสินค้านี้' }}
                         </button>
                         <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="การตั้งอัตราค่าคอมเป็นสิทธิ์ของ Super Admin">
                           ตั้งค่าโดย Super Admin
@@ -5895,7 +5984,29 @@ watch(companyPlanType, (pt) => {
                  the same way. -->
             <div class="col-span-2">
               <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-              <select v-model="overrideForm.scope" data-test="override-form-scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <!--
+                2026-09-14 — a STATEMENT, and NOT a control (owner, twice:
+                "ขอบเขตยังต้องเลือกซ้ำอีกเหรอ" and then "ผมกดมาจากสินค้ารายตัว
+                ขอบเขตมันต้องแก้ไขเป็นสินค้าเท่านั้น เลือกไม่ได้").
+
+                I shipped a "เปลี่ยน" link here first, on the theory that an
+                admin who opened the wrong box should not have to cancel. The
+                owner overruled it and was right: cancelling and pressing the
+                correct button is two clicks, not a dead end — while a control
+                that can move a rate from one product to the WHOLE COMPANY,
+                sitting in a modal whose heading names that one product, is a
+                wrong payout waiting for a stray click. Two clicks against an
+                immutable ledger row (BR-4) is not a trade.
+              -->
+              <div
+                v-if="overrideFormScopeLocked"
+                class="mt-1 flex items-center gap-2.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50"
+                data-test="override-form-scope-fixed"
+              >
+                <span class="text-sm font-bold text-slate-700">{{ ruleScopeLabels[overrideForm.scope] }}</span>
+                <span class="ml-auto text-xs text-slate-400">ตามปุ่มที่กดเข้ามา · เปลี่ยนที่นี่ไม่ได้</span>
+              </div>
+              <select v-else v-model="overrideForm.scope" data-test="override-form-scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
                 <option value="category">ตามหมวดหมู่สินค้า</option>
                 <option value="product">ตามสินค้า</option>
@@ -5996,7 +6107,24 @@ watch(companyPlanType, (pt) => {
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div class="col-span-2">
               <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
-              <select v-model="ruleForm.scope" :disabled="!!editingRuleId" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+              <!--
+                Same statement-not-control treatment as the leader form. The
+                note there covers why. On an EDIT the wording differs because
+                the reason differs: an agent rate's scope is immutable on
+                update server-side (CommissionRuleService), so it could not be
+                changed here even if the screen offered to.
+              -->
+              <div
+                v-if="ruleFormScopeLocked"
+                class="mt-1 flex items-center gap-2.5 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50"
+                data-test="rule-form-scope-fixed"
+              >
+                <span class="text-sm font-bold text-slate-700">{{ ruleScopeLabels[ruleForm.scope] }}</span>
+                <span class="ml-auto text-xs text-slate-400">
+                  {{ editingRuleId ? 'เปลี่ยนขอบเขตของอัตราที่มีอยู่แล้วไม่ได้' : 'ตามปุ่มที่กดเข้ามา · เปลี่ยนที่นี่ไม่ได้' }}
+                </span>
+              </div>
+              <select v-else v-model="ruleForm.scope" data-test="rule-form-scope" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="company">ค่าเริ่มต้นทั้งบริษัท</option>
                 <option value="category">ตามหมวดหมู่สินค้า</option>
                 <option value="product">ตามสินค้า</option>

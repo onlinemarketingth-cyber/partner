@@ -364,7 +364,10 @@ describe('CommissionPlansView — step 4.1 says what a narrow scope leaves uncov
     await flushPromises()
     expect(wrapper.find('[data-test="override-no-company-default"]').exists()).toBe(false)
 
-    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
+    // Opened from 4.3 instead: the scope IS product and the note appears.
+    // The form no longer offers the scope at all, so the test presses the
+    // button that answers it rather than driving a dropdown nobody sees.
+    await wrapper.get('[data-test="add-leader-rate-product"]').trigger('click')
     await flushPromises()
 
     const note = wrapper.get('[data-test="override-no-company-default"]').text()
@@ -380,7 +383,6 @@ describe('CommissionPlansView — step 4.1 says what a narrow scope leaves uncov
     const wrapper = await mountView()
     await goToStep4(wrapper)
     await wrapper.get('[data-test="add-leader-rate-product"]').trigger('click')
-    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
     await flushPromises()
 
     expect(wrapper.find('[data-test="override-no-company-default"]').exists()).toBe(false)
@@ -433,8 +435,9 @@ describe('CommissionPlansView — a leader rate may differ from the company', ()
   it('sends the chosen mode when the rate opts out of the company setting', async () => {
     const wrapper = await mountView({ overrideRules: [] })
     await goToStep4(wrapper)
+    // The + button in 4.3 already answers "which scope"; the form states it
+    // rather than asking again (2026-09-14).
     await wrapper.get('[data-test="add-leader-rate-product"]').trigger('click')
-    await wrapper.get('[data-test="override-form-scope"]').setValue('product')
     await wrapper.get('[data-test="override-form-product"]').setValue('1')
     await wrapper.get('[data-test="override-form-rate-value"]').setValue('2')
     await wrapper.get('[data-test="override-form-mode"]').setValue('deduct_from_commission')
@@ -478,5 +481,57 @@ describe('CommissionPlansView — step 4.2 and the company admin', () => {
 
     expect(wrapper.find('[data-test="override-mode-example"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="override-mode-picker"]').exists()).toBe(false)
+  })
+})
+
+describe('the form does not re-ask a question the button already answered', () => {
+  /*
+   * Owner, 2026-09-14: "ผมคลิกเข้ามาที่หน้าหมวดหมู่แล้ว ขอบเขตยังต้องเลือกซ้ำ
+   * อีกเหรอ มันไม่ควรแล้วนะครับ".
+   *
+   * Splitting 4.1 into three boxes gave every + button a scope of its own —
+   * and left the scope dropdown sitting in the form's most prominent slot,
+   * re-asking it. Worse than clutter: it is the one field that can silently
+   * move the rate out of the box the admin thought they were working in.
+   */
+  it('states the scope instead of offering it', async () => {
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-category"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="override-form-scope-fixed"]').text()).toContain('ตามหมวดหมู่สินค้า')
+    expect(wrapper.find('[data-test="override-form-scope"]').exists()).toBe(false)
+  })
+
+  it('offers no way to change it, not even a small one', async () => {
+    /*
+     * 2026-09-14 — this test is the inversion of the one I shipped first.
+     *
+     * I had put a "เปลี่ยน" link beside the statement so an admin who opened
+     * the wrong box would not have to cancel. The owner overruled it —
+     * "ขอบเขตมันต้องแก้ไขเป็นสินค้าเท่านั้น เลือกไม่ได้" — and the trade is
+     * plainly his way: cancelling and pressing the right button is two clicks,
+     * while a control that can move a rate from one product to the WHOLE
+     * COMPANY, inside a modal whose heading names that one product, is a wrong
+     * payout one stray click away. And a wrong payout cannot be corrected
+     * (BR-4).
+     */
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-category"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="override-form-scope"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="override-form-scope-change"]').exists()).toBe(false)
+  })
+
+  it('states the company scope the same way', async () => {
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+    await wrapper.get('[data-test="add-leader-rate-company"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="override-form-scope-fixed"]').text()).toContain('ค่าเริ่มต้นทั้งบริษัท')
   })
 })

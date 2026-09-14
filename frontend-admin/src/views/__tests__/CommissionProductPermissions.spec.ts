@@ -6,7 +6,7 @@
  * to show — and none of it ever gated a control. Three buttons therefore led
  * straight to a 403 for a Company Admin:
  *
- *   • "+ ตั้งอัตราคอมมิชชั่น"  → POST /commission-rules, refused by
+ *   • "+ ตั้งอัตราเฉพาะสินค้านี้"  → POST /commission-rules, refused by
  *     StoreCommissionRuleRequest for a product linked to the shared catalogue.
  *   • "แก้ไขอัตราคอมมิชชั่น"    → the same, via UpdateCommissionRuleRequest.
  *   • the Wizard's first step   → PUT /products/{id} to write the plan type,
@@ -200,7 +200,7 @@ describe('CommissionPlansView — a Super Admin, on a product nothing else block
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([OWN]))
 
-    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราคอมมิชชั่น')
+    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
   })
 })
 
@@ -225,7 +225,7 @@ describe('CommissionPlansView — a SHARED product', () => {
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([SHARED]))
 
-    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราคอมมิชชั่น')
+    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
   })
 })
 
@@ -245,7 +245,7 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
   it('is offered no rate button, on any product', async () => {
     const wrapper = await showProducts(await mountView([OWN, SHARED]))
 
-    expect(buttonTexts(wrapper)).not.toContain('+ ตั้งอัตราคอมมิชชั่น')
+    expect(buttonTexts(wrapper)).not.toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
     expect(buttonTexts(wrapper)).not.toContain('แก้ไขอัตราคอมมิชชั่น')
   })
 
