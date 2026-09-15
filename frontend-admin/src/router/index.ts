@@ -1,9 +1,18 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import type { RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
-const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [
+/*
+ * 2026-09-15 — EXPORTED so the route table can be asserted directly.
+ *
+ * /commission became a redirect when its three tabs became three
+ * routes, and a redirect is the one kind of route whose mistakes are
+ * invisible: a dropped query or a renamed target breaks links that are
+ * written down elsewhere — in bookmarks, in notification bodies — and
+ * nothing on any screen fails first. CommissionNavigation.spec.ts reads
+ * this array so those stay pinned.
+ */
+export const routes: RouteRecordRaw[] = [
     {
       path: '/login',
       name: 'login',
@@ -194,10 +203,50 @@ const router = createRouter({
      * the dashboard's existing deep link keeps its meaning.
      */
     {
+      /*
+       * 2026-09-15 — /commission IS NOW A SIGNPOST, NOT A PAGE.
+       *
+       * Owner: "ย้าย ตั้งจ่าย รอบจ่าย รายรายการ ไปเป็น sub menu". The three
+       * were tabs inside one page; each is its own route below, so the
+       * left-hand menu is the only switcher.
+       *
+       * The NAME is kept on this redirect deliberately. Links written as
+       * { name: 'commission-management' } exist in this app, in bookmarks and
+       * in the notification links the payout release added — all of them keep
+       * resolving, and the function below sends the two old query shapes to
+       * the page that now owns them instead of dropping them on the floor.
+       */
       path: '/commission',
       name: 'commission-management',
+      redirect: (to) => {
+        if (to.query.view === 'queue') return { name: 'commission-runs' }
+        // `?tab=` is the ORIGINAL /commission ledger link (the dashboard's
+        // "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still wrote it), and the ledger
+        // panel still reads it — so the query travels with the redirect.
+        if (to.query.view === 'entries' || typeof to.query.tab === 'string') {
+          return { name: 'commission-entries', query: to.query }
+        }
+
+        return { name: 'commission-payouts' }
+      },
+    },
+    {
+      path: '/commission/payouts',
+      name: 'commission-payouts',
       component: () => import('../views/CommissionPayoutsView.vue'),
-      meta: { navLabel: 'จ่ายเงิน' },
+      meta: { navLabel: 'ตั้งจ่าย' },
+    },
+    {
+      path: '/commission/runs',
+      name: 'commission-runs',
+      component: () => import('../views/CommissionRunsView.vue'),
+      meta: { navLabel: 'รอบจ่าย' },
+    },
+    {
+      path: '/commission/entries',
+      name: 'commission-entries',
+      component: () => import('../views/CommissionEntriesView.vue'),
+      meta: { navLabel: 'รายรายการ' },
     },
     // TASK-050 — "ทีมขาย" leadership cockpit: manager_id reporting
     // roll-up (per-agent client/deal counts + close rate) built
@@ -229,7 +278,7 @@ const router = createRouter({
        * wrote down — and a 404 on a money screen is a support call.
        */
       path: '/commission-withdrawals',
-      redirect: { name: 'commission-management', query: { view: 'queue' } },
+      redirect: { name: 'commission-runs' },
     },
     {
       path: '/commission-plans',
@@ -425,7 +474,11 @@ const router = createRouter({
       component: () => import('../views/PaymentGatewaySettingsView.vue'),
       meta: { navLabel: 'ช่องทางรับชำระเงิน', requiresSuperAdmin: true },
     },
-  ],
+]
+
+const router = createRouter({
+  history: createWebHistory(import.meta.env.BASE_URL),
+  routes,
 })
 
 // Same Sanctum SPA session guard as the Agent Portal (see

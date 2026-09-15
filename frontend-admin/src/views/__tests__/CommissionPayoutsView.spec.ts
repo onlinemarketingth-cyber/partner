@@ -268,22 +268,15 @@ describe('the company share is reported apart from the agents', () => {
  * /commission?tab=paid, and that link means "show me the paid LEDGER ROWS" —
  * so it has to land on the row view, not on the per-agent default.
  */
-describe('the two views of one payout screen', () => {
-  it('opens on the per-agent view, because that is what a payout run needs', async () => {
-    const wrapper = await mountView([makeRow()])
-
-    expect(wrapper.get('[data-test="payout-view-agents"]').attributes('aria-pressed')).toBe('true')
-    expect(wrapper.find('commission-ledger-panel-stub').exists()).toBe(false)
-  })
-
-  it('switches to the row view without leaving the page', async () => {
-    const wrapper = await mountView([makeRow()])
-
-    await wrapper.get('[data-test="payout-view-entries"]').trigger('click')
-
-    expect(wrapper.find('commission-ledger-panel-stub').exists()).toBe(true)
-  })
-})
+/*
+ * 2026-09-15 — THE IN-PAGE VIEW SWITCHER IS GONE.
+ *
+ * Owner: "ย้าย ตั้งจ่าย รอบจ่าย รายรายการ ไปเป็น sub menu". The three views
+ * became three routes under the ค่าแนะนำ pillar, so the left-hand menu is the
+ * only switcher and this screen is just the first of the three. The tests
+ * that pressed the tab strip moved to CommissionPayoutQueue.spec.ts, where
+ * they now assert the ROUTES rather than the tabs.
+ */
 
 /**
  * 2026-09-15 — "ตั้งจ่าย" (แนวทาง C).

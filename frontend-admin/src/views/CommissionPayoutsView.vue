@@ -65,10 +65,7 @@
  * cosmetic choices.
  */
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
-import CommissionLedgerPanel from './CommissionLedgerPanel.vue'
-import CommissionPayoutQueuePanel from './CommissionPayoutQueuePanel.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -77,7 +74,6 @@ import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
-const route = useRoute()
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
 
@@ -508,37 +504,19 @@ const kpis = computed(() => [
  * would fight the next click.
  */
 /*
- * 2026-09-15 — THREE VIEWS, IN THE ORDER THE WORK HAPPENS (แนวทาง C).
+ * 2026-09-15 (ครั้งที่สอง) — THE THREE VIEWS BECAME THREE MENU ITEMS.
  *
- * Owner: "ระบบเราใช้วิธีโอนเองผ่านระบบการทำงาน Bank เราไม่ได้ Payment auto ซึ่ง
- * ต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้วจึงมากดยืนยัน."
+ * Owner: "ย้าย ตั้งจ่าย รอบจ่าย รายรายการ ไปเป็น sub menu".
  *
- * That is a three-day process — decide, accounting transfers, confirm — and
- * this screen used to collapse it into one irreversible click that also
- * emailed the agent their money had arrived. คำขอเบิกค่าคอม, in a different
- * menu, already modelled the process correctly and was always empty because
- * this screen had consumed the same rows.
+ * They were tabs inside this one screen for exactly one iteration. Each is
+ * now its own route under the ค่าแนะนำ pillar — /commission/payouts,
+ * /commission/runs, /commission/entries — so the left-hand menu is the only
+ * switcher, and this file is just the first of the three.
  *
- * So they are one screen now, read left to right: who is owed → what is in
- * flight → the individual rows behind either. The queue in the middle is the
- * old menu, unchanged in behaviour and now fed from both directions.
+ * The in-page tab strip went with them. Two controls that do the same thing,
+ * one under the other, is the kind of duplication this screen has already
+ * been consolidated twice to remove.
  */
-const VIEWS = [
-  { id: 'agents' as const, label: 'ตั้งจ่าย', hint: 'ใครค้างรับเท่าไร — ตั้งจ่าย บัญชีธนาคาร และไฟล์ CSV' },
-  { id: 'queue' as const, label: 'รอบจ่าย', hint: 'อนุมัติคำขอ · ส่งบัญชีโอน · กลับมากดยืนยันเมื่อโอนจริงแล้ว' },
-  { id: 'entries' as const, label: 'รายรายการ', hint: 'ทุกแถวในบัญชี สำหรับตรวจสอบดีลเดียว' },
-]
-
-const view = ref<'agents' | 'queue' | 'entries'>(
-  route.query.view === 'entries' || (route.query.view === undefined && typeof route.query.tab === 'string')
-    ? 'entries'
-    // `?view=queue` is where /commission-withdrawals now redirects, so an old
-    // bookmark or a notification link lands on the queue rather than on a
-    // dead route.
-    : route.query.view === 'queue'
-      ? 'queue'
-      : 'agents',
-)
 
 // BR-3 — satang in, baht out. Divide by 100 only here, at the display layer.
 function formatSatang(satang: number): string {
@@ -554,57 +532,16 @@ watch(() => activeCompany.companyId, () => { loadAll() })
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="money"
-      title="จ่ายเงิน"
-      subtitle="ค่าคอมมิชชั่นของบริษัทนี้"
-      description="ยอดรวมต่อคน สำหรับรอบจ่ายเงิน · หรือดูทีละรายการเพื่อตรวจสอบดีลเดียว — ตัวเลขทั้งหมดมาจาก Commission Ledger จริง"
-      :kpis="view === 'agents' ? kpis : []"
+      title="ตั้งจ่าย"
+      subtitle="ใครค้างรับค่าแนะนำเท่าไร"
+      description="ยอดรวมต่อคน · ตั้งจ่ายเพื่อส่งเข้ารอบจ่าย · บัญชีธนาคาร และไฟล์ CSV — ตัวเลขทั้งหมดมาจาก Commission Ledger จริง"
+      :kpis="kpis"
       accent-color="brand"
       storage-key="agent-commission-summary"
     />
 
     <CompanyScopeNotice action="ดูสรุปคอมมิชชั่น" />
 
-    <!--
-      TWO VIEWS OF THE SAME MONEY (2026-09-15).
-
-      Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
-
-      These were two menu items in two different pillars — "ค่าคอมมิชชั่น" under
-      จัดการตัวแทน and "จ่ายคอมมิชชั่น" under Commission — over the same ledger,
-      and a payout run needed both: the totals, the bank details and the CSV
-      here, the button that actually marks a row paid over there.
-
-      NOT tabs over two data sets. One question asked two ways: รายตัวแทน is
-      "who do I pay, and how much", รายรายการ is "why is this number what it
-      is". Which is also why they keep separate fetches and filters — a shared
-      query would make each of them worse at its own question.
-    -->
-    <div class="mt-4 flex flex-wrap items-center gap-1" role="group" aria-label="มุมมอง" data-test="payout-view-switch">
-      <button
-        v-for="v in VIEWS"
-        :key="v.id"
-        type="button"
-        class="px-3.5 py-2 rounded-lg text-[13px] font-bold transition-colors"
-        :class="view === v.id ? 'bg-brand-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
-        :aria-pressed="view === v.id"
-        :data-test="`payout-view-${v.id}`"
-        @click="view = v.id"
-      >
-        {{ v.label }}
-      </button>
-      <span class="ml-2 text-[12px] text-slate-400">{{ VIEWS.find((v) => v.id === view)?.hint }}</span>
-    </div>
-
-    <!-- รายรายการ — the old /commission page, now a view rather than a
-         destination. It loads and filters itself; see its own docblock. -->
-    <CommissionLedgerPanel v-if="view === 'entries'" />
-
-    <!-- รอบจ่าย — the old คำขอเบิกค่าคอม menu, now the middle of this screen
-         rather than a place to go looking for. Same component behaviour; it
-         loads and filters itself. -->
-    <CommissionPayoutQueuePanel v-else-if="view === 'queue'" />
-
-    <template v-else>
     <div class="mt-4 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
       <DateRangeFilter v-model:date-from="filters.date_from" v-model:date-to="filters.date_to" :years-back="3" :years-forward="0" />
       <div>
@@ -942,7 +879,6 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         </div>
       </div>
       </template>
-    </template>
     </template>
   </main>
 </template>

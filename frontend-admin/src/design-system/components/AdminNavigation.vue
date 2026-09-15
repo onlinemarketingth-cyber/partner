@@ -210,6 +210,40 @@ const navItems: NavItem[] = [
       { name: 'reward-center', icon: 'trophy', label: { th: 'ศูนย์รางวัล', en: 'Reward Center' } },
     ],
   },
+  /*
+   * ── ค่าแนะนำ (Referral) ────────────────────────────────────────────────
+   *
+   * 2026-09-15 (owner) — three changes in one: the pillar moved up to sit
+   * directly after จัดการตัวแทน, it stopped being called "Commission", and its
+   * two sub-items were replaced by the three pages that used to be tabs
+   * inside จ่ายเงิน.
+   *
+   * THE NAME. The business calls what an agent earns ค่าแนะนำ, and the menu
+   * now says so. The English is "Referral" rather than the "Reference" the
+   * request was written with — Reference means a citation, Referral is the
+   * word for sending business somebody's way, and the English label is read
+   * by people who will not ask which was meant.
+   *
+   * WHAT IS NOT HERE. "ตั้งค่า" moved out to ตั้งค่าระบบ (below). That leaves
+   * this pillar holding only things an admin DOES daily and none of the
+   * configuration they touch once — which is the split the owner asked for.
+   *
+   * Route names for the three are new (commission-payouts / -runs /
+   * -entries). `commission-management` still exists as a redirect so nothing
+   * written down anywhere stops working — see router/index.ts.
+   */
+  {
+    name: 'commission-payouts',
+    icon: 'money',
+    label: { th: 'ค่าแนะนำ', en: 'Referral' },
+    subMenus: [
+      // Read left to right, in the order the work happens: who is owed →
+      // what is in flight with the bank → the individual rows behind either.
+      { name: 'commission-payouts', icon: 'money', label: { th: 'ตั้งจ่าย', en: 'Raise payouts' } },
+      { name: 'commission-runs', icon: 'invoice', label: { th: 'รอบจ่าย', en: 'Payout runs' } },
+      { name: 'commission-entries', icon: 'list', label: { th: 'รายรายการ', en: 'Ledger' } },
+    ],
+  },
   {
     name: 'product-catalog',
     icon: 'cube',
@@ -229,54 +263,6 @@ const navItems: NavItem[] = [
   // Untouched by TASK-043 (spec §4/§5) — stays a distinct top-level
   // pillar, not folded into agent-management's submenu.
   //
-  // TASK-219 (human request, 2026-08-20) — "แผนคอมมิชชั่น" used to be its
-  // OWN top-level pillar sitting next to this one. Two neighbouring
-  // pillars both about commission, one holding the money that was paid and
-  // one holding the rules that decide it, is a distinction the top bar
-  // could not express: the icons said "money" and "layers" and nothing
-  // said they were two halves of the same subject.
-  //
-  // They are now one pillar with two sub-items, which is what row 2 is
-  // for. The human's own framing — "แยกระหว่าง จ่ายคอมมิชชั่น กับตั้งค่า" —
-  // is why the FIRST sub-item is relabelled too: leaving it as
-  // "Commission" beside "ตั้งค่า" would name the parent twice and still
-  // never say what the page actually holds (the payout ledger).
-  //
-  // Route names are UNCHANGED (/commission and /commission-plans), so
-  // every existing link and bookmark keeps working — including the
-  // signpost ProductCatalogView renders (TASK-213) and the readiness
-  // links inside CommissionPlansView itself.
-  {
-    name: 'commission-management',
-    icon: 'money',
-    label: { th: 'Commission', en: 'Commission' },
-    subMenus: [
-      /*
-       * 2026-09-15 — "จ่ายคอมมิชชั่น" became "จ่ายเงิน" when the per-agent
-       * summary merged into it. The shorter label is the honest one: the page
-       * now answers both "who do I pay and how much" and "why is this row what
-       * it is", and naming it after only the ledger half would send anybody
-       * looking for the payout file back to the pillar it just left.
-       */
-      { name: 'commission-management', icon: 'money', label: { th: 'จ่ายเงิน', en: 'Payouts' } },
-      /*
-       * 2026-09-15 — "คำขอเบิกค่าคอม" was removed from this pillar (แนวทาง C).
-       *
-       * It pointed at a queue that was always empty: จ่ายเงิน above settled
-       * the same commission rows in one click, so an agent could never ask
-       * for them. Both routes now raise the same payout object, so the queue
-       * is the middle view of จ่ายเงิน rather than a second destination —
-       * which is what the owner asked for ("ป้องกันความสับสน").
-       *
-       * The old path still resolves; see the redirect in router/index.ts.
-       */
-      // ADR-011 (TASK-034) — moved in from its own top-level pillar. NOT
-      // superAdminOnly: a Company Admin has always been able to set their
-      // own company's commission rules, and folding the page into another
-      // pillar must not quietly take that away.
-      { name: 'commission-plan-settings', icon: 'layers', label: { th: 'ตั้งค่า', en: 'Settings' } },
-    ],
-  },
   // TASK-055 / ADR-018 — per-company white-label of the Agent Portal. Its own
   // top-level pillar: no existing pillar was a home for a Company-Admin-facing
   // branding screen (the rest are unrelated business domains). 'display_cog'
@@ -295,6 +281,20 @@ const navItems: NavItem[] = [
       // as "ตั้งค่า Email SMTP" below) — the pillar itself must remain
       // open to Company Admin, who still needs "ธีม / แบรนด์".
       { name: 'company-management', icon: 'building', label: { th: 'จัดการบริษัท', en: 'Companies' }, superAdminOnly: true },
+      /*
+       * 2026-09-15 (owner: "ย้าย sub menu ตั้งค่าไปอยู่ที่ ตั้งค่าระบบ ต่อจาก
+       * จัดการบริษัท") — the four-step commission setup used to sit in the
+       * ค่าแนะนำ pillar next to the payout screens. It is configuration an
+       * admin touches once and then leaves alone, which is what this pillar
+       * is for; the pillar it left is now only the daily work.
+       *
+       * NOT superAdminOnly, and that matters: a Company Admin has always been
+       * able to set their own company's rates, and moving the page must not
+       * quietly take that away. The pillar itself is open to them (only
+       * จัดการบริษัท above and the SMTP/gateway items below are restricted),
+       * so this arrives here with the same audience it had.
+       */
+      { name: 'commission-plan-settings', icon: 'layers', label: { th: 'ตั้งค่าค่าแนะนำ', en: 'Referral settings' } },
       { name: 'theme-settings', icon: 'display_cog', label: { th: 'ธีม / แบรนด์', en: 'Theme / Brand' } },
       // TASK-202 (human request, 2026-08-17) — these 3 used to be per-company
       // setting cards stacked below ThemeSettingsView's tabbed editor. Split
@@ -412,6 +412,8 @@ const activeSubMenus = computed(() => {
               v-for="item in visibleNavItems"
               :key="item.name"
               :to="{ name: item.name }"
+              :title="item.label.th"
+              :data-test="`nav-pillar-${item.name}`"
               class="group relative flex items-center p-2 rounded-xl transition-all duration-300 border-b-2 border-transparent shrink-0 text-sm"
               :class="isPillarActive(item)
                 ? 'bg-brand-100/70 text-brand-600 font-bold border-b-brand-600'
@@ -539,6 +541,7 @@ const activeSubMenus = computed(() => {
           v-for="sub in activeSubMenus"
           :key="sub.name"
           :to="{ name: sub.name }"
+          :data-test="`nav-sub-${sub.name}`"
           class="relative flex items-center p-1.5 rounded-lg transition-all duration-300 shrink-0 text-xs"
           :class="activeName === sub.name
             ? 'bg-brand-50/60 text-brand-600 font-bold'

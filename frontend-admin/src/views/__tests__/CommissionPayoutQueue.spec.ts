@@ -1,5 +1,5 @@
 /**
- * รอบจ่าย — the payout queue, now the middle of จ่ายเงิน (แนวทาง C).
+ * รอบจ่าย — the payout queue panel (/commission/runs).
  *
  * Owner: "ระบบเรามีข้อจำกัดในการโอนเงินไปให้ Agent เราใช้วิธีโอนเองผ่านระบบการ
  * ทำงาน Bank เราไม่ได้ Payment auto ซึ่งต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้ว
@@ -8,13 +8,13 @@
  * This queue existed, modelled that three-step process correctly, and was
  * always empty — because the payout screen in a different menu settled the
  * same commission rows in one click before an agent could ever ask for them.
- * Both routes now raise the same object, so the queue is a view of the screen
- * that feeds it rather than a place to go looking for.
+ * Both routes now raise the same object.
  *
- * What is pinned here is the part a reader of the screen depends on:
+ * Where it LIVES has moved twice since (own menu → tab → own route again);
+ * none of that is tested here, because none of it changed the panel. The menu
+ * and the routes are pinned in CommissionNavigation.spec.ts. What is pinned
+ * here is what the panel says:
  *
- *   · THE THREE VIEWS EXIST AND ARE REACHABLE, including from the old URL,
- *     which is in bookmarks and in the notification links this release adds.
  *   · EVERY ROW SAYS WHOSE DECISION IT WAS. In รอโอน an agent's approved
  *     request and a payout the company raised sit together and answer to
  *     different people.
@@ -51,7 +51,6 @@ vi.mock('vue-router', () => ({
 }))
 
 import CommissionPayoutQueuePanel from '../CommissionPayoutQueuePanel.vue'
-import CommissionPayoutsView from '../CommissionPayoutsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
@@ -106,62 +105,12 @@ async function mountPanel(rows: unknown[] = []) {
   return wrapper
 }
 
-async function mountScreen(query: Record<string, unknown> = {}) {
-  routeQuery.value = query
-  wireApi([])
-  const wrapper = mount(CommissionPayoutsView, {
-    global: {
-      stubs: {
-        HeroHeader: true,
-        EmptyState: true,
-        Icon: true,
-        LoadingSkeleton: true,
-        CompanyScopeNotice: true,
-        CommissionLedgerPanel: true,
-      },
-    },
-  })
-  await flushPromises()
-
-  return wrapper
-}
-
 beforeEach(() => {
   get.mockReset()
   post.mockReset()
   post.mockResolvedValue({ data: {} })
   routeQuery.value = {}
   useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
-})
-
-describe('จ่ายเงิน now has three views, in the order the work happens', () => {
-  it('offers ตั้งจ่าย, รอบจ่าย and รายรายการ', async () => {
-    const wrapper = await mountScreen()
-
-    const labels = wrapper.get('[data-test="payout-view-switch"]').text()
-    expect(labels).toContain('ตั้งจ่าย')
-    expect(labels).toContain('รอบจ่าย')
-    expect(labels).toContain('รายรายการ')
-  })
-
-  it('opens on the queue when the old menu redirects here', async () => {
-    /*
-     * /commission-withdrawals now redirects to ?view=queue. If this did not
-     * hold, every bookmark and every notification link this release adds
-     * would land on the wrong view of the right screen — which looks like the
-     * queue losing somebody's payout.
-     */
-    const wrapper = await mountScreen({ view: 'queue' })
-
-    expect(wrapper.findComponent(CommissionPayoutQueuePanel).exists()).toBe(true)
-  })
-
-  it('still opens on ตั้งจ่าย by default', async () => {
-    const wrapper = await mountScreen()
-
-    expect(wrapper.findComponent(CommissionPayoutQueuePanel).exists()).toBe(false)
-    expect(wrapper.get('[data-test="payout-view-agents"]').attributes('aria-pressed')).toBe('true')
-  })
 })
 
 describe('every row says whose decision it was', () => {

@@ -2617,7 +2617,7 @@ function goToVideoSettings() {
             </p>
             <p v-if="product" class="mt-1 text-xs text-slate-400">
               ค่าที่ใช้จริงตอนนี้: <span class="font-bold text-slate-600">{{ planTypeLabels[product.effective_plan_type] }}</span>
-              <RouterLink :to="{ name: 'commission-plan-settings' }" class="ml-1 text-brand-600 hover:underline">ตั้งค่าแผนคอมมิชชั่น →</RouterLink>
+              <RouterLink :to="{ name: 'commission-plan-settings' }" class="ml-1 text-brand-600 hover:underline">ตั้งค่าค่าแนะนำ →</RouterLink>
             </p>
           </div>
           <!-- ADR-026 §3.3 — per-product pipeline template override.

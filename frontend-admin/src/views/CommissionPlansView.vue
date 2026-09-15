@@ -4074,9 +4074,13 @@ watch(companyPlanType, (pt) => {
          collapsed across the redesign. The #tabs slot is gone because the
          step bar is no longer a filter on one page — it IS the page, and it
          has to stay visible when the header is collapsed. -->
+    <!-- 2026-09-15 — the title matches the menu it now sits under (ตั้งค่าระบบ
+         → ตั้งค่าค่าแนะนำ). The page's own body still says "คอมมิชชั่น" in many
+         places; renaming that vocabulary everywhere is a separate copy pass
+         and was not part of this request. -->
     <HeroHeader
       icon="money"
-      title="ตั้งค่าคอมมิชชั่น"
+      title="ตั้งค่าค่าแนะนำ"
       :subtitle="`กดทีละขั้น 1 → 4 · ตอนนี้อยู่ขั้นที่ ${activeStep} จาก 4`"
       description="Unilevel/Binary/Matrix/Stairstep-Breakaway/Generation/Affiliate (ADR-011) — ตั้งครบทั้ง 4 ขั้นแล้วระบบถึงจะจ่ายค่าคอมได้"
       accent-color="brand"

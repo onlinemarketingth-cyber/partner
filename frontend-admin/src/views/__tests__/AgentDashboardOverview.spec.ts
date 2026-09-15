@@ -608,7 +608,10 @@ describe('AgentDashboardOverview — every number opens what it counts', () => {
     const wrapper = await mountDashboard()
 
     expect(destinationOf(wrapper, 2)).toEqual({
-      name: 'commission-management',
+      // 2026-09-15 — the ledger is its own route now (/commission/entries);
+      // /commission is a redirect. Pointing at the redirect still worked, but
+      // through a hop that could silently drop the query it depends on.
+      name: 'commission-entries',
       query: { tab: 'paid' },
     })
   })

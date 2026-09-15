@@ -70,7 +70,7 @@ const activeCompany = useActiveCompanyStore()
  * 2026-09-13 — THE MINIMUM IS READ HERE AND WRITTEN SOMEWHERE ELSE.
  *
  * Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ นำของเก่า
- * ออกเลย" — the edit now lives on แผนคอมมิชชั่น → ขั้นที่ 4, with every other
+ * ออกเลย" — the edit now lives on ตั้งค่าค่าแนะนำ → ขั้นที่ 4, with every other
  * commission setting, and the input that used to be on this page is gone.
  *
  * The READ stays, deliberately. The original comment on that input argued the
@@ -269,7 +269,7 @@ watch(() => activeCompany.companyId, () => {
       <p class="text-xs text-slate-400 mt-1">
         แก้ไขที่
         <RouterLink :to="{ name: 'commission-plan-settings' }" class="font-bold text-brand-600 hover:underline" data-test="link-commission-step4">
-          แผนคอมมิชชั่น → ขั้นที่ 4 →
+          ตั้งค่าค่าแนะนำ → ขั้นที่ 4 →
         </RouterLink>
       </p>
     </div>
