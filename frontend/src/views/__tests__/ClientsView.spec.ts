@@ -395,7 +395,7 @@ describe('ClientsView — client drawer deal block (TASK-169 Phase 2)', () => {
     const wrapper = await openDrawer(await mountList())
 
     expect(wrapper.text()).not.toContain('+ เพิ่มสินค้าที่สนใจ')
-    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้ (BR-1)')
+    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้')
     // BR-1 gates SELLING NEW, not collecting on a deal that already exists —
     // the existing row keeps its payment action.
     expect(wrapper.text()).toContain('เก็บเงินเลย')
@@ -442,7 +442,7 @@ describe('ClientsView — client drawer deal block (TASK-169 Phase 2)', () => {
     const wrapper = await openDrawer(await mountList())
 
     expect(wrapper.text()).not.toContain('+ เพิ่มสินค้าที่สนใจ')
-    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้ (BR-1)')
+    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้')
   })
 
   it('BR-1: a non-Basic tier of my OWN does not open the gate either', async () => {
@@ -457,7 +457,7 @@ describe('ClientsView — client drawer deal block (TASK-169 Phase 2)', () => {
     // Basic is the MANDATORY gate (CLAUDE.md §2) — a higher tier row without
     // it is not a substitute, and the predicate must test both halves.
     expect(wrapper.text()).not.toContain('+ เพิ่มสินค้าที่สนใจ')
-    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้ (BR-1)')
+    expect(wrapper.text()).toContain('ต้องผ่านใบรับรอง Basic ก่อนจึงจะเพิ่มสินค้าที่สนใจได้')
   })
 })
 

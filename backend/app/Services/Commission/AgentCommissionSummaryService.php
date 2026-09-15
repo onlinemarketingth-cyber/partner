@@ -145,7 +145,27 @@ class AgentCommissionSummaryService
             // without the Admin having to open "ดูรายละเอียด" first —
             // human feedback: "รูป avatar ให้ขึ้นที่รายชื่อเลยไม่ต้องคลิ๊กดู
             // รายละเอียด".
-            ->with(['agent:id,name,avatar_path,bank_name,bank_account_number,bank_account_holder_name'])
+            /*
+             * 2026-09-15 (ครั้งที่สอง) — four more columns and one more
+             * relation, all of them so `payout_details_complete` below can be
+             * answered by the model method that actually refuses the payout
+             * rather than by a second copy of the rule written here.
+             *
+             * national_id / id_document_type ARE the first half of that rule.
+             * A narrower select leaves them null on a hydrated model, and
+             * `filled(null)` is false — so every agent on the screen would
+             * have been reported as unpayable, with no query failing and
+             * nothing to see.
+             *
+             * company_id + the company relation are the other half: the rule
+             * differs for the company's own seat, and
+             * User::isCommissionHouseAccount() falls back to its own SELECT
+             * when the relation is not loaded — one per row, on a list.
+             */
+            ->with([
+                'agent:id,name,company_id,avatar_path,national_id,id_document_type,bank_name,bank_account_number,bank_account_holder_name',
+                'agent.company:id,commission_house_user_id',
+            ])
             ->get();
 
         // TASK-047 (follow-up) — bulk-load each agent's HIGHEST passed
@@ -235,13 +255,29 @@ class AgentCommissionSummaryService
                      * A company can hold a seat at the top of its hierarchy
                      * and be paid a leader's override
                      * (CommissionHouseAccountService), and this summary groups
-                     * by agent_id — so that seat appears here as a payee with
-                     * no bank details, in a list whose entire purpose is a
-                     * payout run. Flagged rather than filtered out: the number
-                     * is one an admin wants (it is what the setting earned),
-                     * it just must never be queued for a transfer.
+                     * by agent_id — so that seat appears here as a payee among
+                     * the people.
+                     *
+                     * It was flagged here so the screen could keep it OUT of
+                     * the payout run. The owner has since asked for the
+                     * opposite ("ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย"), so the flag
+                     * now only changes how the row is LABELLED and where its
+                     * bank details are edited — ตั้งค่าค่าแนะนำ rather than the
+                     * agent's own profile, because that row is not a person.
                      */
                     'is_company_share' => in_array((int) $row->agent_id, $houseUserIds, true),
+                    /*
+                     * Can this payee be paid at all, right now?
+                     *
+                     * The same method that refuses in
+                     * CommissionWithdrawalService, asked here so the screen can
+                     * say why a row cannot be selected BEFORE somebody selects
+                     * it and presses. Re-deriving the rule in the browser is
+                     * how the two answers start to disagree — and the rule
+                     * differs per payee type (the company seat has no identity
+                     * document and never will).
+                     */
+                    'payout_details_complete' => (bool) $row->agent?->hasCompletePayoutDetails(),
                 ];
             })
             // ?? 0 here is an ORDERING fallback only — it never reaches the

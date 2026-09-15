@@ -49,6 +49,23 @@ use Illuminate\Support\Str;
 class CommissionHouseAccountService
 {
     /**
+     * The account the company's own share is transferred into.
+     *
+     * The same three columns every agent is paid through, on purpose: the
+     * payout run reads one bank snapshot (CommissionWithdrawalService::open)
+     * and the CSV the bank is handed has one set of columns. A separate pair
+     * of company bank fields elsewhere would be a second thing to keep in step
+     * with the file accounting actually opens.
+     *
+     * @var list<string>
+     */
+    private const BANK_FIELDS = [
+        'bank_name',
+        'bank_account_number',
+        'bank_account_holder_name',
+    ];
+
+    /**
      * A mailbox that cannot receive mail, on a domain that cannot exist.
      *
      * `users.email` is UNIQUE and NOT NULL, so the house account needs one.
@@ -158,9 +175,9 @@ class CommissionHouseAccountService
     }
 
     /**
-     * Change the name the seat is shown under.
+     * Change the name the seat is shown under, and the account it is paid into.
      *
-     * ── WHY THE SEAT NEEDS ITS OWN RENAME DOOR ──
+     * ── WHY THE SEAT NEEDS ITS OWN EDIT DOOR ──
      *
      * Every guard this feature added points the same way: UserPolicy::update
      * refuses the seat, UserService refuses to reset its password, move it or
@@ -171,25 +188,55 @@ class CommissionHouseAccountService
      * with no way back short of deleting the seat and losing the link between
      * its history and its successor.
      *
-     * So the door exists, and it is exactly this wide: one field, on the
-     * company's own commission settings, behind the same Ability as every
-     * other step-4 write. Nothing here can change who the seat reports to,
-     * who reports to it, what it is paid, or whether anyone can sign in as it.
+     * So the door exists, and it is exactly this wide: the label, plus — since
+     * the owner asked for the company's share to be payable too — the account
+     * that share is transferred into. Both sit on the company's own commission
+     * settings, behind the same Ability as every other step-4 write. Nothing
+     * here can change who the seat reports to, who reports to it, what it is
+     * paid, or whether anyone can sign in as it.
+     *
+     * ── WHY THE BANK FIELDS COME THROUGH HERE AND NOT PUT /users/{id} ──
+     *
+     * That is the door every agent's bank details go through, and it is closed
+     * on this row on purpose (UserPolicy::update, UserService's refusals). The
+     * refusals are still right: the seat must not be editable as a person. It
+     * does, now, need to be editable as a PAYEE, and those are three fields.
      *
      * `first_name`, not `name` — same reason as create(): `users.name` is
      * derived by a saving hook and is not fillable, so writing it is silently
      * dropped.
+     *
+     * @param  array<string, string|null>  $bank  any of bank_name,
+     *                                            bank_account_number,
+     *                                            bank_account_holder_name.
+     *                                            Keys that are absent are left
+     *                                            alone; a key present and null
+     *                                            or blank CLEARS that field,
+     *                                            which is how an account typed
+     *                                            into the wrong company is
+     *                                            taken back out.
      */
-    public function rename(Company $company, string $displayName): User
+    public function update(Company $company, string $displayName, array $bank = []): User
     {
         $house = $company->commissionHouseAccount;
 
         abort_if($house === null, 404, 'บริษัทนี้ยังไม่ได้เปิดบัญชีบริษัทสำหรับรับค่าคอมหัวหน้าทีม');
 
-        $house->forceFill([
+        $changes = [
             'first_name' => trim($displayName),
             'last_name' => '',
-        ])->save();
+        ];
+
+        foreach (self::BANK_FIELDS as $field) {
+            if (! array_key_exists($field, $bank)) {
+                continue;
+            }
+
+            $value = is_string($bank[$field]) ? trim($bank[$field]) : null;
+            $changes[$field] = $value === '' ? null : $value;
+        }
+
+        $house->forceFill($changes)->save();
 
         return $house->refresh();
     }

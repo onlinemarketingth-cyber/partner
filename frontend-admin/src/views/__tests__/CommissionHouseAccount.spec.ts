@@ -106,7 +106,20 @@ const AGENT_RULE = {
 }
 
 function house(over: Record<string, unknown> = {}) {
-  return { id: 90, name: 'Thai Life insurance', agents_under: 4, earned_satang: 134550, ...over }
+  return {
+    id: 90,
+    name: 'Thai Life insurance',
+    agents_under: 4,
+    earned_satang: 134550,
+    // 2026-09-15 (ครั้งที่สอง) — the seat is a payee now. Unbanked by default,
+    // which is the state a company is in the moment it turns the seat on, and
+    // the one the payout screen has to refuse.
+    bank_name: null,
+    bank_account_number: null,
+    bank_account_holder_name: null,
+    payout_details_complete: false,
+    ...over,
+  }
 }
 
 async function mountView(settings: Record<string, unknown> = {}) {
@@ -358,7 +371,7 @@ describe('renaming the seat', () => {
       .toBe('ชื่อที่พิมพ์ผิด')
   })
 
-  it('sends only the name, and repaints from what came back', async () => {
+  it('sends the name and the bank account together, and repaints from what came back', async () => {
     put.mockResolvedValue({
       data: { commission_house_account: house({ name: 'ไทยประกันชีวิต' }), deepest_manager_chain: 1 },
     })
@@ -370,9 +383,24 @@ describe('renaming the seat', () => {
     await wrapper.get('[data-test="house-account-rename-save"]').trigger('click')
     await flushPromises()
 
+    /*
+     * 2026-09-15 (ครั้งที่สอง) — the three bank fields ride along.
+     *
+     * One PUT, one save button: the seat became a payee ("ให้เพิ่มทำจ่ายบริษัท
+     * ให้เลือกได้ด้วย"), and splitting the name and the account into two
+     * requests would let the screen end up holding a name that was written
+     * and an account that was not.
+     *
+     * They are null here rather than absent because this fixture's seat has
+     * no account yet — and null is what CLEARS a field, which is how an
+     * account typed into the wrong company is taken back out.
+     */
     expect(put).toHaveBeenCalledWith('/commission-house-account', {
       company_id: AIA.id,
       display_name: 'ไทยประกันชีวิต',
+      bank_name: null,
+      bank_account_number: null,
+      bank_account_holder_name: null,
     })
     expect(wrapper.get('[data-test="house-account-name-shown"]').text()).toBe('ไทยประกันชีวิต')
     // Repainted from the response, not patched locally — the two counts beside
@@ -486,5 +514,90 @@ describe('the leaders who will silently be paid nothing', () => {
     await goToStep4(wrapper)
 
     expect(wrapper.find('[data-test="step4-uncertified-leaders"]').exists()).toBe(true)
+  })
+})
+
+/**
+ * 2026-09-15 (ครั้งที่สอง) — THE ACCOUNT THE COMPANY IS PAID INTO.
+ *
+ * Owner: "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย". The seat stopped being a payee
+ * that could never be paid and became one that can — which means it needs a
+ * bank account, and this is the only screen that can give it one: PUT
+ * /users/{id} refuses that row (UserPolicy::update, UserService), deliberately
+ * and permanently, because the seat is not a person.
+ */
+describe('the company seat as a payee', () => {
+  it('says on the summary row when it cannot be paid yet, and why that matters', async () => {
+    const wrapper = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    expect(wrapper.get('[data-test="house-account-bank-missing"]').text()).toContain('ตั้งจ่ายส่วนของบริษัทไม่ได้')
+  })
+
+  it('shows the account once it has one', async () => {
+    const wrapper = await mountView({
+      commission_house_account: house({
+        bank_name: 'กสิกรไทย',
+        bank_account_number: '1234567890',
+        bank_account_holder_name: 'บริษัท ตัวอย่าง จำกัด',
+        payout_details_complete: true,
+      }),
+      deepest_manager_chain: 1,
+    })
+    await goToStep4(wrapper)
+
+    expect(wrapper.get('[data-test="house-account-bank-shown"]').text()).toContain('1234567890')
+    expect(wrapper.find('[data-test="house-account-bank-missing"]').exists()).toBe(false)
+  })
+
+  it('prefills the form from what is stored, so a partial edit cannot wipe the rest', async () => {
+    const wrapper = await mountView({
+      commission_house_account: house({
+        bank_name: 'กสิกรไทย',
+        bank_account_number: '1234567890',
+        bank_account_holder_name: 'บริษัท ตัวอย่าง จำกัด',
+        payout_details_complete: true,
+      }),
+      deepest_manager_chain: 1,
+    })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+
+    expect((wrapper.get('[data-test="house-account-bank-number"]').element as HTMLInputElement).value).toBe('1234567890')
+  })
+
+  it('sends what was typed', async () => {
+    put.mockResolvedValue({
+      data: {
+        commission_house_account: house({
+          bank_name: 'กสิกรไทย',
+          bank_account_number: '9876543210',
+          bank_account_holder_name: 'บริษัท ตัวอย่าง จำกัด',
+          payout_details_complete: true,
+        }),
+        deepest_manager_chain: 1,
+      },
+    })
+    const wrapper = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+    await wrapper.get('[data-test="house-account-bank-name"]').setValue('กสิกรไทย')
+    await wrapper.get('[data-test="house-account-bank-number"]').setValue('9876543210')
+    await wrapper.get('[data-test="house-account-bank-holder"]').setValue('บริษัท ตัวอย่าง จำกัด')
+    await wrapper.get('[data-test="house-account-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/commission-house-account', {
+      company_id: AIA.id,
+      display_name: 'Thai Life insurance',
+      bank_name: 'กสิกรไทย',
+      bank_account_number: '9876543210',
+      bank_account_holder_name: 'บริษัท ตัวอย่าง จำกัด',
+    })
+    // Repainted from the response rather than patched locally — the summary
+    // row must not say "ยังไม่ได้กรอก" next to an account that was just saved.
+    expect(wrapper.get('[data-test="house-account-bank-shown"]').text()).toContain('9876543210')
   })
 })

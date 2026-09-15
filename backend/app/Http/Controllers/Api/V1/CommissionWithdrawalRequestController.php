@@ -6,6 +6,7 @@ use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Commission\MarkWithdrawalTransferredRequest;
 use App\Http\Requests\Commission\RejectWithdrawalRequestRequest;
+use App\Http\Requests\Commission\StoreCompanyPayoutBatchRequest;
 use App\Http\Requests\Commission\StoreCompanyPayoutRequest;
 use App\Http\Requests\Commission\StoreWithdrawalRequestRequest;
 use App\Http\Resources\CommissionWithdrawalRequestResource;
@@ -213,22 +214,85 @@ class CommissionWithdrawalRequestController extends Controller
          * and raise this figure; paying the new total would be paying an
          * amount nobody authorised, and BR-4 means the ledger rows it settles
          * cannot be un-settled.
+         *
+         * 2026-09-15 (ครั้งที่สอง) — that check used to be written out here,
+         * which put it OUTSIDE the row lock the service takes. It moved into
+         * CommissionWithdrawalService::payOutSettling() so the comparison and
+         * the write happen under the same lock, and so the batch door cannot
+         * drift from this one.
          */
-        $available = $service->availableSatang($agent);
-        $expected = $request->integer('expected_total_satang');
+        $payout = $service->payOutSettling(
+            $agent,
+            $request->integer('expected_total_satang'),
+            $request->user(),
+        );
 
-        if ($available !== $expected) {
+        return new CommissionWithdrawalRequestResource($payout->load(['agent', 'decidedBy', 'items']));
+    }
+
+    /**
+     * 2026-09-15 (ครั้งที่สอง) — POST /commission-withdrawals/payout-batch.
+     *
+     * The same act as payOut() above for everybody ticked on the ตั้งจ่าย
+     * table. All or nothing: see CommissionWithdrawalService::payOutMany() for
+     * why a per-row loop of the single endpoint is the one shape this must not
+     * have.
+     *
+     * Duplicate ids are rejected here rather than deduplicated. A list naming
+     * the same payee twice is a screen that lost track of its own selection,
+     * and paying them once "because that is obviously what was meant" hides
+     * that — while paying twice would raise a second payout against a balance
+     * the first one already reserved.
+     */
+    public function payOutBatch(
+        StoreCompanyPayoutBatchRequest $request,
+        CommissionWithdrawalService $service,
+    ): JsonResponse {
+        $rows = $request->validated('payees');
+        $ids = array_map(static fn (array $row) => (int) $row['agent_id'], $rows);
+
+        if (count($ids) !== count(array_unique($ids))) {
             throw ValidationException::withMessages([
-                'expected_total_satang' => 'ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว ('
-                    .number_format($available / 100, 2).' บาท ไม่ตรงกับ '
-                    .number_format($expected / 100, 2).' บาท ที่แสดงอยู่) '
-                    .'— กรุณารีเฟรชหน้าจอแล้วลองใหม่ ระบบยังไม่ได้ตั้งจ่ายใด ๆ',
+                'payees' => 'มีตัวแทนซ้ำกันในรายการที่เลือก — กรุณารีเฟรชหน้าจอแล้วเลือกใหม่',
             ]);
         }
 
-        $payout = $service->payOut($agent, $available, $request->user());
+        $payees = [];
 
-        return new CommissionWithdrawalRequestResource($payout->load(['agent', 'decidedBy', 'items']));
+        foreach ($rows as $index => $row) {
+            // withoutGlobalScopes() for the same reason as payOut(): a Super
+            // Admin resolves people in any company, and the policy below is
+            // what decides whether they may act for this one.
+            $agent = User::withoutGlobalScopes()->findOrFail((int) $row['agent_id']);
+
+            /*
+             * Asked for EVERY row before a single payout is written. A policy
+             * failure throws a 403, which is not one of the ValidationExceptions
+             * the transaction rolls back cleanly — so the one that would be
+             * refused must be found before the transaction opens, not during.
+             */
+            $this->authorize('raise', [CommissionWithdrawalRequest::class, $agent]);
+
+            $payees[$index] = [
+                'agent' => $agent,
+                'expected_total_satang' => (int) $row['expected_total_satang'],
+            ];
+        }
+
+        $payouts = $service->payOutMany($payees, $request->user());
+
+        // ->each->load(), not ->load(): payOutMany answers with a plain
+        // Support collection (it is built by hand from the loop), and only an
+        // Eloquent collection knows how to eager-load across its members.
+        $payouts->each->load(['agent', 'decidedBy', 'items']);
+
+        // 201 explicitly. A single JsonResource infers it from the model being
+        // recently created; a collection does not, and the two doors answering
+        // the same act with different status codes is the kind of difference
+        // that is only ever discovered by the client that broke on it.
+        return CommissionWithdrawalRequestResource::collection($payouts)
+            ->response()
+            ->setStatusCode(201);
     }
 
     public function show(CommissionWithdrawalRequest $commissionWithdrawalRequest): CommissionWithdrawalRequestResource

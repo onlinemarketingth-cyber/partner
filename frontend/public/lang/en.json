@@ -281,7 +281,7 @@
     "quiz_passed": "End-of-lesson quiz passed",
     "take_quiz": "Take the end-of-lesson quiz",
     "sequential": "Lessons unlock in order — finish the previous one to open the next",
-    "cert_exam": "Certification exam — passing unlocks your selling permissions (BR-1)",
+    "cert_exam": "Certification exam — passing unlocks your selling permissions",
     "no_lessons": "No lessons in this category yet",
     "no_exam": "No assessment yet",
     "back": "Back to Academy",
@@ -467,8 +467,8 @@
     "split_ph": "% the other member receives (1-99)",
     "empty": "No commission entries yet",
     "subtitle": "A summary of your commission",
-    "description": "The ledger is read-only — entries are never edited after the fact (BR-4)",
-    "empty_help": "Commission is recorded automatically when a referral reaches Complete Payment in the pipeline (BR-4)"
+    "description": "Commission appears here automatically once a client you referred has paid",
+    "empty_help": "Commission is recorded automatically when a deal reaches “Payment received”"
   },
   "pipeline": {
     "title": "Sales pipeline",
@@ -481,19 +481,19 @@
     "confirm_paid": "Confirm that payment for this order has been received",
     "step": "Step:",
     "collect_now": "Collect payment",
-    "empty_help": "Deals start from “+ Add a product of interest” on a client — commission (BR-4) is triggered at the Complete Payment stage",
-    "commission_warning": "Commission is recorded immediately and cannot be edited afterwards (BR-4)",
+    "empty_help": "Deals start from “+ Add a product of interest” on a client — commission is calculated when the deal reaches “Payment received”",
+    "commission_warning": "Once confirmed, commission is calculated immediately and cannot be changed afterwards",
     "no_branch": "No branch specified",
     "meeting_no": "Meeting {n}",
     "advance_to": "Advance to {stage}",
     "to_stage": "To: {stage}"
   },
   "affiliate": {
-    "needs_basic": "You must pass Basic certification before creating affiliate links (BR-1) — start in Academy",
+    "needs_basic": "You must pass Basic certification before creating affiliate links — start in Academy",
     "window_note": "Set by your administrator — the last click must fall inside this window to count as a conversion",
     "empty": "No affiliate links yet",
     "subtitle": "Create tracked links to refer clients",
-    "description": "Share this link with clients — every click and sign-up is recorded and credited to you (ADR-011)",
+    "description": "Share this link with clients — every click and sign-up is recorded and credited to you",
     "empty_help": "Create your first link above to start sharing and tracking results"
   },
   "stat": {
@@ -510,10 +510,10 @@
     "sales": "Sales"
   },
   "cert": {
-    "needs_basic_short": "Requires Basic certification (BR-1)",
-    "needs_basic_interest": "Requires Basic certification before adding products of interest (BR-1)",
-    "needs_basic_share": "You must pass Basic certification before sharing product links (BR-1) — start in Academy",
-    "needs_basic_share2": "Requires Basic certification before sharing products (BR-1) — take the exam in Academy"
+    "needs_basic_short": "Requires Basic certification",
+    "needs_basic_interest": "Requires Basic certification before adding products of interest",
+    "needs_basic_share": "You must pass Basic certification before sharing product links — start in Academy",
+    "needs_basic_share2": "Requires Basic certification before sharing products — take the exam in Academy"
   },
   "home": {
     "all_menus": "All menus",
@@ -534,9 +534,9 @@
     "empty": "No ranking data yet",
     "super_admin_note": "The leaderboard is per company — super admins should use the admin app instead (this screen has no company picker)",
     "subtitle": "XP ranking across the sales team",
-    "description": "XP comes from completing lessons, passing certifications, and pipeline progress (BR-5)",
-    "badge_help": "Badges are granted by a company administrator — automatic rules are not enabled yet (BR-7)",
-    "xp_help": "XP is recorded automatically when you finish a module, pass a certification, or advance a deal (BR-5)"
+    "description": "XP comes from completing lessons, passing certifications, and deal progress",
+    "badge_help": "Badges are granted by a company administrator — nothing is awarded automatically yet",
+    "xp_help": "XP is recorded automatically when you finish a module, pass a certification, or advance a deal"
   },
   "links": {
     "mine": "My links",

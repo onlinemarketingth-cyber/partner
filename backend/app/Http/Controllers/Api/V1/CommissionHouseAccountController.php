@@ -51,13 +51,19 @@ class CommissionHouseAccountController extends Controller
     }
 
     /**
-     * 2026-09-15 — the one edit of the seat that is allowed: its name.
+     * 2026-09-15 — the edits of the seat that are allowed: its name, and the
+     * account its share is paid into.
      *
      * The docblock above used to say the display name "is an ordinary user
      * edit". It was not, and saying so hid a dead end: every guard this
      * feature added — UserPolicy::update, UserService's refusals — closes the
      * ordinary door on this row, which is correct and which left a company
      * that mistyped the name at setup with no way to fix it.
+     *
+     * The bank fields joined it the same day, when the owner asked for the
+     * company's own share to be payable ("ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย").
+     * They arrive here rather than through PUT /users/{id} for the same reason
+     * the name does — see CommissionHouseAccountService::update().
      */
     public function update(
         UpdateCommissionHouseAccountRequest $request,
@@ -66,7 +72,15 @@ class CommissionHouseAccountController extends Controller
     ): CommissionSettingResource {
         $company = $this->company($request);
 
-        $houseAccounts->rename($company, $request->string('display_name')->toString());
+        $houseAccounts->update(
+            $company,
+            $request->string('display_name')->toString(),
+            // only() — not a default-filled array: a key the caller did not
+            // send must stay untouched, and a key they sent as null must
+            // clear. array_merge with defaults would erase the other two
+            // fields every time one of them was saved on its own.
+            $request->only(['bank_name', 'bank_account_number', 'bank_account_holder_name']),
+        );
 
         return new CommissionSettingResource($settings->forCompany($company->id));
     }

@@ -193,7 +193,7 @@ class CommissionSettingService
     }
 
     /**
-     * @return array{id: int, name: string, agents_under: int, earned_satang: int}|null
+     * @return array{id: int, name: string, agents_under: int, earned_satang: int, bank_name: string|null, bank_account_number: string|null, bank_account_holder_name: string|null, payout_details_complete: bool}|null
      */
     private function houseAccountPayload(?Company $company): ?array
     {
@@ -219,6 +219,23 @@ class CommissionSettingService
             'earned_satang' => (int) CommissionLedger::withoutGlobalScopes()
                 ->where('agent_id', $house->id)
                 ->sum('amount_satang'),
+            /*
+             * 2026-09-15 (ครั้งที่สอง) — where the company's own share is
+             * transferred to, now that it is a payee.
+             *
+             * Shown in full, not masked: this whole payload is behind
+             * Ability::SettingsCommissionPlanUpdate, the same screen already
+             * shows every agent's real account number on the payout run
+             * (TASK-047, "แสดงเลยครับ เพราะต้องใช้งาน"), and an account number
+             * that has to be checked against a bank file cannot be checked
+             * with four of its digits hidden.
+             */
+            'bank_name' => $house->bank_name,
+            'bank_account_number' => $house->bank_account_number,
+            'bank_account_holder_name' => $house->bank_account_holder_name,
+            // The screen needs to say WHY ตั้งจ่าย is refused before the admin
+            // presses it, and this is the same method that refuses.
+            'payout_details_complete' => $house->hasCompletePayoutDetails(),
         ];
     }
 

@@ -1340,6 +1340,23 @@ Route::prefix('v1')->group(function () {
         Route::post('/commission-withdrawals/payout', [CommissionWithdrawalRequestController::class, 'payOut'])
             // A money action, throttled like the agent-side request beside it.
             ->middleware('throttle:30,1');
+
+        /*
+         * 2026-09-15 (ครั้งที่สอง) — the same press for everybody ticked.
+         *
+         * The ตั้งจ่าย screen became a table with checkboxes (แบบ C), so one
+         * press raises several payouts, and it has to be ALL OR NOTHING — see
+         * CommissionWithdrawalService::payOutMany().
+         *
+         * Throttled harder than the single door, not softer: each call may
+         * carry fifty payees, so 10/minute is already 500 payouts a minute,
+         * and there is no workflow in which an admin presses this repeatedly.
+         *
+         * Registered above the {commissionWithdrawalRequest} routes, like its
+         * sibling, so "payout-batch" is never read as an id.
+         */
+        Route::post('/commission-withdrawals/payout-batch', [CommissionWithdrawalRequestController::class, 'payOutBatch'])
+            ->middleware('throttle:10,1');
         Route::get('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'index']);
         Route::post('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'store'])
             // A payout request is a money action; the throttle is the same

@@ -2014,6 +2014,20 @@ interface HouseAccount {
   agents_under: number
   /** Every satang ever credited to it, paid or not. See the Service. */
   earned_satang: number
+  /*
+   * 2026-09-15 (ครั้งที่สอง) — where the company's own share is transferred.
+   *
+   * Owner: "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย". The seat is a payee now, and
+   * these are the only three fields that make it payable — it has no identity
+   * document and never will, so hasCompletePayoutDetails() asks it for these
+   * alone. Edited HERE rather than on the payout screen because the seat is
+   * not a person: PUT /users/{id} refuses that row, and always will.
+   */
+  bank_name: string | null
+  bank_account_number: string | null
+  bank_account_holder_name: string | null
+  /** The SERVER's answer to "could this be paid right now" — never re-derived. */
+  payout_details_complete: boolean
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2111,10 +2125,25 @@ async function saveHouseAccount(enable: boolean): Promise<void> {
 const renamingHouseAccount = ref(false)
 const houseAccountRename = ref('')
 
+/*
+ * 2026-09-15 (ครั้งที่สอง) — and the account the company is paid into.
+ *
+ * The same door, widened by three fields rather than given a second one: they
+ * are saved in the same PUT as the name, so the panel has one save button and
+ * the screen cannot end up holding a name that was written and a bank account
+ * that was not.
+ */
+const houseAccountBank = ref({ bank_name: '', bank_account_number: '', bank_account_holder_name: '' })
+
 function openHouseAccountRename(): void {
   if (!houseAccount.value) return
   houseAccountError.value = ''
   houseAccountRename.value = houseAccount.value.name
+  houseAccountBank.value = {
+    bank_name: houseAccount.value.bank_name ?? '',
+    bank_account_number: houseAccount.value.bank_account_number ?? '',
+    bank_account_holder_name: houseAccount.value.bank_account_holder_name ?? '',
+  }
   renamingHouseAccount.value = true
 }
 
@@ -2126,7 +2155,15 @@ async function renameHouseAccount(): Promise<void> {
   try {
     const r = await commissionApi.put<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>(
       '/commission-house-account',
-      withCompanyBody({ display_name: houseAccountRename.value.trim() }),
+      withCompanyBody({
+        display_name: houseAccountRename.value.trim(),
+        // Trimmed to null rather than '' so clearing a field actually clears
+        // it — the Service treats a blank string as "remove this", and an
+        // account typed into the wrong company has to be removable.
+        bank_name: houseAccountBank.value.bank_name.trim() || null,
+        bank_account_number: houseAccountBank.value.bank_account_number.trim() || null,
+        bank_account_holder_name: houseAccountBank.value.bank_account_holder_name.trim() || null,
+      }),
     )
     houseAccount.value = r.data.commission_house_account ?? null
     renamingHouseAccount.value = false
@@ -5660,8 +5697,27 @@ watch(companyPlanType, (pt) => {
                         data-test="house-account-rename-open"
                         @click="openHouseAccountRename"
                       >
-                        เปลี่ยนชื่อ
+                        แก้ไขชื่อ / บัญชีรับเงิน
                       </button>
+                    </div>
+                    <!--
+                      2026-09-15 (ครั้งที่สอง) — where this money is transferred.
+                      Said on the summary row, not only inside the form, because
+                      the payout screen refuses to tick this payee without it and
+                      this is the screen that fixes that.
+                    -->
+                    <div>
+                      <p class="text-[11px] font-extrabold text-slate-400">บัญชีรับเงินของบริษัท</p>
+                      <p
+                        v-if="houseAccount.payout_details_complete"
+                        class="text-sm font-extrabold text-slate-900"
+                        data-test="house-account-bank-shown"
+                      >
+                        {{ houseAccount.bank_name }} · {{ houseAccount.bank_account_number }}
+                      </p>
+                      <p v-else class="text-sm font-extrabold text-amber-700" data-test="house-account-bank-missing">
+                        ยังไม่ได้กรอก — ตั้งจ่ายส่วนของบริษัทไม่ได้
+                      </p>
                     </div>
                     <div>
                       <p class="text-[11px] font-extrabold text-slate-400">ขึ้นตรงกับบัญชีนี้</p>
@@ -5697,7 +5753,47 @@ watch(companyPlanType, (pt) => {
                     <p class="mt-1 text-[11.5px] text-slate-500">
                       เปลี่ยนเฉพาะชื่อที่แสดง · ไม่กระทบว่าใครขึ้นตรงกับบัญชีนี้ หรือค่าคอมที่ได้รับไปแล้ว
                     </p>
-                    <div class="mt-2 flex items-center gap-2">
+
+                    <!--
+                      THE ACCOUNT THE COMPANY'S OWN SHARE IS TRANSFERRED INTO.
+                      Three fields, the same three every agent is paid through,
+                      so the bank file has one set of columns. Not asked for an
+                      identity document: a company has none, and asking would
+                      refuse every company payout forever while blaming
+                      paperwork nobody can supply.
+                    -->
+                    <div class="mt-3 pt-3 border-t border-slate-100">
+                      <p class="text-[12px] font-bold text-slate-600 mb-1.5">บัญชีรับเงินของบริษัท</p>
+                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 max-w-2xl">
+                        <input
+                          v-model="houseAccountBank.bank_name"
+                          type="text"
+                          placeholder="ธนาคาร"
+                          class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                          data-test="house-account-bank-name"
+                        />
+                        <input
+                          v-model="houseAccountBank.bank_account_number"
+                          type="text"
+                          inputmode="numeric"
+                          placeholder="เลขที่บัญชี"
+                          class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                          data-test="house-account-bank-number"
+                        />
+                        <input
+                          v-model="houseAccountBank.bank_account_holder_name"
+                          type="text"
+                          placeholder="ชื่อบัญชี"
+                          class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                          data-test="house-account-bank-holder"
+                        />
+                      </div>
+                      <p class="mt-1 text-[11.5px] text-slate-500">
+                        กรอกครบทั้งสามช่องแล้วจึงจะตั้งจ่ายส่วนของบริษัทได้ที่หน้า ตั้งจ่าย · เว้นว่างไว้เพื่อลบบัญชีออก
+                      </p>
+                    </div>
+
+                    <div class="mt-3 flex items-center gap-2">
                       <button
                         type="button"
                         class="btn-primary"
@@ -5705,7 +5801,7 @@ watch(companyPlanType, (pt) => {
                         data-test="house-account-rename-save"
                         @click="renameHouseAccount"
                       >
-                        {{ houseAccountSaving ? 'กำลังบันทึก…' : 'บันทึกชื่อใหม่' }}
+                        {{ houseAccountSaving ? 'กำลังบันทึก…' : 'บันทึก' }}
                       </button>
                       <button type="button" class="btn-secondary" :disabled="houseAccountSaving" @click="renamingHouseAccount = false">
                         ยกเลิก

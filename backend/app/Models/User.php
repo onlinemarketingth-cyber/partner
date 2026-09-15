@@ -801,11 +801,32 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function hasCompletePayoutDetails(): bool
     {
-        return filled($this->national_id)
-            && $this->id_document_type !== null
-            && filled($this->bank_name)
+        /*
+         * 2026-09-15 — THE COMPANY'S OWN SEAT IS A PAYEE WITHOUT AN IDENTITY
+         * DOCUMENT, AND ALWAYS WILL BE.
+         *
+         * Owner: "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย". The seat can now be paid
+         * out (CommissionWithdrawalService), which brings it through this gate
+         * — and the two identity fields above are asked of a PERSON receiving
+         * money. A company has no national ID and no ID-document type, and
+         * CommissionHouseAccountService never writes either, so leaving the
+         * rule as it stands would refuse every company payout forever while
+         * reporting the cause as missing paperwork nobody can supply.
+         *
+         * What is left is the part that is really about money moving: an
+         * account to send it to.
+         */
+        $bankReady = filled($this->bank_name)
             && filled($this->bank_account_number)
             && filled($this->bank_account_holder_name);
+
+        if ($this->isCommissionHouseAccount()) {
+            return $bankReady;
+        }
+
+        return filled($this->national_id)
+            && $this->id_document_type !== null
+            && $bankReady;
     }
 
     public function maskedNationalId(): ?string

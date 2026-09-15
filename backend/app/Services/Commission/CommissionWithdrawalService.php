@@ -58,22 +58,24 @@ class CommissionWithdrawalService
     public function availableSatang(User $agent): int
     {
         /*
-         * 2026-09-15 — THE COMPANY CANNOT WITHDRAW FROM ITSELF.
+         * 2026-09-15 (ครั้งที่สอง) — THE HARD ZERO FOR THE HOUSE ACCOUNT IS GONE.
          *
-         * The house account is a real `users` row so the payout walk can pay
-         * it (see CommissionHouseAccountService), which means it accrues
-         * Pending ledger rows exactly like a team leader does — and every one
-         * of them is money the company already holds. Left alone, this method
-         * would report the company's own margin as a balance somebody could
-         * ask for, and the request screen would offer to transfer it.
+         * It used to `return 0` here, on the reasoning that the company cannot
+         * transfer to itself. The owner has since decided the opposite —
+         * "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย" — and they are the one who knows
+         * where that money actually goes: the company's share is transferred
+         * out to a real company bank account like anybody else's.
          *
-         * Zero, not an exception: this is also what the profile banner reads,
-         * and a balance query is not the place to throw.
+         * So the seat now reports its real balance. What replaced the blanket
+         * refusal is a narrower one in open(): the seat is payable only
+         * through the company door, and only once somebody has given it an
+         * account to pay into (ตั้งค่าค่าแนะนำ → บัญชีรับเงินของบริษัท).
+         *
+         * Nothing here can be reached by the seat itself — its password is 64
+         * random characters nobody kept and its mailbox cannot receive a reset
+         * (CommissionHouseAccountService) — so this is read by admin screens
+         * only, never by a logged-in company account.
          */
-        if ($agent->isCommissionHouseAccount()) {
-            return 0;
-        }
-
         $earned = (int) CommissionLedger::query()
             ->where('agent_id', $agent->id)
             ->where('payment_status', PaymentStatus::Pending)
@@ -126,6 +128,97 @@ class CommissionWithdrawalService
     }
 
     /**
+     * Settle this payee's WHOLE outstanding balance, if it is still the figure
+     * the admin was shown.
+     *
+     * The single-payee twin of payOutMany(), and the one door the "ตั้งจ่าย"
+     * button goes through. The staleness check used to live in the Controller;
+     * it is inside open()'s row lock now, so both doors get it and neither has
+     * its own copy of the rule.
+     *
+     * @throws ValidationException
+     */
+    public function payOutSettling(User $agent, int $expectedSatang, User $actor): CommissionWithdrawalRequest
+    {
+        return $this->open(
+            $agent,
+            $expectedSatang,
+            WithdrawalSource::CompanyPayout,
+            $actor,
+            expectWholeBalance: true,
+            // The field the screen's own number came from, so the message
+            // lands on it rather than on an `amount_satang` input that this
+            // request does not have.
+            errorKey: 'expected_total_satang',
+        );
+    }
+
+    /**
+     * 2026-09-15 (ครั้งที่สอง) — ONE PRESS, SEVERAL PAYEES, ALL OR NOTHING.
+     *
+     * Owner chose แบบ C: tick the people to pay this round, press once. That
+     * shape is only safe if the press is atomic. Raising the payouts one HTTP
+     * call at a time — the obvious way to build it in the browser — fails
+     * halfway on the third of five and leaves two payouts raised, three not,
+     * and an admin with no way to tell which without reading the queue row by
+     * row. They would then press again, and the two already raised would be
+     * refused as stale while the other three went through, which is a worse
+     * version of the same confusion.
+     *
+     * So: one transaction. Any refusal — a stale total, a missing bank
+     * account, somebody else's company — rolls back every payout in the batch
+     * and names the row that caused it. Nothing partial is ever written.
+     *
+     * ── WHY THE EMAILS WAIT ──
+     *
+     * announce() is held back until after the commit. open() normally
+     * announces as its last act, which is correct on its own; inside a batch
+     * that "last act" happens while the outer transaction is still open, and a
+     * later failure would roll the payout back after its notification had
+     * already gone out. An email about a payout that does not exist cannot be
+     * recalled.
+     *
+     * @param  list<array{agent: User, expected_total_satang: int}>  $payees
+     * @return \Illuminate\Support\Collection<int, CommissionWithdrawalRequest>
+     *
+     * @throws ValidationException
+     */
+    public function payOutMany(array $payees, User $actor): \Illuminate\Support\Collection
+    {
+        $opened = DB::transaction(function () use ($payees, $actor) {
+            $raised = collect();
+
+            foreach ($payees as $index => $payee) {
+                $raised->push([
+                    'agent' => $payee['agent'],
+                    'request' => $this->open(
+                        $payee['agent'],
+                        $payee['expected_total_satang'],
+                        WithdrawalSource::CompanyPayout,
+                        $actor,
+                        expectWholeBalance: true,
+                        announce: false,
+                        // Every refusal inside open() is keyed 'amount_satang',
+                        // which on a list of ten rows says nothing about WHICH
+                        // one. Keyed by position, the screen can put the
+                        // message on the row the admin ticked.
+                        errorKey: "payees.{$index}.expected_total_satang",
+                        payeeLabel: $payee['agent']->name,
+                    ),
+                ]);
+            }
+
+            return $raised;
+        });
+
+        foreach ($opened as $row) {
+            $this->announceOpened($row['request'], $row['agent'], WithdrawalSource::CompanyPayout);
+        }
+
+        return $opened->map(fn (array $row) => $row['request']);
+    }
+
+    /**
      * Both doors, one room.
      *
      * The only two things `$source` changes are the starting state and
@@ -134,12 +227,20 @@ class CommissionWithdrawalService
      * allocation, the audit row) is identical on purpose: a second copy of
      * any of it is a second place for the money to go wrong.
      */
-    private function open(User $agent, int $amountSatang, WithdrawalSource $source, User $actor): CommissionWithdrawalRequest
-    {
+    private function open(
+        User $agent,
+        int $amountSatang,
+        WithdrawalSource $source,
+        User $actor,
+        bool $expectWholeBalance = false,
+        bool $announce = true,
+        string $errorKey = 'amount_satang',
+        ?string $payeeLabel = null,
+    ): CommissionWithdrawalRequest {
         // Wrapped BEFORE the balance is read, not after: two requests
         // submitted at the same moment must not both see the same balance
         // and both pass. The row lock inside is what makes that true.
-        $request = DB::transaction(function () use ($agent, $amountSatang, $source, $actor) {
+        $request = DB::transaction(function () use ($agent, $amountSatang, $source, $actor, $expectWholeBalance, $errorKey, $payeeLabel) {
             // Lock the agent's own row for the duration. It is not the data
             // being summed, but it is a single, always-present row that every
             // concurrent request for THIS agent contends on — which is
@@ -154,15 +255,18 @@ class CommissionWithdrawalService
             $agent = $agent->fresh();
 
             /*
-             * The write-side twin of availableSatang()'s zero. Asked as well
-             * as, not instead of: a balance of zero already refuses further
-             * down, but that refusal reads as "you have nothing right now",
-             * which for this account is wrong in a way somebody would try to
-             * fix by waiting for more sales.
+             * THE COMPANY IS PAID, BUT IT NEVER ASKS.
+             *
+             * The seat is a payee now (see availableSatang), but only through
+             * the company door. The agent door is reached by somebody logged
+             * in as the payee, and nobody can be logged in as this row — so an
+             * AgentRequest naming it is not a company asking for its money, it
+             * is a sign that something else is wrong, and it stops here rather
+             * than opening a request nobody raised.
              */
-            if ($agent->isCommissionHouseAccount()) {
+            if ($agent->isCommissionHouseAccount() && $source !== WithdrawalSource::CompanyPayout) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => 'บัญชีบริษัทเบิกค่าคอมไม่ได้ — เงินส่วนนี้อยู่กับบริษัทอยู่แล้ว',
+                    $errorKey => 'บัญชีบริษัทขอเบิกเองไม่ได้ — ส่วนของบริษัทตั้งจ่ายจากหน้าตั้งจ่ายเท่านั้น',
                 ]);
             }
 
@@ -175,15 +279,27 @@ class CommissionWithdrawalService
              */
             if (! $agent->hasCompletePayoutDetails()) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => $source === WithdrawalSource::CompanyPayout
-                        ? 'ตั้งจ่ายไม่ได้ — ตัวแทนคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ'
-                        : 'กรุณากรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อนขอเบิก',
+                    /*
+                     * Three readers, three sentences. The third is new with the
+                     * company seat: telling an admin that the COMPANY has not
+                     * uploaded its identity document would send them looking
+                     * for a profile page that does not exist for this row — the
+                     * account lives on the commission settings screen, and
+                     * what it is missing is a bank account.
+                     */
+                    $errorKey => match (true) {
+                        $agent->isCommissionHouseAccount() => 'ตั้งจ่ายส่วนของบริษัทไม่ได้ — ยังไม่ได้กรอกบัญชีรับเงินของบริษัท (ตั้งค่าระบบ → ตั้งค่าค่าแนะนำ)',
+                        $source === WithdrawalSource::CompanyPayout => $payeeLabel !== null
+                            ? "ตั้งจ่ายไม่ได้ — {$payeeLabel} ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ"
+                            : 'ตั้งจ่ายไม่ได้ — ตัวแทนคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ',
+                        default => 'กรุณากรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อนขอเบิก',
+                    },
                 ]);
             }
 
             if ($amountSatang <= 0) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => 'จำนวนเงินที่ขอเบิกต้องมากกว่า 0',
+                    $errorKey => 'จำนวนเงินที่ขอเบิกต้องมากกว่า 0',
                 ]);
             }
 
@@ -206,7 +322,7 @@ class CommissionWithdrawalService
 
             if ($minimum !== null && $amountSatang < $minimum) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => sprintf(
+                    $errorKey => sprintf(
                         'ยอดขั้นต่ำในการเบิกคือ %s บาท',
                         number_format($minimum / 100, 2)
                     ),
@@ -215,9 +331,34 @@ class CommissionWithdrawalService
 
             $available = $this->availableSatang($agent);
 
+            /*
+             * THE PRESS PAYS THE WHOLE BALANCE, AND ONLY THE ONE THAT WAS
+             * SHOWN.
+             *
+             * Asked HERE rather than in the controller, where it used to live,
+             * because here it is inside the row lock. Outside it, a sale
+             * completing between the check and the write slipped through the
+             * gap — the window was small, and BR-4 means the ledger rows a
+             * payout settles cannot be un-settled afterwards, so "small" was
+             * not the same as "acceptable".
+             *
+             * The wording names both figures on purpose: an admin who is told
+             * only "this is stale" cannot tell whether the difference is one
+             * new sale or somebody else already paying this person.
+             */
+            if ($expectWholeBalance && $available !== $amountSatang) {
+                throw ValidationException::withMessages([
+                    $errorKey => ($payeeLabel !== null ? "{$payeeLabel}: " : '')
+                        .'ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว ('
+                        .number_format($available / 100, 2).' บาท ไม่ตรงกับ '
+                        .number_format($amountSatang / 100, 2).' บาท ที่แสดงอยู่) '
+                        .'— กรุณารีเฟรชหน้าจอแล้วลองใหม่ ระบบยังไม่ได้ตั้งจ่ายใด ๆ',
+                ]);
+            }
+
             if ($amountSatang > $available) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => sprintf(
+                    $errorKey => sprintf(
                         'ยอดที่เบิกได้ขณะนี้คือ %s บาท',
                         number_format($available / 100, 2)
                     ),
@@ -284,7 +425,9 @@ class CommissionWithdrawalService
          * roll back a payout that was written correctly — the same rule every
          * AuditLog::create() in this codebase follows for the same reason.
          */
-        $this->announceOpened($request, $agent, $source);
+        if ($announce) {
+            $this->announceOpened($request, $agent, $source);
+        }
 
         return $request;
     }
@@ -308,14 +451,20 @@ class CommissionWithdrawalService
         $baht = number_format((int) $request->amount_satang / 100, 2);
 
         if ($source === WithdrawalSource::CompanyPayout) {
-            $this->notifier->notify(
-                $agent,
-                NotificationType::CommissionWithdrawalDecided,
-                'บริษัทตั้งจ่ายค่าคอมให้คุณแล้ว',
-                "จำนวน {$baht} บาท อยู่ระหว่างรอโอน จะแจ้งอีกครั้งเมื่อโอนเรียบร้อย",
-                '/withdrawals',
-                ['commission_withdrawal_request_id' => $request->id],
-            );
+            foreach ($this->audienceFor($agent) as $recipient) {
+                $this->notifier->notify(
+                    $recipient,
+                    NotificationType::CommissionWithdrawalDecided,
+                    $agent->isCommissionHouseAccount()
+                        ? 'ตั้งจ่ายส่วนของบริษัทแล้ว'
+                        : 'บริษัทตั้งจ่ายค่าคอมให้คุณแล้ว',
+                    $agent->isCommissionHouseAccount()
+                        ? "ส่วนของบริษัท {$baht} บาท อยู่ระหว่างรอโอน"
+                        : "จำนวน {$baht} บาท อยู่ระหว่างรอโอน จะแจ้งอีกครั้งเมื่อโอนเรียบร้อย",
+                    '/withdrawals',
+                    ['commission_withdrawal_request_id' => $request->id],
+                );
+            }
 
             return;
         }
@@ -330,6 +479,27 @@ class CommissionWithdrawalService
                 ['commission_withdrawal_request_id' => $request->id],
             );
         }
+    }
+
+    /**
+     * WHO ACTUALLY HEARS ABOUT A PAYOUT TO THIS PAYEE.
+     *
+     * Normally the payee — it is their money and their bank account.
+     *
+     * The company's own seat has neither a person nor a reachable address:
+     * house.<id>@commission.internal is on a domain RFC 6762 reserves, so it
+     * resolves nowhere and every message to it is a guaranteed bounce. Sending
+     * there would look like a notification and be a silent hole. The company's
+     * own admins are told instead; they are the people who will see the money
+     * arrive, and adminsOf() already leaves the seat out of that list.
+     *
+     * @return \Illuminate\Support\Collection<int, User>
+     */
+    private function audienceFor(User $payee): \Illuminate\Support\Collection
+    {
+        return $payee->isCommissionHouseAccount()
+            ? $this->adminsOf($payee)
+            : collect([$payee]);
     }
 
     /**
@@ -580,14 +750,23 @@ class CommissionWithdrawalService
             : '';
 
         if ($updated->agent) {
-            $this->notifier->notify(
-                $updated->agent,
-                NotificationType::CommissionPaid,
-                'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
-                "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",
-                '/withdrawals',
-                ['commission_withdrawal_request_id' => $updated->id],
-            );
+            // "โอนเข้าบัญชีของคุณแล้ว" is addressed to the payee, and for a
+            // company-seat payout the readers are the admins who authorised
+            // it — the sentence has to name whose account the money went to.
+            $isHouse = $updated->agent->isCommissionHouseAccount();
+
+            foreach ($this->audienceFor($updated->agent) as $recipient) {
+                $this->notifier->notify(
+                    $recipient,
+                    NotificationType::CommissionPaid,
+                    $isHouse ? 'โอนส่วนของบริษัทเรียบร้อยแล้ว' : 'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
+                    $isHouse
+                        ? "ส่วนของบริษัท {$baht} บาท โอนเข้าบัญชีบริษัทแล้ว{$withReference}"
+                        : "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",
+                    '/withdrawals',
+                    ['commission_withdrawal_request_id' => $updated->id],
+                );
+            }
         }
 
         return $updated;
@@ -606,14 +785,18 @@ class CommissionWithdrawalService
             return;
         }
 
-        $this->notifier->notify(
-            $request->agent,
-            NotificationType::CommissionWithdrawalDecided,
-            $title,
-            $body(number_format((int) $request->amount_satang / 100, 2)),
-            '/withdrawals',
-            ['commission_withdrawal_request_id' => $request->id],
-        );
+        // A company-seat payout is announced to the company's admins instead
+        // of into a mailbox that cannot receive it — see audienceFor().
+        foreach ($this->audienceFor($request->agent) as $recipient) {
+            $this->notifier->notify(
+                $recipient,
+                NotificationType::CommissionWithdrawalDecided,
+                $title,
+                $body(number_format((int) $request->amount_satang / 100, 2)),
+                '/withdrawals',
+                ['commission_withdrawal_request_id' => $request->id],
+            );
+        }
     }
 
     /**

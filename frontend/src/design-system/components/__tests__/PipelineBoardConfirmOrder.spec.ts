@@ -415,7 +415,7 @@ describe('§4.4 — the action goes through the confirmation dialog', () => {
     // The dialog is up; the ledger has not been touched.
     expect(post).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('ยืนยันว่าได้รับเงิน 8,900.00 บาท สำหรับ ORD-TEST01 แล้ว?')
-    expect(wrapper.text()).toContain('ระบบจะบันทึกคอมมิชชั่นทันทีและแก้ไขภายหลังไม่ได้ (BR-4)')
+    expect(wrapper.text()).toContain('แก้ไขย้อนหลังไม่ได้')
 
     await dialogConfirm(wrapper).trigger('click')
     await flushPromises()

@@ -13,6 +13,7 @@ use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\CommissionOverrideRule;
 use App\Models\CommissionRule;
+use App\Models\CommissionWithdrawalRequest;
 use App\Models\Company;
 use App\Models\Product;
 use App\Models\Referral;
@@ -236,24 +237,127 @@ class CommissionHouseAccountTest extends TestCase
 
     // ── It is not treated like a person ───────────────────────────────
 
-    public function test_the_company_cannot_withdraw_its_own_margin(): void
+    /*
+     * ── 2026-09-15 (ครั้งที่สอง): THE RULE HERE WAS REVERSED ──
+     *
+     * This section used to pin "the company cannot withdraw its own margin":
+     * availableSatang() returned a hard zero for the seat and both doors of
+     * CommissionWithdrawalService refused it outright.
+     *
+     * The owner decided the opposite — "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย" —
+     * and they are the one who knows where that money goes: the company's
+     * share is transferred out to a real company account like anybody else's.
+     * The old test is not deleted quietly, it is rewritten, because "why can
+     * the company be paid now" is a question somebody will ask of exactly
+     * this file.
+     *
+     * What replaced the blanket refusal is narrower, and these tests are what
+     * hold it in place: the seat is payable only through the COMPANY door, and
+     * only once it has an account to be paid into.
+     */
+
+    public function test_the_company_seat_reports_the_real_balance_it_is_owed(): void
+    {
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $this->sell($world);
+
+        // The leader override the seat earned on that sale — a real figure,
+        // where this used to answer zero whatever had happened.
+        $this->assertGreaterThan(0, app(CommissionWithdrawalService::class)->availableSatang($house->fresh()));
+    }
+
+    public function test_the_company_seat_still_cannot_ask_for_its_own_money(): void
     {
         /*
-         * The seat accrues Pending ledger rows exactly like a leader does, and
-         * every satang of them is money the company already holds. Without
-         * this guard the balance query would offer it as something to request
-         * a transfer of.
+         * THE HALF OF THE OLD GUARD THAT SURVIVED, AND WHY.
+         *
+         * request() is the agent door — it is reached by somebody logged in as
+         * the payee, and nobody can be logged in as this row (64 random
+         * characters nobody kept, on a mailbox that cannot receive a reset).
+         * So a request naming the seat is not the company asking for its
+         * money; it is a sign something else is wrong, and it stops here.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $this->sell($world);
+
+        $this->expectException(ValidationException::class);
+        app(CommissionWithdrawalService::class)->request($house->fresh(), 10000);
+    }
+
+    public function test_paying_the_company_is_refused_until_it_has_an_account_to_be_paid_into(): void
+    {
+        /*
+         * THE ONE THAT MATTERS. The seat has no bank details when it is
+         * created and nothing else fills them in, so without this the first
+         * company payout would go into the queue carrying an empty bank
+         * snapshot — and be discovered by whoever opened the transfer file.
          */
         $world = $this->world(agentRate: 300, leaderRate: 200);
         $house = $this->houseAccounts()->create($world['company']);
         $this->sell($world);
 
         $withdrawals = app(CommissionWithdrawalService::class);
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $world['company']->id]);
+        $owed = $withdrawals->availableSatang($house->fresh());
 
-        $this->assertSame(0, $withdrawals->availableSatang($house->fresh()));
+        try {
+            $withdrawals->payOutSettling($house->fresh(), $owed, $admin);
+            $this->fail('a company with no bank account was paid out');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('บัญชีรับเงินของบริษัท', $e->getMessage());
+        }
 
-        $this->expectException(ValidationException::class);
-        $withdrawals->request($house->fresh(), 10000);
+        $this->assertSame(0, CommissionWithdrawalRequest::withoutGlobalScopes()->count());
+    }
+
+    public function test_once_the_company_account_is_filled_in_the_payout_is_raised(): void
+    {
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $this->houseAccounts()->create($world['company']);
+        $this->sell($world);
+
+        // Through the seat's OWN door — PUT /users/{id} is closed on this row
+        // and stays closed.
+        $house = $this->houseAccounts()->update($world['company']->fresh(), 'บริษัท ตัวอย่าง', [
+            'bank_name' => 'กสิกรไทย',
+            'bank_account_number' => '1234567890',
+            'bank_account_holder_name' => 'บริษัท ตัวอย่าง จำกัด',
+        ]);
+
+        $withdrawals = app(CommissionWithdrawalService::class);
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $world['company']->id]);
+        $owed = $withdrawals->availableSatang($house->fresh());
+
+        $payout = $withdrawals->payOutSettling($house->fresh(), $owed, $admin);
+
+        $this->assertSame($owed, (int) $payout->amount_satang);
+        // The snapshot is what the bank file is built from, so it has to be
+        // the account that was just saved, not a live read at transfer time.
+        $this->assertSame('1234567890', $payout->bank_account_number);
+    }
+
+    public function test_the_company_has_no_identity_document_and_is_not_asked_for_one(): void
+    {
+        /*
+         * hasCompletePayoutDetails() asks a PERSON for a national ID and a
+         * document type. CommissionHouseAccountService never writes either and
+         * a company has neither, so leaving that rule unchanged would have
+         * refused every company payout forever while blaming missing paperwork
+         * nobody could supply.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $this->houseAccounts()->create($world['company']);
+        $house = $this->houseAccounts()->update($world['company']->fresh(), 'บริษัท ตัวอย่าง', [
+            'bank_name' => 'กสิกรไทย',
+            'bank_account_number' => '1234567890',
+            'bank_account_holder_name' => 'บริษัท ตัวอย่าง จำกัด',
+        ]);
+
+        $this->assertNull($house->national_id);
+        $this->assertNull($house->id_document_type);
+        $this->assertTrue($house->fresh()->hasCompletePayoutDetails());
     }
 
     public function test_an_ordinary_company_admin_is_untouched_by_that_guard(): void

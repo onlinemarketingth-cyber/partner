@@ -99,6 +99,8 @@ interface RowOverrides {
   total_pending_satang?: number | null
   /** 2026-09-15 — this payee is the company itself, not one of its agents. */
   is_company_share?: boolean
+  payout_details_complete?: boolean
+  bank_account_number?: string | null
 }
 
 function makeRow(overrides: RowOverrides = {}) {
@@ -109,9 +111,17 @@ function makeRow(overrides: RowOverrides = {}) {
     total_pending_satang:
       overrides.total_pending_satang === undefined ? TWO_THOUSAND_BAHT : overrides.total_pending_satang,
     entry_count: 3,
-    bank_name: null,
-    bank_account_number: null,
-    bank_account_holder_name: null,
+    bank_name: 'กสิกรไทย',
+    bank_account_number: '1234567890',
+    bank_account_holder_name: 'สมชาย ใจดี',
+    /*
+     * 2026-09-15 — the SERVER's answer to "can this payee be paid at all".
+     *
+     * Default true so the rows in this file are ordinary payable people; the
+     * tests about the refusals pass false explicitly. A default of false would
+     * make every selection test here fail for a reason none of them is about.
+     */
+    payout_details_complete: true,
     avatar_url: null,
     cert_tier: null,
     ...overrides,
@@ -127,10 +137,23 @@ function wireApi(rows: ReturnType<typeof makeRow>[]) {
   })
 }
 
-async function mountView(rows: ReturnType<typeof makeRow>[]) {
+/**
+ * @param view which tab to land on. The screen OPENS on ค้างจ่าย now (the
+ *             owner's "ที่จ่ายไปแล้ว ต้องไม่แสดง"), and that view deliberately
+ *             does not render the จ่ายแล้ว column at all — so the tests about
+ *             both buckets being printed have to ask for ทั้งหมด, exactly as a
+ *             reader would.
+ */
+async function mountView(rows: ReturnType<typeof makeRow>[], view: 'pending' | 'paid' | 'all' = 'all') {
   wireApi(rows)
   const wrapper = mount(CommissionPayoutsView, { global: { stubs: { CommissionLedgerPanel: true } } })
   await flushPromises()
+
+  if (view !== 'pending') {
+    await wrapper.get(`[data-test="payout-view-${view}"]`).trigger('click')
+    await flushPromises()
+  }
+
   return wrapper
 }
 
@@ -208,217 +231,295 @@ describe('filtered by payment_status — the excluded bucket was never measured'
 
 
 /**
- * 2026-09-15 — THE COMPANY'S OWN SHARE IS NOT A PAYEE.
+ * ══════════════════════════════════════════════════════════════════════════
+ * 2026-09-15 — THE SCREEN BECAME แบบ C, AND TWO RULES CHANGED WITH IT.
  *
- * A company can hold a seat at the top of its own hierarchy and be paid a
- * leader's override (ขั้นตอนที่ 4.2). This screen is a payout RUN: every row
- * on it is somebody a transfer is about to be made to, and it carries their
- * bank details and a drill-down for exactly that reason.
+ * Owner: "คือตั้งจ่าย มันควรจะมีแต่ตั้งจ่าย ที่จ่ายไปแล้ว ต้องไม่แสดง เลือกเป็น
+ * ตัวกรองได้" and "ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย".
  *
- * The company's row belongs to neither half of that. It is real money the
- * admin wants to see, and it is money that never moves — so it is SPLIT OUT
- * rather than filtered away, which would hide it, or left in place, which
- * would queue it.
+ * So the default view is ค้างจ่าย only, the press is a selection rather than a
+ * per-row button, and the company's own share — which every test in the block
+ * this replaces asserted could NEVER be paid — is a payee like anybody else.
+ *
+ * The old expectations are not deleted quietly. They are rewritten, because
+ * "wasn't the company excluded on purpose?" is a question somebody will ask of
+ * exactly this file, and the answer is: it was, and the owner changed it.
+ * ══════════════════════════════════════════════════════════════════════════
  */
-describe('the company share is reported apart from the agents', () => {
-  it('lifts it out of the agent list into its own row', async () => {
-    const wrapper = await mountView([
-      makeRow({ agent_id: 1, agent_name: 'สมชาย' }),
-      makeRow({ agent_id: 90, agent_name: 'Thai Life insurance', is_company_share: true }),
-    ])
 
-    const companyRow = wrapper.get('[data-test="company-share-row-90"]')
-    expect(companyRow.text()).toContain('ส่วนของบริษัท')
-    expect(companyRow.text()).toContain('Thai Life insurance')
-    // ...and it says why there is nothing to do with it, which is the whole
-    // reason it cannot sit in the list above.
-    expect(companyRow.text()).toContain('ไม่ต้องโอน')
+describe('ค้างจ่าย is the view the screen opens on', () => {
+  it('asks the server for only what is still owed, without being told to', async () => {
+    // THE ONE THAT MATTERS for the owner's complaint. Work and history looked
+    // identical because the screen opened on "ทั้งหมด".
+    wireApi([makeRow()])
+    mount(CommissionPayoutsView, { global: { stubs: { CommissionLedgerPanel: true } } })
+    await flushPromises()
+
+    expect(get).toHaveBeenCalledWith(expect.stringContaining('payment_status=pending'))
   })
 
-  it('leaves the agent rows alone', async () => {
-    const wrapper = await mountView([
-      makeRow({ agent_id: 1, agent_name: 'สมชาย' }),
-      makeRow({ agent_id: 90, agent_name: 'Thai Life insurance', is_company_share: true }),
-    ])
+  it('does not show a จ่ายแล้ว column in that view — it is history, not work', async () => {
+    const wrapper = await mountView([makeRow()], 'pending')
 
-    expect(wrapper.text()).toContain('สมชาย')
-    expect(wrapper.find('[data-test="company-share-row-1"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('2,000 บาท')
+    expect(wrapper.text()).not.toContain('1,500 บาท')
   })
 
-  it('shows nothing extra for a company that has no seat', async () => {
-    const wrapper = await mountView([makeRow({ agent_id: 1, agent_name: 'สมชาย' })])
+  it('จ่ายแล้ว is a tab, and asking for it refetches', async () => {
+    const wrapper = await mountView([makeRow()], 'paid')
 
-    expect(wrapper.find('[data-test="company-share-row-1"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('ส่วนของบริษัท')
+    expect(get).toHaveBeenCalledWith(expect.stringContaining('payment_status=paid'))
+    // ...and nothing can be raised from a history view.
+    expect(wrapper.find('[data-test="payout-select-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payout-paid-view-note"]').text()).toContain('ตั้งจ่ายจากหน้านี้ไม่ได้')
+  })
+
+  it('ทั้งหมด is still reachable, because "who have I paid at all" is a real question', async () => {
+    const wrapper = await mountView([makeRow()], 'all')
+
+    expect(wrapper.text()).toContain('1,500 บาท')
+    expect(wrapper.text()).toContain('2,000 บาท')
   })
 })
 
-/**
- * 2026-09-15 — ONE MENU, TWO VIEWS.
- *
- * Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
- *
- * Two screens in two different pillars used to show the same ledger: this one
- * grouped by agent with the bank details and the CSV, and /commission as flat
- * rows with the only button that marks anything paid. A payout run needed
- * both. They are one screen now.
- *
- * What is pinned here is the part a refactor loses silently: the deep link.
- * The dashboard's "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still points at
- * /commission?tab=paid, and that link means "show me the paid LEDGER ROWS" —
- * so it has to land on the row view, not on the per-agent default.
- */
-/*
- * 2026-09-15 — THE IN-PAGE VIEW SWITCHER IS GONE.
- *
- * Owner: "ย้าย ตั้งจ่าย รอบจ่าย รายรายการ ไปเป็น sub menu". The three views
- * became three routes under the ค่าแนะนำ pillar, so the left-hand menu is the
- * only switcher and this screen is just the first of the three. The tests
- * that pressed the tab strip moved to CommissionPayoutQueue.spec.ts, where
- * they now assert the ROUTES rather than the tabs.
- */
+describe('the selection', () => {
+  it('adds the row to a running total that is printed before the press', async () => {
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1, total_pending_satang: TWO_THOUSAND_BAHT }),
+      makeRow({ agent_id: 2, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT }),
+    ], 'pending')
 
-/**
- * 2026-09-15 — "ตั้งจ่าย" (แนวทาง C).
- *
- * Owner: "ระบบเราใช้วิธีโอนเองผ่านระบบการทำงาน Bank เราไม่ได้ Payment auto ซึ่ง
- * ต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้วจึงมากดยืนยัน."
- *
- * The button that stood here for one day settled the commission rows on the
- * press and emailed the agent that their money had arrived — days before
- * accounting actually sent it, and permanently (BR-4). It now RAISES a payout
- * into the รอบจ่าย queue instead and touches no ledger row.
- *
- * So these tests are mostly about what the press does NOT do. A screen that
- * still talks about settling, or that still posts to the endpoint which
- * settles, would be the same defect with a new label.
- */
-describe('ตั้งจ่าย', () => {
+    await wrapper.get('[data-test="payout-select-1"]').trigger('change')
+    await wrapper.get('[data-test="payout-select-2"]').trigger('change')
+
+    // 2,000 + 1,500. The figure an admin checks against what accounting is
+    // about to be asked to transfer — so it is theirs to see BEFORE pressing.
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('3,500 บาท')
+  })
+
+  it('hides the bar entirely when nothing is ticked', async () => {
+    const wrapper = await mountView([makeRow()], 'pending')
+
+    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(false)
+  })
+
+  it('cannot tick somebody with nothing owed', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: 0 })], 'pending')
+
+    expect(wrapper.get('[data-test="payout-select-1"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('cannot tick somebody the server would refuse, and says why on the row', async () => {
+    /*
+     * The refusal is the SERVER's (payout_details_complete), shown here rather
+     * than discovered from a 422 after eight people were ticked. Re-deriving
+     * it from the three bank fields would be a second copy of a rule that
+     * differs per payee type.
+     */
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1, payout_details_complete: false, bank_account_number: null }),
+    ], 'pending')
+
+    expect(wrapper.get('[data-test="payout-select-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="payout-blocked-1"]').text()).toContain('บัญชีธนาคาร')
+  })
+
+  it('select-all takes everybody who can actually be paid, and nobody who cannot', async () => {
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1, total_pending_satang: TWO_THOUSAND_BAHT }),
+      makeRow({ agent_id: 2, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT }),
+      makeRow({ agent_id: 3, agent_name: 'ไม่มีบัญชี', payout_details_complete: false }),
+    ], 'pending')
+
+    await wrapper.get('[data-test="payout-select-all"]').trigger('change')
+
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('3,500 บาท')
+  })
+
+  it('is dropped when the view changes, because the amounts under it change too', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
+    await wrapper.get('[data-test="payout-select-1"]').trigger('change')
+    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(true)
+
+    await wrapper.get('[data-test="payout-view-all"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(false)
+  })
+})
+
+describe('the press', () => {
+  async function ticked(rows: ReturnType<typeof makeRow>[] = [makeRow({ agent_id: 42 })]) {
+    const first = rows[0]!
+    const wrapper = await mountView(rows, 'pending')
+    await wrapper.get(`[data-test="payout-select-${first.agent_id}"]`).trigger('change')
+    return wrapper
+  }
+
   it('does not write on the first press', async () => {
-    const wrapper = await mountView([makeRow({ agent_id: 1 })])
+    const wrapper = await ticked()
 
-    await wrapper.get('[data-test="pay-all-1"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
 
     expect(post).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-test="pay-all-confirm-1"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payout-batch-confirm"]').exists()).toBe(true)
   })
 
   it('names the amount, and says plainly that nothing is settled yet', async () => {
-    /*
-     * The old copy here read "บันทึกว่าโอนเงินแล้ว … แก้ไขย้อนหลังไม่ได้",
-     * which was true of the button this replaced and is now the opposite of
-     * what happens. Wrong-but-reassuring copy on a money button is worse than
-     * none.
-     */
-    const wrapper = await mountView([makeRow({ agent_id: 1, agent_name: 'สมชาย' })])
+    const wrapper = await ticked()
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
 
-    await wrapper.get('[data-test="pay-all-1"]').trigger('click')
+    const confirm = wrapper.get('[data-test="payout-batch-confirm"]').text()
 
-    const confirm = wrapper.get('[data-test="pay-all-confirm-1"]').text()
-    expect(confirm).toContain('สมชาย')
     expect(confirm).toContain('2,000 บาท')
     expect(confirm).toContain('ยังไม่ปิดรายการค่าคอม')
     expect(confirm).toContain('รอบจ่าย')
+    // The copy this replaced said "แก้ไขย้อนหลังไม่ได้", which was true of the
+    // button that settled the ledger and is now the opposite of what happens.
     expect(confirm).not.toContain('แก้ไขย้อนหลังไม่ได้')
   })
 
-  it('raises a payout instead of settling the ledger', async () => {
+  it('sends every ticked payee in ONE request, each with the total that was shown', async () => {
     /*
-     * THE ONE THAT MATTERS. /commission-ledger/mark-paid closes the rows on
-     * the spot; /commission-withdrawals/payout puts them in a queue that
-     * waits for the bank. Posting to the wrong one would restore the exact
-     * behaviour แนวทาง C exists to remove, with the new wording on top of it.
+     * THE ONE THAT MATTERS. A loop over the single-payee endpoint fails on the
+     * third of five and leaves an admin with two payouts raised, three not,
+     * and no way to tell which.
      */
-    const wrapper = await mountView([makeRow({ agent_id: 42 })])
-
-    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
-    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    const wrapper = await mountView([
+      makeRow({ agent_id: 42, total_pending_satang: TWO_THOUSAND_BAHT }),
+      makeRow({ agent_id: 43, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT }),
+    ], 'pending')
+    await wrapper.get('[data-test="payout-select-42"]').trigger('change')
+    await wrapper.get('[data-test="payout-select-43"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
     await flushPromises()
 
-    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout', {
-      agent_id: 42,
-      expected_total_satang: TWO_THOUSAND_BAHT,
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout-batch', {
+      payees: [
+        { agent_id: 42, expected_total_satang: TWO_THOUSAND_BAHT },
+        { agent_id: 43, expected_total_satang: FIFTEEN_HUNDRED_BAHT },
+      ],
     })
   })
 
-  it('sends the total that was on screen, so the server can refuse a stale press', async () => {
-    // Between the page loading and the press, a sale can complete. Sending
-    // the figure the admin actually saw is what lets the server refuse rather
-    // than raise a payout larger than the one authorised.
-    const wrapper = await mountView([makeRow({ agent_id: 42, total_pending_satang: 123_400 })])
-
-    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
-    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+  it('raises payouts rather than settling the ledger', async () => {
+    const wrapper = await ticked()
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
     await flushPromises()
 
-    expect(post.mock.calls[0]?.[1]).toMatchObject({ expected_total_satang: 123_400 })
+    // The endpoint that settles a ledger row is never touched by this screen.
+    expect(post).not.toHaveBeenCalledWith('/commission-ledger/mark-paid', expect.anything())
   })
 
-  it('reports what the server raised, and points at where it went', async () => {
-    post.mockResolvedValue({ data: { id: 9, amount_satang: 987_600 } })
-    const wrapper = await mountView([makeRow({ agent_id: 42 })])
-
-    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
-    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+  it('reports what was raised, and points at where it went', async () => {
+    const wrapper = await ticked()
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
     await flushPromises()
 
-    const done = wrapper.get('[data-test="pay-all-done-42"]').text()
-    expect(done).toContain('9,876 บาท')
+    const done = wrapper.get('[data-test="payout-batch-done"]').text()
+
+    expect(done).toContain('2,000 บาท')
     expect(done).toContain('รอบจ่าย')
   })
 
   it("shows the server's own refusal, because it is the one that says what to do", async () => {
-    post.mockRejectedValue(new FakeApiError(422, {
-      errors: { expected_total_satang: ['ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว — กรุณารีเฟรชหน้าจอแล้วลองใหม่'] },
+    const wrapper = await ticked()
+    post.mockRejectedValueOnce(new FakeApiError(422, {
+      errors: { 'payees.0.expected_total_satang': ['ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว — กรุณารีเฟรชหน้าจอแล้วลองใหม่'] },
     }))
-    const wrapper = await mountView([makeRow({ agent_id: 42 })])
 
-    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
-    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="pay-all-error-42"]').text()).toContain('กรุณารีเฟรชหน้าจอ')
-    // Still open, so the reader can act on what they were just told.
-    expect(wrapper.find('[data-test="pay-all-confirm-42"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pay-all-done-42"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payout-batch-error"]').text()).toContain('กรุณารีเฟรชหน้าจอ')
+    // The selection survives a refusal: nothing was raised, so the admin's
+    // work of choosing who to pay must not have to be redone.
+    expect(wrapper.find('[data-test="payout-batch-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payout-batch-done"]').exists()).toBe(false)
   })
 
   it('goes away under a date filter, and says why', async () => {
-    /*
-     * A payout is raised for the agent's WHOLE outstanding balance. Under a
-     * date filter the figure on the row is a slice of it, so a button there
-     * would either pay a different number from the one beside it or have to
-     * explain itself after the press.
-     */
-    const wrapper = await mountView([makeRow({ agent_id: 1 })])
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
 
+    await wrapper.get('[data-test="payout-toggle-dates"]').trigger('click')
     const dates = wrapper.findComponent(DateRangeFilter)
     dates.vm.$emit('update:dateFrom', '2026-01-01')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="payout-select-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="payout-date-filter-note"]').text()).toContain('ยอดค้างทั้งหมด')
   })
+})
 
-  it('is not offered when nothing is owed', async () => {
-    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: 0 })])
+/**
+ * 2026-09-15 (ครั้งที่สอง) — THE COMPANY'S OWN SHARE IS A PAYEE NOW.
+ *
+ * It used to be lifted out of the list into a green box that explained why it
+ * could never be paid, and the tests here asserted exactly that. The owner
+ * decided the company's share is transferred out like anybody else's
+ * ("ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย"), so it is a row in the table.
+ *
+ * What survives from the old rule is the LABEL. An admin reconciling a bank
+ * file still has to be able to tell at a glance which line is not a person —
+ * and that row's bank details live on ตั้งค่าค่าแนะนำ, because PUT /users/{id}
+ * refuses the seat and always will.
+ */
+describe("the company's own share", () => {
+  const COMPANY = {
+    agent_id: 90,
+    agent_name: 'Thai Life insurance',
+    is_company_share: true,
+  }
 
-    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+  it('sits in the table, labelled, rather than in a box above it', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1 }), makeRow(COMPANY)], 'pending')
+
+    const row = wrapper.get('[data-test="company-share-row-90"]')
+
+    expect(row.text()).toContain('ส่วนของบริษัท')
+    expect(row.text()).toContain('Thai Life insurance')
+    // The sentence that used to be the whole point of the box is gone: this
+    // money DOES move now.
+    expect(wrapper.text()).not.toContain('ไม่ต้องโอน')
   })
 
-  it('is not offered when the filter excluded the pending bucket', async () => {
-    // §3.7 (F-10) again, with money attached: null is "nobody measured this".
-    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: null })])
+  it('can be ticked and paid like anybody else', async () => {
+    const wrapper = await mountView([makeRow(COMPANY)], 'pending')
 
-    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+    await wrapper.get('[data-test="payout-select-90"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout-batch', {
+      payees: [{ agent_id: 90, expected_total_satang: TWO_THOUSAND_BAHT }],
+    })
   })
 
-  it("is not offered on the company's own share", async () => {
-    // That money is already with the company; there is no transfer to raise.
+  it('points at the settings screen for its account, not at an inline form', async () => {
+    /*
+     * The seat is not a person. UserPolicy::update and UserService both refuse
+     * that row, so the "แก้ไข" link every agent row carries would open a form
+     * whose save can only fail.
+     */
     const wrapper = await mountView([
-      makeRow({ agent_id: 90, agent_name: 'Thai Life insurance', is_company_share: true }),
-    ])
+      makeRow({ ...COMPANY, payout_details_complete: false, bank_account_number: null }),
+    ], 'pending')
 
-    expect(wrapper.find('[data-test="pay-all-90"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="payout-company-bank-link"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payout-bank-edit-90"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payout-blocked-90"]').text()).toContain('บัญชีรับเงินของบริษัท')
+  })
+
+  it('shows nothing extra for a company that has no seat', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
+
+    expect(wrapper.find('[data-test="company-share-row-1"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('ส่วนของบริษัท')
   })
 })
