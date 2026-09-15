@@ -158,6 +158,43 @@ class CommissionHouseAccountService
     }
 
     /**
+     * Change the name the seat is shown under.
+     *
+     * ── WHY THE SEAT NEEDS ITS OWN RENAME DOOR ──
+     *
+     * Every guard this feature added points the same way: UserPolicy::update
+     * refuses the seat, UserService refuses to reset its password, move it or
+     * deactivate it. Those refusals are right — the seat is not a person and
+     * must not be edited as one — but together they closed the ONE edit that
+     * is legitimate. A company that typed the wrong name when it turned the
+     * seat on was stuck with it forever, on every payout row and every screen,
+     * with no way back short of deleting the seat and losing the link between
+     * its history and its successor.
+     *
+     * So the door exists, and it is exactly this wide: one field, on the
+     * company's own commission settings, behind the same Ability as every
+     * other step-4 write. Nothing here can change who the seat reports to,
+     * who reports to it, what it is paid, or whether anyone can sign in as it.
+     *
+     * `first_name`, not `name` — same reason as create(): `users.name` is
+     * derived by a saving hook and is not fillable, so writing it is silently
+     * dropped.
+     */
+    public function rename(Company $company, string $displayName): User
+    {
+        $house = $company->commissionHouseAccount;
+
+        abort_if($house === null, 404, 'บริษัทนี้ยังไม่ได้เปิดบัญชีบริษัทสำหรับรับค่าคอมหัวหน้าทีม');
+
+        $house->forceFill([
+            'first_name' => trim($displayName),
+            'last_name' => '',
+        ])->save();
+
+        return $house->refresh();
+    }
+
+    /**
      * Take the seat away: everyone who reported to it reports to nobody, and
      * the company stops pointing at it.
      *

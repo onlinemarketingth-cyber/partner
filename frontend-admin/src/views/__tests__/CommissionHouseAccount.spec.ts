@@ -318,3 +318,173 @@ describe('a Company Admin sees it and cannot change it', () => {
     expect(wrapper.find('[data-test="house-account-enable"]').exists()).toBe(false)
   })
 })
+
+/**
+ * 2026-09-15 — RENAMING THE SEAT.
+ *
+ * Every guard this feature added points the same way: the seat is not a
+ * person, so UserPolicy refuses to update it and UserService refuses its
+ * password, its move and its deactivation. Those refusals are right, and
+ * together they closed the ONE edit that is legitimate — a name typed wrong
+ * at setup otherwise sits on every payout row forever.
+ *
+ * So the door is here, and these tests are about it staying one field wide.
+ */
+describe('renaming the seat', () => {
+  beforeEach(() => {
+    useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
+  })
+
+  it('is offered only once a seat exists', async () => {
+    const withoutSeat = await mountView()
+    await goToStep4(withoutSeat)
+    expect(withoutSeat.find('[data-test="house-account-rename-open"]').exists()).toBe(false)
+
+    const withSeat = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
+    await goToStep4(withSeat)
+    expect(withSeat.find('[data-test="house-account-rename-open"]').exists()).toBe(true)
+  })
+
+  it('opens prefilled with the name that is actually on the row', async () => {
+    // Prefilled from the SERVER's value, not from the company name: those two
+    // can differ precisely because somebody typed the wrong one, which is the
+    // whole case this control exists for.
+    const wrapper = await mountView({ commission_house_account: house({ name: 'ชื่อที่พิมพ์ผิด' }), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+
+    expect((wrapper.get('[data-test="house-account-rename-input"]').element as HTMLInputElement).value)
+      .toBe('ชื่อที่พิมพ์ผิด')
+  })
+
+  it('sends only the name, and repaints from what came back', async () => {
+    put.mockResolvedValue({
+      data: { commission_house_account: house({ name: 'ไทยประกันชีวิต' }), deepest_manager_chain: 1 },
+    })
+    const wrapper = await mountView({ commission_house_account: house({ name: 'ชื่อเก่า' }), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+    await wrapper.get('[data-test="house-account-rename-input"]').setValue('ไทยประกันชีวิต')
+    await wrapper.get('[data-test="house-account-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/commission-house-account', {
+      company_id: AIA.id,
+      display_name: 'ไทยประกันชีวิต',
+    })
+    expect(wrapper.get('[data-test="house-account-name-shown"]').text()).toBe('ไทยประกันชีวิต')
+    // Repainted from the response, not patched locally — the two counts beside
+    // the name are money facts and must never be left showing a stale pair
+    // next to a fresh label.
+    expect(wrapper.get('[data-test="house-account-agents"]').text()).toBe('4 คน')
+  })
+
+  it('refuses to send an empty name rather than blanking the row', async () => {
+    // `users.name` is DERIVED from this field server-side, so an empty save
+    // would leave the payee labelled nothing at all on every ledger row.
+    const wrapper = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+    await wrapper.get('[data-test="house-account-rename-input"]').setValue('   ')
+
+    expect((wrapper.get('[data-test="house-account-rename-save"]').element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('says so when the write fails and keeps the old name on screen', async () => {
+    put.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountView({ commission_house_account: house({ name: 'ชื่อเก่า' }), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    await wrapper.get('[data-test="house-account-rename-open"]').trigger('click')
+    await wrapper.get('[data-test="house-account-rename-input"]').setValue('ชื่อใหม่')
+    await wrapper.get('[data-test="house-account-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="house-account-error"]').text()).toContain('เปลี่ยนชื่อบัญชีบริษัทไม่สำเร็จ')
+    expect(wrapper.get('[data-test="house-account-name-shown"]').text()).toBe('ชื่อเก่า')
+  })
+
+  it('is not offered to a Company Admin', async () => {
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+    const wrapper = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
+    await goToStep4(wrapper)
+
+    expect(wrapper.find('[data-test="house-account-rename-open"]').exists()).toBe(false)
+  })
+})
+
+/**
+ * 2026-09-15 — THE LEADERS THIS PLAN WILL PAY NOTHING.
+ *
+ * ADR-035 makes a certification a GATE: an uncertified manager is SKIPPED by
+ * the payout walk — no error, no log line, no ledger row. Every box on this
+ * screen can be filled in correctly and the money still goes nowhere.
+ *
+ * The warning is computed server-side, so these tests are about the two
+ * things the SCREEN can still get wrong: showing it when there is nothing to
+ * say, and turning a capped list into a smaller-sounding problem.
+ */
+describe('the leaders who will silently be paid nothing', () => {
+  beforeEach(() => {
+    useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
+  })
+
+  function warning(over: Record<string, unknown> = {}) {
+    return {
+      total: 2,
+      leaders: [
+        { id: 7, name: 'สมชาย ใจดี', agents_under: 5 },
+        { id: 8, name: 'สมหญิง รักดี', agents_under: 1 },
+      ],
+      ...over,
+    }
+  }
+
+  it('says nothing at all when every leader is certified', async () => {
+    // A permanent advisory about a thing that is not happening is a warning
+    // people learn to scroll past — and this one has to still be readable on
+    // the day it appears.
+    const wrapper = await mountView({ leaders_missing_certification: { total: 0, leaders: [] } })
+    await goToStep4(wrapper)
+
+    expect(wrapper.find('[data-test="step4-uncertified-leaders"]').exists()).toBe(false)
+  })
+
+  it('names them, with the size of the team each one is costing', async () => {
+    const wrapper = await mountView({ leaders_missing_certification: warning() })
+    await goToStep4(wrapper)
+
+    const box = wrapper.get('[data-test="step4-uncertified-leaders"]').text()
+    expect(box).toContain('สมชาย ใจดี')
+    expect(box).toContain('ลูกทีม 5 คน')
+    // The consequence in words: skipped, not paid less, and with nothing said
+    // at the time.
+    expect(box).toContain('ข้ามไปเงียบ ๆ')
+  })
+
+  it('does not shrink the problem when the list is capped', async () => {
+    // "3 of 47" is a different situation from "3", and a box that could only
+    // render its sample would present the second.
+    const wrapper = await mountView({ leaders_missing_certification: warning({ total: 47 }) })
+    await goToStep4(wrapper)
+
+    expect(wrapper.get('[data-test="step4-uncertified-leaders"]').text()).toContain('47 คน')
+    expect(wrapper.get('[data-test="uncertified-leaders-more"]').text()).toContain('45')
+  })
+
+  it('is shown to a Company Admin too', async () => {
+    /*
+     * The hide-don't-disable house rule is about CONTROLS a Company Admin may
+     * not use. This is not a control — it is the reason their leaders are not
+     * being paid, and they are the person who can get those people certified.
+     */
+    useAuthStore().user = { id: 2, name: 'ผู้ดูแลบริษัท', role: 'company_admin', company: AIA } as never
+    const wrapper = await mountView({ leaders_missing_certification: warning() })
+    await goToStep4(wrapper)
+
+    expect(wrapper.find('[data-test="step4-uncertified-leaders"]').exists()).toBe(true)
+  })
+})

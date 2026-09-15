@@ -181,6 +181,84 @@ async function markEntryPaid(entry: LedgerItem, agent: AgentSummaryItem): Promis
   }
 }
 
+/**
+ * 2026-09-15 — "จ่ายทั้งหมดของคนนี้", the owner's request.
+ *
+ * A payout run is one person and a page of rows. Settling them one press at a
+ * time is a run that can stop halfway, and — because a ledger row cannot be
+ * corrected once written (BR-4) — halfway is a state nothing can tidy up
+ * afterwards.
+ *
+ * ── TWO PRESSES, NOT ONE ──
+ *
+ * The first press only asks. It is the difference between a slip that scrolls
+ * past and a slip that pays out forty thousand baht permanently, and the
+ * confirm strip names the amount rather than saying "are you sure" — the
+ * number is the thing being agreed to.
+ *
+ * ── THE AMOUNT ON SCREEN IS PART OF THE REQUEST ──
+ *
+ * `expected_total_satang` is what this row was showing. The server sums the
+ * pending rows again and refuses the whole run if they disagree, so a sale
+ * that completed while this page sat open cannot be swept into a press the
+ * admin made before it existed. A 422 here is that refusal, and its message
+ * says to refresh — which is why the server's own wording is shown rather
+ * than a generic "บันทึกไม่สำเร็จ".
+ */
+const confirmPayoutId = ref<number | null>(null)
+const payingAgentId = ref<number | null>(null)
+const payoutError = ref('')
+const payoutDone = ref<{ agent_id: number; count: number; satang: number } | null>(null)
+
+/** Nothing measured, or nothing owed — either way there is no run to offer. */
+function canPayAll(agent: AgentSummaryItem): boolean {
+  return agent.is_company_share !== true
+    && agent.total_pending_satang !== null
+    && agent.total_pending_satang > 0
+}
+
+function askToPayAll(agent: AgentSummaryItem): void {
+  payoutError.value = ''
+  payoutDone.value = null
+  confirmPayoutId.value = confirmPayoutId.value === agent.agent_id ? null : agent.agent_id
+}
+
+async function payAll(agent: AgentSummaryItem): Promise<void> {
+  if (payingAgentId.value !== null || agent.total_pending_satang === null) return
+
+  payingAgentId.value = agent.agent_id
+  payoutError.value = ''
+  try {
+    const res = await api.post<{ data: { batch_id: string; paid_count: number; paid_satang: number } }>(
+      '/commission-ledger/mark-paid',
+      {
+        agent_id: agent.agent_id,
+        // The SAME range the total above was computed from. Sending one and
+        // not the other would have the server settle a different set than the
+        // number the admin just agreed to.
+        ...(filters.value.date_from ? { date_from: filters.value.date_from } : {}),
+        ...(filters.value.date_to ? { date_to: filters.value.date_to } : {}),
+        expected_total_satang: agent.total_pending_satang,
+      },
+    )
+    confirmPayoutId.value = null
+    payoutDone.value = { agent_id: agent.agent_id, count: res.data.paid_count, satang: res.data.paid_satang }
+    await loadAll()
+    // Only when the drill-down for THIS person is open: reloading a panel the
+    // admin has open for somebody else would swap it under them.
+    if (detailAgentId.value === agent.agent_id) {
+      await toggleDetail(agent, { keepOpen: true })
+    }
+  } catch (e) {
+    // e.message is Laravel's own field error (see ApiError.extractMessage) —
+    // for the 422 above that is the sentence naming both totals and telling
+    // the reader to refresh, which no generic copy could replace.
+    payoutError.value = e instanceof ApiError ? e.message : 'จ่ายทั้งหมดไม่สำเร็จ'
+  } finally {
+    payingAgentId.value = null
+  }
+}
+
 // TASK-047 point 4/5 — agent profile header + avatar/initial-circle,
 // from GET /users/{id} (UserResource — same Resource every other Admin
 // screen already uses, so no new endpoint needed).
@@ -645,8 +723,79 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 <Icon name="list" :size="14" />
                 ดูรายละเอียด
               </button>
+              <!--
+                จ่ายทั้งหมดของคนนี้ (2026-09-15). Hidden, not disabled, when
+                there is nothing owed or the filter excluded the bucket: a
+                greyed-out payout button invites a click that would have to
+                explain itself, and "ไม่ได้แสดง (ถูกกรองออก)" is not an amount
+                anybody can agree to pay.
+              -->
+              <button
+                v-if="canPayAll(s)"
+                type="button"
+                class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 whitespace-nowrap disabled:opacity-50"
+                :disabled="payingAgentId !== null"
+                :data-test="`pay-all-${s.agent_id}`"
+                @click="askToPayAll(s)"
+              >
+                <Icon name="money" :size="14" />
+                จ่ายทั้งหมด
+              </button>
             </div>
           </div>
+
+          <!--
+            THE CONFIRM STRIP — the second press.
+
+            It names the AMOUNT, not "are you sure". The number is what is
+            being agreed to, and a ledger row cannot be corrected once written
+            (BR-4), so this is the last moment at which the figure can be
+            checked against the bank file.
+          -->
+          <div
+            v-if="confirmPayoutId === s.agent_id"
+            class="mt-3 pt-3 border-t border-slate-100"
+            :data-test="`pay-all-confirm-${s.agent_id}`"
+          >
+            <p class="text-[12.5px] text-slate-700">
+              บันทึกว่าจ่ายค่าคอมทั้งหมดของ <span class="font-bold">{{ s.agent_name ?? '—' }}</span>
+              เป็นเงิน <span class="font-bold tabular-nums">{{ formatSatangOrUnmeasured(s.total_pending_satang) }}</span>
+              ({{ s.entry_count }} รายการในช่วงที่กรองอยู่)
+            </p>
+            <p class="mt-1 text-[11.5px] text-slate-500">
+              เป็นการบันทึกว่าโอนเงินแล้ว ระบบไม่ได้โอนเงินให้ และแก้ไขย้อนหลังไม่ได้
+            </p>
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="px-3.5 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50"
+                :disabled="payingAgentId !== null"
+                :data-test="`pay-all-submit-${s.agent_id}`"
+                @click="payAll(s)"
+              >
+                {{ payingAgentId === s.agent_id ? 'กำลังบันทึก…' : 'ยืนยันจ่ายทั้งหมด' }}
+              </button>
+              <button
+                type="button"
+                class="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-bold hover:bg-slate-50"
+                :disabled="payingAgentId !== null"
+                @click="confirmPayoutId = null"
+              >
+                ยกเลิก
+              </button>
+            </div>
+            <p v-if="payoutError" class="mt-2 text-[12px] font-bold text-rose-600" :data-test="`pay-all-error-${s.agent_id}`">
+              {{ payoutError }}
+            </p>
+          </div>
+
+          <p
+            v-if="payoutDone && payoutDone.agent_id === s.agent_id"
+            class="mt-2 text-[12px] font-bold text-emerald-600"
+            :data-test="`pay-all-done-${s.agent_id}`"
+          >
+            บันทึกแล้ว {{ payoutDone.count }} รายการ รวม {{ formatSatang(payoutDone.satang) }}
+          </p>
           <div v-if="bankEditId === s.agent_id" class="mt-3 pt-3 border-t border-slate-100">
             <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
             <p v-else class="text-xs text-slate-400 mb-2">

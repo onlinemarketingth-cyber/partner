@@ -331,6 +331,126 @@ class CommissionHouseAccountTest extends TestCase
             ->assertForbidden();
     }
 
+    // ── Renaming the seat ─────────────────────────────────────────────
+
+    /*
+     * 2026-09-15 — THE EDIT EVERY OTHER GUARD HAD CLOSED.
+     *
+     * The tests above prove the seat cannot be edited as a person: no
+     * password reset, no move, no deactivation, no manager. Those refusals
+     * are right, and together they also took away the one edit that is
+     * legitimate — fixing the name somebody mistyped at setup. It appears on
+     * every payout row and every screen, and the only way back was to delete
+     * the seat and split the company's history across two payees.
+     *
+     * So the rename has its own door, and the point of these four tests is
+     * that the door is exactly one field wide.
+     */
+
+    public function test_the_seat_can_be_renamed_after_it_exists(): void
+    {
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $this->houseAccounts()->create($world['company'], 'ชื่อที่พิมพ์ผิด');
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($superAdmin)
+            ->putJson('/api/v1/commission-house-account', [
+                'company_id' => $world['company']->id,
+                'display_name' => 'ไทยประกันชีวิต',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.commission_house_account.name', 'ไทยประกันชีวิต');
+    }
+
+    public function test_renaming_changes_nothing_but_the_name(): void
+    {
+        /*
+         * The reason this door is safe to open. A rename that also cleared
+         * the manager pointer, or detached the people under it, would stop
+         * the company earning with no error and no screen — the same silent
+         * revenue gap attachUnmanaged() exists to prevent.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($superAdmin)
+            ->putJson('/api/v1/commission-house-account', [
+                'company_id' => $world['company']->id,
+                'display_name' => 'บริษัทของเรา',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.commission_house_account.agents_under', 1);
+
+        $house->refresh();
+        $this->assertSame('บริษัทของเรา', $house->name);
+        $this->assertSame(UserRole::CompanyAdmin, $house->role);
+        $this->assertNull($house->manager_id, 'the seat stays at the top of the chain');
+        $this->assertSame(
+            $house->id,
+            (int) $world['company']->fresh()->commission_house_user_id,
+            'the company still points at the same row',
+        );
+        $this->assertSame(
+            $house->id,
+            (int) $world['agent']->fresh()->manager_id,
+            'and the people under it still report to it',
+        );
+    }
+
+    public function test_an_empty_name_is_refused_rather_than_blanking_the_row(): void
+    {
+        // `users.name` is DERIVED from first_name by a saving hook, so an
+        // empty rename would leave the seat labelled nothing at all, on every
+        // payout row it appears on. Blank is why this field is required here
+        // and optional on create (where blank means "use the company's name").
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $this->houseAccounts()->create($world['company'], 'ไทยประกันชีวิต');
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($superAdmin)
+            ->putJson('/api/v1/commission-house-account', [
+                'company_id' => $world['company']->id,
+                'display_name' => '',
+            ])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('display_name');
+    }
+
+    public function test_an_agent_may_not_rename_the_seat(): void
+    {
+        // Same ability as writing a rate. The name of the payee on a money
+        // row is not cosmetic — it is what an admin reads to decide whether a
+        // row is the company's share or a person's.
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $this->houseAccounts()->create($world['company']);
+
+        $this->actingAs($world['agent'])
+            ->putJson('/api/v1/commission-house-account', [
+                'company_id' => $world['company']->id,
+                'display_name' => 'ของผมเอง',
+            ])
+            ->assertForbidden();
+    }
+
+    public function test_renaming_a_seat_that_does_not_exist_is_a_404_not_a_new_one(): void
+    {
+        // Silently creating one here would turn a typo into a live payee at
+        // the top of the hierarchy — the most expensive possible reading of
+        // "update".
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $this->actingAs($superAdmin)
+            ->putJson('/api/v1/commission-house-account', [
+                'company_id' => $world['company']->id,
+                'display_name' => 'ไทยประกันชีวิต',
+            ])
+            ->assertNotFound();
+
+        $this->assertNull($world['company']->fresh()->commission_house_user_id);
+    }
+
     // ── The screens that list money and people ───────────────────────
 
     public function test_the_payout_list_marks_the_companys_own_row(): void

@@ -1625,6 +1625,7 @@ async function loadCompanySettings(): Promise<void> {
     overrideModeUnknown.value = false
     deepestManagerChain.value = 0
     houseAccount.value = null
+    uncertifiedLeaders.value = EMPTY_LEADER_WARNING
 
     return
   }
@@ -1636,6 +1637,7 @@ async function loadCompanySettings(): Promise<void> {
         commission_override_mode?: CommissionOverrideMode
         deepest_manager_chain?: number
         commission_house_account?: HouseAccount | null
+        leaders_missing_certification?: LeaderWarning
       }
     }>(`/commission-settings${companyQuery()}`)
     commissionBasis.value = r.data.commission_basis ?? 'price'
@@ -1647,6 +1649,7 @@ async function loadCompanySettings(): Promise<void> {
     // save-time refusal then disagrees with.
     deepestManagerChain.value = r.data.deepest_manager_chain ?? 0
     houseAccount.value = r.data.commission_house_account ?? null
+    uncertifiedLeaders.value = r.data.leaders_missing_certification ?? EMPTY_LEADER_WARNING
     overrideModeUnknown.value = false
   } catch {
     // Left NULL, not defaulted: the screen does not know the plan, and
@@ -1658,6 +1661,12 @@ async function loadCompanySettings(): Promise<void> {
     overrideModeUnknown.value = true
     deepestManagerChain.value = 0
     houseAccount.value = null
+    /*
+     * Cleared, never left stale. A warning naming people is a warning an
+     * admin acts on, and repeating one from a company they have since
+     * navigated away from would send them to certify the wrong person.
+     */
+    uncertifiedLeaders.value = EMPTY_LEADER_WARNING
   }
 }
 
@@ -2007,6 +2016,38 @@ interface HouseAccount {
   earned_satang: number
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-15 — THE LEADERS THIS PLAN WILL PAY NOTHING.
+ *
+ * ADR-035: a cert tier is a GATE on being paid an override. A manager who has
+ * never passed one is skipped by the payout walk — no error, no log line, no
+ * ledger row. So an admin can finish every box on this screen, watch a sale
+ * complete, and find the leader was not paid, with nothing anywhere saying
+ * why.
+ *
+ * That is the same SHAPE as the bug the owner reported this morning
+ * ("ค่าคอมตัวแทนไม่ได้คำนวณการตัดให้หัวหน้าทีม"), which turned out to be a
+ * company with no manager chain — a fact this screen already stated, which is
+ * why it was answerable in minutes. This cause stated nothing.
+ *
+ * Server-computed, never derived here: the definition of "has a
+ * certification" has to be the payout's definition, and a second one written
+ * in TypeScript is a second one to forget.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface LeaderWarning {
+  /** Everybody affected — the list below is capped, this is not. */
+  total: number
+  leaders: Array<{ id: number; name: string; agents_under: number }>
+}
+
+const EMPTY_LEADER_WARNING: LeaderWarning = { total: 0, leaders: [] }
+const uncertifiedLeaders = ref<LeaderWarning>(EMPTY_LEADER_WARNING)
+/** How many names are listed before the box stops and gives a count instead. */
+const namedLeaders = computed(() => uncertifiedLeaders.value.leaders)
+const unnamedLeaderCount = computed(() =>
+  Math.max(0, uncertifiedLeaders.value.total - uncertifiedLeaders.value.leaders.length),
+)
+
 const houseAccount = ref<HouseAccount | null>(null)
 const houseAccountSaving = ref(false)
 const houseAccountError = ref('')
@@ -2047,6 +2088,54 @@ async function saveHouseAccount(enable: boolean): Promise<void> {
     void loadResolution()
   } catch (e) {
     houseAccountError.value = apiErrorMessage(e, enable ? 'เปิดบัญชีบริษัทไม่สำเร็จ' : 'ปิดบัญชีบริษัทไม่สำเร็จ')
+  } finally {
+    houseAccountSaving.value = false
+  }
+}
+
+/**
+ * 2026-09-15 — RENAMING THE SEAT.
+ *
+ * Every guard this feature added points the same way: the seat is not a
+ * person, so UserPolicy refuses to update it and UserService refuses to reset
+ * its password, move it or deactivate it. Those refusals are right, and
+ * between them they also closed the one edit that is legitimate — fixing a
+ * name typed wrong at setup, which otherwise sits on every payout row
+ * forever with no way back except deleting the seat and splitting the
+ * company's history across two payees.
+ *
+ * So there is a door, PUT /commission-house-account, and it is one field
+ * wide. Nothing here can change who reports to the seat, what it is paid, or
+ * whether anyone can sign in as it.
+ */
+const renamingHouseAccount = ref(false)
+const houseAccountRename = ref('')
+
+function openHouseAccountRename(): void {
+  if (!houseAccount.value) return
+  houseAccountError.value = ''
+  houseAccountRename.value = houseAccount.value.name
+  renamingHouseAccount.value = true
+}
+
+async function renameHouseAccount(): Promise<void> {
+  if (houseAccountSaving.value || !effectiveCompanyId.value) return
+
+  houseAccountSaving.value = true
+  houseAccountError.value = ''
+  try {
+    const r = await commissionApi.put<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>(
+      '/commission-house-account',
+      withCompanyBody({ display_name: houseAccountRename.value.trim() }),
+    )
+    houseAccount.value = r.data.commission_house_account ?? null
+    renamingHouseAccount.value = false
+    // The name is what the resolution table and the payout screens print for
+    // this payee, so the table below is repainted rather than left showing
+    // the old label next to the new one.
+    void loadResolution()
+  } catch (e) {
+    houseAccountError.value = apiErrorMessage(e, 'เปลี่ยนชื่อบัญชีบริษัทไม่สำเร็จ')
   } finally {
     houseAccountSaving.value = false
   }
@@ -5557,6 +5646,18 @@ watch(companyPlanType, (pt) => {
                     <div>
                       <p class="text-[11px] font-extrabold text-slate-400">บัญชีที่รับเงิน</p>
                       <p class="text-sm font-extrabold text-slate-900" data-test="house-account-name-shown">{{ houseAccount.name }}</p>
+                      <!-- The one edit this row allows. Every other one is
+                           refused on purpose, which is why it needs its own
+                           button here instead of a link to จัดการผู้ใช้. -->
+                      <button
+                        v-if="canEditCommissionConfig && !renamingHouseAccount"
+                        type="button"
+                        class="mt-0.5 text-[11.5px] font-bold text-brand-600 hover:text-brand-700"
+                        data-test="house-account-rename-open"
+                        @click="openHouseAccountRename"
+                      >
+                        เปลี่ยนชื่อ
+                      </button>
                     </div>
                     <div>
                       <p class="text-[11px] font-extrabold text-slate-400">ขึ้นตรงกับบัญชีนี้</p>
@@ -5577,6 +5678,37 @@ watch(companyPlanType, (pt) => {
                       {{ houseAccountSaving ? 'กำลังบันทึก…' : 'ปิดใช้งาน' }}
                     </button>
                   </div>
+                  <div v-if="renamingHouseAccount" class="mt-2.5 rounded-xl border border-brand-200 bg-white px-3.5 py-3" data-test="house-account-rename">
+                    <label class="block text-[12px] font-bold text-slate-600 mb-1" for="house-account-rename-input">
+                      ชื่อที่จะแสดงบนรายการค่าคอมของบริษัท
+                    </label>
+                    <input
+                      id="house-account-rename-input"
+                      v-model="houseAccountRename"
+                      type="text"
+                      maxlength="120"
+                      class="w-full max-w-sm px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                      data-test="house-account-rename-input"
+                    />
+                    <p class="mt-1 text-[11.5px] text-slate-500">
+                      เปลี่ยนเฉพาะชื่อที่แสดง · ไม่กระทบว่าใครขึ้นตรงกับบัญชีนี้ หรือค่าคอมที่ได้รับไปแล้ว
+                    </p>
+                    <div class="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        :disabled="houseAccountSaving || houseAccountRename.trim() === ''"
+                        data-test="house-account-rename-save"
+                        @click="renameHouseAccount"
+                      >
+                        {{ houseAccountSaving ? 'กำลังบันทึก…' : 'บันทึกชื่อใหม่' }}
+                      </button>
+                      <button type="button" class="btn-secondary" :disabled="houseAccountSaving" @click="renamingHouseAccount = false">
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+
                   <!-- Not offered as an undo: the rows it was already paid stay
                        where they are, because a ledger row is immutable. -->
                   <p class="mt-2 text-[12px] text-slate-500">
@@ -5586,6 +5718,56 @@ watch(companyPlanType, (pt) => {
 
                 <p v-if="houseAccountError" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="house-account-error">
                   {{ houseAccountError }}
+                </p>
+              </div>
+
+              <!--
+                ═══ THE LEADERS THIS PLAN WILL PAY NOTHING (2026-09-15) ═══
+
+                ADR-035 makes a certification a GATE on being paid an
+                override: an uncertified manager is SKIPPED by the payout
+                walk. Not paid less — skipped, with no error, no log line and
+                no ledger row. Every box on this screen can be filled in
+                correctly and the money still goes nowhere.
+
+                Sits here, between "who receives" and "how much", because that
+                is where the reader is deciding who the rates are for. Shown
+                only when there is somebody to name: a permanent advisory
+                about a thing that is not happening is the kind of warning
+                people learn to scroll past, and this one has to still be
+                readable on the day it appears.
+              -->
+              <div
+                v-if="uncertifiedLeaders.total > 0"
+                class="rounded-2xl border border-amber-300 bg-amber-50/70 p-4"
+                data-test="step4-uncertified-leaders"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-[11px] font-extrabold text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">ตรวจสอบก่อน</span>
+                  <h4 class="text-[14px] font-extrabold text-slate-900">
+                    มีหัวหน้าทีม {{ uncertifiedLeaders.total }} คนที่จะ<span class="text-amber-700">ไม่ได้รับ</span>ส่วนแบ่ง
+                  </h4>
+                </div>
+                <p class="mt-1 text-[12.5px] text-slate-600">
+                  คนเหล่านี้มีลูกทีมอยู่จริง แต่ยังไม่ผ่านเกณฑ์ใบรับรอง — ระบบจะ<b>ข้ามไปเงียบ ๆ</b>
+                  ตอนคำนวณค่าคอม ไม่มีข้อความแจ้งเตือน และไม่มีรายการค้างไว้ให้ตามทีหลัง
+                  ตั้งอัตราในข้อ 4.3–4.5 ไว้เท่าไรก็ไม่มีผลจนกว่าจะผ่านเกณฑ์
+                </p>
+                <ul class="mt-2.5 flex flex-wrap gap-2">
+                  <li
+                    v-for="leader in namedLeaders"
+                    :key="`uncertified-${leader.id}`"
+                    class="rounded-lg border border-amber-200 bg-white px-2.5 py-1.5"
+                    :data-test="`uncertified-leader-${leader.id}`"
+                  >
+                    <span class="text-[12.5px] font-bold text-slate-900">{{ leader.name }}</span>
+                    <span class="ml-1.5 text-[11.5px] text-slate-500 tabular-nums">ลูกทีม {{ leader.agents_under }} คน</span>
+                  </li>
+                </ul>
+                <!-- The list is capped; the count is not. "3 of 47" is a
+                     different situation from "3". -->
+                <p v-if="unnamedLeaderCount > 0" class="mt-2 text-[12px] text-slate-500" data-test="uncertified-leaders-more">
+                  และอีก {{ unnamedLeaderCount }} คน (แสดงเฉพาะคนที่มีลูกทีมมากที่สุด)
                 </p>
               </div>
 

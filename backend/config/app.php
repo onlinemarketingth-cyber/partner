@@ -96,8 +96,38 @@ return [
     |
     */
 
-    'locale' => env('APP_LOCALE', 'en'),
+    /*
+     * 2026-09-15 — 'th', and deliberately NOT read from the environment.
+     *
+     * Every message this application writes itself is already Thai. The ones
+     * the FRAMEWORK writes were not, and they are exactly the ones a user
+     * meets at the worst moment: a field left blank, a file too large, a date
+     * the wrong way round. See lang/th/validation.php.
+     *
+     * ── WHY THE env() CALL WAS REMOVED RATHER THAN RE-DEFAULTED ──
+     *
+     * This line used to read env('APP_LOCALE', 'en') — and EVERY .env in
+     * existence, here and in production, carries `APP_LOCALE=en`, because
+     * that is what `laravel new` writes. Changing only the fallback would
+     * have shipped this whole change dead: the code would say 'th', the
+     * running site would stay English, and nothing would fail to say so. The
+     * one manual step to fix that (editing .env over SSH) is exactly the step
+     * that gets forgotten, and its failure mode is silent.
+     *
+     * That value was never a decision anybody made; it is scaffolding. So the
+     * decision lives in code, where it is reviewable and cannot be undone by
+     * an untouched file. APP_LOCALE has been dropped from .env.example for
+     * the same reason: a key that looks like it works and does not is worse
+     * than no key. The day this product needs a second language, the env read
+     * comes back together with the language switch that justifies it.
+     */
+    'locale' => 'th',
 
+    /*
+     * Deliberately still 'en'. A key missing from lang/th falls back to
+     * Laravel's own English sentence — which is imperfect and readable —
+     * rather than rendering the raw key ("validation.required") on screen.
+     */
     'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
 
     'faker_locale' => env('APP_FAKER_LOCALE', 'en_US'),

@@ -44,6 +44,16 @@ class CommissionSettingResource extends JsonResource
              * share yet.
              */
             'commission_house_account' => $this['commission_house_account'],
+            /*
+             * 2026-09-15 — who this plan will pay nothing, and never say so.
+             *
+             * `{ total, leaders[] }`, not a bare list: the list is capped, and
+             * a screen holding only the sample would have to present "3 of 47"
+             * as "3". Always present, `total: 0` when there is nothing to warn
+             * about — an absent key would make the screen guess whether it was
+             * told "none" or told nothing.
+             */
+            'leaders_missing_certification' => $this['leaders_missing_certification'],
         ];
     }
 }

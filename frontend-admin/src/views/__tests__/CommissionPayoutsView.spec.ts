@@ -30,14 +30,28 @@ import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
 const put = vi.fn()
+// 2026-09-15 — captured, not an anonymous vi.fn() in the factory: the bulk
+// payout below asserts on the exact body sent, and an unreachable mock can
+// only be asserted to have been called.
+const post = vi.fn()
 
 const { FakeApiError } = vi.hoisted(() => ({
+  /*
+   * 2026-09-15 — this double now extracts the message the way the real
+   * ApiError does (see ApiError.extractMessage). It used to always be
+   * `API error ${status}`, which is the shape the real class was FIXED away
+   * from — so a screen that surfaces the server's own sentence could not be
+   * tested here at all, and a double that behaves differently from the real
+   * thing in exactly the way a test is about is worse than no double.
+   */
   FakeApiError: class extends Error {
     constructor(
       public status: number,
       public body: unknown,
     ) {
-      super(`API error ${status}`)
+      const b = (body ?? {}) as { message?: string; errors?: Record<string, string[]> }
+      const firstFieldError = b.errors ? Object.values(b.errors)[0]?.[0] : undefined
+      super(firstFieldError ?? b.message ?? `API error ${status}`)
     }
   },
 }))
@@ -58,7 +72,7 @@ vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
     put: (...args: unknown[]) => put(...args),
-    post: vi.fn(),
+    post: (...args: unknown[]) => post(...args),
     patch: vi.fn(),
     delete: vi.fn(),
     postForm: vi.fn(),
@@ -68,6 +82,10 @@ vi.mock('@/api/client', () => ({
 }))
 
 import CommissionPayoutsView from '../CommissionPayoutsView.vue'
+// Driven through its v-model events below rather than by typing into its
+// three selects: this file is about what the payout button sends, not about
+// how a Buddhist-era date picker assembles an ISO string.
+import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 // BR-3 — the API sends integer satang. 1,500.00 THB = 150_000 satang.
@@ -130,6 +148,8 @@ const STANDALONE_ZERO_BAHT = /[^\d]0 บาท/
 beforeEach(() => {
   get.mockReset()
   put.mockReset()
+  post.mockReset()
+  post.mockResolvedValue({ data: { batch_id: 'b-1', paid_count: 3, paid_satang: TWO_THOUSAND_BAHT } })
 })
 
 describe('unfiltered — both buckets were measured', () => {
@@ -262,5 +282,149 @@ describe('the two views of one payout screen', () => {
     await wrapper.get('[data-test="payout-view-entries"]').trigger('click')
 
     expect(wrapper.find('commission-ledger-panel-stub').exists()).toBe(true)
+  })
+})
+
+/**
+ * 2026-09-15 — "จ่ายทั้งหมดของคนนี้", the owner's request.
+ *
+ * A payout run is one person and a page of rows, and settling them one press
+ * at a time is a run that can stop halfway — in a ledger where nothing can be
+ * corrected afterwards (BR-4).
+ *
+ * That immutability is what every test here is really about. A bulk money
+ * button makes two new mistakes possible that thirty single presses did not:
+ * paying on a slip, and paying rows that arrived after the number on screen
+ * was computed. The server refuses the second; this layer has to not cause
+ * the first, and has to send the server what it needs to refuse the second.
+ */
+describe('จ่ายทั้งหมดของคนนี้', () => {
+  it('does not write on the first press', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1 })])
+
+    await wrapper.get('[data-test="pay-all-1"]').trigger('click')
+
+    expect(post).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="pay-all-confirm-1"]').exists()).toBe(true)
+  })
+
+  it('names the amount in the confirmation, not just "are you sure"', async () => {
+    // The number is the thing being agreed to. This is the last moment it can
+    // be checked against the bank file.
+    const wrapper = await mountView([makeRow({ agent_id: 1, agent_name: 'สมชาย' })])
+
+    await wrapper.get('[data-test="pay-all-1"]').trigger('click')
+
+    const confirm = wrapper.get('[data-test="pay-all-confirm-1"]').text()
+    expect(confirm).toContain('สมชาย')
+    expect(confirm).toContain('2,000 บาท')
+    // And what it is NOT: the system does not move money, and this cannot be
+    // undone. Both are things an admin assumes the opposite of by default.
+    expect(confirm).toContain('ระบบไม่ได้โอนเงินให้')
+    expect(confirm).toContain('แก้ไขย้อนหลังไม่ได้')
+  })
+
+  it('sends the total that was on screen, so the server can refuse a stale press', async () => {
+    /*
+     * THE ONE THAT MATTERS. Between this page loading and the button being
+     * pressed, a sale can complete and write a new pending row. Sending the
+     * figure the admin actually saw is what lets the server refuse instead of
+     * sweeping that row into a press nobody made.
+     */
+    const wrapper = await mountView([makeRow({ agent_id: 42 })])
+
+    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
+    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/commission-ledger/mark-paid', {
+      agent_id: 42,
+      expected_total_satang: TWO_THOUSAND_BAHT,
+    })
+  })
+
+  it('sends the date range currently applied, so it settles the set it quoted', async () => {
+    // The total above the button was computed with these filters. Paying a
+    // wider set than the one that produced the number is paying an amount
+    // nobody approved.
+    const wrapper = await mountView([makeRow({ agent_id: 42 })])
+
+    const dates = wrapper.findComponent(DateRangeFilter)
+    dates.vm.$emit('update:dateFrom', '2026-01-01')
+    dates.vm.$emit('update:dateTo', '2026-03-31')
+    await flushPromises()
+    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
+    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/commission-ledger/mark-paid', {
+      agent_id: 42,
+      date_from: '2026-01-01',
+      date_to: '2026-03-31',
+      expected_total_satang: TWO_THOUSAND_BAHT,
+    })
+  })
+
+  it('reports what was actually settled, from the server, not from the screen', async () => {
+    // The count and total come back from the write. Echoing the figures this
+    // page was already showing would report a success that never happened the
+    // moment the two disagree.
+    post.mockResolvedValue({ data: { batch_id: 'b-9', paid_count: 7, paid_satang: 987_600 } })
+    const wrapper = await mountView([makeRow({ agent_id: 42 })])
+
+    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
+    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    await flushPromises()
+
+    const done = wrapper.get('[data-test="pay-all-done-42"]').text()
+    expect(done).toContain('7 รายการ')
+    expect(done).toContain('9,876 บาท')
+  })
+
+  it('shows the server\'s own refusal, because it is the one that says what to do', async () => {
+    /*
+     * A 422 here means the pending total moved. The server's sentence names
+     * both figures and says to refresh; a generic "บันทึกไม่สำเร็จ" would send
+     * the admin to press the same button again.
+     */
+    post.mockRejectedValue(new FakeApiError(422, {
+      errors: { expected_total_satang: ['ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว — กรุณารีเฟรชหน้าจอแล้วลองใหม่'] },
+    }))
+    const wrapper = await mountView([makeRow({ agent_id: 42 })])
+
+    await wrapper.get('[data-test="pay-all-42"]').trigger('click')
+    await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="pay-all-error-42"]').text()).toContain('กรุณารีเฟรชหน้าจอ')
+    // Still open, so the reader can act on what they were just told.
+    expect(wrapper.find('[data-test="pay-all-confirm-42"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="pay-all-done-42"]').exists()).toBe(false)
+  })
+
+  it('is not offered when nothing is owed', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: 0 })])
+
+    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+  })
+
+  it('is not offered when the filter excluded the pending bucket', async () => {
+    // §3.7 (F-10) again, with money attached: null is "nobody measured this".
+    // A payout button over an unmeasured bucket would have to send an amount
+    // the screen does not have.
+    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: null })])
+
+    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+  })
+
+  it('is not offered on the company\'s own share', async () => {
+    // That money is already with the company. "จ่ายแล้ว" on it would record a
+    // transfer to itself — which the server also refuses, because a guard that
+    // lives only here is one a stale tab walks past.
+    const wrapper = await mountView([
+      makeRow({ agent_id: 90, agent_name: 'Thai Life insurance', is_company_share: true }),
+    ])
+
+    expect(wrapper.find('[data-test="pay-all-90"]').exists()).toBe(false)
   })
 })

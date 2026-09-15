@@ -30,7 +30,23 @@ import AuthenticatedMedia from './AuthenticatedMedia.vue'
 export interface ProductCardItem {
   id: number
   name: string
+  /**
+   * The ROW's own price. For a platform-owned product (ADR-040) that is the
+   * CENTRAL price, which no company necessarily charges — so this is not the
+   * number to put in front of an agent. See `effective_price_satang`.
+   */
   price_satang: number
+  /**
+   * TASK-257 / ADR-040 — what THIS agent's company actually charges: its own
+   * price if it set one, the central price if not, and an active promotion
+   * above either. Resolved server-side (ProductPricingService) and sent by
+   * ProductResource on every /products read.
+   *
+   * Optional, and that is deliberate rather than defensive: every caller
+   * today sends it, and a future one that does not should quote a stale
+   * number a human once typed rather than render NaN at a customer.
+   */
+  effective_price_satang?: number | null
   thumbnail_url: string | null
   /** 2026-09-09 — the inline blur-up copy; see AuthenticatedMedia. */
   thumbnail_placeholder?: string | null
@@ -52,6 +68,17 @@ const emit = defineEmits<{
 
 function formatBaht(satang: number): string {
   return '฿' + (satang / 100).toLocaleString('th-TH')
+}
+
+/**
+ * The one number this card is allowed to show.
+ *
+ * `??`, never `||`: a free onboarding item is a real price a Super Admin
+ * typed, and `||` would read 0 as "missing" and quote the central price
+ * instead — silently, at the one moment the difference is largest.
+ */
+function priceOf(product: ProductCardItem): number {
+  return product.effective_price_satang ?? product.price_satang
 }
 </script>
 
@@ -93,7 +120,15 @@ function formatBaht(satang: number): string {
         {{ product.category.name }}
       </p>
       <p class="text-sm font-bold text-ink-card leading-tight line-clamp-2">{{ product.name }}</p>
-      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.price_satang) }}</p>
+      <!--
+        TASK-257 / ADR-040 — the price THIS agent's company charges, not the
+        platform's central one. The two are the same number for every
+        company-owned product, and diverge the moment a product is promoted
+        into the shared catalog — at which point this grid would quote one
+        figure and the order take another, in front of the customer the agent
+        has to explain it to.
+      -->
+      <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(priceOf(product)) }}</p>
 
       <!--
         TWO ACTIONS ON ONE LINK (human, 2026-09-14: "ให้เพิ่มปุ่มสั่งซื้อได้เลย

@@ -2,13 +2,13 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\NotificationType;
 use App\Enums\PaymentStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Commission\BulkMarkCommissionPaidRequest;
 use App\Http\Resources\CommissionLedgerResource;
-use App\Models\AuditLog;
 use App\Models\CommissionLedger;
-use App\Services\Notification\NotificationService;
+use App\Models\User;
+use App\Services\Commission\CommissionPayoutService;
 use App\Support\CompanyScopeFilter;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -86,72 +86,64 @@ class CommissionLedgerController extends Controller
         return new CommissionLedgerResource($commissionLedger->load(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime']));
     }
 
-    /** POST /commission-ledger/{commissionLedger}/mark-paid — the one allowed mutation (BR-4). */
-    public function markPaid(Request $request, CommissionLedger $commissionLedger, NotificationService $notifier): CommissionLedgerResource
+    /**
+     * POST /commission-ledger/{commissionLedger}/mark-paid — one row.
+     *
+     * 2026-09-15 — the body of this method moved into
+     * CommissionPayoutService. It used to carry the update, the audit row and
+     * the notification inline, and the bulk endpoint below performs the same
+     * act: leaving both here would be two implementations of "a commission
+     * stops being owed", and the audit row — added months after the fact,
+     * because a security review found this was the one money-moving action
+     * nobody recorded — is exactly the kind of thing a second copy forgets.
+     */
+    public function markPaid(Request $request, CommissionLedger $commissionLedger, CommissionPayoutService $payouts): CommissionLedgerResource
     {
         $this->authorize('markPaid', $commissionLedger);
 
-        $before = $commissionLedger->payment_status;
+        return new CommissionLedgerResource(
+            $payouts->markPaid($commissionLedger, $request->user(), $request->ip()),
+        );
+    }
 
-        $commissionLedger->update([
-            'payment_status' => PaymentStatus::Paid,
-            'paid_at' => now(),
-        ]);
-
+    /**
+     * POST /commission-ledger/mark-paid — everything one agent is owed.
+     *
+     * Owner: "จ่ายทั้งหมดของคนนี้". A payout run is one person and a page of
+     * rows, and settling them one press at a time is a run that can stop
+     * halfway with no record of where.
+     *
+     * ROUTED ABOVE the {commission_ledger} routes in api.php so "mark-paid"
+     * is never read as a ledger id.
+     *
+     * Answers with what it actually did rather than the rows it did it to:
+     * the screen reloads both the per-agent totals and the open drill-down
+     * afterwards anyway, and a response carrying fifty rows the caller is
+     * about to throw away is fifty rows of payload for nothing.
+     *
+     * @return array{data: array{batch_id: string, paid_count: int, paid_satang: int}}
+     */
+    public function bulkMarkPaid(BulkMarkCommissionPaidRequest $request, CommissionPayoutService $payouts): array
+    {
         /*
-         * SECURITY AUDIT 2026-08-21 — THE ONE MONEY-MOVING ACTION IN THIS
-         * APPLICATION WAS THE ONE ACTION NOBODY RECORDED.
-         *
-         * audit_logs' own migration says the table exists "for anything
-         * affecting money, commission, status, certification, or
-         * permissions", and this method is the single point where a
-         * commission stops being owed and starts being paid. Role changes,
-         * bank-account edits and national-id edits were all audited; this
-         * was not. There was no way to answer "who authorised this payout"
-         * — the only trace was paid_at, which says when and never who.
-         *
-         * The amount is recorded alongside the status deliberately. The
-         * ledger row is immutable under BR-4, so the amount cannot drift
-         * from what was approved — but an audit entry that forces the
-         * reader to go and join another table to learn what was actually
-         * paid is an audit entry people stop reading.
-         *
-         * Written after the update() and outside any transaction of its
-         * own, matching every other AuditLog::create() in this codebase: a
-         * logging failure must never roll back a payment that succeeded.
+         * withoutGlobalScopes() so a Super Admin can resolve a payee in any
+         * company — the policy immediately below is what decides whether they
+         * may, and a TenantScope 404 here would answer "no such person" to a
+         * Super Admin for whom that is false.
          */
-        AuditLog::create([
-            'company_id' => $commissionLedger->company_id,
-            'actor_user_id' => $request->user()?->id,
-            'action' => 'commission_ledger.marked_paid',
-            'auditable_type' => CommissionLedger::class,
-            'auditable_id' => $commissionLedger->id,
-            'old_values' => ['payment_status' => $before?->value],
-            'new_values' => [
-                'payment_status' => PaymentStatus::Paid->value,
-                'amount_satang' => $commissionLedger->amount_satang,
-                'agent_user_id' => $commissionLedger->agent_id,
-            ],
-            'ip_address' => $request->ip(),
-        ]);
+        $payee = User::withoutGlobalScopes()->findOrFail($request->integer('agent_id'));
 
-        $commissionLedger->load(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime']);
+        $this->authorize('markAgentPaid', [CommissionLedger::class, $payee]);
 
-        // TASK-053 Phase 2b — let the earning agent know their commission
-        // was paid. BR-3: amount is satang; divide by 100 only here at
-        // the display layer for the notification text.
-        if ($commissionLedger->agent) {
-            $baht = number_format($commissionLedger->amount_satang / 100, 2);
-            $notifier->notify(
-                $commissionLedger->agent,
-                NotificationType::CommissionPaid,
-                'ค่าคอมมิชชั่นจ่ายแล้ว',
-                "จำนวน {$baht} บาท ถูกทำจ่ายเรียบร้อย",
-                '/commission',
-                ['commission_ledger_id' => $commissionLedger->id],
-            );
-        }
-
-        return new CommissionLedgerResource($commissionLedger);
+        return [
+            'data' => $payouts->markAgentPaid(
+                $payee,
+                $request->input('date_from'),
+                $request->input('date_to'),
+                $request->integer('expected_total_satang'),
+                $request->user(),
+                $request->ip(),
+            ),
+        ];
     }
 }

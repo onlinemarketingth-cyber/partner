@@ -840,6 +840,10 @@ Route::prefix('v1')->group(function () {
          * screen shows — see the Controller.
          */
         Route::post('/commission-house-account', [CommissionHouseAccountController::class, 'store']);
+        // 2026-09-15 — the seat's display name, and only that. Every other
+        // edit of that user row is refused on purpose (UserPolicy::update,
+        // UserService), which had left a mistyped name permanent.
+        Route::put('/commission-house-account', [CommissionHouseAccountController::class, 'update']);
         Route::delete('/commission-house-account', [CommissionHouseAccountController::class, 'destroy']);
 
         // TASK-052 / ADR-015 — chart-based Agent Dashboard metrics (totals,
@@ -1265,6 +1269,19 @@ Route::prefix('v1')->group(function () {
         // narrowed to their own earnings; markPaid is the one allowed
         // mutation (Company Admin/Super Admin only, see
         // CommissionLedgerPolicy).
+        /*
+         * 2026-09-15 — BEFORE the apiResource, and that order is load-bearing:
+         * registered after it, "mark-paid" would be matched as a
+         * {commission_ledger} route-model-binding parameter and answer 404
+         * from the binder instead of reaching this action.
+         *
+         * Settles every pending row one agent is owed as ONE act — owner:
+         * "จ่ายทั้งหมดของคนนี้". Same policy rule as the single-row mark-paid
+         * below, asked about the payee instead of a row
+         * (CommissionLedgerPolicy::markAgentPaid).
+         */
+        Route::post('/commission-ledger/mark-paid', [CommissionLedgerController::class, 'bulkMarkPaid']);
+
         Route::apiResource('commission-ledger', CommissionLedgerController::class)
             ->only(['index', 'show'])
             ->parameters(['commission-ledger' => 'commission_ledger']);

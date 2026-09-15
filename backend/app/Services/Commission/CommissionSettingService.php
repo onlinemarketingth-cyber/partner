@@ -62,6 +62,9 @@ use Illuminate\Validation\ValidationException;
  */
 class CommissionSettingService
 {
+    /** How many names the uncertified-leader warning lists before it stops and gives a count instead. */
+    private const LEADER_WARNING_SAMPLE = 10;
+
     public function __construct(
         // Only for deepest_manager_chain below — the screen needs the same
         // number the save-time refusal uses, or it would show a maximum the
@@ -81,7 +84,7 @@ class CommissionSettingService
      * placeholder — the screen refuses to render step 2 in that state
      * anyway — rather than picking one tenant's settings to speak for all.
      *
-     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null}
+     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
      */
     public function forCompany(?int $companyId): array
     {
@@ -111,6 +114,81 @@ class CommissionSettingService
              * earning from one that is attached to nobody.
              */
             'commission_house_account' => $this->houseAccountPayload($company),
+            /*
+             * 2026-09-15 — the leaders this plan will silently pay nothing.
+             *
+             * ADR-035: a cert tier is a GATE on being paid an override. A
+             * manager who has never passed one is skipped by
+             * CommissionService's chain walk — no error, no log, no row. The
+             * company sets a leader rate in step 4, the sale completes, the
+             * seller is paid, and the leader simply is not, with nothing
+             * anywhere saying why. The owner's own bug report earlier today
+             * was this shape ("ค่าคอมตัวแทนไม่ได้คำนวณการตัดให้หัวหน้าทีม")
+             * with a different cause, and this is the next cause in line.
+             *
+             * Computed for every read of this endpoint rather than behind a
+             * flag: it is two queries, and the whole point is that nobody
+             * goes looking for a failure they have not been told exists.
+             */
+            'leaders_missing_certification' => $this->leadersMissingCertification($company),
+        ];
+    }
+
+    /**
+     * Managers with people under them and no certification at all.
+     *
+     * ── THE DEFINITION IS MIRRORED, AND THAT IS A RISK ──
+     *
+     * `User::highestPassedCertTier()` is what actually decides at payout
+     * time, and it is an per-row lookup this could not use without N+1. So
+     * this is a SECOND expression of "has a certification", written as a
+     * whereDoesntHave. The two must agree, or the screen reassures an admin
+     * about a leader the payout then skips — the same defect shape as the
+     * duplicated resolution ladder that once paid a Thai Life rate on an AIA
+     * product. CommissionSettingTest pins them together; if
+     * highestPassedCertTier() ever grows a condition (a pass/fail status, an
+     * expiry), that test fails and this query has to follow it.
+     *
+     * Not narrowed to `role = agent`: the chain walk follows `manager_id`
+     * whatever the role, so whoever is standing in that chain is who this
+     * has to be about.
+     *
+     * @return array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}
+     */
+    private function leadersMissingCertification(?Company $company): array
+    {
+        if ($company === null) {
+            return ['total' => 0, 'leaders' => []];
+        }
+
+        $query = User::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            // The house account is the deliberate exemption from the cert
+            // gate (CommissionService) — it IS paid without one, so warning
+            // about it would be a warning about correct behaviour.
+            ->when(
+                $company->commission_house_user_id !== null,
+                fn ($builder) => $builder->whereKeyNot($company->commission_house_user_id),
+            )
+            ->whereHas('directReports')
+            ->whereDoesntHave('certifications');
+
+        $leaders = (clone $query)
+            ->withCount('directReports')
+            ->orderByDesc('direct_reports_count')
+            ->limit(self::LEADER_WARNING_SAMPLE)
+            ->get();
+
+        return [
+            // The full count, even when the list below is capped: "3 of 47"
+            // is a different situation from "3", and a screen that can only
+            // show the sample would present the second.
+            'total' => $query->count(),
+            'leaders' => $leaders->map(fn (User $leader) => [
+                'id' => (int) $leader->id,
+                'name' => (string) $leader->name,
+                'agents_under' => (int) $leader->direct_reports_count,
+            ])->values()->all(),
         ];
     }
 
@@ -154,7 +232,7 @@ class CommissionSettingService
      * caller asked for (saving the value already in place), not an empty
      * request that silently succeeded.
      *
-     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int}
+     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
      */
     public function update(int $companyId, ?CommissionBasis $basis = null, ?CommissionPlanType $planType = null, ?CommissionOverrideMode $overrideMode = null, ?User $actor = null): array
     {
