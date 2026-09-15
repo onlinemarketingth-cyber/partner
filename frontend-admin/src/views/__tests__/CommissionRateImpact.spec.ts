@@ -247,3 +247,72 @@ describe('the panel stays quiet when it cannot know', () => {
     expect(panel).toContain('บันทึกได้ตามปกติ')
   })
 })
+
+describe('the panel speaks about ONE product when the scope is one product', () => {
+  /*
+   * Owner, 2026-09-14: "ปรับคำอธิบายหน่อย อ่านแล้วไม่เข้าใจ" — looking at
+   * "ไม่มีสินค้าตัวไหนเปลี่ยน (ค่าเดิมเท่ากับค่าใหม่)" while editing ONE
+   * product's own rate.
+   *
+   * Three faults, only one of them wording: it described a SET when the scope
+   * was a single named product already in the modal's heading; it reported the
+   * negation of a technicality instead of the fact; and it printed baht
+   * without saying baht of what, to whom.
+   */
+  const ONE_CHANGED = {
+    layer: 'product',
+    changed: [{ product_id: 1, name: 'GENESENN Health Tracker V8', before_satang: 17800, after_satang: 29700, unchanged: false }],
+    blocked: [],
+    changed_count: 1,
+    blocked_count: 0,
+    reaches_nothing: false,
+  }
+
+  const ONE_UNCHANGED = {
+    ...ONE_CHANGED,
+    changed: [{ product_id: 1, name: 'GENESENN Health Tracker V8', before_satang: 17800, after_satang: 17800, unchanged: true }],
+    changed_count: 0,
+  }
+
+  it('names the product, the person and both amounts', async () => {
+    const wrapper = await mountView(ONE_CHANGED)
+    await typeRate(wrapper, '3')
+
+    const panel = wrapper.get('[data-test="rate-impact-summary"]').text()
+    expect(panel).toContain('GENESENN Health Tracker V8')
+    expect(panel).toContain('ตัวแทนที่ปิดการขาย')
+    expect(panel).toContain('178.00')
+    expect(panel).toContain('297.00')
+    // baht of WHAT — the unit that was missing entirely.
+    expect(panel).toContain('ต่อการขาย 1 ครั้ง')
+  })
+
+  it('states what it still pays rather than that two values are equal', async () => {
+    const wrapper = await mountView(ONE_UNCHANGED)
+    await typeRate(wrapper, '2')
+
+    const panel = wrapper.get('[data-test="rate-impact-summary"]').text()
+    expect(panel).toContain('ยังได้')
+    expect(panel).toContain('178.00')
+    expect(panel).not.toContain('ค่าเดิมเท่ากับค่าใหม่')
+    expect(panel).not.toContain('ไม่มีสินค้าตัวไหนเปลี่ยน')
+  })
+
+  it('drops the effective-date footnote when nothing moves', async () => {
+    // It is a true sentence attached to a non-event, and noise beside the one
+    // sentence that matters is how a panel stops being read.
+    const wrapper = await mountView(ONE_UNCHANGED)
+    await typeRate(wrapper, '2')
+
+    expect(wrapper.get('[data-test="rate-impact"]').text()).not.toContain('ดีลที่ปิดหลังจากกดบันทึก')
+  })
+
+  it('keeps counting when the scope really is many products', async () => {
+    // The count is right for a set and wrong for a single product; both shapes
+    // have to survive.
+    const wrapper = await mountView()
+    await typeRate(wrapper, '5')
+
+    expect(wrapper.get('[data-test="rate-impact-summary"]').text()).toContain('1 สินค้าจะเปลี่ยน')
+  })
+})

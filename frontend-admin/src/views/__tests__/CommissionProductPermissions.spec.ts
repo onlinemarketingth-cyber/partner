@@ -89,6 +89,7 @@ vi.mock('vue-router', () => ({
 import CommissionPlansView from '../CommissionPlansView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { buildResolution, type FixtureProduct } from './support/resolution'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -134,16 +135,21 @@ const LINKED = {
   permissions: { update: false, delete: false, set_commission_rule: false },
 }
 
-function mockApi(products: unknown[]) {
+function mockApi(products: FixtureProduct[]) {
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/companies')) return { data: [AIA] }
     if (path.startsWith('/products')) return { data: products }
+    // Step 3's product rows ARE the resolution table since 2026-09-14 — with
+    // no payload there are no rows to assert a permission about.
+    if (path.startsWith('/commission-resolution')) {
+      return { data: buildResolution({ companyId: AIA.id, products }) }
+    }
 
     return { data: [] }
   })
 }
 
-async function mountView(products: unknown[]) {
+async function mountView(products: FixtureProduct[]) {
   mockApi(products)
 
   const active = useActiveCompanyStore()
@@ -196,11 +202,14 @@ beforeEach(() => {
 })
 
 describe('CommissionPlansView — a Super Admin, on a product nothing else blocks', () => {
-  it('offers the rate button', async () => {
+  it('offers the product rung as a settable cell', async () => {
+    // The "+ ตั้งอัตราเฉพาะสินค้านี้" button became the สินค้า cell of this
+    // product's row when the card list was merged into the table. Same write,
+    // same scope lock, one fewer place to look.
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([OWN]))
 
-    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
+    expect(wrapper.find('[data-test="step3-resolution-add-product-rate-1"]').exists()).toBe(true)
   })
 })
 
@@ -225,7 +234,7 @@ describe('CommissionPlansView — a SHARED product', () => {
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([SHARED]))
 
-    expect(buttonTexts(wrapper)).toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
+    expect(wrapper.find('[data-test="step3-resolution-add-product-rate-2"]').exists()).toBe(true)
   })
 })
 
@@ -242,18 +251,26 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
     expect(wrapper.text()).toContain('AIA Own Package')
   })
 
-  it('is offered no rate button, on any product', async () => {
+  it('is offered no rate cell to click, on any product', async () => {
     const wrapper = await showProducts(await mountView([OWN, SHARED]))
 
-    expect(buttonTexts(wrapper)).not.toContain('+ ตั้งอัตราเฉพาะสินค้านี้')
+    expect(wrapper.find('[data-test="step3-resolution-add-product-rate-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="step3-resolution-add-product-rate-2"]').exists()).toBe(false)
     expect(buttonTexts(wrapper)).not.toContain('แก้ไขอัตราคอมมิชชั่น')
   })
 
-  it('says who can set it instead of leaving a blank space', async () => {
+  it('says who can set it instead of leaving a table of blank cells', async () => {
+    /*
+     * ONCE, UNDER THE TABLE — not on each row. The sentence has the same job
+     * it always had (a screen with every control removed and no explanation
+     * reads as broken, not as read-only), but the merged table would have
+     * repeated it per product, which is the noise the owner objected to from
+     * the other direction.
+     */
     const wrapper = await showProducts(await mountView([LINKED]))
 
     expect(wrapper.text()).toContain('Linked Package')
-    expect(wrapper.text()).toContain('ตั้งค่าโดย Super Admin')
+    expect(wrapper.get('[data-test="step3-resolution-read-only"]').text()).toContain('ตั้งค่าโดย Super Admin')
   })
 
   it('is told the rule up front, on ขั้นที่ 1, rather than finding it by clicking', async () => {
@@ -319,7 +336,15 @@ describe("CommissionPlansView — the PRODUCT's plan type is shown, never edited
     beSuperAdmin()
     const wrapper = await showProducts(await mountView([SHARED]))
 
-    expect(wrapper.get('[data-test="product-row-2"]').text()).toContain('แผน Unilevel')
+    /*
+     * The plan moved into the row's DETAIL panel when the cards were merged —
+     * it is reference, not something an admin scans twenty of, and the columns
+     * are about money. Still one click from the row, and still on the row.
+     */
+    await wrapper.get('[data-test="step3-resolution-expand-2"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="product-plan-2"]').text()).toContain('Unilevel')
   })
 
   it('never writes a plan type onto a PRODUCT from this screen', () => {
@@ -421,7 +446,16 @@ describe('CommissionPlansView — the per-row permission is still asked', () => 
   )
 
   it('gates the rate controls on the row answer AND the role, not on either alone', () => {
-    expect(source).toContain('canEditCommissionConfig && canSetCommission(p)')
+    /*
+     * 2026-09-14 — the guard moved from a v-if on each row's button to the
+     * list the table is handed, because the button became a table cell. Both
+     * halves are still asked, and this pins both: the row answer builds the
+     * list, and `canEdit` (which IS canEditCommissionConfig) still decides
+     * whether any cell is clickable at all.
+     */
+    expect(source).toContain('filter((p) => canSetCommission(p))')
+    expect(source).toContain(':rateable-product-ids="rateableProductIds"')
+    expect(source).toContain(':can-edit="canEditCommissionConfig"')
   })
 
   /*

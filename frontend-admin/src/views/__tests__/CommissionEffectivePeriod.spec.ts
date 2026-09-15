@@ -281,7 +281,11 @@ describe('the same default reaches every commission form', () => {
     const wrapper = await mountView()
     await wrapper.get('[data-test="step-tab-3"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-test="add-product-rate"]').trigger('click')
+    // "+ เพิ่มอัตราของสินค้า" stood here until 2026-09-14, when the per-product
+    // card list merged into the resolution table and its per-row สินค้า cell
+    // became the only door to a product-scoped rate. The category button opens
+    // the same form with a different scope, which is what this test is about.
+    await wrapper.get('[data-test="add-category-rate"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-test="rule-period-summary"]').text()).toContain('ไม่มีวันสิ้นสุด')

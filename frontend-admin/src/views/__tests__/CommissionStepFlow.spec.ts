@@ -63,6 +63,7 @@ vi.mock('vue-router', () => ({
 import CommissionPlansView from '../CommissionPlansView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { buildResolution, type FixtureProduct, type FixtureRule } from './support/resolution'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -193,6 +194,19 @@ async function mountView(fixture: Fixture = {}) {
     // Before the `unconfigured` check: a readiness verdict is never '' — the
     // endpoint always answers, even for a company that has configured nothing.
     if (path.startsWith('/commission-readiness')) return readiness
+    // Step 3's product rows ARE the resolution table since 2026-09-14, so this
+    // answers before the `unconfigured` list: a company that has configured
+    // nothing still has a catalogue, and the table is where that shows.
+    if (path.startsWith('/commission-resolution')) {
+      return {
+        data: buildResolution({
+          companyId: AIA.id,
+          products: products as FixtureProduct[],
+          rules: rules as FixtureRule[],
+          overrideRules: overrides as FixtureRule[],
+        }),
+      }
+    }
     if (unconfigured.some((u) => path.startsWith(u))) return ''
     // 2026-09-12 — commission's own endpoint (see CommissionSettingService).
     if (path.startsWith('/commission-settings')) return { data: { commission_plan_type: companyPlanType } }
@@ -775,16 +789,21 @@ describe('CommissionPlansView — step 2 shows the plan without switching to it'
 describe('CommissionPlansView — step 3 says which layer each rate came from', () => {
   it('labels a product falling through to the company default', async () => {
     /*
-     * Without this badge, "3.00%" on a product row is indistinguishable from a
-     * rate somebody chose for that product — and deleting the company default
-     * then changes it silently.
+     * Without this, "3.00%" on a product row is indistinguishable from a rate
+     * somebody chose for that product — and deleting the company default then
+     * changes it silently.
+     *
+     * 2026-09-14 — a one-word badge ("ใช้ค่าเริ่มต้นบริษัท") used to say it.
+     * Three columns say it better: the rung that won is solid, the ones that
+     * lost are struck through with what they WOULD have paid, and the จ่ายจริง
+     * cell names the layer outright.
      */
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-1"]').text()).toBe('3.00%')
-    expect(wrapper.get('[data-test="product-layer-1"]').text()).toBe('ใช้ค่าเริ่มต้นบริษัท')
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-company"]').text()).toContain('3.00%')
+    expect(wrapper.get('[data-test="step3-resolution-pays-1"]').text()).toContain('จากชั้นบริษัท')
   })
 
   it('labels a product with its own rate', async () => {
@@ -795,8 +814,11 @@ describe('CommissionPlansView — step 3 says which layer each rate came from', 
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-1"]').text()).toBe('5.00%')
-    expect(wrapper.get('[data-test="product-layer-1"]').text()).toBe('ตั้งเฉพาะสินค้านี้')
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-product"]').text()).toContain('5.00%')
+    expect(wrapper.get('[data-test="step3-resolution-pays-1"]').text()).toContain('จากชั้นสินค้า')
+    // ...and the rate it beat is still on screen, struck through, which is the
+    // whole answer to "ทำไมตั้งแล้วไม่เปลี่ยน".
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-company"]').text()).toContain('3.00%')
   })
 
   it('distinguishes an EXPIRED rate from a rate that was never set', async () => {
@@ -812,6 +834,8 @@ describe('CommissionPlansView — step 3 says which layer each rate came from', 
     })
 
     await goToStep(wrapper, 3)
+    // The per-row notes moved into the row's own detail panel with the merge.
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
 
     expect(wrapper.get('[data-test="product-expired-1"]').text()).toContain('อัตราหมดอายุ')
   })
@@ -985,8 +1009,10 @@ describe('CommissionPlansView — a Company Admin sees every step and no write c
     const wrapper = await mountAsCompanyAdmin()
 
     await goToStep(wrapper, 3)
-    expect(wrapper.get('[data-test="product-rate-1"]').text()).toBe('3.00%')
-    expect(wrapper.get('[data-test="product-layer-1"]').text()).toBe('ใช้ค่าเริ่มต้นบริษัท')
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-company"]').text()).toContain('3.00%')
+    expect(wrapper.get('[data-test="step3-resolution-pays-1"]').text()).toContain('จากชั้นบริษัท')
+    // Read-only, and SAID so once rather than as forty blank cells.
+    expect(wrapper.find('[data-test="step3-resolution-read-only"]').exists()).toBe(true)
 
     await goToStep(wrapper, 4)
     expect(wrapper.get('[data-test="leader-rule-20"]').text()).toContain('1.50%')
@@ -1472,21 +1498,26 @@ describe('CommissionPlansView — a product row opens a PRODUCT rate, and only t
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 3)
-    await wrapper.get('[data-test="product-rate-button-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-add-product-rate-1"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.get('[data-test="rule-form-scope-fixed"]').text()).toContain('ตามสินค้า')
     expect(wrapper.find('[data-test="rule-form-scope"]').exists()).toBe(false)
   })
 
-  it('says "ตั้ง" for a product that only inherits, not "แก้ไข"', async () => {
-    // It has a rate — the company default — but it does not have ITS OWN rate,
-    // and only the second one can be edited.
+  it('offers "ตั้ง" for a product that only inherits, never an edit', async () => {
+    /*
+     * It has a rate — the company default — but it does not have ITS OWN rate,
+     * and only the second one can be edited. The old button read the RESOLVED
+     * rate for its label and so said "แก้ไข" on a product that had nothing of
+     * its own, then opened a blank create form. A column per rung cannot make
+     * that mistake: the สินค้า cell is empty, so it offers to fill it.
+     */
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule()] })
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-button-1"]').text()).toContain('ตั้งอัตราเฉพาะสินค้านี้')
+    expect(wrapper.get('[data-test="step3-resolution-add-product-rate-1"]').text()).toContain('ตั้ง')
   })
 
   it('edits the existing row instead of creating a duplicate', async () => {
@@ -1499,9 +1530,10 @@ describe('CommissionPlansView — a product row opens a PRODUCT rate, and only t
     const wrapper = await mountView({ products: [product()], rules: [companyDefaultRule(), ownRule] })
 
     await goToStep(wrapper, 3)
-    expect(wrapper.get('[data-test="product-rate-button-1"]').text()).toContain('แก้ไขอัตราของสินค้านี้')
+    // The cell is filled, so it is not an "+ ตั้ง" invitation — it is the row.
+    expect(wrapper.find('[data-test="step3-resolution-add-product-rate-1"]').exists()).toBe(false)
 
-    await wrapper.get('[data-test="product-rate-button-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-cell-1-product"] button').trigger('click')
     await flushPromises()
 
     // The rate field is pre-filled from the existing row — proof the form is

@@ -99,6 +99,9 @@ function resolutionPayload(over: Record<string, unknown> = {}) {
       {
         product_id: 1,
         name: 'AIA Health Plus',
+        // 2026-09-14 — the server sends closed products too, flagged, because
+        // the switch that reopens one lives on its row.
+        is_sellable: true,
         category: { id: 7, name: 'Anti Aging' },
         base_satang: 1000000,
         agent: {
@@ -316,5 +319,106 @@ describe('step 4 gets the same table about the leader', () => {
 
     expect(wrapper.get('[data-test="step4-resolution"]').text()).toContain('หัวหน้าทีมได้เท่าไหร่')
     expect(wrapper.get('[data-test="step4-resolution-unpaid-1"]').text()).toContain('หัวหน้าไม่ได้')
+  })
+})
+
+/**
+ * 2026-09-14 — THE TABLE ABSORBED STEP 3'S PRODUCT LIST.
+ *
+ * Owner: "3.3 กับต่างผลลัพธ์ … รวมเป็นการแสดงผลเดียวได้ไหม", then, on the
+ * mockup: "สินค้าที่ปิดขายจะหายไปจากตาราง — แสดงไว้ ใช้แบบเดียวกับ 3.3 เดิม
+ * คือปรับค่าคอมได้ เปิดปิดได้" and "ทำตามแบบร่าง".
+ *
+ * Two properties came out of that and neither is obvious from reading the
+ * component, so both are pinned here:
+ *
+ *   1. EVERY PRODUCT IS A ROW, ALWAYS. The old collapse showed only the rows
+ *      the table judged interesting, which is right for an explainer and wrong
+ *      for the list where an admin checks that nothing was missed — the
+ *      product silently omitted is precisely the one nobody notices is unset.
+ *   2. THE READER NARROWS IT, not the table. Filter chips, defaulting to
+ *      ทั้งหมด, with counts that say what they will show before they are
+ *      clicked.
+ */
+describe('the table is the product list, so it never hides a product by itself', () => {
+  /** Three rows: one inheriting, one with its own rate, one closed and unrated. */
+  function threeProducts() {
+    const base = resolutionPayload() as ReturnType<typeof resolutionPayload>
+    const inheriting = {
+      ...base.products[0]!,
+      product_id: 1,
+      name: 'สินค้าใช้ค่าเริ่มต้น',
+      agent: { ...base.products[0]!.agent, category: null, product: null, winner: 'company', amount_satang: 30000 },
+    }
+    const ownRate = { ...base.products[0]!, product_id: 2, name: 'สินค้าตั้งเอง' }
+    const closed = {
+      ...base.products[0]!,
+      product_id: 3,
+      name: 'สินค้าปิดขาย',
+      is_sellable: false,
+      agent: { ...base.products[0]!.agent, company: null, category: null, product: null, winner: null, amount_satang: null },
+    }
+
+    return { ...base, products: [inheriting, ownRate, closed] }
+  }
+
+  it('shows every product at once, with no collapse to open', async () => {
+    const wrapper = await mountView(threeProducts())
+    await goToStep(wrapper, 3)
+
+    for (const id of [1, 2, 3]) {
+      expect(wrapper.find(`[data-test="step3-resolution-row-${id}"]`).exists()).toBe(true)
+    }
+    expect(wrapper.get('[data-test="step3-resolution-showing"]').text()).toContain('แสดง 3 จาก 3')
+  })
+
+  it('narrows to the rows the reader asked for, and says how many that is', async () => {
+    const wrapper = await mountView(threeProducts())
+    await goToStep(wrapper, 3)
+
+    await wrapper.get('[data-test="step3-resolution-filter-own"]').trigger('click')
+    expect(wrapper.findAll('[data-test^="step3-resolution-row-"]')).toHaveLength(1)
+    expect(wrapper.find('[data-test="step3-resolution-row-2"]').exists()).toBe(true)
+
+    await wrapper.get('[data-test="step3-resolution-filter-closed"]').trigger('click')
+    expect(wrapper.find('[data-test="step3-resolution-row-3"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="step3-resolution-row-1"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="step3-resolution-filter-all"]').trigger('click')
+    expect(wrapper.findAll('[data-test^="step3-resolution-row-"]')).toHaveLength(3)
+  })
+
+  it('does not count a closed product as one nobody gets paid on', async () => {
+    /*
+     * A product nobody sells paying nobody is a tautology, not a problem, and
+     * counting it would put a red number on a screen with nothing to fix. The
+     * closed row is the ONLY unpaid one in this fixture, so the badge must be
+     * absent entirely — and the ปิดขายอยู่ filter must still find it.
+     */
+    const wrapper = await mountView(threeProducts())
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.find('[data-test="step3-resolution-unpaid"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="step3-resolution-filter-unpaid"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="step3-resolution-filter-closed"]').text()).toContain('1')
+  })
+
+  it('explains the ladder in sentences for the one row somebody opened', async () => {
+    /*
+     * The columns answer "what does it pay"; they cannot say WHY a rung was
+     * skipped rather than beaten. That distinction is the whole of the owner's
+     * original complaint, and it belongs on the row being asked about rather
+     * than on all forty at once.
+     */
+    const wrapper = await mountView(threeProducts())
+    await goToStep(wrapper, 3)
+
+    expect(wrapper.find('[data-test="step3-resolution-detail-1"]').exists()).toBe(false)
+
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
+
+    const detail = wrapper.get('[data-test="step3-resolution-detail-1"]').text()
+    expect(detail).toContain('ยังไม่ได้ตั้ง จึงเลื่อนไปชั้นถัดไป')
+    expect(detail).toContain('ใช้อันนี้ และหยุดที่นี่')
   })
 })

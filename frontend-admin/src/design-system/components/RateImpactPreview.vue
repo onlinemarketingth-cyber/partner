@@ -31,7 +31,7 @@
  * figure comes from POST /commission-rate-impact, which runs CommissionService's
  * own ladder and rounding.
  */
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api } from '@/api/client'
 
 interface ChangedRow {
@@ -132,6 +132,41 @@ function baht(satang: number | null): string {
 
   return (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
+
+/*
+ * 2026-09-14 — WHO GETS THE MONEY, said out loud.
+ *
+ * Owner: "ปรับคำอธิบายหน่อย อ่านแล้วไม่เข้าใจ", looking at a panel that said
+ * "ไม่มีสินค้าตัวไหนเปลี่ยน (ค่าเดิมเท่ากับค่าใหม่)" while he edited ONE
+ * product's own rate.
+ *
+ * Three things were wrong with that sentence and only one of them was the
+ * wording. It talked about "สินค้าตัวไหน" — a set — when the scope was a
+ * single named product sitting in the modal's own heading. It stated the
+ * outcome as a negation of a technicality ("ค่าเดิมเท่ากับค่าใหม่") instead of
+ * the fact ("still 178 baht"). And it printed baht with no indication of baht
+ * OF WHAT, or to WHOM.
+ *
+ * So the copy now names the person and the occasion, and speaks about ONE
+ * product when there is one.
+ */
+const whoGetsIt = computed(() => (props.kind === 'agent' ? 'ตัวแทนที่ปิดการขาย' : 'หัวหน้าทีม'))
+
+/** The single row in scope, when the scope really is one product. */
+const onlyRow = computed(() => {
+  if (!impact.value) return null
+  const total = impact.value.changed.length + impact.value.blocked.length
+
+  return total === 1 ? (impact.value.changed[0] ?? null) : null
+})
+
+/** The single row in scope that a narrower rate is shielding. */
+const onlyBlocked = computed(() => {
+  if (!impact.value) return null
+  const total = impact.value.changed.length + impact.value.blocked.length
+
+  return total === 1 ? (impact.value.blocked[0] ?? null) : null
+})
 </script>
 
 <template>
@@ -139,7 +174,7 @@ function baht(satang: number | null): string {
     <p class="text-[12.5px] font-extrabold text-slate-700">บันทึกแล้วจะเกิดอะไรขึ้น</p>
 
     <p v-if="!ready" class="mt-1 text-[12px] text-slate-400" data-test="rate-impact-idle">
-      กรอกอัตราให้ครบก่อน แล้วระบบจะคำนวณให้ว่ากระทบสินค้าตัวไหนบ้าง
+      ใส่อัตราก่อน แล้วระบบจะบอกว่าใครได้เงินเปลี่ยนไปเท่าไหร่
     </p>
     <p v-else-if="loading && !impact" class="mt-1 text-[12px] text-slate-400">กำลังคำนวณ...</p>
     <p v-else-if="failed" class="mt-1 text-[12px] text-slate-400" data-test="rate-impact-failed">
@@ -153,39 +188,77 @@ function baht(satang: number | null): string {
       </p>
 
       <template v-else>
-        <p class="mt-1 text-[12.5px]" :class="impact.changed_count ? 'text-slate-700' : 'text-slate-500'" data-test="rate-impact-summary">
-          <template v-if="impact.changed_count">
-            <b>{{ impact.changed_count }} สินค้าจะเปลี่ยน</b>
-          </template>
-          <template v-else>ไม่มีสินค้าตัวไหนเปลี่ยน (ค่าเดิมเท่ากับค่าใหม่)</template>
-          <template v-if="impact.blocked_count">
-            · <b>{{ impact.blocked_count }} สินค้าไม่กระทบ</b> เพราะมีอัตราที่เจาะจงกว่าทับอยู่
-          </template>
+        <!--
+          ── ONE PRODUCT IN SCOPE: SPEAK ABOUT IT, NOT ABOUT "สินค้า" ──
+
+          Editing a single product's own rate and being told "ไม่มีสินค้าตัวไหน
+          เปลี่ยน" is the complaint that produced this rewrite. The scope is one
+          named product; the answer should be about that product, in baht, and
+          should say who receives it.
+        -->
+        <template v-if="onlyRow">
+          <p v-if="!onlyRow.unchanged" class="mt-1 text-[12.5px] text-slate-700" data-test="rate-impact-summary">
+            <b>{{ onlyRow.name }}</b> · {{ whoGetsIt }}จะได้
+            <span class="tabular-nums">{{ baht(onlyRow.before_satang) }}</span>
+            → <b class="tabular-nums text-brand-700">{{ baht(onlyRow.after_satang) }} บาท</b>
+            ต่อการขาย 1 ครั้ง
+          </p>
+          <!-- The fact, not the negation of a technicality. "ค่าเดิมเท่ากับค่า
+               ใหม่" told the admin about the comparison; what they wanted to
+               know is what this product pays. -->
+          <p v-else class="mt-1 text-[12.5px] text-slate-500" data-test="rate-impact-summary">
+            <b>{{ onlyRow.name }}</b> · {{ whoGetsIt }}ยังได้
+            <b class="tabular-nums">{{ baht(onlyRow.after_satang) }} บาท</b> ต่อการขาย 1 ครั้ง
+            เท่าเดิม — กดบันทึกก็ไม่มีอะไรเปลี่ยน
+          </p>
+        </template>
+
+        <p v-else-if="onlyBlocked" class="mt-1 text-[12.5px] text-slate-600" data-test="rate-impact-summary">
+          <b>{{ onlyBlocked.name }}</b> จะ<b>ไม่ใช้อัตรานี้</b> —
+          มีอัตรา{{ onlyBlocked.blocked_by === 'product' ? 'เฉพาะของสินค้าตัวนี้' : 'ของหมวดหมู่' }}ทับอยู่
+          ({{ whoGetsIt }}ยังได้ <span class="tabular-nums">{{ baht(onlyBlocked.amount_satang) }} บาท</span> เท่าเดิม)
         </p>
 
-        <ul v-if="impact.changed_count" class="mt-1.5 space-y-0.5 text-[12px] text-slate-600" data-test="rate-impact-changed">
-          <li v-for="row in impact.changed.filter((r) => !r.unchanged).slice(0, 6)" :key="row.product_id">
-            {{ row.name }} — <span class="tabular-nums">{{ baht(row.before_satang) }}</span>
-            → <b class="tabular-nums">{{ baht(row.after_satang) }}</b> บาท
-          </li>
-          <li v-if="impact.changed_count > 6" class="text-slate-400">
-            และอีก {{ impact.changed_count - 6 }} รายการ
-          </li>
-        </ul>
+        <!-- ── MANY PRODUCTS: COUNT FIRST, THEN NAME THEM ── -->
+        <template v-else>
+          <p class="mt-1 text-[12.5px]" :class="impact.changed_count ? 'text-slate-700' : 'text-slate-500'" data-test="rate-impact-summary">
+            <template v-if="impact.changed_count">
+              <b>{{ impact.changed_count }} สินค้าจะเปลี่ยน</b> — {{ whoGetsIt }}ได้ไม่เท่าเดิม
+            </template>
+            <template v-else>ไม่มีอะไรเปลี่ยน — อัตราใหม่เท่ากับอัตราเดิมของทุกสินค้าในขอบเขตนี้</template>
+            <template v-if="impact.blocked_count">
+              · <b>{{ impact.blocked_count }} สินค้าไม่กระทบ</b> เพราะมีอัตราที่เจาะจงกว่าทับอยู่
+            </template>
+          </p>
 
-        <!-- Named, not just counted. A count says something is being shielded;
-             only the name says whether that was the intention. -->
-        <ul v-if="impact.blocked_count" class="mt-1.5 space-y-0.5 text-[12px] text-slate-400" data-test="rate-impact-blocked">
-          <li v-for="row in impact.blocked.slice(0, 4)" :key="row.product_id">
-            {{ row.name }} — ใช้อัตรา{{ row.blocked_by === 'product' ? 'ของสินค้าเอง' : 'ของหมวดหมู่' }}ต่อไป
-            ({{ baht(row.amount_satang) }} บาท)
-          </li>
-          <li v-if="impact.blocked_count > 4">และอีก {{ impact.blocked_count - 4 }} รายการ</li>
-        </ul>
+          <ul v-if="impact.changed_count" class="mt-1.5 space-y-0.5 text-[12px] text-slate-600" data-test="rate-impact-changed">
+            <li v-for="row in impact.changed.filter((r) => !r.unchanged).slice(0, 6)" :key="row.product_id">
+              {{ row.name }} — <span class="tabular-nums">{{ baht(row.before_satang) }}</span>
+              → <b class="tabular-nums">{{ baht(row.after_satang) }}</b> บาท
+            </li>
+            <li v-if="impact.changed_count > 6" class="text-slate-400">
+              และอีก {{ impact.changed_count - 6 }} รายการ
+            </li>
+          </ul>
+
+          <!-- Named, not just counted. A count says something is being shielded;
+               only the name says whether that was the intention. -->
+          <ul v-if="impact.blocked_count" class="mt-1.5 space-y-0.5 text-[12px] text-slate-400" data-test="rate-impact-blocked">
+            <li v-for="row in impact.blocked.slice(0, 4)" :key="row.product_id">
+              {{ row.name }} — ใช้อัตรา{{ row.blocked_by === 'product' ? 'เฉพาะของตัวเอง' : 'ของหมวดหมู่' }}ต่อไป
+              ({{ baht(row.amount_satang) }} บาท)
+            </li>
+            <li v-if="impact.blocked_count > 4">และอีก {{ impact.blocked_count - 4 }} รายการ</li>
+          </ul>
+        </template>
       </template>
 
-      <p class="mt-1.5 text-[11.5px] text-slate-400">
-        มีผลกับดีลที่เกิดหลังบันทึกเท่านั้น — รายการที่ลงบัญชีไปแล้วไม่เปลี่ยน
+      <!-- Only when something ACTUALLY moves. Under the old copy this line
+           printed even on "nothing changes", where it is noise attached to a
+           non-event — and noise beside the one sentence that matters is how a
+           panel stops being read. -->
+      <p v-if="impact.changed_count" class="mt-1.5 text-[11.5px] text-slate-400">
+        มีผลกับดีลที่ปิดหลังจากกดบันทึกเท่านั้น · ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยน
       </p>
     </template>
   </div>

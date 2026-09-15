@@ -68,6 +68,7 @@ vi.mock('vue-router', () => ({
 import CommissionPlansView from '../CommissionPlansView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { buildResolution, type FixtureProduct, type FixtureRule } from './support/resolution'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -180,6 +181,17 @@ async function mountView(fixture: Fixture = {}) {
 
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/commission-readiness')) return readiness
+    // Step 3's product rows ARE the resolution table since 2026-09-14.
+    if (path.startsWith('/commission-resolution')) {
+      return {
+        data: buildResolution({
+          companyId: AIA.id,
+          products: products as FixtureProduct[],
+          rules: rules as FixtureRule[],
+          overrideRules: overrides as FixtureRule[],
+        }),
+      }
+    }
     if (path.startsWith('/commission-settings')) return { data: { commission_basis: 'price' } }
     if (path.startsWith('/companies')) return { data: [AIA] }
     if (path.startsWith('/products')) return { data: products }
@@ -301,20 +313,27 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
     await goToStep(wrapper, 3)
 
     const section = wrapper.get('[data-test="step3-products"]')
+    /*
+     * 2026-09-14 — THE ROWS ARE TABLE ROWS NOW, and this assertion survived
+     * the merge unchanged because the sentence it forbids was never the
+     * table's. "ยังไม่มีอัตรา" was the per-card badge, repeated once per
+     * product; the table's own phrase is about MONEY ("ไม่มีใครได้เงิน"), it
+     * sits in one column, and it was already on this screen before the merge.
+     */
     expect(section.text()).not.toContain('ยังไม่มีอัตรา')
     for (const id of [1, 2, 3, 4]) {
-      // The badge whose only possible text here is ยังไม่มีอัตรา is absent...
-      expect(wrapper.find(`[data-test="product-layer-${id}"]`).exists()).toBe(false)
-      // ...the rate reads as a quiet dash rather than a red sentence...
-      expect(wrapper.get(`[data-test="product-rate-${id}"]`).text()).toBe('—')
-      // ...and the row itself is not painted red either, which is where four
-      // of the six red things actually lived.
-      expect(wrapper.get(`[data-test="product-row-${id}"]`).classes().join(' ')).not.toContain('bg-rose-50')
+      // No rung resolves, so no cell claims one...
+      expect(wrapper.get(`[data-test="step3-resolution-cell-${id}-company"]`).text()).toBe('+ ตั้ง')
+      // ...and the row itself is not painted red, which is where four of the
+      // six red things actually lived.
+      expect(wrapper.get(`[data-test="step3-resolution-row-${id}"]`).classes().join(' ')).not.toContain('bg-rose-50')
     }
-    // The row still says what it IS — name, price, plan — because reading the
-    // catalogue is not what is locked.
-    expect(wrapper.get('[data-test="product-row-1"]').text()).toContain('สินค้า ก')
-    expect(wrapper.get('[data-test="product-row-1"]').text()).toContain('แผน Unilevel')
+    // The row still says what it IS — name and price — because reading the
+    // catalogue is not what is locked. (The plan moved one click away, into
+    // the row's own detail panel; it is asserted where it now lives.)
+    expect(wrapper.get('[data-test="step3-resolution-row-1"]').text()).toContain('สินค้า ก')
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
+    expect(wrapper.get('[data-test="product-plan-1"]').text()).toContain('Unilevel')
   })
 
   it('leaves every rate control usable, because none of them is actually forbidden', async () => {
@@ -337,8 +356,7 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-button-1"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('[data-test="add-product-rate"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="step3-resolution-add-product-rate-1"]').attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-test="add-category-rate"]').attributes('disabled')).toBeUndefined()
   })
 
@@ -355,14 +373,14 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
 
     await goToStep(wrapper, 3)
 
-    const toggle = wrapper.get('[data-test="selling-switch-1"]')
+    const toggle = wrapper.get('[data-test="step3-resolution-selling-switch-1"]')
     expect(toggle.attributes('disabled')).toBeUndefined()
 
     await toggle.trigger('click')
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/products/1', { is_active: true })
-    expect(wrapper.get('[data-test="selling-label-1"]').text()).toBe('เปิดขาย')
+    expect(wrapper.get('[data-test="step3-resolution-selling-label-1"]').text()).toBe('เปิดขาย')
   })
 
   it('still distinguishes an expired rate, which is the one thing 3.1 cannot say', async () => {
@@ -379,6 +397,9 @@ describe('CommissionPlansView — while 3.1 is missing, 3.1 is the only thing sh
     })
 
     await goToStep(wrapper, 3)
+    // Per-row notes live in the row's detail panel since the merge — one
+    // product's worth at a time, instead of every product's at once.
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
 
     const expired = wrapper.get('[data-test="product-expired-1"]')
     expect(expired.text()).toContain('อัตราหมดอายุ')
@@ -434,9 +455,11 @@ describe('CommissionPlansView — once 3.1 is done the attention moves down the 
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-button-1"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('[data-test="simulate-1"]').attributes('disabled')).toBeUndefined()
-    expect(wrapper.get('[data-test="add-product-rate"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="step3-resolution-add-product-rate-1"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-test="add-category-rate"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
+    expect(wrapper.get('[data-test="step3-resolution-simulate-1"]').attributes('disabled')).toBeUndefined()
   })
 
   it('warns per row again, but only on the rows that genuinely have a problem', async () => {
@@ -454,10 +477,14 @@ describe('CommissionPlansView — once 3.1 is done the attention moves down the 
 
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-row-1"]').text()).toContain('ตั้งค่าครบ พร้อมจ่าย')
-    expect(wrapper.get('[data-test="product-row-2"]').text()).toContain('ยังไม่มีอัตราหัวหน้าทีม')
-    // The layer badge is back on both rows, because both now resolve to a rate.
-    expect(wrapper.get('[data-test="product-layer-2"]').text()).toBe('ใช้ค่าเริ่มต้นบริษัท')
+    await wrapper.get('[data-test="step3-resolution-expand-1"]').trigger('click')
+    expect(wrapper.get('[data-test="product-ready-1"]').text()).toContain('ตั้งค่าครบ พร้อมจ่าย')
+
+    await wrapper.get('[data-test="step3-resolution-expand-2"]').trigger('click')
+    expect(wrapper.get('[data-test="product-readiness-2"]').text()).toContain('ยังไม่มีอัตราหัวหน้าทีม')
+    // Both rows resolve to a rate, and the table says which rung each came
+    // from — the sentence the old one-word layer badge could only gesture at.
+    expect(wrapper.get('[data-test="step3-resolution-pays-2"]').text()).toContain('จากชั้นบริษัท')
   })
 })
 
@@ -480,8 +507,8 @@ describe('CommissionPlansView — step 3 is not finished without a company defau
     await goToStep(wrapper, 3)
     // Both products DO have a usable rate — the premise of the test, not an
     // accident of the fixture.
-    expect(wrapper.get('[data-test="product-rate-1"]').text()).toBe('3.00%')
-    expect(wrapper.get('[data-test="product-rate-2"]').text()).toBe('3.00%')
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-product"]').text()).toContain('3.00%')
+    expect(wrapper.get('[data-test="step3-resolution-cell-2-product"]').text()).toContain('3.00%')
 
     expect(pill(wrapper, 3)).toBe('ยังไม่ครบ')
     // And the gate above agrees: step 4 is still behind step 3.

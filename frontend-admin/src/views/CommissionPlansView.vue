@@ -932,7 +932,7 @@ const ruleScopeLabels: Record<RuleScope, string> = {
  * 2026-09-14 — openCreateOverrideForm() (no scope) WAS HERE AND IS GONE.
  *
  * It was the last caller that opened a rate form without answering the scope,
- * and it had no caller left of its own: splitting 4.1 into three boxes gave
+ * and it had no caller left of its own: splitting the rate box into three gave
  * every + button a scope, and the resolution table's cells carry one too.
  *
  * Deleted rather than kept "just in case", deliberately. A dead opener that
@@ -945,7 +945,7 @@ const ruleScopeLabels: Record<RuleScope, string> = {
 /**
  * 2026-09-14 — open the leader-rate form already pointed at one scope.
  *
- * Owner: "แยกเป็น 3 กล่อง". Each of 4.1 / 4.2 / 4.3 owns one layer of the
+ * Owner: "แยกเป็น 3 กล่อง". Each of 4.3 / 4.4 / 4.5 owns one layer of the
  * ladder and has its own + button, so the scope is answered by WHICH BUTTON
  * was pressed rather than by a dropdown the admin has to notice. Mirrors
  * openCreateRuleFormWithScope() on the agent side exactly.
@@ -1108,77 +1108,20 @@ async function loadReadinessProbe(): Promise<void> {
   structureReady.value = next
 }
 
-// ── Product-row helpers (the Option B idea, now living in step 3.2) ──
 /*
- * Sets the STEP as well as the form. It used to set viewMode + activeTab +
- * form state together for exactly this reason: the form opens as an overlay
- * over whatever is behind it, and closing it must not drop the admin back on
- * a panel that has nothing to do with what they just saved. Step 3 is where
- * the row they clicked lives, so step 3 is where they land.
+ * 2026-09-14 — productOwnRule() AND openRuleFormForProduct() WERE HERE.
+ *
+ * They belonged to the per-product card list in 3.3, which the resolution
+ * table absorbed on the same day. Their whole job — "open this product's own
+ * rate if it has one, otherwise create one with the scope locked to สินค้า" —
+ * is now editFromMatrix('agent', …) with `layer: 'product'`, which gets the
+ * rule id from the server's own ladder instead of re-resolving it here.
+ *
+ * That is the point of the deletion, not tidiness: productOwnRule() was a
+ * FOURTH copy of the resolution ladder living in the browser, and the reason
+ * this screen asks the server for that table at all is that a browser copy
+ * once displayed and paid a Thai Life rate on AIA. Do not reintroduce one.
  */
-/** This product's OWN live rate, if it has one — not whatever it inherits. */
-function productOwnRule(p: ProductOption): CommissionRuleItem | null {
-  const now = new Date()
-
-  return byCompany(commissionRules.value).find((r) => r.product?.id === p.id && isRuleActiveOn(r, now)) ?? null
-}
-
-function openRuleFormForProduct(p: ProductOption) {
-  /*
-   * Assigns `activeStep` directly rather than calling goToStep(), and that is
-   * safe for one reason only: its caller (the product card in step 3.3) is
-   * already ON step 3, so this re-asserts the current step rather than
-   * navigating to another one — and the current step is reachable by
-   * definition (see `stepReachable`).
-   * Anything that starts calling this from elsewhere must go through
-   * goToStep() instead, or it will have found a way around the 2026-09-12
-   * gate.
-   */
-  activeStep.value = 3
-  activeTab.value = 'rules'
-  void ensureTabLoaded('rules')
-
-  /*
-   * ── 2026-09-14, BUG 1: "แก้ไข" WAS CREATING, NOT EDITING ──
-   *
-   * The button's label reads from resolveRuleFor(), which answers "what does
-   * this product get paid" — and that answer may come from the CATEGORY or the
-   * COMPANY rung. So on a product that merely inherits, the button said
-   * แก้ไขอัตราคอมมิชชั่น and then opened a blank CREATE form; and on a product
-   * that had its own rate it said the same thing and tried to create a SECOND
-   * one, which the overlap guard rejects with "ขอบเขตนี้มีอัตราครอบคลุมช่วงเวลา
-   * นี้อยู่แล้ว" — a refusal about a row the admin thought they were editing.
-   *
-   * Editing the product's own row when it has one is both the honest reading
-   * of the label and the only version that can succeed.
-   */
-  const own = productOwnRule(p)
-
-  if (own) {
-    openEditRuleForm(own)
-
-    return
-  }
-
-  /*
-   * ── BUG 2: THE SCOPE WAS STILL A DROPDOWN ──
-   *
-   * Owner: "ตอนแก้ไขสินค้า ค่าคอมก็ยังมีตัวเลือกให้ปรับที่หมวดและบริษัท ซึ่งมัน
-   * จะทำให้สับสนและทำงานผิดพลาดได้."
-   *
-   * This is the worst instance of the redundancy fixed elsewhere the same day,
-   * because here the modal's own HEADING names the product: an admin reading
-   * "สินค้า: Almond Chips" could nudge the first dropdown and save a rate that
-   * silently moves every product in the company. Pressing a button on one
-   * product's row answers the scope question as firmly as a question can be
-   * answered.
-   */
-  resetRuleForm()
-  ruleForm.value.scope = 'product'
-  ruleForm.value.product_id = p.id
-  ruleFormScopeLocked.value = true
-  showRuleForm.value = true
-}
 /** Step 3's two add buttons ("+ เพิ่มอัตราของสินค้า" / "…ของหมวดหมู่"). */
 function openCreateRuleFormWithScope(scope: RuleScope) {
   resetRuleForm()
@@ -1394,7 +1337,7 @@ const activeOverrideRules = computed<CommissionOverrideRuleItem[]>(() => {
 const hasCompanyWideLeaderRate = computed<boolean>(() =>
   activeOverrideRules.value.some((r) => !r.product && !r.product_category))
 
-/* ── 2026-09-14 — ONE BOX PER LAYER OF THE LADDER (step 4.1 / 4.2 / 4.3) ──
+/* ── 2026-09-14 — ONE BOX PER LAYER OF THE LADDER (step 4.3 / 4.4 / 4.5) ──
  *
  * Owner: "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด แต่ตอนนี้เป็นตัวเลือกการ
  * ทำงานแบบอย่างเดียว" and "การตั้งค่าแบบหมวดสินค้า ผมแทบไม่เห็นใน UI เลย".
@@ -1454,7 +1397,7 @@ function leaderRowLabel(r: CommissionOverrideRuleItem): string {
 const leaderRateGroups = computed(() => [
   {
     scope: 'company' as RuleScope,
-    number: '4.1',
+    number: '4.3',
     title: 'ค่าเริ่มต้นทั้งบริษัท',
     hint: 'ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้ — ตั้งอันนี้อันเดียวก็ครอบคลุมทั้งบริษัท',
     empty: 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าคอมเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
@@ -1462,7 +1405,7 @@ const leaderRateGroups = computed(() => [
   },
   {
     scope: 'category' as RuleScope,
-    number: '4.2',
+    number: '4.4',
     title: 'ตามหมวดหมู่สินค้า',
     hint: 'ใช้กับทุกสินค้าในหมวดนั้น และทับค่าเริ่มต้นทั้งบริษัท',
     empty: 'ยังไม่ได้ตั้ง — ทุกหมวดใช้ค่าเริ่มต้นทั้งบริษัท',
@@ -1470,7 +1413,7 @@ const leaderRateGroups = computed(() => [
   },
   {
     scope: 'product' as RuleScope,
-    number: '4.3',
+    number: '4.5',
     title: 'ตามสินค้า',
     hint: 'ใช้กับสินค้าตัวนั้นตัวเดียว และทับทั้งหมวดหมู่และค่าเริ่มต้น',
     empty: 'ยังไม่ได้ตั้ง — ทุกสินค้าใช้ค่าของหมวดหมู่หรือค่าเริ่มต้น',
@@ -1681,6 +1624,7 @@ async function loadCompanySettings(): Promise<void> {
     overrideMode.value = 'additive'
     overrideModeUnknown.value = false
     deepestManagerChain.value = 0
+    houseAccount.value = null
 
     return
   }
@@ -1691,6 +1635,7 @@ async function loadCompanySettings(): Promise<void> {
         commission_plan_type?: CommissionPlanType | null
         commission_override_mode?: CommissionOverrideMode
         deepest_manager_chain?: number
+        commission_house_account?: HouseAccount | null
       }
     }>(`/commission-settings${companyQuery()}`)
     commissionBasis.value = r.data.commission_basis ?? 'price'
@@ -1701,6 +1646,7 @@ async function loadCompanySettings(): Promise<void> {
     // leader rate from this number, and a guess would print a ceiling the
     // save-time refusal then disagrees with.
     deepestManagerChain.value = r.data.deepest_manager_chain ?? 0
+    houseAccount.value = r.data.commission_house_account ?? null
     overrideModeUnknown.value = false
   } catch {
     // Left NULL, not defaulted: the screen does not know the plan, and
@@ -1711,6 +1657,7 @@ async function loadCompanySettings(): Promise<void> {
     // Same reason, one card further on — see overrideModeUnknown.
     overrideModeUnknown.value = true
     deepestManagerChain.value = 0
+    houseAccount.value = null
   }
 }
 
@@ -1758,6 +1705,107 @@ async function loadResolution(): Promise<void> {
 }
 
 const resolutionRows = computed<ResolutionRow[]>(() => resolution.value?.products ?? [])
+
+/**
+ * ── THE BRIDGE BETWEEN THE TWO LISTS OF PRODUCTS (2026-09-14) ──
+ *
+ * The table's rows come from /commission-resolution, because its numbers must
+ * come from the code that pays. The controls that moved INTO those rows — the
+ * selling switch, ทดสอบคำนวณ, the readiness note — need the catalogue row from
+ * /products instead, because that is where `permissions`, `is_shared` and the
+ * effective plan type live.
+ *
+ * One lookup by id, and every one of those controls goes through it. The
+ * alternative — teaching the resolution endpoint to carry permissions too —
+ * would give this screen two services answering "may I" and is how the mirror
+ * problems in this file started.
+ */
+const productsById = computed(() => new Map(byCompany(products.value).map((p) => [p.id, p] as const)))
+
+function productForRow(row: ResolutionRow): ProductOption | null {
+  return productsById.value.get(row.product_id) ?? null
+}
+
+/**
+ * Which rows' switches this viewer may move. Sent as ids rather than a
+ * predicate so the table stays a design-system component that knows nothing
+ * about ADR-040 or ProductPolicy — see canToggleSelling() for what it does
+ * know.
+ */
+const togglableProductIds = computed(() =>
+  byCompany(products.value).filter((p) => canToggleSelling(p)).map((p) => p.id))
+
+/**
+ * Which rows may carry a product-scoped rate — the server's per-row answer,
+ * not the viewer's role (TASK-245: a catalog-LINKED product is rated centrally
+ * and the write is refused, ADR-036 §5/§6).
+ *
+ * This is the same question the old per-row "+ ตั้งอัตราเฉพาะสินค้านี้" button
+ * asked before it was drawn. It has to survive the merge or the table offers a
+ * 403 once per catalogue-linked product.
+ */
+const rateableProductIds = computed(() =>
+  byCompany(products.value).filter((p) => canSetCommission(p)).map((p) => p.id))
+
+function toggleSellingFromMatrix(row: ResolutionRow): void {
+  const product = productForRow(row)
+  if (product) void toggleSelling(product)
+}
+
+function simulateFromMatrix(row: ResolutionRow): void {
+  const product = productForRow(row)
+  if (product) openSimulate(product)
+}
+
+/*
+ * ── THE PER-PRODUCT NOTES, ONE CALL EACH ──
+ *
+ * These four exist so the opened row's template asks each question once
+ * instead of calling productForRow() six times per note. They return null for
+ * "nothing to say", which is the state most rows are in most of the time.
+ */
+
+/** Which plan structure pays this product, and whether it chose that itself. */
+function rowPlanLabel(row: ResolutionRow): string {
+  const p = productForRow(row)
+  if (!p?.effective_plan_type) return '—'
+
+  return planTypeLabels[p.effective_plan_type] + (p.commission_plan_type ? '' : ' (สืบทอดจากบริษัท)')
+}
+
+/**
+ * An expired rate is not the same gap as a missing one — it carries a DATE
+ * nothing else on this screen knows, and it sends the admin to a row that
+ * needs one field changed instead of to a duplicate. Null once a live rate
+ * resolves, because then the expiry is history.
+ */
+function rowExpiredRule(row: ResolutionRow): CommissionRuleItem | null {
+  const p = productForRow(row)
+  if (!p || resolveRuleFor(p)) return null
+
+  return expiredRuleFor(p)
+}
+
+function rowReadiness(row: ResolutionRow): { level: ReadinessLevel; message: string } | null {
+  const p = productForRow(row)
+
+  return p ? productReadiness(p) : null
+}
+
+/**
+ * The plan tab whose STRUCTURE this product is still missing, or null.
+ *
+ * Also null when step 2 is unreachable: this panel is step 3, so the offer to
+ * jump is made from inside a step that may itself be incomplete. goToStep()
+ * would refuse it, and a button drawn dead is worse than one not drawn — the
+ * readiness message beside it already names the gap.
+ */
+function rowStructureGap(row: ResolutionRow): CommissionPlanType | null {
+  const plan = productForRow(row)?.effective_plan_type ?? null
+  if (!plan || !planTypeToTab[plan] || structureReady.value[plan] !== false || !stepReachable.value[2]) return null
+
+  return plan
+}
 
 /**
  * Open the right rate form for a cell the admin clicked in the table.
@@ -1930,6 +1978,79 @@ const overrideModeUnknown = ref(false)
 const deepestManagerChain = ref(0)
 const overrideModeSaving = ref(false)
 const overrideModeError = ref('')
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-15 — 4.2 · WHO RECEIVES THE LEADER'S SHARE.
+ *
+ * Owner: "หัวหน้าทีมในที่นี้มีได้ 2 ความหมาย คือหัวหน้าทีมที่เป็น user จริงในระบบ
+ * กับหัวหน้าทีมที่เป็นตัวบริษัทเองที่ได้ค่าคอมจากการขาย เช่น Thailife".
+ *
+ * Until now a leader override could only reach a human up the manager chain,
+ * so an agent with nobody above them kept the whole commission and the company
+ * earned no share of their sales. The company can now take a seat at the TOP
+ * of its own hierarchy — a real users row, so the payout walk reaches it
+ * without learning a second kind of recipient (see
+ * CommissionHouseAccountService for why that shape was chosen over three
+ * others).
+ *
+ * THIS BOX SITS BETWEEN THE MODE AND THE RATES, and that order is the whole
+ * reason it is 4.2: "where does the money come from" → "who receives it" →
+ * "how much". Put it after the rates and an admin types a percentage before
+ * knowing who it is for.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface HouseAccount {
+  id: number
+  name: string
+  /** How many agents report directly to the seat — 0 means it earns nothing. */
+  agents_under: number
+  /** Every satang ever credited to it, paid or not. See the Service. */
+  earned_satang: number
+}
+
+const houseAccount = ref<HouseAccount | null>(null)
+const houseAccountSaving = ref(false)
+const houseAccountError = ref('')
+const showHouseAccountConfirm = ref(false)
+const houseAccountName = ref('')
+
+function openHouseAccountConfirm(): void {
+  houseAccountError.value = ''
+  // The company's own name is what nine admins in ten want on the row, and
+  // pre-filling it means the common case is one button rather than a form.
+  houseAccountName.value = activeCompany.companies.find((c) => c.id === effectiveCompanyId.value)?.name ?? ''
+  showHouseAccountConfirm.value = true
+}
+
+/**
+ * Give the company a seat, or take it away.
+ *
+ * Both answers carry the WHOLE commission setting back, because switching
+ * either way moves `deepest_manager_chain` — every agent with no upline gains
+ * one — and that number is the ceiling 4.3–4.5 offer as a maximum. Refreshing
+ * the resolution table too, since what a leader is paid on each product has
+ * just changed from "nobody" to "the company".
+ */
+async function saveHouseAccount(enable: boolean): Promise<void> {
+  if (houseAccountSaving.value || !effectiveCompanyId.value) return
+
+  houseAccountSaving.value = true
+  houseAccountError.value = ''
+  try {
+    const body = withCompanyBody(enable ? { display_name: houseAccountName.value.trim() || null } : {})
+    const r = enable
+      ? await commissionApi.post<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>('/commission-house-account', body)
+      : await commissionApi.delete<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>('/commission-house-account', body)
+
+    houseAccount.value = r.data.commission_house_account ?? null
+    deepestManagerChain.value = r.data.deepest_manager_chain ?? 0
+    showHouseAccountConfirm.value = false
+    void loadResolution()
+  } catch (e) {
+    houseAccountError.value = apiErrorMessage(e, enable ? 'เปิดบัญชีบริษัทไม่สำเร็จ' : 'ปิดบัญชีบริษัทไม่สำเร็จ')
+  } finally {
+    houseAccountSaving.value = false
+  }
+}
 
 const overrideModeOptions: Array<{
   value: CommissionOverrideMode
@@ -2314,30 +2435,15 @@ async function savePointValue(p: ProductOption): Promise<void> {
  * one control in two places, and an admin should not have to learn it twice.
  */
 
-/**
- * Selling first, then by name — SORTED, never filtered.
+/*
+ * 2026-09-14 — sellingFirstProducts() WAS HERE.
  *
- * A closed product still needs a rate: it is the one somebody is about to
- * switch back on, and the owner said so outright ("ที่ปิดไว้ก็แก้ไขได้เหมือน
- * เดิม"). What is on sale is today's work; what is closed is reference.
+ * It ordered the per-product card list: on sale first, then by Thai name. The
+ * list is gone and the ORDER survived it — CommissionResolutionService::
+ * configurableProducts() now sorts the same way, on the server, so the table
+ * and the payout logic agree about what "every product" means without this
+ * file holding a second opinion.
  */
-const sellingFirstProducts = computed<ProductOption[]>(() =>
-  /*
-   * `.slice()` BEFORE `.sort()`: byCompany() hands back the SOURCE array
-   * untouched whenever there is nothing to narrow (any Company Admin, and the
-   * "ทุกบริษัท" view), so sorting in place would reorder `products.value`
-   * itself and make each render depend on the last one.
-   *
-   * `localeCompare(…, 'th')` so each half is ordered the way a Thai reader
-   * expects rather than by insertion.
-   */
-  byCompany(products.value).slice().sort((a, b) => {
-    const aSelling = a.is_sellable_here === true
-    const bSelling = b.is_sellable_here === true
-    if (aSelling !== bSelling) return aSelling ? -1 : 1
-
-    return a.name.localeCompare(b.name, 'th')
-  }))
 
 /**
  * May THIS viewer work THIS row's on/off switch — two different questions,
@@ -2418,6 +2524,22 @@ async function toggleSelling(p: ProductOption): Promise<void> {
      */
     const row = products.value.find((x) => x.id === p.id)
     if (row) row.is_sellable_here = next
+    /*
+     * THE TABLE'S COPY OF THIS FLAG IS THE SERVER'S (`is_sellable` on the
+     * resolution row), and it is what draws the switch the admin just moved.
+     * So it is patched here too — the switch has to move on the click, not one
+     * round trip later, or the admin clicks it twice.
+     *
+     * And then it is REFETCHED anyway, which is not belt and braces: opening a
+     * product changes `max_override_per_level_satang`, because the ceiling is
+     * the worst SELLABLE product's commission divided by the chain. Leaving
+     * that stale would have step 4 offer a leader rate the guard then refuses.
+     * The catalogue list above still must not be refetched (it holds step 2's
+     * PV drafts); this payload holds nothing anybody is typing into.
+     */
+    const resolved = resolution.value?.products.find((x) => x.product_id === p.id)
+    if (resolved) resolved.is_sellable = next
+    void loadResolution()
   } catch (e) {
     sellingError.value = apiErrorMessage(e, 'เปิด/ปิดขายสินค้าไม่สำเร็จ')
   } finally {
@@ -3035,15 +3157,15 @@ const companyDefaultSummary = computed<string>(() => {
   return only ? formatRate(only.rate_type, only.rate_value) : ''
 })
 
-/** 'ตั้งเฉพาะสินค้านี้' / 'ใช้อัตราหมวดหมู่' / 'ใช้ค่าเริ่มต้นบริษัท' — the badge in 3.2. */
-function rateLayerLabel(p: ProductOption): string {
-  const r = resolveRuleFor(p)
-  if (!r) return 'ยังไม่มีอัตรา'
-  if (r.product) return 'ตั้งเฉพาะสินค้านี้'
-  if (r.product_category) return 'ใช้อัตราหมวดหมู่'
-
-  return 'ใช้ค่าเริ่มต้นบริษัท'
-}
+/*
+ * 2026-09-14 — rateLayerLabel() WAS HERE.
+ *
+ * It was a pill on each product card reading "ใช้อัตราหมวดหมู่" or "ใช้ค่า
+ * เริ่มต้นบริษัท" — one word for a whole ladder, computed in the browser. The
+ * table says the same thing with three columns and a strikethrough, using the
+ * server's answer, and it says WHAT THE LOSING RUNGS WOULD HAVE PAID, which
+ * the pill never could.
+ */
 
 /**
  * The rate this product USED to have, when it has none now.
@@ -4889,13 +5011,36 @@ watch(companyPlanType, (pt) => {
                 </TransitionGroup>
               </div>
 
-              <!-- ── 3.3 สินค้าที่มาร์จิ้นต่างจริง ──
-                   LOCKED UNTIL 3.1 EXISTS, and the lock is what removes five
-                   of the six red things: with no company default NOTHING
-                   resolves, so every row here was repeating 3.1's sentence
-                   once per product. The rows stay readable (a rate that IS set
-                   per product still shows, and so does whether the company
-                   sells it) — only the echo and the controls go. -->
+              <!-- ── 3.3 อัตราต่อสินค้า และผลลัพธ์ ──
+
+                   ONE TABLE, NOT A LIST PLUS A TABLE (owner, 2026-09-14:
+                   "3.3 กับต่างผลลัพธ์ … รวมเป็นการแสดงผลเดียวได้ไหม").
+
+                   There used to be a card list here — every product, the rate
+                   that resolved, a selling switch, ทดสอบคำนวณ and one edit
+                   button — and a resolution table directly underneath it
+                   listing the same products again with all three rungs and the
+                   baht each would pay. The duplication was mine: the note that
+                   justified keeping the boxes ("a category rate covering no
+                   product would go invisible") is true of 3.1 and 3.2, which
+                   list RULES, and simply false of this one, which listed
+                   PRODUCTS — the table's own rows.
+
+                   So the list is gone and its three controls moved into the
+                   table's rows. Two things had to change to make that safe,
+                   both decided by the owner:
+
+                     1. CLOSED PRODUCTS STAY LISTED ("แสดงไว้ ใช้แบบเดียวกับ
+                        3.3 เดิมคือปรับค่าคอมได้ เปิดปิดได้"). The server no
+                        longer filters by isSellableBy(); it flags instead.
+                        Without that the switch that REOPENS a product would
+                        have vanished with its row.
+                     2. NOTHING IS HIDDEN BY DEFAULT. The table's old collapse
+                        showed only "interesting" rows, which is right for an
+                        explainer and wrong for the list where you check that
+                        every product has been dealt with. Filter chips replace
+                        it: the reader narrows, the table never does.
+              -->
               <div
                 data-test="step3-products"
                 class="rounded-2xl transition-colors"
@@ -4904,12 +5049,11 @@ watch(companyPlanType, (pt) => {
                   : 'border-2 border-brand-500 ring-4 ring-brand-100 bg-brand-50/20 px-4 py-3.5'"
               >
                 <div class="flex flex-wrap items-center gap-2 mb-2">
-                  <span class="text-[13.5px] font-extrabold text-slate-900">3.3 แยกเฉพาะสินค้าที่มาร์จิ้นต่างจริง</span>
-                  <!-- Not "ทำตรงนี้ก่อน": 3.2 is an exception list, not a duty
-                       — its own subtitle already says ไม่ต้องแยกทุกตัว. A badge
-                       that ORDERED an optional refinement would be the same
-                       lie as marking step 4 ยังไม่ครบ for being skippable, and
-                       it is how a badge stops being read. -->
+                  <span class="text-[13.5px] font-extrabold text-slate-900">3.3 อัตราต่อสินค้า และผลลัพธ์</span>
+                  <!-- Not "ทำตรงนี้ก่อน": this is an exception list, not a duty
+                       — a badge that ORDERED an optional refinement would be
+                       the same lie as marking step 4 ยังไม่ครบ for being
+                       skippable, and it is how a badge stops being read. -->
                   <span
                     v-if="!companyDefaultMissing"
                     class="text-[11px] font-extrabold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700 border border-brand-200"
@@ -4923,13 +5067,12 @@ watch(companyPlanType, (pt) => {
                 </div>
 
                 <!--
-                  2026-09-14 — ADVICE, NOT A PADLOCK.
-                  This was a lock line with a key icon, and it was overstating
-                  its case: a product rate written before the company default
-                  is unusual, not invalid, and the server takes it. What the
-                  admin actually needs to know is the CONSEQUENCE of stopping
-                  here — products they do not list get nothing — and that is a
-                  sentence, not a refusal. The controls below stay open.
+                  ADVICE, NOT A PADLOCK.
+                  A product rate written before the company default is unusual,
+                  not invalid, and the server takes it. What the admin actually
+                  needs to know is the CONSEQUENCE of stopping here — products
+                  they do not list get nothing — and that is a sentence, not a
+                  refusal. The table below stays fully usable.
                 -->
                 <p
                   v-if="companyDefaultMissing"
@@ -4940,360 +5083,89 @@ watch(companyPlanType, (pt) => {
                   แนะนำให้ตั้ง <b>ค่าเริ่มต้นทั้งบริษัทที่ 3.1</b> ก่อน — ไม่อย่างนั้นสินค้าที่ไม่ได้แยกเรตไว้จะไม่มีใครได้เงิน
                 </p>
 
-                <!-- A failed switch has to say so where the switch is. Same
-                     shape as pvError one step over — a visible line, never a
-                     silently reverted row. -->
-                <p v-if="sellingError" class="mb-2 text-[12.5px] font-bold text-rose-600" data-test="selling-error">{{ sellingError }}</p>
-
-                <EmptyState v-if="!byCompany(products).length" icon="money" title="ยังไม่มีสินค้า" />
-                <div v-else class="space-y-2">
-                  <!--
-                    The Option B product card from the 2026-07-22 overview,
-                    folded onto the path. It keeps what that card was FOR —
-                    the rate that actually resolves, and the layer it came
-                    from — and drops the separate view mode that made it a
-                    detour.
-
-                    2026-09-12 — and it now says whether the company SELLS the
-                    product, greyed exactly as ProductCatalogView greys it.
-                    Not hidden and not disabled: the reason to look at a closed
-                    row here is to rate it, and the owner asked for that
-                    outright ("ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม"). It is only
-                    visibly not part of today's shop, which the eye sorts far
-                    faster than it reads a status word.
-
-                    A missing rate still wins the row's colour: "nobody gets
-                    paid" outranks "not on sale today" — a closed product can
-                    be reopened in one click, an immutable ledger entry cannot
-                    (BR-4).
-                  -->
-                  <div
-                    v-for="p in sellingFirstProducts"
-                    :key="p.id"
-                    class="rounded-xl border px-4 py-3 transition-colors"
-                    :class="!companyDefaultMissing && productReadiness(p).level === 'bad'
-                      ? 'border-rose-200 bg-rose-50'
-                      : (p.is_sellable_here ? 'border-slate-200 bg-white' : 'border-slate-300 border-dashed bg-white')"
-                    :data-test="`product-row-${p.id}`"
-                    :data-selling="p.is_sellable_here ? 'open' : 'closed'"
-                  >
-                    <div class="flex flex-wrap items-center gap-3.5">
-                      <div class="flex-1 min-w-[200px]">
-                        <!--
-                          2026-09-14 — A CLOSED PRODUCT IS NO LONGER GREY.
-                          It used to be `bg-slate-50/60` with faded text, which
-                          is the same treatment a LOCKED box wore two elements
-                          up: one colour answering two questions, the exact
-                          mistake red was making before 2026-09-13. "ปิดขายอยู่"
-                          is a state the admin chose and can undo in one click,
-                          not a refusal — so it gets a label and a dashed border,
-                          and the text stays readable.
-                        -->
-                        <span
-                          v-if="p.is_sellable_here === false"
-                          class="mr-2 align-middle text-[11px] font-bold rounded-full px-2 py-0.5 bg-slate-100 text-slate-500"
-                          :data-test="`product-closed-${p.id}`"
-                        >ปิดขายอยู่</span>
-                        <p
-                          class="text-sm font-bold inline"
-                          :class="!companyDefaultMissing && productReadiness(p).level === 'bad'
-                            ? 'text-rose-800'
-                            : 'text-slate-900'"
-                        >{{ p.name }}</p>
-                        <p class="text-xs text-slate-400">
-                          {{ p.category?.name ?? 'ไม่มีหมวดหมู่' }}<span v-if="p.price_satang"> · {{ formatSatang(p.price_satang) }}</span>
-                          · แผน {{ p.effective_plan_type ? planTypeLabels[p.effective_plan_type] : '—' }}<span v-if="!p.commission_plan_type"> (สืบทอดจากบริษัท)</span>
-                        </p>
-                      </div>
-                      <!-- A rate this product genuinely has still shows while
-                           3.2 is locked — 3.1 missing does not make a
-                           product-scoped 5% untrue. What is suppressed is the
-                           RED "ยังไม่มีอัตรา", four copies of which were the
-                           owner's แดงไปหมด: with no company default that is
-                           every row, saying what the framed panel above
-                           already says once. A dash is the honest quiet
-                           version — nothing resolves yet, and the screen has
-                           already told you why. -->
-                      <span
-                        class="text-sm font-extrabold"
-                        :class="resolveRuleFor(p) ? 'text-brand-700' : (companyDefaultMissing ? 'text-slate-400' : 'text-rose-600')"
-                        :data-test="`product-rate-${p.id}`"
-                      >
-                        {{ resolveRuleFor(p) ? formatRate(resolveRuleFor(p)!.rate_type, resolveRuleFor(p)!.rate_value) : (companyDefaultMissing ? '—' : 'ยังไม่มีอัตรา') }}
-                      </span>
-                      <!-- WHICH LAYER the number came from. Without it, "3.00%"
-                           on a product row is indistinguishable from a rate
-                           somebody chose for that product, and deleting the
-                           company default silently changes it.
-                           Absent entirely while locked AND unresolved: the
-                           badge's only text in that state is ยังไม่มีอัตรา, so
-                           keeping it would reinstate the repetition in a
-                           smaller font. -->
-                      <span
-                        v-if="resolveRuleFor(p) || !companyDefaultMissing"
-                        class="text-[11px] font-bold rounded-full px-2.5 py-1"
-                        :class="resolveRuleFor(p) ? (resolveRuleFor(p)!.product ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500') : 'bg-rose-100 text-rose-700'"
-                        :data-test="`product-layer-${p.id}`"
-                      >
-                        {{ rateLayerLabel(p) }}
-                      </span>
-                      <div class="flex items-center gap-2 shrink-0">
-                        <!--
-                          2026-09-12 (owner: "เพิ่มการเปิดปิดสินค้าได้เลย").
-
-                          A switch, not a button labelled "ปิดขาย": a button
-                          states the ACTION it performs, a switch states the
-                          STATE it is in — and the state is what somebody
-                          scanning twenty rows is reading for. It is also the
-                          one control in this row that takes effect the moment
-                          it is touched, with no dialog, which is the shape
-                          people already read a switch as.
-
-                          Shown only where it will actually work — see
-                          canToggleSelling() for why that is a per-row question
-                          on one branch and a role on the other.
-
-                          2026-09-13 — AND IT IS NOT DISABLED BY 3.2'S LOCK,
-                          unlike every other control in this row. Owner's
-                          explicit decision: opening a product for sale is a
-                          CATALOGUE action, not a commission one. Locking it
-                          for a commission reason would invent a new dead end —
-                          an admin who came here to close a product they must
-                          not sell would be told to go and set a commission
-                          rate first, which has nothing to do with what they
-                          asked for. Do not "tidy" this into the same
-                          :disabled as its neighbours; the read-only pill below
-                          is exempt for the same reason.
-                        -->
-                        <button
-                          v-if="canToggleSelling(p)"
-                          type="button"
-                          class="shrink-0 inline-flex items-center gap-2 disabled:opacity-50"
-                          :disabled="sellingSavingId === p.id"
-                          :data-test="`selling-switch-${p.id}`"
-                          :title="p.is_sellable_here ? 'เปิดขายอยู่ — แตะเพื่อปิดขาย' : 'ปิดขายอยู่ — แตะเพื่อเปิดขาย'"
-                          @click="toggleSelling(p)"
-                        >
-                          <!-- The colour and the WORD say the same thing, which
-                               is what keeps it readable at a glance and still
-                               readable to someone who does not separate these
-                               two blues. -->
-                          <span
-                            class="text-xs font-bold whitespace-nowrap"
-                            :class="p.is_sellable_here ? 'text-brand-700' : 'text-slate-400'"
-                            :data-test="`selling-label-${p.id}`"
-                          >
-                            {{ sellingSavingId === p.id ? 'กำลังบันทึก…' : (p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย') }}
-                          </span>
-                          <!-- The knob is a FLEX CHILD pushed to one end, never
-                               an absolutely positioned span shifted by an
-                               arbitrary Tailwind translate: an arbitrary value
-                               the scanner never saw is absent from the compiled
-                               CSS, so the knob carries the right classes and
-                               simply never moves. That shipped once already —
-                               ProductCatalogView's toggleSellHere() tells the
-                               whole story. -->
-                          <span
-                            class="w-11 h-6 rounded-full border flex items-center p-0.5 transition-colors"
-                            :class="p.is_sellable_here ? 'bg-brand-600 border-brand-600 justify-end' : 'bg-white border-slate-300 justify-start'"
-                          >
-                            <span
-                              class="w-5 h-5 rounded-full shadow-sm transition-colors"
-                              :class="p.is_sellable_here ? 'bg-white' : 'bg-slate-300'"
-                            ></span>
-                          </span>
-                        </button>
-                        <!-- House rule since 2026-09-11: a control somebody
-                             cannot use is not shown — a switch you can see and
-                             cannot move reads as broken, not as forbidden. The
-                             STATE is still news to them (it is why the row is
-                             grey), so it stays as a pill that was never a
-                             control in the first place. -->
-                        <span
-                          v-else
-                          class="shrink-0 text-[11px] font-bold rounded-full px-2.5 py-1 whitespace-nowrap"
-                          :class="p.is_sellable_here ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
-                          :data-test="`selling-state-${p.id}`"
-                          :title="p.is_shared
-                            ? 'สินค้ากลาง — เปิด/ปิดขายตั้งโดย Super Admin'
-                            : 'เปิด/ปิดขายสินค้านี้ต้องมีสิทธิ์แก้ไขสินค้า'"
-                        >
-                          {{ p.is_sellable_here ? 'เปิดขาย' : 'ปิดขาย' }}
-                        </span>
-                        <!-- Inert while 3.2 is locked: a simulator whose every
-                             answer is "ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้" is not a
-                             preview, it is a fourth way to be told the one
-                             thing 3.1 already says. -->
-                        <button
-                          type="button"
-                          class="px-3 py-1.5 rounded-lg text-slate-600 border border-slate-200 text-xs font-bold hover:bg-slate-50"
-                          :data-test="`simulate-${p.id}`"
-                          @click="openSimulate(p)"
-                        >
-                          ทดสอบคำนวณ
-                        </button>
-                        <!-- TASK-245's per-row question AND the 2026-09-11 role
-                             rule, asked together: `canSetCommission` still
-                             answers for the PRODUCT (a catalog-linked row is
-                             refused, ADR-036 §5/§6) while
-                             `canEditCommissionConfig` answers for the VIEWER.
-                             Either one refusing means the server would, so the
-                             button must not be there to click.
-
-                             The row's "Wizard" button sat beside this one under
-                             the same condition until 2026-09-12; the `template`
-                             that grouped the pair went with it, so the test
-                             now sits on the one button that is left. -->
-                        <!--
-                             DISABLED BY THE SUB-STEP LOCK, NOT HIDDEN BY IT,
-                             and the difference is the house rule's own line:
-                             things a viewer may never do are hidden ("อันไหน
-                             สิทธิ์ company admin ทำไม่ได้ต้องซ่อน"), things
-                             they may do LATER are shown refusing, exactly as
-                             the step tabs and the footer's next button already
-                             do. Hiding it would delete the evidence that this
-                             is where the per-product rate is set, which is the
-                             one thing 3.2 is for.
-                        -->
-                        <button
-                          v-if="canEditCommissionConfig && canSetCommission(p)"
-                          type="button"
-                          class="btn-primary"
-                          :data-test="`product-rate-button-${p.id}`"
-                          @click="openRuleFormForProduct(p)"
-                        >
-                          <!-- Reads the product's OWN rate, not whatever it
-                               inherits: a product on the company default is
-                               about to GET a rate, not have one edited, and
-                               the two are different promises. -->
-                          {{ productOwnRule(p) ? 'แก้ไขอัตราของสินค้านี้' : '+ ตั้งอัตราเฉพาะสินค้านี้' }}
-                        </button>
-                        <span v-else class="text-[11px] text-slate-400 whitespace-nowrap" title="การตั้งอัตราค่าคอมเป็นสิทธิ์ของ Super Admin">
-                          ตั้งค่าโดย Super Admin
-                        </span>
-                      </div>
-                    </div>
-
-                    <!-- An expired rate is not the same gap as a missing one;
-                         see expiredRuleFor()'s docblock.
-
-                         THE ONE PER-ROW LINE THAT SURVIVES THE LOCK, because
-                         it is the one that is not an echo of 3.1: it carries a
-                         DATE nothing else on this screen knows, and it sends
-                         the admin to the row that needs one field changed
-                         instead of to a duplicate. It gives up red while
-                         locked, though — red belongs to the thing you must do
-                         now, and while 3.1 is missing that is 3.1. -->
-                    <p
-                      v-if="!resolveRuleFor(p) && expiredRuleFor(p)"
-                      class="mt-2 text-[12.5px] font-bold"
-                      :class="companyDefaultMissing ? 'text-amber-700' : 'text-rose-700'"
-                      :data-test="`product-expired-${p.id}`"
-                    >
-                      อัตราหมดอายุ {{ formatDate(expiredRuleFor(p)!.effective_to!) }} — ปิดการขายแล้วไม่มีใครได้เงิน
+                <RateResolutionMatrix
+                  kind="agent"
+                  :rows="resolutionRows"
+                  :loading="resolutionLoading"
+                  :failed="resolutionFailed"
+                  :can-edit="canEditCommissionConfig"
+                  :basis-label="commissionBasis === 'pv' ? 'PV' : 'ยอดขาย'"
+                  :mode-labels="overrideModeLabels"
+                  show-selling
+                  show-simulate
+                  :togglable-product-ids="togglableProductIds"
+                  :rateable-product-ids="rateableProductIds"
+                  :saving-product-id="sellingSavingId"
+                  :selling-error="sellingError || null"
+                  test-id="step3-resolution"
+                  @edit="editFromMatrix('agent', $event)"
+                  @toggle-selling="toggleSellingFromMatrix"
+                  @simulate="simulateFromMatrix"
+                  @retry="loadResolution"
+                >
+                  <!-- Everything in an opened row that needs to know about the
+                       OTHER steps. It lives here rather than in the component
+                       for exactly that reason: a design-system table that knew
+                       what step 4 was would not be one. -->
+                  <template #row-detail="{ row }">
+                    <p class="text-[12px] font-extrabold text-slate-500 mb-1.5">สถานะของสินค้านี้</p>
+                    <p class="text-[12.5px] text-slate-500" :data-test="`product-plan-${row.product_id}`">
+                      แผนค่าคอม: {{ rowPlanLabel(row) }}
                     </p>
-                    <!-- Everything below is suppressed while locked. The 'bad'
-                         message is verbatim what 3.1 says, once per product;
-                         the 'warn' ones (leader rate, plan structure) are
-                         advice about the share of a commission that is not
-                         being paid at all yet, which is advice nobody can act
-                         on in a useful order. They come back the moment 3.1
-                         exists, per row, for the rows that genuinely have a
-                         problem. -->
-                    <div
-                      v-else-if="!companyDefaultMissing && productReadiness(p).level !== 'ok'"
-                      class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
-                      :class="productReadiness(p).level === 'bad' ? 'bg-rose-100/60 text-rose-700' : 'bg-amber-50 text-amber-700'"
+
+                    <p
+                      v-if="rowExpiredRule(row)"
+                      class="mt-1.5 text-[12.5px] font-bold"
+                      :class="companyDefaultMissing ? 'text-amber-700' : 'text-rose-700'"
+                      :data-test="`product-expired-${row.product_id}`"
                     >
-                      <span class="font-bold">{{ productReadiness(p).level === 'bad' ? '●' : '!' }} {{ productReadiness(p).message }}</span>
+                      อัตราหมดอายุ {{ formatDate(rowExpiredRule(row)!.effective_to!) }} — ปิดการขายแล้วไม่มีใครได้เงิน
+                    </p>
+
+                    <!-- Suppressed while 3.1 is missing: the 'bad' message is
+                         verbatim what 3.1 says, once per product, and the
+                         'warn' ones are advice about the share of a commission
+                         that is not being paid at all yet. They come back the
+                         moment 3.1 exists. -->
+                    <div
+                      v-else-if="!companyDefaultMissing && rowReadiness(row) && rowReadiness(row)!.level !== 'ok'"
+                      class="mt-1.5 px-3 py-2 rounded-lg text-xs flex items-center justify-between gap-2 flex-wrap"
+                      :class="rowReadiness(row)!.level === 'bad' ? 'bg-rose-100/60 text-rose-700' : 'bg-amber-50 text-amber-700'"
+                      :data-test="`product-readiness-${row.product_id}`"
+                    >
+                      <span class="font-bold">{{ rowReadiness(row)!.level === 'bad' ? '●' : '!' }} {{ rowReadiness(row)!.message }}</span>
                       <!-- Points at the STEP that owns the gap, which is the
                            whole reason the steps exist: a structural gap is
-                           step 2's, a leader-rate gap is step 4's, and
-                           neither is fixable from here.
-
-                           2026-09-12 — both are now also conditioned on the
-                           target being REACHABLE, and this is the one place
-                           where the gate bites something real: this panel IS
-                           step 3, so "ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม" is
-                           offered from inside a step that may itself be
-                           incomplete (this product has a rate; another one in
-                           the list may not). goToStep() would refuse it, so
-                           the button is not drawn rather than drawn dead. The
-                           readiness message it sits beside still names the
-                           gap, and the banner above still names the step to
-                           clear first — so nothing is hidden, only the false
-                           promise of a one-click fix that is not available
-                           yet. -->
+                           step 2's, a leader-rate gap is step 4's, and neither
+                           is fixable from here. -->
                       <button
-                        v-if="p.effective_plan_type && planTypeToTab[p.effective_plan_type] && structureReady[p.effective_plan_type] === false && stepReachable[2]"
+                        v-if="rowStructureGap(row)"
                         type="button"
                         class="font-bold whitespace-nowrap hover:underline"
-                        :data-test="`jump-structure-${p.id}`"
-                        @click="viewPlan(p.effective_plan_type!); goToStep(2)"
+                        :data-test="`jump-structure-${row.product_id}`"
+                        @click="viewPlan(rowStructureGap(row)!); goToStep(2)"
                       >
                         ไปขั้นที่ 2 ตั้งโครงสร้าง →
                       </button>
                       <button
-                        v-else-if="productReadiness(p).level === 'warn' && stepReachable[4]"
+                        v-else-if="rowReadiness(row)!.level === 'warn' && stepReachable[4]"
                         type="button"
                         class="font-bold whitespace-nowrap hover:underline"
-                        :data-test="`jump-leader-${p.id}`"
+                        :data-test="`jump-leader-${row.product_id}`"
                         @click="goToStep(4)"
                       >
                         ไปขั้นที่ 4 ตั้งอัตราหัวหน้าทีม →
                       </button>
                     </div>
-                    <p v-else-if="!companyDefaultMissing" class="mt-2 text-xs font-bold text-emerald-700">✓ ตั้งค่าครบ พร้อมจ่าย</p>
-                  </div>
-                </div>
 
-                <!-- Same lock, same reasoning as the per-row rate button: a
-                     product- or category-scoped rate written before the
-                     company default exists is an exception to a rule that has
-                     not been decided yet, and 3.1 is the decision. -->
-                <div v-if="canEditCommissionConfig" class="flex flex-wrap gap-2.5 mt-3">
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-test="add-product-rate"
-                    @click="openCreateRuleFormWithScope('product')"
-                  >
-                    + เพิ่มอัตราของสินค้า
-                  </button>
-                  <!-- "+ เพิ่มอัตราของหมวดหมู่" used to stand here beside the
-                       product button, which is how the category scope became
-                       writable-but-invisible: the control lived in the product
-                       box and the result was rendered nowhere. It now lives in
-                       3.2, next to the rows it creates.
-
-                       TASK-037's "เปิดตัวช่วยตั้งค่า (Wizard)" also stood here
-                       and was removed 2026-09-12: these buttons and the row
-                       buttons above ARE the guided path now. -->
-                </div>
+                    <p
+                      v-else-if="!companyDefaultMissing"
+                      class="mt-1.5 text-xs font-bold text-emerald-700"
+                      :data-test="`product-ready-${row.product_id}`"
+                    >✓ ตั้งค่าครบ พร้อมจ่าย</p>
+                  </template>
+                </RateResolutionMatrix>
               </div>
-
-              <!--
-                THE TABLE (owner's ข้อเสนอ 2, 2026-09-14).
-
-                Placed BELOW the edit boxes and not instead of them, which is
-                the whole shape of the fix: the boxes list the rows that exist
-                — including a category rate that currently covers no product,
-                which has no line in this table at all and would go invisible
-                again, the exact bug that started this. Boxes say what you set;
-                this says what happens.
-              -->
-              <RateResolutionMatrix
-                kind="agent"
-                :rows="resolutionRows"
-                :loading="resolutionLoading"
-                :failed="resolutionFailed"
-                :can-edit="canEditCommissionConfig"
-                :basis-label="commissionBasis === 'pv' ? 'PV' : 'ยอดขาย'"
-                :mode-labels="overrideModeLabels"
-                test-id="step3-resolution"
-                @edit="editFromMatrix('agent', $event)"
-                @retry="loadResolution"
-              />
             </template>
           </section>
 
@@ -5335,8 +5207,32 @@ watch(companyPlanType, (pt) => {
                     และเงื่อนไขการเบิก — ตั้งเมื่อไหร่ก็ได้ ไม่มีอะไรในนี้ที่ทำให้ค่าคอมหยุดจ่าย
                   </p>
                   <ul class="mt-2.5 space-y-1.5 text-[12.5px] text-sky-900/90">
+                    <!--
+                      2026-09-14 — THE MODE COMES FIRST NOW (owner: "ผมสลับข้อ
+                      4.4 มาเป็น 4.1").
+
+                      It was last, after the three rate boxes, and that order
+                      asked the admin to type a percentage before knowing what
+                      the percentage was OF — the same 2% is 200 baht under one
+                      mode and 6 under another. Deciding where the money comes
+                      from is the question the rates are answers to, so it is
+                      now 4.1 and the rates follow it as 4.2–4.4.
+                    -->
                     <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.1–4.3</span>
+                      <span class="font-extrabold shrink-0">4.1</span>
+                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · ตั้งอันนี้ก่อน เพราะมันเปลี่ยนความหมายของ % ที่จะตั้งใน 4.3–4.5</span>
+                    </li>
+                    <!--
+                      2026-09-15 — 4.2 JOINED THE LIST between "มาจากไหน" and
+                      "เท่าไหร่", which is the order the three questions can
+                      actually be answered in.
+                    -->
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.2</span>
+                      <span><b>ใครเป็นผู้รับ</b> — เฉพาะหัวหน้าทีมที่เป็นคนจริง หรือให้บริษัทนั่งยอดสุดของสายงานแล้วรับส่วนแบ่งจากทุกดีลด้วย</span>
+                    </li>
+                    <li class="flex gap-2">
+                      <span class="font-extrabold shrink-0">4.3–4.5</span>
                       <span>
                         <b>อัตราหัวหน้าทีม</b> — หัวหน้าได้เท่าไหร่เมื่อลูกทีมปิดการขาย · แยกเป็น 3 ชั้น
                         (ค่าเริ่มต้นทั้งบริษัท / ตามหมวดหมู่ / ตามสินค้า) ชั้นที่เจาะจงกว่าทับชั้นที่กว้างกว่า ·
@@ -5344,15 +5240,11 @@ watch(companyPlanType, (pt) => {
                       </span>
                     </li>
                     <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.4</span>
-                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · เป็นค่าเริ่มต้น แต่ละอัตราใน 4.1–4.3 ตั้งทับเองได้</span>
-                    </li>
-                    <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.5</span>
+                      <span class="font-extrabold shrink-0">4.6</span>
                       <span><b>แบ่งค่าคอมผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
                     </li>
                     <li class="flex gap-2">
-                      <span class="font-extrabold shrink-0">4.6</span>
+                      <span class="font-extrabold shrink-0">4.7</span>
                       <span><b>ยอดขั้นต่ำในการเบิก</b> — ตัวแทนต้องสะสมถึงเท่าไหร่จึงกดขอเบิกได้ · เว้นว่าง = ไม่มีขั้นต่ำ</span>
                     </li>
                   </ul>
@@ -5371,7 +5263,334 @@ watch(companyPlanType, (pt) => {
             />
             <template v-else>
               <!--
-                ═══ 4.1 / 4.2 / 4.3 — ONE BOX PER LAYER OF THE LADDER ═══
+                ═══ 4.1 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
+
+                Owner, verbatim: "จุดที่คนเข้าใจผิดบ่อยที่สุด — 2% ไม่ได้หักจาก
+                300 ของสมชาย · เรื่องนี้ต้องทำให้ชัดเจน และปรับได้ทั้งหักจาก
+                สมชายปิดการขาย และบริษัทจ่ายเพิ่ม [ทำ UI ให้ผู้ใช้เข้าใจก่อน
+                เลือกแบบใดแบบหนึ่ง]".
+
+                The card shows ALL THREE ANSWERS IN BAHT BEFORE the admin
+                picks, computed from this company's own rates. That ordering is
+                the entire design: a selector that named three modes and left
+                the arithmetic to be discovered at a payout would reproduce the
+                misunderstanding it was built to end. Three named options with
+                three numbers beside them is a choice; three names alone is a
+                guess with extra steps.
+
+                The comparison table is above the buttons for the same reason —
+                you read the consequences, then you choose.
+
+                ── AND IT IS FIRST IN THE STEP, AS OF 2026-09-14 ──
+
+                Owner: "ผมสลับข้อ 4.4 มาเป็น 4.1 และข้อเดิม 4.1-4.3 ขยับลงมา
+                เป็น 4.2-4.4".
+
+                It used to sit BELOW the three rate boxes, which had the admin
+                typing a percentage before knowing what the percentage was OF.
+                Under บริษัทจ่ายเพิ่ม a leader's 2% is 2% of the sale; under
+                หักจากค่าคอมของตัวแทน it is 2% of the seller's commission — the
+                same two digits, thirty-three times apart. A screen that asks
+                for the number first and the meaning second is asking the
+                question in the wrong order, and this card exists precisely to
+                stop that confusion.
+
+                So: decide where the money comes from, THEN say how much.
+              -->
+              <div class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4" data-test="step4-override-mode">
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-[15px] font-extrabold text-slate-900">
+                    <span class="text-slate-400 mr-1.5">4.1</span>เงินของหัวหน้าทีมมาจากไหน (ค่าเริ่มต้นของบริษัท)
+                  </p>
+                  <span
+                    v-if="!overrideModeUnknown"
+                    class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-indigo-100 text-indigo-700"
+                    data-test="override-mode-current"
+                  >
+                    ตอนนี้: {{ overrideModeLabels[overrideMode] }}
+                  </span>
+                </div>
+                <p class="mt-1 text-[12.5px] text-slate-600">
+                  ตัดสินว่าค่าคอมของหัวหน้าทีมเป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b> ·
+                  อันนี้คือ <b>ค่าเริ่มต้น</b> — อัตราในข้อ 4.3–4.5 ที่ไม่ได้เลือกโหมดของตัวเองจะใช้อันนี้ แต่แต่ละอัตราตั้งของตัวเองทับได้
+                </p>
+
+                <!-- The read failed, so the card does not know. Same defence as
+                     step 2's basis: showing the default as the chosen answer
+                     would state a wrong fact about somebody's pay. -->
+                <div
+                  v-if="overrideModeUnknown"
+                  class="mt-3 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3"
+                  data-test="override-mode-unknown"
+                >
+                  <Icon name="warning" :size="18" class="text-rose-600 mt-0.5 shrink-0" />
+                  <div>
+                    <p class="text-[13px] font-extrabold text-rose-800">อ่านค่าปัจจุบันไม่สำเร็จ</p>
+                    <p class="mt-0.5 text-[12.5px] text-rose-700">
+                      ระบบยังไม่รู้ว่าบริษัทนี้ใช้โหมดไหน จึงยังไม่แสดงว่าอันไหนถูกเลือก — โหลดหน้าใหม่อีกครั้ง
+                    </p>
+                  </div>
+                </div>
+
+                <template v-else>
+                  <!-- THE TABLE. One sale, one leader above the seller. -->
+                  <div class="mt-3 rounded-xl border border-indigo-200 bg-white/90 overflow-hidden" data-test="override-mode-example">
+                    <div class="px-3.5 py-2.5 border-b border-indigo-100 bg-indigo-50/60">
+                      <p class="text-[12.5px] font-bold text-slate-700">
+                        ตัวอย่างจากอัตราจริงของบริษัทนี้ — ขาย “{{ overrideModeExample.productName }}”
+                      </p>
+                      <p class="text-[12px] text-slate-500 mt-0.5">
+                        {{ overrideModeExample.baseLabel }} {{ formatSatang(overrideModeExample.baseSatang) }} ·
+                        ตัวแทน {{ overrideModeExample.sellerRateLabel }} · หัวหน้าทีม {{ overrideModeExample.leaderRateLabel }} · หัวหน้า 1 คน
+                      </p>
+                      <!-- Labelled, not hidden. A company with no rates yet is
+                           exactly the one that has to understand the modes
+                           BEFORE it sets any — so the example falls back to a
+                           round illustration and says so, rather than
+                           disappearing and leaving the choice unexplained. -->
+                      <p v-if="overrideModeExample.hypothetical" class="text-[12px] font-bold text-amber-700 mt-1" data-test="override-example-hypothetical">
+                        ⚠ ยังไม่มีสินค้าที่มีทั้งอัตราตัวแทนและอัตราหัวหน้าทีม — ตัวเลขข้างล่างเป็น <b>ตัวอย่างสมมติ</b> เพื่ออธิบายเท่านั้น
+                      </p>
+                    </div>
+                    <table class="w-full text-[12.5px]">
+                      <thead>
+                        <tr class="text-slate-500 bg-white">
+                          <th class="text-left font-bold px-3.5 py-2">โหมด</th>
+                          <th class="text-right font-bold px-3.5 py-2">คนปิดการขายได้</th>
+                          <th class="text-right font-bold px-3.5 py-2">หัวหน้าทีมได้</th>
+                          <th class="text-right font-bold px-3.5 py-2">บริษัทจ่ายรวม</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="opt in overrideModeOptions"
+                          :key="`row-${opt.value}`"
+                          class="border-t border-slate-100"
+                          :class="opt.value === overrideMode ? 'bg-indigo-50/80 font-bold text-slate-900' : 'text-slate-600'"
+                          :data-test="`override-mode-row-${opt.value}`"
+                        >
+                          <td class="px-3.5 py-2">
+                            {{ opt.title }}
+                            <span v-if="opt.value === overrideMode" class="ml-1 text-[11px] text-indigo-600">← ใช้อยู่</span>
+                          </td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].sellerSatang) }}</td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].leaderSatang) }}</td>
+                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].companyPaysSatang) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <!-- The depth, and what it does to the two deduct modes. The
+                       example above deliberately shows ONE leader because that
+                       is the smallest case where the three modes disagree; this
+                       line is where the real chain gets said out loud, because
+                       multiplying the table by five managers makes the numbers
+                       dramatic and the comparison unreadable. -->
+                  <div class="mt-2.5 text-[12.5px] text-slate-600" data-test="override-mode-chain">
+                    <!--
+                      2026-09-15 — the third state. A company with a house
+                      account can never read "ยังไม่มีสายงาน" again, because the
+                      seat itself is a layer — and the reader has to know that
+                      the layer they are being charged for is the company, not
+                      a person they forgot about.
+                    -->
+                    <p v-if="deepestManagerChain === 0">
+                      ตอนนี้บริษัทนี้ <b>ยังไม่มีสายงาน</b> (ไม่มีใครมีหัวหน้า) — ยังไม่มีใครได้ค่าคอมหัวหน้าทีม ไม่ว่าจะเลือกโหมดไหน
+                    </p>
+                    <template v-else>
+                      <p>
+                        สายงานลึกที่สุดตอนนี้ <b>{{ deepestManagerChain }} ชั้น</b><template v-if="houseAccount"> (รวมบัญชีบริษัท 1 ชั้น)</template> — ดีลหนึ่งอาจมีหัวหน้าได้ถึง {{ deepestManagerChain }} คน
+                        และแบบ “หักจากตัวแทน” จะหัก <b>{{ deepestManagerChain }} เท่า</b>ของตัวเลขในตาราง
+                      </p>
+                      <p v-if="maxOverridePerLevelSatang !== null" class="mt-1">
+                        ดังนั้นถ้าเลือกแบบหัก อัตราหัวหน้าทีมจะตั้งได้ไม่เกิน <b>{{ formatSatang(maxOverridePerLevelSatang) }} ต่อชั้น</b>
+                        (คิดจากสินค้าที่ตัวแทนได้ค่าคอมน้อยที่สุด) — เกินกว่านี้ระบบจะไม่ให้บันทึก
+                      </p>
+                    </template>
+                  </div>
+
+                  <!-- THE CHOICE. Hidden entirely from a Company Admin, per the
+                       house rule ("อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน
+                       ไม่ใช่ให้ error 403") — the table above still explains
+                       what their company does, which is the half they are
+                       allowed to know. -->
+                  <div v-if="canEditCommissionConfig && effectiveCompanyId" class="mt-3 grid grid-cols-1 gap-2" data-test="override-mode-picker">
+                    <button
+                      v-for="opt in overrideModeOptions"
+                      :key="`pick-${opt.value}`"
+                      type="button"
+                      class="text-left rounded-xl border px-3.5 py-3 transition-colors disabled:opacity-60"
+                      :class="opt.value === overrideMode
+                        ? 'border-indigo-400 bg-indigo-100/70'
+                        : 'border-slate-200 bg-white hover:border-indigo-300'"
+                      :disabled="overrideModeSaving"
+                      :data-test="`override-mode-pick-${opt.value}`"
+                      @click="setOverrideMode(opt.value)"
+                    >
+                      <span class="flex items-center gap-2">
+                        <Icon v-if="opt.value === overrideMode" name="check" :size="14" class="text-indigo-600" />
+                        <span class="text-[13.5px] font-extrabold text-slate-900">{{ opt.title }}</span>
+                      </span>
+                      <span class="block mt-0.5 text-[12.5px] text-slate-600">{{ opt.oneLine }}</span>
+                      <span class="block mt-1 text-[12px] text-slate-500">{{ opt.detail }}</span>
+                    </button>
+                  </div>
+
+                  <p v-if="overrideModeError" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="override-mode-error">
+                    {{ overrideModeError }}
+                  </p>
+                  <p v-else-if="canEditCommissionConfig" class="mt-2 text-[12px] text-slate-500">
+                    เปลี่ยนโหมดมีผลกับดีลที่เกิดหลังจากนี้เท่านั้น · รายการที่ลงบัญชีไปแล้วเก็บโหมดเดิมไว้กับตัวมันเอง แก้ย้อนหลังไม่ได้
+                  </p>
+                </template>
+              </div>
+
+              <!--
+                ═══ 4.2 — WHO RECEIVES THE LEADER'S SHARE ═══
+
+                Owner, 2026-09-15: "หัวหน้าทีมในที่นี้มีได้ 2 ความหมาย คือหัวหน้า
+                ทีมที่เป็น user จริงในระบบ กับหัวหน้าทีมที่เป็นตัวบริษัทเองที่ได้
+                ค่าคอมจากการขาย เช่น Thailife หากไม่มีการตั้งหัวหน้าทีม".
+
+                BETWEEN THE MODE AND THE RATES ON PURPOSE. The reading order of
+                this step is now "เงินมาจากไหน → ใครรับ → เท่าไหร่", and each
+                question is only answerable once the one before it is. Putting
+                this after the rates would have an admin type a percentage
+                before knowing who it is for.
+
+                The company takes a seat at the TOP of its own hierarchy — a
+                real user row, so the payout walk reaches it with no second
+                kind of recipient anywhere in the money code. The consequence
+                the owner accepted after seeing it three times is stated in the
+                box rather than buried: the company sits ABOVE any human
+                leader, so it is paid on EVERY deal, and a seller with a leader
+                funds both.
+              -->
+              <div
+                class="rounded-2xl border p-4"
+                :class="houseAccount ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-white'"
+                data-test="step4-house-account"
+              >
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-[15px] font-extrabold text-slate-900">
+                    <span class="text-slate-400 mr-1.5">4.2</span>ใครเป็นผู้รับค่าคอมหัวหน้าทีม
+                  </p>
+                  <span
+                    class="text-[11px] font-bold rounded-full px-2.5 py-1"
+                    :class="houseAccount ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                    data-test="house-account-state"
+                  >
+                    {{ houseAccount ? 'บริษัทรับด้วย' : 'เฉพาะหัวหน้าทีมที่เป็นคนจริง' }}
+                  </span>
+                </div>
+
+                <!-- STATE A — no seat. Says what is happening now, then what
+                     would change, in money terms rather than in settings. -->
+                <template v-if="!houseAccount">
+                  <p class="mt-1 text-[12.5px] text-slate-500">
+                    ตอนนี้ค่าคอมหัวหน้าทีมจ่ายให้เฉพาะ <b>คนจริงที่อยู่เหนือคนปิดการขาย</b> ตามสายงาน —
+                    ตัวแทนที่ไม่มีหัวหน้า ขายแล้วไม่มีใครได้ส่วนนี้ และบริษัทไม่ได้เก็บไว้ด้วย
+                  </p>
+                  <div v-if="canEditCommissionConfig && !showHouseAccountConfirm" class="mt-3">
+                    <button type="button" class="btn-primary" data-test="house-account-enable" @click="openHouseAccountConfirm">
+                      ให้บริษัทรับค่าคอมหัวหน้าทีมด้วย
+                    </button>
+                  </div>
+
+                  <!--
+                    THE CONFIRMATION NAMES BOTH THINGS THAT ARE HARD TO UNDO.
+                    Attaching every unmanaged agent is a structural edit nobody
+                    asked for by name, and the deduction starts on the next
+                    deal — a ledger row cannot be corrected afterwards (BR-4).
+                    A confirm that only said "ยืนยัน" would be a button, not a
+                    decision.
+                  -->
+                  <div
+                    v-if="showHouseAccountConfirm"
+                    class="mt-3 rounded-xl border border-emerald-300 bg-white p-3.5"
+                    data-test="house-account-confirm"
+                  >
+                    <label class="block text-[12px] font-extrabold text-slate-500 mb-1">ชื่อที่จะแสดงในรายงาน</label>
+                    <input
+                      v-model="houseAccountName"
+                      type="text"
+                      maxlength="120"
+                      class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                      data-test="house-account-name"
+                      placeholder="ชื่อบริษัท"
+                    />
+                    <ul class="mt-2.5 space-y-1 text-[12.5px] text-slate-600">
+                      <li>· ตัวแทนที่ยังไม่มีหัวหน้าทุกคนจะถูกผูกเข้าสายงานใต้บัญชีนี้ทันที</li>
+                      <li>· บริษัทอยู่<b>ยอดสุด</b> จึงได้ส่วนแบ่งจาก<b>ทุกดีล</b> ไม่ใช่เฉพาะดีลที่ไม่มีหัวหน้า</li>
+                      <li>· สายงานลึกขึ้น 1 ชั้น เพดานอัตราหัวหน้าทีมที่ตั้งได้จะแคบลง</li>
+                      <li>· มีผลกับดีลที่เกิดหลังจากนี้เท่านั้น รายการที่ลงบัญชีไปแล้วไม่เปลี่ยน</li>
+                    </ul>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        :disabled="houseAccountSaving"
+                        data-test="house-account-confirm-save"
+                        @click="saveHouseAccount(true)"
+                      >
+                        {{ houseAccountSaving ? 'กำลังบันทึก…' : 'ยืนยัน ให้บริษัทรับด้วย' }}
+                      </button>
+                      <button type="button" class="btn-secondary" :disabled="houseAccountSaving" @click="showHouseAccountConfirm = false">
+                        ยกเลิก
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- STATE B — the seat exists. The two counts are what tell a
+                     working seat from one attached to nobody; "on" alone would
+                     not. -->
+                <template v-else>
+                  <p class="mt-1 text-[12.5px] text-slate-500">
+                    บริษัทอยู่ยอดสุดของสายงาน — ได้ส่วนแบ่งหัวหน้าทีมจากทุกดีล ตามอัตราในข้อ 4.3–4.5
+                    <span v-if="houseAccount.agents_under === 0" class="font-bold text-amber-700">
+                      · ตอนนี้ยังไม่มีใครขึ้นตรงกับบัญชีนี้ จึงยังไม่ได้รับอะไร
+                    </span>
+                  </p>
+                  <div class="mt-2.5 rounded-xl border border-emerald-200 bg-white px-3.5 py-3 flex flex-wrap items-center gap-x-6 gap-y-2">
+                    <div>
+                      <p class="text-[11px] font-extrabold text-slate-400">บัญชีที่รับเงิน</p>
+                      <p class="text-sm font-extrabold text-slate-900" data-test="house-account-name-shown">{{ houseAccount.name }}</p>
+                    </div>
+                    <div>
+                      <p class="text-[11px] font-extrabold text-slate-400">ขึ้นตรงกับบัญชีนี้</p>
+                      <p class="text-sm font-extrabold text-slate-900 tabular-nums" data-test="house-account-agents">{{ houseAccount.agents_under }} คน</p>
+                    </div>
+                    <div>
+                      <p class="text-[11px] font-extrabold text-slate-400">ได้รับสะสม</p>
+                      <p class="text-sm font-extrabold text-slate-900 tabular-nums" data-test="house-account-earned">{{ formatSatang(houseAccount.earned_satang) }}</p>
+                    </div>
+                    <button
+                      v-if="canEditCommissionConfig"
+                      type="button"
+                      class="ml-auto text-xs font-bold text-rose-600 hover:text-rose-700"
+                      :disabled="houseAccountSaving"
+                      data-test="house-account-disable"
+                      @click="saveHouseAccount(false)"
+                    >
+                      {{ houseAccountSaving ? 'กำลังบันทึก…' : 'ปิดใช้งาน' }}
+                    </button>
+                  </div>
+                  <!-- Not offered as an undo: the rows it was already paid stay
+                       where they are, because a ledger row is immutable. -->
+                  <p class="mt-2 text-[12px] text-slate-500">
+                    ปิดใช้งานแล้วตัวแทนที่ขึ้นตรงกับบัญชีนี้จะกลับไปไม่มีหัวหน้า · ค่าคอมที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม
+                  </p>
+                </template>
+
+                <p v-if="houseAccountError" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="house-account-error">
+                  {{ houseAccountError }}
+                </p>
+              </div>
+
+              <!--
+                ═══ 4.3 / 4.4 / 4.5 — ONE BOX PER LAYER OF THE LADDER ═══
 
                 Owner, 2026-09-14: "การตั้งค่าใน Step ที่ 4 ต้องต่างกันทั้งหมด
                 แต่ตอนนี้เป็นตัวเลือกการทำงานแบบอย่างเดียว" and "การตั้งค่าแบบ
@@ -5390,6 +5609,11 @@ watch(companyPlanType, (pt) => {
                 resolution order is the reverse and is stated in words under the
                 heading, because the two orders being opposite is precisely the
                 thing that has to not be guessed.
+
+                2026-09-14 — these were 4.1–4.3, then 4.2–4.4, and are now 4.3–4.5 as
+                the mode and then the payee moved above them. See those cards:
+                every percentage typed here means something different depending
+                on the answer given up there, so the answer comes first.
               -->
               <div class="rounded-2xl border border-amber-200 bg-amber-50/40 p-4" data-test="step4-leader-rates">
                 <div class="flex flex-wrap items-center gap-2 mb-1">
@@ -5514,171 +5738,11 @@ watch(companyPlanType, (pt) => {
                 :can-edit="canEditCommissionConfig"
                 :basis-label="commissionBasis === 'pv' ? 'PV' : 'ยอดขาย'"
                 :mode-labels="overrideModeLabels"
+                :rateable-product-ids="rateableProductIds"
                 test-id="step4-resolution"
                 @edit="editFromMatrix('leader', $event)"
                 @retry="loadResolution"
               />
-              <!--
-                ═══ 4.4 — THE MOST MISUNDERSTOOD NUMBER IN THE SYSTEM ═══
-
-                Owner, verbatim: "จุดที่คนเข้าใจผิดบ่อยที่สุด — 2% ไม่ได้หักจาก
-                300 ของสมชาย · เรื่องนี้ต้องทำให้ชัดเจน และปรับได้ทั้งหักจาก
-                สมชายปิดการขาย และบริษัทจ่ายเพิ่ม [ทำ UI ให้ผู้ใช้เข้าใจก่อน
-                เลือกแบบใดแบบหนึ่ง]".
-
-                The card shows ALL THREE ANSWERS IN BAHT BEFORE the admin
-                picks, computed from this company's own rates. That ordering is
-                the entire design: a selector that named three modes and left
-                the arithmetic to be discovered at a payout would reproduce the
-                misunderstanding it was built to end. Three named options with
-                three numbers beside them is a choice; three names alone is a
-                guess with extra steps.
-
-                The comparison table is above the buttons for the same reason —
-                you read the consequences, then you choose.
-              -->
-              <div class="rounded-2xl border border-indigo-200 bg-indigo-50/40 p-4" data-test="step4-override-mode">
-                <div class="flex flex-wrap items-center gap-2">
-                  <p class="text-[15px] font-extrabold text-slate-900">
-                    <span class="text-slate-400 mr-1.5">4.4</span>เงินของหัวหน้าทีมมาจากไหน (ค่าเริ่มต้นของบริษัท)
-                  </p>
-                  <span
-                    v-if="!overrideModeUnknown"
-                    class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-indigo-100 text-indigo-700"
-                    data-test="override-mode-current"
-                  >
-                    ตอนนี้: {{ overrideModeLabels[overrideMode] }}
-                  </span>
-                </div>
-                <p class="mt-1 text-[12.5px] text-slate-600">
-                  ตัดสินว่าค่าคอมของหัวหน้าทีมเป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b> ·
-                  อันนี้คือ <b>ค่าเริ่มต้น</b> — อัตราในข้อ 4.1–4.3 ที่ไม่ได้เลือกโหมดของตัวเองจะใช้อันนี้ แต่แต่ละอัตราตั้งของตัวเองทับได้
-                </p>
-
-                <!-- The read failed, so the card does not know. Same defence as
-                     step 2's basis: showing the default as the chosen answer
-                     would state a wrong fact about somebody's pay. -->
-                <div
-                  v-if="overrideModeUnknown"
-                  class="mt-3 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3"
-                  data-test="override-mode-unknown"
-                >
-                  <Icon name="warning" :size="18" class="text-rose-600 mt-0.5 shrink-0" />
-                  <div>
-                    <p class="text-[13px] font-extrabold text-rose-800">อ่านค่าปัจจุบันไม่สำเร็จ</p>
-                    <p class="mt-0.5 text-[12.5px] text-rose-700">
-                      ระบบยังไม่รู้ว่าบริษัทนี้ใช้โหมดไหน จึงยังไม่แสดงว่าอันไหนถูกเลือก — โหลดหน้าใหม่อีกครั้ง
-                    </p>
-                  </div>
-                </div>
-
-                <template v-else>
-                  <!-- THE TABLE. One sale, one leader above the seller. -->
-                  <div class="mt-3 rounded-xl border border-indigo-200 bg-white/90 overflow-hidden" data-test="override-mode-example">
-                    <div class="px-3.5 py-2.5 border-b border-indigo-100 bg-indigo-50/60">
-                      <p class="text-[12.5px] font-bold text-slate-700">
-                        ตัวอย่างจากอัตราจริงของบริษัทนี้ — ขาย “{{ overrideModeExample.productName }}”
-                      </p>
-                      <p class="text-[12px] text-slate-500 mt-0.5">
-                        {{ overrideModeExample.baseLabel }} {{ formatSatang(overrideModeExample.baseSatang) }} ·
-                        ตัวแทน {{ overrideModeExample.sellerRateLabel }} · หัวหน้าทีม {{ overrideModeExample.leaderRateLabel }} · หัวหน้า 1 คน
-                      </p>
-                      <!-- Labelled, not hidden. A company with no rates yet is
-                           exactly the one that has to understand the modes
-                           BEFORE it sets any — so the example falls back to a
-                           round illustration and says so, rather than
-                           disappearing and leaving the choice unexplained. -->
-                      <p v-if="overrideModeExample.hypothetical" class="text-[12px] font-bold text-amber-700 mt-1" data-test="override-example-hypothetical">
-                        ⚠ ยังไม่มีสินค้าที่มีทั้งอัตราตัวแทนและอัตราหัวหน้าทีม — ตัวเลขข้างล่างเป็น <b>ตัวอย่างสมมติ</b> เพื่ออธิบายเท่านั้น
-                      </p>
-                    </div>
-                    <table class="w-full text-[12.5px]">
-                      <thead>
-                        <tr class="text-slate-500 bg-white">
-                          <th class="text-left font-bold px-3.5 py-2">โหมด</th>
-                          <th class="text-right font-bold px-3.5 py-2">คนปิดการขายได้</th>
-                          <th class="text-right font-bold px-3.5 py-2">หัวหน้าทีมได้</th>
-                          <th class="text-right font-bold px-3.5 py-2">บริษัทจ่ายรวม</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr
-                          v-for="opt in overrideModeOptions"
-                          :key="`row-${opt.value}`"
-                          class="border-t border-slate-100"
-                          :class="opt.value === overrideMode ? 'bg-indigo-50/80 font-bold text-slate-900' : 'text-slate-600'"
-                          :data-test="`override-mode-row-${opt.value}`"
-                        >
-                          <td class="px-3.5 py-2">
-                            {{ opt.title }}
-                            <span v-if="opt.value === overrideMode" class="ml-1 text-[11px] text-indigo-600">← ใช้อยู่</span>
-                          </td>
-                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].sellerSatang) }}</td>
-                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].leaderSatang) }}</td>
-                          <td class="px-3.5 py-2 text-right tabular-nums">{{ formatSatang(overrideModeExample.rows[opt.value].companyPaysSatang) }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <!-- The depth, and what it does to the two deduct modes. The
-                       example above deliberately shows ONE leader because that
-                       is the smallest case where the three modes disagree; this
-                       line is where the real chain gets said out loud, because
-                       multiplying the table by five managers makes the numbers
-                       dramatic and the comparison unreadable. -->
-                  <div class="mt-2.5 text-[12.5px] text-slate-600" data-test="override-mode-chain">
-                    <p v-if="deepestManagerChain === 0">
-                      ตอนนี้บริษัทนี้ <b>ยังไม่มีสายงาน</b> (ไม่มีใครมีหัวหน้า) — ยังไม่มีใครได้ค่าคอมหัวหน้าทีม ไม่ว่าจะเลือกโหมดไหน
-                    </p>
-                    <template v-else>
-                      <p>
-                        สายงานลึกที่สุดตอนนี้ <b>{{ deepestManagerChain }} ชั้น</b> — ดีลหนึ่งอาจมีหัวหน้าได้ถึง {{ deepestManagerChain }} คน
-                        และแบบ “หักจากตัวแทน” จะหัก <b>{{ deepestManagerChain }} เท่า</b>ของตัวเลขในตาราง
-                      </p>
-                      <p v-if="maxOverridePerLevelSatang !== null" class="mt-1">
-                        ดังนั้นถ้าเลือกแบบหัก อัตราหัวหน้าทีมจะตั้งได้ไม่เกิน <b>{{ formatSatang(maxOverridePerLevelSatang) }} ต่อชั้น</b>
-                        (คิดจากสินค้าที่ตัวแทนได้ค่าคอมน้อยที่สุด) — เกินกว่านี้ระบบจะไม่ให้บันทึก
-                      </p>
-                    </template>
-                  </div>
-
-                  <!-- THE CHOICE. Hidden entirely from a Company Admin, per the
-                       house rule ("อันไหนสิทธิ์ company admin ทำไม่ได้ต้องซ่อน
-                       ไม่ใช่ให้ error 403") — the table above still explains
-                       what their company does, which is the half they are
-                       allowed to know. -->
-                  <div v-if="canEditCommissionConfig && effectiveCompanyId" class="mt-3 grid grid-cols-1 gap-2" data-test="override-mode-picker">
-                    <button
-                      v-for="opt in overrideModeOptions"
-                      :key="`pick-${opt.value}`"
-                      type="button"
-                      class="text-left rounded-xl border px-3.5 py-3 transition-colors disabled:opacity-60"
-                      :class="opt.value === overrideMode
-                        ? 'border-indigo-400 bg-indigo-100/70'
-                        : 'border-slate-200 bg-white hover:border-indigo-300'"
-                      :disabled="overrideModeSaving"
-                      :data-test="`override-mode-pick-${opt.value}`"
-                      @click="setOverrideMode(opt.value)"
-                    >
-                      <span class="flex items-center gap-2">
-                        <Icon v-if="opt.value === overrideMode" name="check" :size="14" class="text-indigo-600" />
-                        <span class="text-[13.5px] font-extrabold text-slate-900">{{ opt.title }}</span>
-                      </span>
-                      <span class="block mt-0.5 text-[12.5px] text-slate-600">{{ opt.oneLine }}</span>
-                      <span class="block mt-1 text-[12px] text-slate-500">{{ opt.detail }}</span>
-                    </button>
-                  </div>
-
-                  <p v-if="overrideModeError" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="override-mode-error">
-                    {{ overrideModeError }}
-                  </p>
-                  <p v-else-if="canEditCommissionConfig" class="mt-2 text-[12px] text-slate-500">
-                    เปลี่ยนโหมดมีผลกับดีลที่เกิดหลังจากนี้เท่านั้น · รายการที่ลงบัญชีไปแล้วเก็บโหมดเดิมไว้กับตัวมันเอง แก้ย้อนหลังไม่ได้
-                  </p>
-                </template>
-              </div>
-
               <!--
                 ═══ CARD 2 — EMBEDDED, NOT LINKED (2026-09-12) ═══
 
@@ -5706,7 +5770,7 @@ watch(companyPlanType, (pt) => {
                 <!-- The number lives outside the card because the card is
                      shared with nothing else on this screen and must not learn
                      about this step's numbering to be reusable. -->
-                <p class="text-[12px] font-extrabold text-slate-400 mb-1 ml-1">4.5</p>
+                <p class="text-[12px] font-extrabold text-slate-400 mb-1 ml-1">4.6</p>
                 <CommissionSplitSettingCard
                   :key="effectiveCompanyId ?? 'own'"
                   :company-id="effectiveCompanyId"
@@ -5716,7 +5780,7 @@ watch(companyPlanType, (pt) => {
               </div>
 
               <!--
-                ═══ 4.6 — EDITED HERE NOW, NOT LINKED (2026-09-13) ═══
+                ═══ 4.7 — EDITED HERE NOW, NOT LINKED (2026-09-13) ═══
 
                 Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ
                 นำของเก่าออกเลย".
@@ -5737,7 +5801,7 @@ watch(companyPlanType, (pt) => {
               -->
               <div class="rounded-2xl border border-slate-200 bg-white p-4" data-test="step4-withdrawal-minimum">
                 <p class="text-[15px] font-extrabold text-slate-900">
-                  <span class="text-slate-400 mr-1.5">4.6</span>ยอดขั้นต่ำในการเบิก
+                  <span class="text-slate-400 mr-1.5">4.7</span>ยอดขั้นต่ำในการเบิก
                 </p>
                 <p class="mt-1 text-[12.5px] text-slate-500">
                   ตัวแทนต้องมียอดค่าคอมสะสมถึงเท่าไหร่จึงจะกดขอเบิกได้ · <b>เว้นว่าง = ไม่มีขั้นต่ำ</b> (เบิกเท่าไรก็ได้)
@@ -6059,7 +6123,7 @@ watch(companyPlanType, (pt) => {
                 </option>
               </select>
               <p class="mt-1 text-[11.5px] text-slate-400">
-                เลือกอย่างอื่นเพื่อให้อัตรานี้ต่างจากทั้งบริษัท · ดูตัวเลขของแต่ละแบบได้ที่ข้อ 4.4
+                เลือกอย่างอื่นเพื่อให้อัตรานี้ต่างจากทั้งบริษัท · ดูตัวเลขของแต่ละแบบได้ที่ข้อ 4.1
               </p>
             </div>
             <RateImpactPreview

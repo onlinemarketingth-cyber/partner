@@ -50,6 +50,7 @@ vi.mock('vue-router', () => ({
 import CommissionPlansView from '../CommissionPlansView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { buildResolution, type FixtureProduct, type FixtureRule } from './support/resolution'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -139,7 +140,7 @@ const READY = {
   can_fix: true,
 }
 
-async function mountView(opts: { products?: unknown[]; rules?: unknown[] } = {}) {
+async function mountView(opts: { products?: FixtureProduct[]; rules?: FixtureRule[] } = {}) {
   // `rules` added 2026-09-13: the readiness block below needs a company with
   // NO company-wide default, which the shared COMPANY_RULE fixture would
   // otherwise always supply.
@@ -147,6 +148,15 @@ async function mountView(opts: { products?: unknown[]; rules?: unknown[] } = {})
 
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/commission-readiness')) return READY
+    /*
+     * 2026-09-14 — THE TABLE IS THE PRODUCT LIST NOW, so a spec about product
+     * rows needs the server's answer for those rows to exist at all. Derived
+     * from the same fixtures, and re-derived on every call, because the switch
+     * these tests click writes to the catalogue and then re-reads this.
+     */
+    if (path.startsWith('/commission-resolution')) {
+      return { data: buildResolution({ companyId: AIA.id, products, rules, overrideRules: [LEADER_RULE] }) }
+    }
     if (path.startsWith('/commission-settings')) return { data: { commission_basis: 'price' } }
     if (path.startsWith('/companies')) return { data: [AIA] }
     // startsWith, not equality: since 2026-09-12 this screen fetches
@@ -157,6 +167,22 @@ async function mountView(opts: { products?: unknown[]; rules?: unknown[] } = {})
     if (path.startsWith('/commission-override-rules')) return { data: [LEADER_RULE] }
 
     return { data: [] }
+  })
+
+  /*
+   * THE FAKE SERVER HAS TO ACTUALLY APPLY THE WRITE.
+   *
+   * The screen re-reads /commission-resolution after a successful toggle — it
+   * must, because opening a product moves the override ceiling. A mock that
+   * kept answering with the old flag would hand the row straight back in its
+   * previous state and every switch test would be asserting a bug.
+   */
+  put.mockImplementation(async (path: string, body: Record<string, unknown>) => {
+    const id = Number(String(path).split('/')[2])
+    const row = products.find((x) => x.id === id)
+    if (row && typeof body?.is_active === 'boolean') row.is_sellable_here = body.is_active
+
+    return { data: {} }
   })
 
   const active = useActiveCompanyStore()
@@ -206,8 +232,8 @@ describe('step 3 — which products this company actually sells', () => {
     })
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-row-1"]').attributes('data-selling')).toBe('open')
-    expect(wrapper.get('[data-test="product-row-3"]').attributes('data-selling')).toBe('closed')
+    expect(wrapper.get('[data-test="step3-resolution-row-1"]').attributes('data-selling')).toBe('open')
+    expect(wrapper.get('[data-test="step3-resolution-row-3"]').attributes('data-selling')).toBe('closed')
     /*
      * 2026-09-14 — this used to assert the muted `bg-slate-50/60` the
      * catalogue screen uses, and the mute is what had to go.
@@ -222,10 +248,13 @@ describe('step 3 — which products this company actually sells', () => {
      * stays as readable as any other. The mute is reserved for controls that
      * genuinely cannot be used.
      */
-    expect(wrapper.get('[data-test="product-closed-3"]').text()).toBe('ปิดขายอยู่')
-    expect(wrapper.find('[data-test="product-closed-1"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="product-row-3"]').classes().join(' ')).toContain('border-dashed')
-    expect(wrapper.get('[data-test="selling-label-3"]').text()).toBe('ปิดขาย')
+    expect(wrapper.get('[data-test="step3-resolution-closed-3"]').text()).toBe('ปิดขายอยู่')
+    expect(wrapper.find('[data-test="step3-resolution-closed-1"]').exists()).toBe(false)
+    // A dashed card border became a left edge when the cards became table
+    // rows. The rule it encodes did not change: the closed row is MARKED, not
+    // muted — grey is what an unusable control wears on this screen.
+    expect(wrapper.get('[data-test="step3-resolution-row-3"]').classes().join(' ')).toContain('border-l-slate-300')
+    expect(wrapper.get('[data-test="step3-resolution-selling-label-3"]').text()).toBe('ปิดขาย')
   })
 
   it('puts the products on sale first, then orders each half by Thai name', async () => {
@@ -244,11 +273,11 @@ describe('step 3 — which products this company actually sells', () => {
     })
     await goToStep(wrapper, 3)
 
-    const order = wrapper.findAll('[data-test^="product-row-"]').map((r) => r.attributes('data-test'))
+    const order = wrapper.findAll('[data-test^="step3-resolution-row-"]').map((r) => r.attributes('data-test'))
     // ข before ฮ, then ก before ฟ — Thai alphabetical order inside each half,
     // which is the whole reason the comparator passes 'th' rather than
     // sorting by code point.
-    expect(order).toEqual(['product-row-4', 'product-row-2', 'product-row-3', 'product-row-1'])
+    expect(order).toEqual(['step3-resolution-row-4', 'step3-resolution-row-2', 'step3-resolution-row-3', 'step3-resolution-row-1'])
   })
 
   it('leaves the source list alone — the sort is on a copy', async () => {
@@ -262,10 +291,10 @@ describe('step 3 — which products this company actually sells', () => {
     })
     await goToStep(wrapper, 3)
 
-    const first = wrapper.findAll('[data-test^="product-row-"]').map((r) => r.attributes('data-test'))
+    const first = wrapper.findAll('[data-test^="step3-resolution-row-"]').map((r) => r.attributes('data-test'))
     await goToStep(wrapper, 1)
     await goToStep(wrapper, 3)
-    expect(wrapper.findAll('[data-test^="product-row-"]').map((r) => r.attributes('data-test'))).toEqual(first)
+    expect(wrapper.findAll('[data-test^="step3-resolution-row-"]').map((r) => r.attributes('data-test'))).toEqual(first)
   })
 })
 
@@ -274,7 +303,7 @@ describe('step 3 — the switch writes to the endpoint that owns the state', () 
     const wrapper = await mountView({ products: [sharedProduct({ is_sellable_here: false })] })
     await goToStep(wrapper, 3)
 
-    await wrapper.get('[data-test="selling-switch-2"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-selling-switch-2"]').trigger('click')
     await flushPromises()
 
     /*
@@ -297,7 +326,7 @@ describe('step 3 — the switch writes to the endpoint that owns the state', () 
     const wrapper = await mountView({ products: [ownedProduct({ is_sellable_here: true })] })
     await goToStep(wrapper, 3)
 
-    await wrapper.get('[data-test="selling-switch-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-selling-switch-1"]').trigger('click')
     await flushPromises()
 
     expect(puts()).toContainEqual(['/products/1', { is_active: false }])
@@ -315,11 +344,11 @@ describe('step 3 — the switch writes to the endpoint that owns the state', () 
     await goToStep(wrapper, 3)
     const getsBefore = get.mock.calls.filter((c) => String(c[0]).startsWith('/products')).length
 
-    await wrapper.get('[data-test="selling-switch-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-selling-switch-1"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="selling-label-1"]').text()).toBe('ปิดขาย')
-    expect(wrapper.get('[data-test="product-row-1"]').attributes('data-selling')).toBe('closed')
+    expect(wrapper.get('[data-test="step3-resolution-selling-label-1"]').text()).toBe('ปิดขาย')
+    expect(wrapper.get('[data-test="step3-resolution-row-1"]').attributes('data-selling')).toBe('closed')
     expect(get.mock.calls.filter((c) => String(c[0]).startsWith('/products')).length).toBe(getsBefore)
   })
 
@@ -328,32 +357,37 @@ describe('step 3 — the switch writes to the endpoint that owns the state', () 
     await goToStep(wrapper, 3)
     put.mockRejectedValueOnce(new Error('boom'))
 
-    await wrapper.get('[data-test="selling-switch-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-selling-switch-1"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.get('[data-test="selling-error"]').text()).toContain('เปิด/ปิดขายสินค้าไม่สำเร็จ')
+    expect(wrapper.get('[data-test="step3-resolution-selling-error"]').text()).toContain('เปิด/ปิดขายสินค้าไม่สำเร็จ')
     // The row never moved, because the server never agreed that it did.
-    expect(wrapper.get('[data-test="product-row-1"]').attributes('data-selling')).toBe('open')
+    expect(wrapper.get('[data-test="step3-resolution-row-1"]').attributes('data-selling')).toBe('open')
   })
 })
 
 describe('step 3 — a closed product is still fully editable', () => {
-  it('keeps the rate, the layer badge and the rate button on a closed row', async () => {
+  it('keeps every rung readable and settable on a closed row', async () => {
     /*
-     * The owner's clause, defended: "ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม". Greying is
-     * a colour and nothing else — a `disabled` creeping onto this button would
-     * look tidy and remove the only reason a closed row is still in the list.
+     * The owner's clause, defended twice: "ที่ปิดไว้ก็แก้ไขได้เหมือนเดิม", and
+     * again on 2026-09-14 when the cards were merged into the table ("แสดงไว้
+     * ใช้แบบเดียวกับ 3.3 เดิมคือปรับค่าคอมได้ เปิดปิดได้").
+     *
+     * Closing a product MARKS the row; it does not disable it. A `disabled`
+     * creeping onto these cells would look tidy and remove the only reason a
+     * closed row is still in the list — it is the one somebody is about to
+     * switch back on, and it needs a rate before they do.
      */
     const wrapper = await mountView({ products: [ownedProduct({ is_sellable_here: false })] })
     await goToStep(wrapper, 3)
 
-    expect(wrapper.get('[data-test="product-rate-1"]').text()).toContain('3')
-    expect(wrapper.find('[data-test="product-layer-1"]').exists()).toBe(true)
+    // The inherited company rate still resolves, and still says what it pays.
+    expect(wrapper.get('[data-test="step3-resolution-cell-1-company"]').text()).toContain('3.00%')
 
-    const rateButton = wrapper.get('[data-test="product-row-1"] button.btn-primary')
-    expect(rateButton.attributes('disabled')).toBeUndefined()
+    const setProductRate = wrapper.get('[data-test="step3-resolution-add-product-rate-1"]')
+    expect(setProductRate.attributes('disabled')).toBeUndefined()
 
-    await rateButton.trigger('click')
+    await setProductRate.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('อัตราค่าคอมตัวแทนผู้ขาย')
   })
@@ -374,9 +408,9 @@ describe('step 3 — a Company Admin sees the state, and only works the switch t
     const wrapper = await mountView({ products: [sharedProduct({ is_sellable_here: false })] })
     await goToStep(wrapper, 3)
 
-    expect(wrapper.find('[data-test="selling-switch-2"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="selling-state-2"]').text()).toBe('ปิดขาย')
-    expect(wrapper.get('[data-test="product-row-2"]').attributes('data-selling')).toBe('closed')
+    expect(wrapper.find('[data-test="step3-resolution-selling-switch-2"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="step3-resolution-selling-state-2"]').text()).toBe('ปิดขาย')
+    expect(wrapper.get('[data-test="step3-resolution-row-2"]').attributes('data-selling')).toBe('closed')
   })
 
   it('still works the switch on a product their own company owns', async () => {
@@ -389,7 +423,7 @@ describe('step 3 — a Company Admin sees the state, and only works the switch t
     const wrapper = await mountView({ products: [ownedProduct({ is_sellable_here: false })] })
     await goToStep(wrapper, 3)
 
-    await wrapper.get('[data-test="selling-switch-1"]').trigger('click')
+    await wrapper.get('[data-test="step3-resolution-selling-switch-1"]').trigger('click')
     await flushPromises()
 
     expect(puts()).toContainEqual(['/products/1', { is_active: true }])
@@ -401,8 +435,8 @@ describe('step 3 — a Company Admin sees the state, and only works the switch t
     })
     await goToStep(wrapper, 3)
 
-    expect(wrapper.find('[data-test="selling-switch-1"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="selling-state-1"]').text()).toBe('เปิดขาย')
+    expect(wrapper.find('[data-test="step3-resolution-selling-switch-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="step3-resolution-selling-state-1"]').text()).toBe('เปิดขาย')
   })
 })
 

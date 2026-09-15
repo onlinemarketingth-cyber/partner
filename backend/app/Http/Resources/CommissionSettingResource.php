@@ -37,6 +37,13 @@ class CommissionSettingResource extends JsonResource
             // real number the screen uses ("no manager chain yet, so no
             // deduction can happen").
             'deepest_manager_chain' => $this['deepest_manager_chain'],
+            /*
+             * 2026-09-15 — the company's own seat in its hierarchy, or null
+             * when it has none. Null is the answer for most companies and a
+             * real one: nobody has decided the company should take a leader's
+             * share yet.
+             */
+            'commission_house_account' => $this['commission_house_account'],
         ];
     }
 }

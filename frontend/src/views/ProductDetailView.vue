@@ -99,8 +99,16 @@ const hasPassedBasic = computed(() =>
   certifications.value.some((c) => c.user_id === authStore.user?.id && c.cert_tier?.key === 'basic'),
 )
 
-const { sharingProductId, shareError, showShareModal, shareLink, shareHeading, shareProduct } =
-  useProductShare({ canShare: () => hasPassedBasic.value, signal: pageAbort.signal })
+const {
+  sharingProductId,
+  buyingProductId,
+  shareError,
+  showShareModal,
+  shareLink,
+  shareHeading,
+  shareProduct,
+  openBuyPage,
+} = useProductShare({ canShare: () => hasPassedBasic.value, signal: pageAbort.signal })
 
 const productId = computed(() => Number(route.params.id))
 
@@ -271,18 +279,42 @@ onMounted(load)
         {{ td('cert.needs_basic_share2') }}
       </p>
 
-      <button
-        type="button"
-        :disabled="!hasPassedBasic || sharingProductId === product.id"
-        class="mt-4 w-full min-h-[48px] flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all active:scale-95"
-        :class="hasPassedBasic
-          ? 'bg-surface-primary text-ink-primary hover:opacity-90'
-          : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
-        @click="shareProduct(product)"
-      >
-        <Icon name="share" :size="16" />
-        {{ sharingProductId === product.id ? 'กำลังสร้าง...' : 'แชร์สินค้านี้' }}
-      </button>
+      <!--
+        THE SAME PAIR AS THE CARD (human, 2026-09-14). A card in the grid and
+        this page are the two places an agent acts on a product, and an action
+        that exists on one and not the other is the one they stop trusting is
+        there. Full width each, stacked reading order: สั่งซื้อ is the action
+        that ends in money, แชร์ is the one that starts a conversation.
+      -->
+      <div class="mt-4 flex items-stretch gap-2">
+        <button
+          type="button"
+          :disabled="!hasPassedBasic || sharingProductId === product.id || buyingProductId === product.id"
+          class="flex-1 min-w-0 min-h-[48px] flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all active:scale-95"
+          :class="hasPassedBasic
+            ? 'bg-surface-chip text-ink-card border border-line-card hover:opacity-90'
+            : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
+          data-test="detail-share-button"
+          @click="shareProduct(product)"
+        >
+          <Icon name="share" :size="16" class="shrink-0" />
+          <span class="truncate">{{ sharingProductId === product.id ? 'กำลังสร้าง...' : 'แชร์' }}</span>
+        </button>
+
+        <button
+          type="button"
+          :disabled="!hasPassedBasic || sharingProductId === product.id || buyingProductId === product.id"
+          class="flex-1 min-w-0 min-h-[48px] flex items-center justify-center gap-2 rounded-xl text-sm font-bold transition-all active:scale-95"
+          :class="hasPassedBasic
+            ? 'bg-surface-primary text-ink-primary hover:opacity-90'
+            : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
+          data-test="detail-buy-button"
+          @click="openBuyPage(product)"
+        >
+          <Icon name="cart" :size="16" class="shrink-0" />
+          <span class="truncate">{{ buyingProductId === product.id ? 'กำลังเปิด...' : 'สั่งซื้อ' }}</span>
+        </button>
+      </div>
     </div>
 
     <ShareLinkModal

@@ -64,7 +64,13 @@ class CommissionResolutionService
         $rows = [];
         $maxPerLevel = null;
 
-        foreach ($this->sellableProducts($company) as $product) {
+        foreach ($this->configurableProducts($company) as $product) {
+            /*
+             * 2026-09-14 — CLOSED PRODUCTS ARE IN THE LIST, and this flag is
+             * the whole reason they can be. See configurableProducts().
+             */
+            $sellable = $product->isSellableBy((int) $company->id);
+
             $base = $this->commissionBasisResolver->baseSatang(
                 $product,
                 $company,
@@ -84,8 +90,16 @@ class CommissionResolutionService
              * this arithmetic at save time; a screen that predicted it with
              * its own copy would eventually offer a maximum the server then
              * rejects, which is the most annoying possible way to be wrong.
+             *
+             * SELLABLE PRODUCTS ONLY, even though the loop now walks closed
+             * ones too. OverrideDeductionGuard — the thing this mirrors — asks
+             * `productsInScope()`, which filters by isSellableBy(). Letting a
+             * closed product tighten the ceiling here would hand the screen a
+             * maximum the guard does not enforce, and the mirror discipline
+             * that exists because of the Thai-Life-rate-on-AIA bug says the
+             * two copies agree or one of them goes.
              */
-            if ($depth > 0 && $agentAmount !== null) {
+            if ($sellable && $depth > 0 && $agentAmount !== null) {
                 $forThisProduct = intdiv($agentAmount, $depth);
                 $maxPerLevel = $maxPerLevel === null ? $forThisProduct : min($maxPerLevel, $forThisProduct);
             }
@@ -93,6 +107,13 @@ class CommissionResolutionService
             $rows[] = [
                 'product_id' => (int) $product->id,
                 'name' => $product->effectiveName(),
+                /*
+                 * "Does this company sell it today", NOT "may it be rated".
+                 * Every row here can be rated; this says whether a rate on it
+                 * can pay anybody yet, which is the difference between a
+                 * warning worth a colour and one worth ignoring.
+                 */
+                'is_sellable' => $sellable,
                 'category' => $product->category_id === null ? null : [
                     'id' => (int) $product->category_id,
                     'name' => $product->category?->name,
@@ -204,19 +225,43 @@ class CommissionResolutionService
     }
 
     /**
-     * The same set CommissionReadinessService and OverrideDeductionGuard
-     * judge — a product this company does not sell has no rate to explain.
+     * Every product this company could RATE — which is a wider set than the
+     * one it can sell today, and the difference is deliberate.
+     *
+     * ── WHY THIS IS NOT sellableProducts() ANY MORE (2026-09-14) ──
+     *
+     * It was, and it was filtered by isSellableBy() to match
+     * CommissionReadinessService and OverrideDeductionGuard. That was right
+     * while this table only EXPLAINED rates: a product nobody sells has no
+     * payout to explain.
+     *
+     * Then the table absorbed the per-product edit list (owner: "สินค้าที่ปิด
+     * ขายจะหายไปจากตาราง — แสดงไว้ ใช้แบบเดียวกับ 3.3 เดิมคือปรับค่าคอมได้
+     * เปิดปิดได้"). The old list showed closed products on purpose, because
+     * the control that REOPENS a product lives on its row: filtering them out
+     * of the merged table would have taken the switch with them and left an
+     * admin no way back — a screen that hides the only exit from the state it
+     * is reporting.
+     *
+     * Two things stay judged on the narrow set, and both are commented where
+     * they happen: the per-level override ceiling above, and every verdict in
+     * CommissionReadinessService, which this service still does not duplicate.
+     *
+     * Sellable first, then by name — the same order the edit list used, and
+     * for the same reason: what is on sale today is what the admin came for.
      *
      * @return Collection<int, Product>
      */
-    private function sellableProducts(Company $company)
+    private function configurableProducts(Company $company)
     {
         return Product::withoutGlobalScope(SharedOrTenantScope::class)
             ->with('category')
             ->where(fn ($query) => $query->where('company_id', $company->id)->orWhereNull('company_id'))
             ->get()
-            ->filter(fn (Product $product) => $product->isSellableBy((int) $company->id))
-            ->sortBy(fn (Product $product) => $product->effectiveName())
+            ->sortBy(fn (Product $product) => [
+                $product->isSellableBy((int) $company->id) ? 0 : 1,
+                $product->effectiveName(),
+            ])
             ->values();
     }
 }

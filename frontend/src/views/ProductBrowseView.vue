@@ -467,11 +467,15 @@ onMounted(async () => {
 // the next correction.
 const {
   sharingProductId,
+  buyingProductId,
   shareError,
   showShareModal,
   shareLink,
   shareHeading,
   shareProduct,
+  // 2026-09-14 — the card's second button. Same mint, same BR-1 gate; it
+  // navigates to /p/<code> instead of opening the share sheet.
+  openBuyPage,
 } = useProductShare({ canShare: () => hasPassedBasic.value, signal: pageAbort.signal })
 </script>
 
@@ -685,7 +689,9 @@ const {
             :product="product"
             :has-passed-basic="hasPassedBasic"
             :sharing="sharingProductId === product.id"
+            :buying="buyingProductId === product.id"
             @share="shareProduct"
+            @buy="openBuyPage"
           />
         </div>
       </div>
@@ -759,7 +765,9 @@ const {
             :product="product"
             :has-passed-basic="hasPassedBasic"
             :sharing="sharingProductId === product.id"
+            :buying="buyingProductId === product.id"
             @share="shareProduct"
+            @buy="openBuyPage"
           />
         </div>
       </div>

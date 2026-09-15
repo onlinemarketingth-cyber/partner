@@ -50,6 +50,23 @@ class CommissionWithdrawalService
      */
     public function availableSatang(User $agent): int
     {
+        /*
+         * 2026-09-15 — THE COMPANY CANNOT WITHDRAW FROM ITSELF.
+         *
+         * The house account is a real `users` row so the payout walk can pay
+         * it (see CommissionHouseAccountService), which means it accrues
+         * Pending ledger rows exactly like a team leader does — and every one
+         * of them is money the company already holds. Left alone, this method
+         * would report the company's own margin as a balance somebody could
+         * ask for, and the request screen would offer to transfer it.
+         *
+         * Zero, not an exception: this is also what the profile banner reads,
+         * and a balance query is not the place to throw.
+         */
+        if ($agent->isCommissionHouseAccount()) {
+            return 0;
+        }
+
         $earned = (int) CommissionLedger::query()
             ->where('agent_id', $agent->id)
             ->where('payment_status', PaymentStatus::Pending)
@@ -65,9 +82,9 @@ class CommissionWithdrawalService
     }
 
     /**
-     * @throws ValidationException  every refusal an agent can act on —
-     *                              incomplete payout details, below the
-     *                              company minimum, more than they have.
+     * @throws ValidationException every refusal an agent can act on —
+     *                             incomplete payout details, below the
+     *                             company minimum, more than they have.
      */
     public function request(User $agent, int $amountSatang): CommissionWithdrawalRequest
     {
@@ -87,6 +104,19 @@ class CommissionWithdrawalService
             // Re-read from the database rather than trusting the passed-in
             // model: the details may have been completed in another tab.
             $agent = $agent->fresh();
+
+            /*
+             * The write-side twin of availableSatang()'s zero. Asked as well
+             * as, not instead of: a balance of zero already refuses further
+             * down, but that refusal reads as "you have nothing right now",
+             * which for this account is wrong in a way somebody would try to
+             * fix by waiting for more sales.
+             */
+            if ($agent->isCommissionHouseAccount()) {
+                throw ValidationException::withMessages([
+                    'amount_satang' => 'บัญชีบริษัทเบิกค่าคอมไม่ได้ — เงินส่วนนี้อยู่กับบริษัทอยู่แล้ว',
+                ]);
+            }
 
             if (! $agent->hasCompletePayoutDetails()) {
                 throw ValidationException::withMessages([

@@ -277,6 +277,28 @@ class TrackedLinkTest extends TestCase
         $this->assertSame(1, TrackedLinkVisit::withoutGlobalScopes()->count());
     }
 
+    public function test_the_owning_agent_opening_their_own_short_link_records_no_visit(): void
+    {
+        /*
+         * 2026-09-14 — the twin of ProductShareLinkTest's view_count case, and
+         * it has to be tested separately because these are two counters: the
+         * link's own `view_count` and this visit row. The portal's "สั่งซื้อ"
+         * button sends the agent to their own /p/<code>, and a fix that
+         * silenced one counter and not the other would leave the two numbers
+         * disagreeing about what a view is — which is worse than either being
+         * wrong, because then neither can be checked against the other.
+         */
+        $company = Company::factory()->create();
+        $target = $this->shareLink($company);
+        $agent = User::withoutGlobalScopes()->find($target->agent_id);
+        $link = $this->service()->mintFor(TrackedLinkGroup::ProductShare, $target);
+
+        $this->actingAs($agent)->getJson('/api/v1/public/product-shares/'.$link->code)->assertOk();
+
+        $this->assertSame(0, TrackedLinkVisit::withoutGlobalScopes()->count());
+        $this->assertSame(0, $target->fresh()->view_count);
+    }
+
     public function test_a_revoked_short_code_and_an_invented_one_answer_identically(): void
     {
         $company = Company::factory()->create();

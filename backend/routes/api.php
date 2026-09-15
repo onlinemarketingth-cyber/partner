@@ -32,6 +32,7 @@ use App\Http\Controllers\Api\V1\ClientController;
 use App\Http\Controllers\Api\V1\ClientDocumentController;
 use App\Http\Controllers\Api\V1\CommissionBinarySettingController;
 use App\Http\Controllers\Api\V1\CommissionGenerationRuleController;
+use App\Http\Controllers\Api\V1\CommissionHouseAccountController;
 use App\Http\Controllers\Api\V1\CommissionGenerationSettingController;
 use App\Http\Controllers\Api\V1\CommissionLedgerController;
 use App\Http\Controllers\Api\V1\CommissionMatrixLevelRateController;
@@ -826,6 +827,20 @@ Route::prefix('v1')->group(function () {
 
         Route::get('/commission-settings', [CommissionSettingController::class, 'show']);
         Route::put('/commission-settings', [CommissionSettingController::class, 'update']);
+
+        /*
+         * 2026-09-15 — the company's own seat in its hierarchy, so a leader
+         * override has somebody to reach when the seller has no human above
+         * them (owner: "หัวหน้าทีมที่เป็นตัวบริษัทเอง").
+         *
+         * No PUT: the seat is on or off, and everything about how much it is
+         * paid is the ordinary leader rate in step 4. Both verbs answer with
+         * the whole commission setting, because switching this changes
+         * `deepest_manager_chain` and therefore the deduction ceiling the
+         * screen shows — see the Controller.
+         */
+        Route::post('/commission-house-account', [CommissionHouseAccountController::class, 'store']);
+        Route::delete('/commission-house-account', [CommissionHouseAccountController::class, 'destroy']);
 
         // TASK-052 / ADR-015 — chart-based Agent Dashboard metrics (totals,
         // 6-month series, pipeline funnel, cert/lead-source distributions,

@@ -486,7 +486,7 @@ class CommissionService
      * silently receiving nothing is exactly the kind of thing that surfaces as
      * an accusation weeks later.
      *
-     * @return list<array{manager: User, tier: CertTier, rule: CommissionOverrideRule, amount_satang: int}>
+     * @return list<array{manager: User, tier: ?CertTier, rule: CommissionOverrideRule, amount_satang: int}>
      */
     private function resolveUnilevelOverrides(
         Referral $referral,
@@ -518,7 +518,30 @@ class CommissionService
         while ($manager !== null && $depth < self::MAX_OVERRIDE_CHAIN_DEPTH) {
             $managerTier = $manager->highestPassedCertTier();
 
-            if ($managerTier) {
+            /*
+             * 2026-09-15 — THE ONE EXEMPTION FROM ADR-035's CERT GATE.
+             *
+             * A cert tier is a gate on being paid an override: you are
+             * eligible because you passed something. The company's own house
+             * account sits at the top of the chain (owner: "หัวหน้าทีมที่เป็น
+             * ตัวบริษัทเอง") and cannot sit an exam — gating it would mean the
+             * company is never paid, whatever anybody configures, and the
+             * seller is never charged for it either.
+             *
+             * The alternative was to write a certification row for the house
+             * account and touch no code. That was rejected: it puts a
+             * qualification on a money row for an entity that never earned
+             * one, and `cert_tier_id_at_time` on the company's ledger rows
+             * would read "Basic" forever. The column is nullable; the honest
+             * answer is null.
+             *
+             * NARROW ON PURPOSE — `isCommissionHouseAccount()`, never
+             * `isCompanyAdmin()`. A company admin is an ordinary person; only
+             * the one row the company points at is exempt.
+             */
+            $isHouseAccount = $manager->isCommissionHouseAccount();
+
+            if ($managerTier || $isHouseAccount) {
                 $amount = $this->overrideAmountFor($mode, $overrideRule, $saleValue, $agentAmountSatang);
 
                 if ($mode->deductsFromSeller()) {
@@ -579,7 +602,7 @@ class CommissionService
      * immutable ledger row (BR-4); the seller's row, already written by now,
      * is never touched.
      *
-     * @param  list<array{manager: User, tier: CertTier, rule: CommissionOverrideRule, amount_satang: int}>  $rows
+     * @param  list<array{manager: User, tier: ?CertTier, rule: CommissionOverrideRule, amount_satang: int}>  $rows
      */
     private function writeUnilevelOverrides(
         Referral $referral,
@@ -838,13 +861,19 @@ class CommissionService
      * copies of this CommissionLedger::create() call — same fields, same
      * earned_via/override_source_agent_id semantics either way.
      */
-    private function createOverrideLedgerRow(Referral $referral, User $manager, CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, SaleValueSnapshot $saleValue, User $sourceAgent, CommissionOverrideMode $mode): CommissionLedger
+    private function createOverrideLedgerRow(Referral $referral, User $manager, ?CertTier $managerTier, CommissionOverrideRule $overrideRule, int $amountSatang, SaleValueSnapshot $saleValue, User $sourceAgent, CommissionOverrideMode $mode): CommissionLedger
     {
         return CommissionLedger::create([
             'company_id' => $referral->company_id,
             'agent_id' => $manager->id,
             'referral_id' => $referral->id,
-            'cert_tier_id_at_time' => $managerTier->id,
+            /*
+             * NULL for the company's own house account, which holds no
+             * certification and never will (see resolveUnilevelOverrides).
+             * The column has been nullable since 2026-07-14; every human
+             * payee still carries the tier they qualified under.
+             */
+            'cert_tier_id_at_time' => $managerTier?->id,
             'product_id' => $referral->product_id,
             ...$saleValue->ledgerColumns(),
             'rate_type_applied' => $overrideRule->rate_type,

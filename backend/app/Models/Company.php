@@ -49,6 +49,19 @@ class Company extends Model
         // App\Enums\CommissionOverrideMode — the two deduct modes differ by
         // 33x on the same inputs, which is why the enum names the base.
         'commission_override_mode',
+        /*
+         * 2026-09-15 — the user row that IS this company inside its own
+         * hierarchy, so a leader override has somebody to reach when the
+         * seller has no human manager. See the migration for why this is the
+         * only place that fact is stored.
+         *
+         * Fillable, but nothing should ever write it directly:
+         * CommissionHouseAccountService owns both ends of the change (the
+         * pointer AND every agent's manager_id), and setting the column alone
+         * produces a company that believes it has a house account nobody
+         * reports to.
+         */
+        'commission_house_user_id',
         // ADR-017 (TASK-054) — BR-7 admin-editable payment collection
         // config, shown on the public /pay/{token} page. All nullable.
         'payment_promptpay_id',
@@ -157,6 +170,23 @@ class Company extends Model
     public function users(): HasMany
     {
         return $this->hasMany(User::class);
+    }
+
+    /**
+     * 2026-09-15 — the company's own position in its hierarchy, or null.
+     *
+     * `withoutGlobalScopes()` because this is read from inside the commission
+     * walk and from the withdrawal guard, where the acting user is whoever is
+     * being paid or asking — a TenantScope narrowed to THEM would hide the
+     * house account of the company that owns the sale. The relation is
+     * already keyed by this company's own column, so there is nothing wider
+     * it could reach.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function commissionHouseAccount(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'commission_house_user_id')->withoutGlobalScopes();
     }
 
     /** @return HasMany<Brand, $this> */

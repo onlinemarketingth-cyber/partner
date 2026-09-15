@@ -78,6 +78,22 @@ class UserService
      */
     public function update(User $target, array $data, User $actor): User
     {
+        /*
+         * The house account accepts a new display name and nothing else.
+         * `role` would take it out of every list that hides it; `manager_id`
+         * would put the company under one of its own agents; the rest are
+         * fields of a person this row is not.
+         */
+        if ($target->isCommissionHouseAccount()) {
+            $forbidden = array_diff(array_keys($data), ['name']);
+
+            if ($forbidden !== []) {
+                throw ValidationException::withMessages([
+                    'user' => 'บัญชีบริษัทแก้ได้เฉพาะชื่อที่แสดง — ปิดใช้งานได้ที่ขั้นตอนที่ 4 ของหน้าตั้งค่าคอมมิชชั่น',
+                ]);
+            }
+        }
+
         if (array_key_exists('manager_id', $data)) {
             $this->assertValidManager($target, $data['manager_id']);
         }
@@ -342,6 +358,18 @@ class UserService
             throw ValidationException::withMessages(['manager_id' => 'An agent cannot be their own manager.']);
         }
 
+        /*
+         * 2026-09-15 — the house account is the ROOT and stays there. Giving
+         * the company a manager would put one of its own agents above it in
+         * the payout walk, which pays that agent an override on every sale in
+         * the company and is not a configuration anybody would mean to make.
+         */
+        if ($target->isCommissionHouseAccount()) {
+            throw ValidationException::withMessages([
+                'manager_id' => 'บัญชีบริษัทอยู่ยอดสุดของสายงานเสมอ ตั้งหัวหน้าให้ไม่ได้',
+            ]);
+        }
+
         $manager = User::withoutGlobalScopes()->find($managerId);
 
         if (! $manager || $manager->company_id !== $target->company_id) {
@@ -387,8 +415,40 @@ class UserService
      * that neither the submitted password nor the resulting hash appears
      * anywhere in the serialized row.
      */
+    /**
+     * 2026-09-15 — the company's own seat in its hierarchy is not a person,
+     * and every control a person gets is refused on it.
+     *
+     * One helper rather than four copied conditions, because the list of
+     * things it must refuse will grow: anything that can move, rename,
+     * re-home, deactivate or hand somebody a credential for this row is a way
+     * to take the company out of its own payout chain, or into somebody's
+     * hands. The row exists only so `CommissionService` has an id to pay.
+     *
+     * The one door left open is DISPLAY NAME, which is the company's own
+     * label on its own seat and changes nothing about where money goes. It is
+     * allowed through `update()` below and nowhere else.
+     *
+     * Turning the seat on and off is CommissionHouseAccountService's job, not
+     * this class's — it has to move every agent's manager_id in the same
+     * breath, which nothing here does.
+     */
+    private function assertNotHouseAccount(User $target, string $what): void
+    {
+        if ($target->isCommissionHouseAccount()) {
+            throw ValidationException::withMessages([
+                'user' => "บัญชีบริษัท{$what}ไม่ได้ — ปิดใช้งานได้ที่ขั้นตอนที่ 4 ของหน้าตั้งค่าคอมมิชชั่น",
+            ]);
+        }
+    }
+
     public function resetPassword(User $target, string $newPassword, User $actor): User
     {
+        // A working credential for this row is a login that can reach the
+        // agent portal and ask for the company's own margin. There is no
+        // legitimate reason anybody signs in as it.
+        $this->assertNotHouseAccount($target, 'ตั้งรหัสผ่าน');
+
         return DB::transaction(function () use ($target, $newPassword, $actor) {
             $target->update(['password' => $newPassword]);
             $this->revokeApiTokens($target, 'password reset by an admin');
@@ -421,6 +481,10 @@ class UserService
      */
     public function deactivate(User $target, User $actor): void
     {
+        // Soft-deleting the seat would leave every agent pointing at a
+        // deleted manager and stop the company earning, silently.
+        $this->assertNotHouseAccount($target, 'ปิดการใช้งานจากหน้านี้');
+
         DB::transaction(function () use ($target, $actor) {
             $action = $target->isUnconfirmedApplicant()
                 ? 'user.applicant_removed'
@@ -472,6 +536,9 @@ class UserService
      */
     public function moveToCompany(User $target, int $newCompanyId, User $actor): User
     {
+        // It belongs to ONE company by definition — the one pointing at it.
+        $this->assertNotHouseAccount($target, 'ย้ายบริษัท');
+
         return DB::transaction(function () use ($target, $newCompanyId, $actor) {
             $oldCompanyId = $target->company_id;
 

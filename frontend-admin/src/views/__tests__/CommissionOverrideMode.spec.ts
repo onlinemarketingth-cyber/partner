@@ -535,3 +535,44 @@ describe('the form does not re-ask a question the button already answered', () =
     expect(wrapper.get('[data-test="override-form-scope-fixed"]').text()).toContain('ค่าเริ่มต้นทั้งบริษัท')
   })
 })
+
+describe('step 4 asks where the money comes from before it asks how much', () => {
+  /*
+   * Owner, 2026-09-14: "ผมสลับข้อ 4.4 มาเป็น 4.1 และข้อเดิม 4.1-4.3 ขยับลงมา
+   * เป็น 4.2-4.4 เรียงหน้าจอใหม่ด้วย".
+   *
+   * The mode card used to sit UNDER the three rate boxes, which asked the
+   * admin to type a percentage before knowing what it was a percentage OF:
+   * the same 2% is 200 baht under บริษัทจ่ายเพิ่ม and 6 baht under
+   * หักจากค่าคอมของตัวแทน. Nothing else on the screen fails if this order is
+   * reversed by a refactor, so it is pinned here.
+   */
+  it('puts the deduction mode above the rate boxes, and numbers them to match', async () => {
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+
+    const html = wrapper.html()
+    expect(html.indexOf('data-test="step4-override-mode"'))
+      .toBeLessThan(html.indexOf('data-test="step4-leader-rates"'))
+
+    expect(wrapper.get('[data-test="step4-override-mode"]').text()).toContain('4.1')
+    // 2026-09-15 — the broadest rate box is 4.3 now, because "ใครเป็นผู้รับ"
+    // took 4.2. The three questions of this step can only be answered in that
+    // order: where the money comes from, who receives it, how much.
+    expect(wrapper.get('[data-test="step4-leader-rates"]').text()).toContain('4.3')
+  })
+
+  it('asks who receives it between the mode and the rates', async () => {
+    const wrapper = await mountView()
+    await goToStep4(wrapper)
+
+    const html = wrapper.html()
+    const mode = html.indexOf('data-test="step4-override-mode"')
+    const payee = html.indexOf('data-test="step4-house-account"')
+    const rates = html.indexOf('data-test="step4-leader-rates"')
+
+    expect(mode).toBeLessThan(payee)
+    expect(payee).toBeLessThan(rates)
+    expect(wrapper.get('[data-test="step4-house-account"]').text()).toContain('4.2')
+  })
+})

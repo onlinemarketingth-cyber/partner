@@ -213,6 +213,51 @@ class OverrideModeTest extends TestCase
         $this->assertSame(20000, $this->overrideAmount($world), 'leader is paid on top');
     }
 
+    /*
+     * ── THE TWO WAYS A DEDUCTING MODE CORRECTLY DEDUCTS NOTHING ──
+     *
+     * 2026-09-14, owner, after a live test: "ค่าคอมตัวแทนไม่ได้คำนวณการตัดให้
+     * หัวหน้าทีมเลย ลองตรวจสอบว่าผมเข้าใจผิดหรือไม่".
+     *
+     * The setting was right and the arithmetic was right; the sale simply had
+     * no leader to fund. That is correct — the deduction is not a company
+     * haircut, it is the money one specific person is about to be paid — but
+     * from the payout screen it is indistinguishable from the feature being
+     * broken, and nothing pinned it. These two tests are what makes the answer
+     * checkable instead of a claim.
+     */
+
+    public function test_a_seller_with_nobody_above_them_keeps_the_whole_commission(): void
+    {
+        // No manager_id at all — the top of the tree, and the state every
+        // company's first agent is in.
+        $world = $this->world(CommissionOverrideMode::DeductFromSale, managerCount: 0);
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->directAmount($world), 'there is no leader to fund, so nothing is taken');
+        $this->assertSame(0, $this->overrideAmount($world), 'and no override row is written either');
+    }
+
+    public function test_a_manager_who_has_passed_nothing_is_skipped_and_costs_the_seller_nothing(): void
+    {
+        /*
+         * ADR-035: a cert tier is a GATE on being paid an override, never a
+         * rate key. An uncertified manager is therefore passed over — and the
+         * seller must not be charged for a row nobody received, which is the
+         * half of that rule that money depends on.
+         */
+        $world = $this->world(CommissionOverrideMode::DeductFromSale);
+        UserCertification::query()->withoutGlobalScopes()
+            ->where('user_id', $world['agent']->manager_id)
+            ->delete();
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->directAmount($world), 'the seller is not charged for an override nobody got');
+        $this->assertSame(0, $this->overrideAmount($world));
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────
 
     /** @return array{company: Company, referral: Referral, agent: User} */

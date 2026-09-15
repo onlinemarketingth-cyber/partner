@@ -6,6 +6,7 @@ use App\Enums\CommissionBasis;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Models\AuditLog;
+use App\Models\CommissionLedger;
 use App\Models\CommissionOverrideRule;
 use App\Models\Company;
 use App\Models\User;
@@ -80,7 +81,7 @@ class CommissionSettingService
      * placeholder — the screen refuses to render step 2 in that state
      * anyway — rather than picking one tenant's settings to speak for all.
      *
-     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int}
+     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null}
      */
     public function forCompany(?int $companyId): array
     {
@@ -100,6 +101,46 @@ class CommissionSettingService
              * is a real and common answer, not a missing one.
              */
             'deepest_manager_chain' => $company === null ? 0 : $this->deductionGuard->deepestChain($company),
+            /*
+             * 2026-09-15 — the company's own seat in its hierarchy, or null.
+             *
+             * Sent with the two counts the screen needs to say what the seat
+             * IS doing rather than only that it exists: how many people report
+             * to it, and what it has been paid so far. A box that could only
+             * say "on" would leave an admin no way to tell a seat that is
+             * earning from one that is attached to nobody.
+             */
+            'commission_house_account' => $this->houseAccountPayload($company),
+        ];
+    }
+
+    /**
+     * @return array{id: int, name: string, agents_under: int, earned_satang: int}|null
+     */
+    private function houseAccountPayload(?Company $company): ?array
+    {
+        $house = $company?->commissionHouseAccount;
+
+        if ($house === null) {
+            return null;
+        }
+
+        return [
+            'id' => (int) $house->id,
+            'name' => $house->name,
+            'agents_under' => User::withoutGlobalScopes()
+                ->where('company_id', $company->id)
+                ->where('manager_id', $house->id)
+                ->count(),
+            /*
+             * EVERY row, paid and unpaid alike — this is "what the company has
+             * earned as a leader", not "what it is owed". The company is never
+             * owed anything by itself; the number exists so an admin can see
+             * the setting doing something.
+             */
+            'earned_satang' => (int) CommissionLedger::withoutGlobalScopes()
+                ->where('agent_id', $house->id)
+                ->sum('amount_satang'),
         ];
     }
 

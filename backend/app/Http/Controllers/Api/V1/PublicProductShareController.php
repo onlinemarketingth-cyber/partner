@@ -19,6 +19,7 @@ use App\Services\Link\TrackedLinkService;
 use App\Services\Order\ProductShareCheckoutService;
 use App\Support\Media\RangeFileResponder;
 use App\Support\PortalOrigin;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Storage;
 
@@ -38,11 +39,52 @@ class PublicProductShareController extends Controller
     public function show(string $token): PublicProductShareResource
     {
         $link = $this->resolveUsableLink($token);
-        $link->increment('view_count');
+
+        /*
+         * 2026-09-14 — AN AGENT OPENING THEIR OWN LINK IS NOT A VISITOR.
+         *
+         * Owner: "ไม่นับวิวเมื่อเจ้าของลิงก์เปิดเอง".
+         *
+         * The agent portal's new "สั่งซื้อ" button brings the agent to this
+         * page on their OWN link, so they can take the order with the customer
+         * in front of them. Counting that would inflate `view_count` by one on
+         * every press — for the agent most likely to look at the number, on the
+         * product they sell most.
+         *
+         * The suppression is the same fact the tracked-link counter uses (see
+         * shouldRecordVisit() below), so the two numbers cannot start
+         * disagreeing about what a view is.
+         */
+        if ($this->shouldRecordVisit($link)) {
+            $link->increment('view_count');
+        }
 
         $link->load(['agent', 'company', 'product.media', 'product.salesMaterials', 'product.specs']);
 
         return new PublicProductShareResource($link);
+    }
+
+    /**
+     * Everyone except the agent whose link this is.
+     *
+     * This route sits OUTSIDE auth:sanctum, so there is usually nobody to
+     * identify and this answers true — the normal path, a stranger reading a
+     * product. It is asked of the sanctum guard explicitly rather than
+     * `$request->user()`, because only the guard will read the bearer token on
+     * a route that has no auth middleware to have read it already.
+     *
+     * A Company Admin or Super Admin previewing the link IS counted. They are
+     * not the person the number is for and they open it rarely; narrowing the
+     * exemption to the link's own agent keeps the rule to the one case that
+     * would actually distort the statistic.
+     */
+    protected function shouldRecordVisit(Model $target): bool
+    {
+        $viewer = auth('sanctum')->user();
+
+        return ! ($target instanceof ProductShareLink
+            && $viewer !== null
+            && (int) $target->agent_id === (int) $viewer->id);
     }
 
     /**

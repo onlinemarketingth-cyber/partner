@@ -140,6 +140,51 @@ class ProductShareLinkTest extends TestCase
         $this->assertSame(1, $link->fresh()->view_count);
     }
 
+    public function test_the_links_own_agent_opening_it_is_not_counted_as_a_view(): void
+    {
+        /*
+         * 2026-09-14, owner: "ไม่นับวิวเมื่อเจ้าของลิงก์เปิดเอง".
+         *
+         * The agent portal's "สั่งซื้อ" button lands the agent on this page,
+         * on their own link, so they can take the order with the customer in
+         * front of them. Counting it would add one view per press — to the
+         * number the agent themselves is reading, on the product they sell
+         * most. An agent who stops believing the count has lost the feature.
+         */
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+        $link = ProductShareLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id, 'product_id' => $product->id]);
+
+        $this->actingAs($agent)
+            ->getJson("/api/v1/public/product-shares/{$link->token}")
+            ->assertOk();
+
+        $this->assertSame(0, $link->fresh()->view_count);
+    }
+
+    public function test_somebody_else_opening_the_link_is_still_counted(): void
+    {
+        /*
+         * The control, and it is not a formality: the exemption is narrowed to
+         * the link's OWN agent on purpose. A colleague, an admin previewing
+         * it, or a signed-in customer are all real openings, and an exemption
+         * that widened to "anybody logged in" would quietly zero the counter
+         * for every company that sells to its own members.
+         */
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $colleague = User::factory()->agent()->create(['company_id' => $company->id]);
+        $product = Product::factory()->create(['company_id' => $company->id]);
+        $link = ProductShareLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id, 'product_id' => $product->id]);
+
+        $this->actingAs($colleague)
+            ->getJson("/api/v1/public/product-shares/{$link->token}")
+            ->assertOk();
+
+        $this->assertSame(1, $link->fresh()->view_count);
+    }
+
     public function test_public_show_never_exposes_internal_ids(): void
     {
         $company = Company::factory()->create();

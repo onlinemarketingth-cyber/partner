@@ -159,14 +159,47 @@ class CommissionResolutionTest extends TestCase
         $this->assertNull($payload['max_override_per_level_satang']);
     }
 
-    public function test_a_product_this_company_does_not_sell_is_not_listed(): void
+    public function test_a_product_this_company_does_not_sell_is_listed_and_flagged(): void
     {
-        // A rate on something nobody sells pays nobody, and listing it would
-        // pad the table with rows whose warnings can never matter.
+        /*
+         * 2026-09-14 — this assertion used to be the opposite, and the reason
+         * it flipped is the screen, not the arithmetic: the table absorbed the
+         * per-product edit list, and the switch that REOPENS a closed product
+         * lives on its row. Excluding the row removed the only way out of the
+         * state the row exists to report. The flag is what keeps the two
+         * meanings apart.
+         */
         $world = $this->world();
-        Product::factory()->create(['company_id' => $world['company']->id, 'is_active' => false]);
+        $closed = Product::factory()->create(['company_id' => $world['company']->id, 'is_active' => false]);
 
-        $this->assertCount(1, $this->rows($world));
+        $rows = collect($this->rows($world));
+
+        $this->assertCount(2, $rows);
+        $this->assertTrue($rows->firstWhere('product_id', $world['product']->id)['is_sellable']);
+        $this->assertFalse($rows->firstWhere('product_id', $closed->id)['is_sellable']);
+    }
+
+    public function test_a_closed_product_does_not_tighten_the_override_ceiling(): void
+    {
+        /*
+         * The ceiling mirrors OverrideDeductionGuard, which only ever looks at
+         * products the company can sell. A closed product with a smaller
+         * commission must not lower the maximum the screen offers, or the
+         * screen refuses a rate the server would happily take.
+         */
+        $world = $this->world();
+        $this->rate($world, 'company', 300);
+        $this->chainOfDepth($world, 2);
+
+        $ceilingWithoutIt = $this->payload($world)['max_override_per_level_satang'];
+
+        Product::factory()->create([
+            'company_id' => $world['company']->id,
+            'is_active' => false,
+            'price_satang' => 100,
+        ]);
+
+        $this->assertSame($ceilingWithoutIt, $this->payload($world)['max_override_per_level_satang']);
     }
 
     public function test_an_agent_may_not_read_it(): void

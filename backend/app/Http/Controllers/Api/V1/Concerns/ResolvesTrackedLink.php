@@ -65,9 +65,30 @@ trait ResolvesTrackedLink
             return null;
         }
 
-        $this->recordTrackedVisit($link, $request, $service);
+        if ($this->shouldRecordVisit($target)) {
+            $this->recordTrackedVisit($link, $request, $service);
+        }
 
         return $target;
+    }
+
+    /**
+     * Is this opening worth counting?
+     *
+     * TRUE FOR EVERY CALLER BY DEFAULT, and that is the point of it being a
+     * method rather than a condition: nothing about the existing resolvers
+     * changes, and a controller that has a reason to say otherwise says so in
+     * one place instead of reaching into the counting.
+     *
+     * 2026-09-14 — PublicProductShareController is the first to override it.
+     * Its "สั่งซื้อ" button sends the AGENT to their own public page, and an
+     * agent who watches their own link's view count climb every time they open
+     * it stops believing the number — the same failure recordVisit()'s own
+     * docblock describes for crawler previews, arriving from the other side.
+     */
+    protected function shouldRecordVisit(Model $target): bool
+    {
+        return true;
     }
 
     /**

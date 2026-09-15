@@ -46,6 +46,42 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         static::addGlobalScope(new TenantScope);
 
+        /*
+         * 2026-09-15 — NOBODY JOINS OUTSIDE THE HIERARCHY.
+         *
+         * Once a company has given itself a seat at the top of its own chain
+         * (CommissionHouseAccountService), an agent who arrives with no upline
+         * would sit outside it — and the company would silently earn nothing
+         * on everything they sell. No error, no screen, no way to notice
+         * except by reading a payout months later.
+         *
+         * A model hook rather than a call in RegistrationService, because
+         * there is more than one door: self-registration, a recruit link, an
+         * admin creating a user by hand, an import. Hunting them is how one
+         * gets missed, and the one that gets missed is the revenue gap.
+         *
+         * `created`, not `creating`: the house account itself is created
+         * BEFORE the company points at it, so at this moment
+         * `commission_house_user_id` is still null for it and it correctly
+         * attaches to nothing.
+         *
+         * Seeders run with WithoutModelEvents and are unaffected, which is
+         * right — a seeded hierarchy says what it means explicitly.
+         */
+        static::created(function (User $user) {
+            if ($user->role !== UserRole::Agent || $user->company_id === null || $user->manager_id !== null) {
+                return;
+            }
+
+            $houseId = Company::withTrashed()->whereKey($user->company_id)->value('commission_house_user_id');
+
+            if ($houseId === null || (int) $houseId === (int) $user->id) {
+                return;
+            }
+
+            $user->forceFill(['manager_id' => $houseId])->saveQuietly();
+        });
+
         // `name` is derived, not directly writable (see migration
         // 2026_07_12_090000 docblock) — kept in sync here so every
         // existing read site (UserResource, LeaderboardController, both
@@ -491,6 +527,36 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isAgent(): bool
     {
         return $this->role === UserRole::Agent;
+    }
+
+    /**
+     * 2026-09-15 — is this user the COMPANY's own position in its hierarchy?
+     *
+     * The house account sits at the top of the manager chain so a leader
+     * override reaches the company when the seller has nobody human above
+     * them. It is a real `users` row (that is the whole point — the payout
+     * walk needs no special case), which is precisely why this question has
+     * to be askable everywhere money or people are listed: it must never be
+     * offered a withdrawal, a password reset, or a place in an agent roster.
+     *
+     * NOT a role check. The row's role is `company_admin` so it stays out of
+     * every `role = agent` listing for free, but a company admin is an
+     * ordinary person and must keep every right this account is denied.
+     *
+     * Reads the eager-loaded company when there is one, so a list that
+     * already loaded it does not pay a query per row.
+     */
+    public function isCommissionHouseAccount(): bool
+    {
+        if ($this->company_id === null) {
+            return false;
+        }
+
+        $houseId = $this->relationLoaded('company') && $this->company !== null
+            ? $this->company->commission_house_user_id
+            : Company::withTrashed()->whereKey($this->company_id)->value('commission_house_user_id');
+
+        return $houseId !== null && (int) $houseId === (int) $this->id;
     }
 
     /**

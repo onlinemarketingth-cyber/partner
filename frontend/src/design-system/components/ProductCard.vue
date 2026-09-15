@@ -41,9 +41,14 @@ defineProps<{
   product: ProductCardItem
   hasPassedBasic: boolean
   sharing: boolean
+  /** 2026-09-14 — the second button's own spinner; see the template. */
+  buying?: boolean
 }>()
 
-const emit = defineEmits<{ share: [product: ProductCardItem] }>()
+const emit = defineEmits<{
+  share: [product: ProductCardItem]
+  buy: [product: ProductCardItem]
+}>()
 
 function formatBaht(satang: number): string {
   return '฿' + (satang / 100).toLocaleString('th-TH')
@@ -90,21 +95,58 @@ function formatBaht(satang: number): string {
       <p class="text-sm font-bold text-ink-card leading-tight line-clamp-2">{{ product.name }}</p>
       <p class="text-sm font-bold text-ink-brand mt-1">{{ formatBaht(product.price_satang) }}</p>
 
-      <!-- `.stop.prevent` is load-bearing now that the card is a link:
-           without it, every share press would ALSO navigate, and the
-           modal would open on a page that is already leaving. -->
-      <button
-        :disabled="!hasPassedBasic || sharing"
-        :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'สร้าง/เปิดลิงก์แชร์'"
-        class="mt-auto pt-3 min-h-[44px] flex items-center justify-center gap-1.5 text-xs font-bold py-2 rounded-lg transition-all active:scale-95"
-        :class="hasPassedBasic
-          ? 'bg-surface-primary text-ink-primary hover:opacity-90'
-          : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
-        @click.stop.prevent="emit('share', product)"
-      >
-        <Icon name="share" :size="14" />
-        {{ sharing ? 'กำลังสร้าง...' : 'แชร์' }}
-      </button>
+      <!--
+        TWO ACTIONS ON ONE LINK (human, 2026-09-14: "ให้เพิ่มปุ่มสั่งซื้อได้เลย
+        เอาไว้คู่กับปุ่มแชร์").
+
+        แชร์ hands the link to the customer; สั่งซื้อ opens the page that link
+        leads to, so the agent can take the order with the customer in front of
+        them. Both mint the SAME idempotent share link — see useProductShare —
+        which is also why both carry the same BR-1 lock: the server refuses to
+        mint for an uncertified agent, so an unlocked สั่งซื้อ would be a button
+        whose only outcome is an error.
+
+        `.stop.prevent` on both is load-bearing, because the card is a
+        RouterLink: without it every press would ALSO navigate to the detail
+        page, and the sheet would open on a page that is already leaving.
+
+        Side by side, `flex-1 min-w-0` with `truncate` labels: the grid is two
+        columns on a phone, so a card is ~160px wide and neither label may be
+        what decides the card's width.
+      -->
+      <div class="mt-auto pt-3 flex items-stretch gap-1.5">
+        <button
+          :disabled="!hasPassedBasic || sharing || buying"
+          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'สร้าง/เปิดลิงก์แชร์'"
+          class="flex-1 min-w-0 min-h-[44px] flex items-center justify-center gap-1 text-[11px] font-bold py-2 px-1.5 rounded-lg transition-all active:scale-95"
+          :class="hasPassedBasic
+            ? 'bg-surface-chip text-ink-card border border-line-card hover:opacity-90'
+            : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
+          data-test="product-share-button"
+          @click.stop.prevent="emit('share', product)"
+        >
+          <Icon name="share" :size="13" class="shrink-0" />
+          <span class="truncate">{{ sharing ? 'กำลังสร้าง...' : 'แชร์' }}</span>
+        </button>
+
+        <!-- The filled one, because this is the action that ends in money.
+             แชร์ gives up the solid fill it used to have and keeps the same
+             position; it is still the more common press, but it is a step
+             toward a sale rather than the sale. -->
+        <button
+          :disabled="!hasPassedBasic || sharing || buying"
+          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'เปิดหน้าสั่งซื้อของสินค้านี้'"
+          class="flex-1 min-w-0 min-h-[44px] flex items-center justify-center gap-1 text-[11px] font-bold py-2 px-1.5 rounded-lg transition-all active:scale-95"
+          :class="hasPassedBasic
+            ? 'bg-surface-primary text-ink-primary hover:opacity-90'
+            : 'bg-surface-chip text-ink-chip/50 cursor-not-allowed'"
+          data-test="product-buy-button"
+          @click.stop.prevent="emit('buy', product)"
+        >
+          <Icon name="cart" :size="13" class="shrink-0" />
+          <span class="truncate">{{ buying ? 'กำลังเปิด...' : 'สั่งซื้อ' }}</span>
+        </button>
+      </div>
     </div>
   </RouterLink>
 </template>
