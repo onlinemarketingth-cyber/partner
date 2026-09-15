@@ -134,13 +134,35 @@ describe('the payout list', () => {
     expect(post).not.toHaveBeenCalled()
   })
 
-  it('still offers it on an ordinary pending row', async () => {
-    // The control: the guard is keyed on the flag, never on "override" or on
-    // the payee's name, and a real leader's override is still a payout.
+  it('says nothing special about an ordinary pending row', async () => {
+    /*
+     * 2026-09-15 — this used to assert that an ordinary row still HAD a
+     * "จ่ายแล้ว" button, as the control for the guard above. That button no
+     * longer exists anywhere on this panel: settling a row on the spot is
+     * what แนวทาง C removed, because the company transfers by hand and only
+     * confirms afterwards. Payouts are raised on ตั้งจ่าย and settled on
+     * รอบจ่าย.
+     *
+     * The control it was providing still matters, so it is kept in the only
+     * form still available: the company-share NOTE is keyed on the flag and
+     * must not appear on an ordinary row, whatever its earned_via.
+     */
     const wrapper = await mountPayouts([ledgerRow({ earned_via: 'override' })])
 
     expect(wrapper.find('[data-test="company-share-note-1"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('จ่ายแล้ว')
+    expect(wrapper.find('[data-test="company-share-1"]').exists()).toBe(false)
+  })
+
+  it('offers no way to settle any row from here at all', async () => {
+    // The panel is an audit view again. Two ways to settle one commission row
+    // is the confusion the owner asked to remove, so the second one is gone
+    // rather than hidden behind a permission.
+    const wrapper = await mountPayouts([ledgerRow(), COMPANY_ROW])
+
+    await wrapper.findAll('button').forEach(async (button) => {
+      expect(button.text()).not.toBe('จ่ายแล้ว')
+    })
+    expect(post).not.toHaveBeenCalled()
   })
 })
 

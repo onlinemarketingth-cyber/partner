@@ -41,6 +41,23 @@ class CommissionWithdrawalRequestPolicy
         return $this->mayDecide($user, $request);
     }
 
+    /**
+     * 2026-09-15 — may this user RAISE a payout for that agent?
+     *
+     * The same authority as deciding on one, asked about a person instead of
+     * a row, because when the request arrives there is no row yet. Raising a
+     * company payout creates something already Approved — the press IS the
+     * decision (see WithdrawalSource) — so anything less than the decide
+     * permission here would be a way around it.
+     *
+     * Invoked as authorize('raise', [CommissionWithdrawalRequest::class, $agent]).
+     */
+    public function raise(User $user, User $agent): bool
+    {
+        return $user->isSuperAdmin()
+            || ($user->isCompanyAdmin() && $agent->company_id !== null && $user->company_id === $agent->company_id);
+    }
+
     private function isOwnRequest(User $user, CommissionWithdrawalRequest $request): bool
     {
         return $user->id === $request->agent_id;

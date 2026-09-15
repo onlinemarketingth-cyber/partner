@@ -6,14 +6,17 @@ use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Commission\MarkWithdrawalTransferredRequest;
 use App\Http\Requests\Commission\RejectWithdrawalRequestRequest;
+use App\Http\Requests\Commission\StoreCompanyPayoutRequest;
 use App\Http\Requests\Commission\StoreWithdrawalRequestRequest;
 use App\Http\Resources\CommissionWithdrawalRequestResource;
 use App\Models\CommissionWithdrawalRequest;
+use App\Models\User;
 use App\Services\Commission\CommissionWithdrawalService;
 use App\Support\CompanyScopeFilter;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Commission withdrawal — agent side (ask, watch, cancel) and admin side
@@ -103,6 +106,62 @@ class CommissionWithdrawalRequestController extends Controller
         $withdrawal = $service->request($request->user(), (int) $request->validated('amount_satang'));
 
         return new CommissionWithdrawalRequestResource($withdrawal->load(['agent', 'items']));
+    }
+
+    /**
+     * 2026-09-15 — POST /commission-withdrawals/payout — "ตั้งจ่าย".
+     *
+     * The admin half of the same act. Owner: the company transfers through
+     * its bank by hand and only confirms afterwards, so the decision and the
+     * transfer are two different days and have to be two different states.
+     *
+     * This creates the payout already APPROVED (the press is the decision)
+     * and leaves the commission ledger untouched until somebody records the
+     * transfer — which is the button that replaces the old one-click
+     * "จ่ายแล้ว" that settled the ledger and emailed the agent immediately.
+     *
+     * Answers with the created payout so the screen can show it landing in
+     * the "รอโอน" tab rather than having to guess what happened.
+     */
+    public function payOut(
+        StoreCompanyPayoutRequest $request,
+        CommissionWithdrawalService $service,
+    ): CommissionWithdrawalRequestResource {
+        /*
+         * withoutGlobalScopes() so a Super Admin can resolve an agent in any
+         * company — the policy immediately below is what decides whether they
+         * may, and a TenantScope 404 here would answer "no such person" to
+         * somebody for whom that is false.
+         */
+        $agent = User::withoutGlobalScopes()->findOrFail($request->integer('agent_id'));
+
+        $this->authorize('raise', [CommissionWithdrawalRequest::class, $agent]);
+
+        /*
+         * THE AMOUNT IS THE SERVER'S, NOT THE CALLER'S.
+         *
+         * A company payout settles the whole balance, so the only number in
+         * the request is what the admin was SHOWN — and it is checked, not
+         * used. Between the screen loading and the press, a sale can complete
+         * and raise this figure; paying the new total would be paying an
+         * amount nobody authorised, and BR-4 means the ledger rows it settles
+         * cannot be un-settled.
+         */
+        $available = $service->availableSatang($agent);
+        $expected = $request->integer('expected_total_satang');
+
+        if ($available !== $expected) {
+            throw ValidationException::withMessages([
+                'expected_total_satang' => 'ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว ('
+                    .number_format($available / 100, 2).' บาท ไม่ตรงกับ '
+                    .number_format($expected / 100, 2).' บาท ที่แสดงอยู่) '
+                    .'— กรุณารีเฟรชหน้าจอแล้วลองใหม่ ระบบยังไม่ได้ตั้งจ่ายใด ๆ',
+            ]);
+        }
+
+        $payout = $service->payOut($agent, $available, $request->user());
+
+        return new CommissionWithdrawalRequestResource($payout->load(['agent', 'decidedBy', 'items']));
     }
 
     public function show(CommissionWithdrawalRequest $commissionWithdrawalRequest): CommissionWithdrawalRequestResource

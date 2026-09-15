@@ -1311,6 +1311,24 @@ Route::prefix('v1')->group(function () {
         Route::put('/commission-withdrawal-settings', [CommissionWithdrawalSettingController::class, 'update']);
 
         Route::get('/commission-withdrawals/available', [CommissionWithdrawalRequestController::class, 'available']);
+
+        /*
+         * 2026-09-15 — "ตั้งจ่าย": an ADMIN raises the payout instead of the
+         * agent asking for it.
+         *
+         * Registered above the {commissionWithdrawalRequest} routes so
+         * "payout" is never read as an id. Same object, same three states,
+         * same audit trail as an agent's own request — only the source
+         * column and the starting state differ (WithdrawalSource).
+         *
+         * This is what replaced the old one-click "จ่ายแล้ว" on the payout
+         * screen: the company transfers through its bank by hand, so the
+         * decision and the transfer are different days and the ledger is not
+         * settled until somebody records the second one.
+         */
+        Route::post('/commission-withdrawals/payout', [CommissionWithdrawalRequestController::class, 'payOut'])
+            // A money action, throttled like the agent-side request beside it.
+            ->middleware('throttle:30,1');
         Route::get('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'index']);
         Route::post('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'store'])
             // A payout request is a money action; the throttle is the same

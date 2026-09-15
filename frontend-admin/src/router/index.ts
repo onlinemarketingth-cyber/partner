@@ -215,13 +215,21 @@ const router = createRouter({
     // (2026-07-20): one consolidated tabbed route rather than 5 more
     // flat nav items.
     {
-      // 2026-08-27 — the payout queue. Next to /commission because it is
-      // the same money one step further along: the ledger records what was
-      // earned, this records asking for it and paying it out.
+      /*
+       * 2026-09-15 — THE QUEUE MOVED INTO จ่ายเงิน (แนวทาง C).
+       *
+       * It was its own menu item over a queue that was always empty, because
+       * the payout screen settled the same commission rows in one click
+       * before an agent could ever ask for them. Both now raise the same
+       * object, so there is one queue and it is the middle view of the screen
+       * that feeds it.
+       *
+       * Kept as a REDIRECT rather than deleted: this path is in bookmarks, in
+       * the notification links this release adds, and in whatever anybody
+       * wrote down — and a 404 on a money screen is a support call.
+       */
       path: '/commission-withdrawals',
-      name: 'commission-withdrawals',
-      component: () => import('../views/CommissionWithdrawalsView.vue'),
-      meta: { navLabel: 'คำขอเบิกค่าคอม' },
+      redirect: { name: 'commission-management', query: { view: 'queue' } },
     },
     {
       path: '/commission-plans',

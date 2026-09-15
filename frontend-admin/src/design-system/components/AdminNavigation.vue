@@ -259,10 +259,17 @@ const navItems: NavItem[] = [
        * looking for the payout file back to the pillar it just left.
        */
       { name: 'commission-management', icon: 'money', label: { th: 'จ่ายเงิน', en: 'Payouts' } },
-      // 2026-08-27 — agent-initiated payout requests. Under Commission
-      // rather than its own pillar: it is the same money as "จ่ายคอมมิชชั่น"
-      // above, one step earlier in the process.
-      { name: 'commission-withdrawals', icon: 'invoice', label: { th: 'คำขอเบิกค่าคอม', en: 'Withdrawals' } },
+      /*
+       * 2026-09-15 — "คำขอเบิกค่าคอม" was removed from this pillar (แนวทาง C).
+       *
+       * It pointed at a queue that was always empty: จ่ายเงิน above settled
+       * the same commission rows in one click, so an agent could never ask
+       * for them. Both routes now raise the same payout object, so the queue
+       * is the middle view of จ่ายเงิน rather than a second destination —
+       * which is what the owner asked for ("ป้องกันความสับสน").
+       *
+       * The old path still resolves; see the redirect in router/index.ts.
+       */
       // ADR-011 (TASK-034) — moved in from its own top-level pillar. NOT
       // superAdminOnly: a Company Admin has always been able to set their
       // own company's commission rules, and folding the page into another

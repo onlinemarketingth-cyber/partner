@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -33,6 +34,10 @@ class CommissionWithdrawalRequest extends Model
     protected $fillable = [
         'company_id',
         'agent_id',
+        // 2026-09-15 — who raised it. The ONLY thing that differs between an
+        // agent's own request and a payout an admin raised for them; see
+        // WithdrawalSource for why they share this table at all.
+        'source',
         'amount_satang',
         'status',
         'decided_by_user_id',
@@ -53,6 +58,7 @@ class CommissionWithdrawalRequest extends Model
         return [
             'amount_satang' => 'integer',
             'status' => WithdrawalStatus::class,
+            'source' => WithdrawalSource::class,
             'decided_at' => 'datetime',
             'transferred_at' => 'datetime',
             // §6/PDPA — same treatment the live column on users gets. A

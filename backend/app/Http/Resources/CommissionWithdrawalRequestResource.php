@@ -2,11 +2,13 @@
 
 namespace App\Http\Resources;
 
+use App\Enums\WithdrawalSource;
+use App\Models\CommissionWithdrawalRequest;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
- * @mixin \App\Models\CommissionWithdrawalRequest
+ * @mixin CommissionWithdrawalRequest
  */
 class CommissionWithdrawalRequestResource extends JsonResource
 {
@@ -20,6 +22,22 @@ class CommissionWithdrawalRequestResource extends JsonResource
             'agent_id' => $this->agent_id,
             'agent_name' => $this->whenLoaded('agent', fn () => $this->agent?->name),
             'amount_satang' => (int) $this->amount_satang,
+            /*
+             * 2026-09-15 — which of the two doors this came through.
+             *
+             * Sent on every row because the queue mixes them: a reviewer
+             * looking at "รอตรวจสอบ" is looking at work an agent raised, and
+             * one looking at "รอโอน" may be looking at either. Without this
+             * the two are indistinguishable on screen, which is the exact
+             * confusion merging them into one table could otherwise create.
+             *
+             * Coalesced rather than assumed non-null: rows written before the
+             * column existed carry the migration's default, but a model
+             * hydrated in a test or a half-applied deploy may not, and a null
+             * here would throw on ->value at render time rather than degrade.
+             */
+            'source' => ($this->source ?? WithdrawalSource::AgentRequest)->value,
+            'source_label' => ($this->source ?? WithdrawalSource::AgentRequest)->label(),
             'status' => $this->status->value,
             // The Thai label lives on the enum, so the agent portal and the
             // admin console cannot show two different words for one state.

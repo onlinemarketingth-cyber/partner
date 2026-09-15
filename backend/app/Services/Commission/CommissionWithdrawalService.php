@@ -2,13 +2,18 @@
 
 namespace App\Services\Commission;
 
+use App\Enums\NotificationType;
 use App\Enums\PaymentStatus;
+use App\Enums\UserRole;
+use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Models\CommissionWithdrawalItem;
 use App\Models\CommissionWithdrawalRequest;
+use App\Models\Scopes\TenantScope;
 use App\Models\User;
+use App\Services\Notification\NotificationService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -40,6 +45,8 @@ use Illuminate\Validation\ValidationException;
  */
 class CommissionWithdrawalService
 {
+    public function __construct(private readonly NotificationService $notifier) {}
+
     /**
      * What this agent may ask for right now, in satang.
      *
@@ -82,16 +89,57 @@ class CommissionWithdrawalService
     }
 
     /**
+     * The agent asks, from the agent portal.
+     *
      * @throws ValidationException every refusal an agent can act on —
      *                             incomplete payout details, below the
      *                             company minimum, more than they have.
      */
     public function request(User $agent, int $amountSatang): CommissionWithdrawalRequest
     {
+        return $this->open($agent, $amountSatang, WithdrawalSource::AgentRequest, $agent);
+    }
+
+    /**
+     * 2026-09-15 — AN ADMIN RAISES THE PAYOUT INSTEAD.
+     *
+     * Owner: "ระบบเรามีข้อจำกัดในการโอนเงินไปให้ Agent เราใช้วิธีโอนเองผ่านระบบ
+     * การทำงาน Bank … ซึ่งต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้วจึงมากดยืนยัน".
+     *
+     * That is a three-step process, and the button this replaces had one
+     * step. "จ่ายแล้ว" on the payout screen flipped the ledger to Paid and
+     * emailed the agent that their money had arrived — at the moment the
+     * admin DECIDED to pay, days before accounting actually transferred it,
+     * and with no way back afterwards (BR-4).
+     *
+     * So the admin's decision now creates the same object an agent's request
+     * creates, already in Approved: the decision is made, the transfer is
+     * not. The ledger is untouched until markTransferred(), which is the
+     * press that happens after accounting confirms — and that is also where
+     * the agent's email moved to.
+     *
+     * @throws ValidationException
+     */
+    public function payOut(User $agent, int $amountSatang, User $actor): CommissionWithdrawalRequest
+    {
+        return $this->open($agent, $amountSatang, WithdrawalSource::CompanyPayout, $actor);
+    }
+
+    /**
+     * Both doors, one room.
+     *
+     * The only two things `$source` changes are the starting state and
+     * whether the company minimum applies — see WithdrawalSource. Everything
+     * else here (the lock, the balance maths, the bank snapshot, the
+     * allocation, the audit row) is identical on purpose: a second copy of
+     * any of it is a second place for the money to go wrong.
+     */
+    private function open(User $agent, int $amountSatang, WithdrawalSource $source, User $actor): CommissionWithdrawalRequest
+    {
         // Wrapped BEFORE the balance is read, not after: two requests
         // submitted at the same moment must not both see the same balance
         // and both pass. The row lock inside is what makes that true.
-        return DB::transaction(function () use ($agent, $amountSatang) {
+        $request = DB::transaction(function () use ($agent, $amountSatang, $source, $actor) {
             // Lock the agent's own row for the duration. It is not the data
             // being summed, but it is a single, always-present row that every
             // concurrent request for THIS agent contends on — which is
@@ -118,9 +166,18 @@ class CommissionWithdrawalService
                 ]);
             }
 
+            /*
+             * Both doors, and the wording is the only difference: the agent
+             * is being told to go and fill their own details in, the admin is
+             * being told why they cannot pay this person yet — and they can
+             * fix it without leaving the payout screen, which has the bank
+             * fields on the same row.
+             */
             if (! $agent->hasCompletePayoutDetails()) {
                 throw ValidationException::withMessages([
-                    'amount_satang' => 'กรุณากรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อนขอเบิก',
+                    'amount_satang' => $source === WithdrawalSource::CompanyPayout
+                        ? 'ตั้งจ่ายไม่ได้ — ตัวแทนคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ'
+                        : 'กรุณากรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อนขอเบิก',
                 ]);
             }
 
@@ -130,9 +187,22 @@ class CommissionWithdrawalService
                 ]);
             }
 
-            // NULL minimum means no minimum — a real setting, not a missing
-            // one, so nothing is substituted for it here.
-            $minimum = $agent->company?->min_withdrawal_satang;
+            /*
+             * THE MINIMUM IS A RULE FOR THE PERSON ASKING, NOT FOR THE
+             * COMPANY PAYING.
+             *
+             * It exists so agents do not queue up ฿20 transfers. A company
+             * settling what it owes is the opposite situation — refusing to
+             * let an admin close out a small balance would leave that money
+             * stuck with no way to release it, because the agent cannot
+             * request it either.
+             *
+             * NULL minimum means no minimum — a real setting, not a missing
+             * one, so nothing is substituted for it here.
+             */
+            $minimum = $source === WithdrawalSource::CompanyPayout
+                ? null
+                : $agent->company?->min_withdrawal_satang;
 
             if ($minimum !== null && $amountSatang < $minimum) {
                 throw ValidationException::withMessages([
@@ -154,11 +224,27 @@ class CommissionWithdrawalService
                 ]);
             }
 
+            $byCompany = $source === WithdrawalSource::CompanyPayout;
+
             $request = CommissionWithdrawalRequest::create([
                 'company_id' => $agent->company_id,
                 'agent_id' => $agent->id,
+                'source' => $source,
                 'amount_satang' => $amountSatang,
-                'status' => WithdrawalStatus::PendingReview,
+                /*
+                 * A company payout starts DECIDED. The admin pressing
+                 * "ตั้งจ่าย" is the approval — sending it to a review queue
+                 * so they can approve their own press is a rubber stamp, and
+                 * rubber stamps are what teach people to click through a
+                 * queue without reading it.
+                 *
+                 * Recorded as decided by them, then and there, so the audit
+                 * answers "who authorised this" with a person rather than
+                 * with the absence of a review step.
+                 */
+                'status' => $byCompany ? WithdrawalStatus::Approved : WithdrawalStatus::PendingReview,
+                'decided_by_user_id' => $byCompany ? $actor->id : null,
+                'decided_at' => $byCompany ? now() : null,
                 // Snapshot, not a live read at payout time — see the model.
                 'bank_name' => $agent->bank_name,
                 'bank_account_number' => $agent->bank_account_number,
@@ -169,17 +255,119 @@ class CommissionWithdrawalService
 
             AuditLog::create([
                 'company_id' => $agent->company_id,
-                'actor_user_id' => $agent->id,
-                'action' => 'commission_withdrawal.requested',
+                // The ACTOR, which for an agent request is the agent and for a
+                // company payout is the admin. Hardcoding the agent here (as
+                // this did) would have credited every admin-raised payout to
+                // the person receiving it.
+                'actor_user_id' => $actor->id,
+                'action' => $byCompany
+                    ? 'commission_withdrawal.raised_by_company'
+                    : 'commission_withdrawal.requested',
                 'auditable_type' => CommissionWithdrawalRequest::class,
                 'auditable_id' => $request->id,
                 'old_values' => null,
-                'new_values' => ['amount_satang' => $amountSatang],
+                'new_values' => [
+                    'amount_satang' => $amountSatang,
+                    'source' => $source->value,
+                    'status' => $request->status->value,
+                    'agent_user_id' => $agent->id,
+                ],
                 'ip_address' => request()?->ip(),
             ]);
 
             return $request->load('items');
         });
+
+        /*
+         * Outside the transaction, deliberately. A mail server that is slow
+         * or down must not hold a row lock on the agent open, and must not
+         * roll back a payout that was written correctly — the same rule every
+         * AuditLog::create() in this codebase follows for the same reason.
+         */
+        $this->announceOpened($request, $agent, $source);
+
+        return $request;
+    }
+
+    /**
+     * 2026-09-15 — TELL SOMEBODY. THIS WAS THE HALF NOBODY BUILT.
+     *
+     * Owner: "ตัวแทนขอเบิกผ่านหน้า frontend แล้วแจ้งให้ admin ทราบ อันนี้ไม่มี
+     * การแจ้งเตือนเลย" — and it was worse than that. The route where the agent
+     * is sitting and WAITING for an answer said nothing at any step, while the
+     * route where nobody was waiting sent an email. Exactly backwards.
+     *
+     * Who is told depends on who is now blocked:
+     *   · an agent's request blocks on an ADMIN reading the queue
+     *   · a company payout blocks on accounting, and the agent is simply told
+     *     it is coming, so that money appearing in their bank later is not a
+     *     surprise they have to ask about
+     */
+    private function announceOpened(CommissionWithdrawalRequest $request, User $agent, WithdrawalSource $source): void
+    {
+        $baht = number_format((int) $request->amount_satang / 100, 2);
+
+        if ($source === WithdrawalSource::CompanyPayout) {
+            $this->notifier->notify(
+                $agent,
+                NotificationType::CommissionWithdrawalDecided,
+                'บริษัทตั้งจ่ายค่าคอมให้คุณแล้ว',
+                "จำนวน {$baht} บาท อยู่ระหว่างรอโอน จะแจ้งอีกครั้งเมื่อโอนเรียบร้อย",
+                '/withdrawals',
+                ['commission_withdrawal_request_id' => $request->id],
+            );
+
+            return;
+        }
+
+        foreach ($this->adminsOf($agent) as $admin) {
+            $this->notifier->notify(
+                $admin,
+                NotificationType::CommissionWithdrawalRequested,
+                'มีคำขอเบิกค่าคอมใหม่',
+                ($agent->name ?? 'ตัวแทน')." ขอเบิก {$baht} บาท — รอตรวจสอบ",
+                '/commission?view=queue',
+                ['commission_withdrawal_request_id' => $request->id],
+            );
+        }
+    }
+
+    /**
+     * The people who can act on a request for this agent.
+     *
+     * Company admins of the agent's own company, and never the house account:
+     * its address is on a reserved domain that cannot receive mail (RFC 6762),
+     * so mailing it is a guaranteed bounce, and it is not a person who can
+     * read a queue. Super Admins are not included — they are not on the hook
+     * for one tenant's payout run, and a platform operator does not want every
+     * company's withdrawal traffic in their inbox.
+     *
+     * @return \Illuminate\Support\Collection<int, User>
+     */
+    private function adminsOf(User $agent): \Illuminate\Support\Collection
+    {
+        if ($agent->company_id === null) {
+            return collect();
+        }
+
+        $houseId = $agent->company?->commission_house_user_id;
+
+        /*
+         * withoutGlobalScope(TenantScope) rather than withoutGlobalScopes():
+         * the tenant filter has to go (the acting user may be a Super Admin
+         * with no company of their own), but SoftDeletes must STAY, or a
+         * removed admin keeps being mailed about a queue they can no longer
+         * open.
+         *
+         * There is no `is_active` on users — being deactivated is a soft
+         * delete here, and `is_active` is a COMPANY column. An earlier draft
+         * of this filtered on it and silently matched nobody.
+         */
+        return User::withoutGlobalScope(TenantScope::class)
+            ->where('company_id', $agent->company_id)
+            ->where('role', UserRole::CompanyAdmin->value)
+            ->when($houseId !== null, fn ($q) => $q->whereKeyNot($houseId))
+            ->get();
     }
 
     /**
@@ -286,10 +474,24 @@ class CommissionWithdrawalService
     {
         $this->assertPendingReview($request);
 
-        return $this->transition($request, $actor, WithdrawalStatus::Approved, 'commission_withdrawal.approved', [
+        $updated = $this->transition($request, $actor, WithdrawalStatus::Approved, 'commission_withdrawal.approved', [
             'decided_by_user_id' => $actor->id,
             'decided_at' => now(),
         ]);
+
+        /*
+         * Approved is NOT "paid", and the wording has to carry that or this
+         * message does more harm than silence did. An agent told "อนุมัติแล้ว"
+         * who then sees nothing in their bank for three days will ask; one
+         * told "รอโอน" already knows the answer.
+         */
+        $this->tellAgent(
+            $updated,
+            'คำขอเบิกได้รับอนุมัติแล้ว',
+            fn (string $baht) => "จำนวน {$baht} บาท อนุมัติแล้ว อยู่ระหว่างรอโอน จะแจ้งอีกครั้งเมื่อโอนเรียบร้อย",
+        );
+
+        return $updated;
     }
 
     public function reject(CommissionWithdrawalRequest $request, User $actor, string $reason): CommissionWithdrawalRequest
@@ -302,11 +504,29 @@ class CommissionWithdrawalService
         // what this request had claimed survives for the audit trail. A
         // rejected payout that leaves no trace of what it was for is exactly
         // the thing somebody will need to reconstruct later.
-        return $this->transition($request, $actor, WithdrawalStatus::Rejected, 'commission_withdrawal.rejected', [
+        $updated = $this->transition($request, $actor, WithdrawalStatus::Rejected, 'commission_withdrawal.rejected', [
             'decided_by_user_id' => $actor->id,
             'decided_at' => now(),
             'rejection_reason' => $reason,
         ]);
+
+        /*
+         * THE MOST IMPORTANT ONE OF THE FOUR. The admin is required to type a
+         * reason precisely because the agent needs it — and until now that
+         * reason sat in a row the agent would only ever see by opening the
+         * portal and thinking to look. A refusal nobody is told about is a
+         * request that just never happens, and the agent's money stays
+         * unclaimed while they wait for an answer that was given days ago.
+         *
+         * The reason is passed through verbatim, as it is everywhere else.
+         */
+        $this->tellAgent(
+            $updated,
+            'คำขอเบิกไม่ได้รับอนุมัติ',
+            fn (string $baht) => "จำนวน {$baht} บาท ไม่ได้รับอนุมัติ — เหตุผล: {$reason}",
+        );
+
+        return $updated;
     }
 
     /**
@@ -328,16 +548,72 @@ class CommissionWithdrawalService
             ]);
         }
 
-        return DB::transaction(function () use ($request, $actor, $reference) {
-            $updated = $this->transition($request, $actor, WithdrawalStatus::Transferred, 'commission_withdrawal.transferred', [
+        $updated = DB::transaction(function () use ($request, $actor, $reference) {
+            $settled = $this->transition($request, $actor, WithdrawalStatus::Transferred, 'commission_withdrawal.transferred', [
                 'transferred_at' => now(),
                 'transfer_reference' => $reference,
             ]);
 
-            $this->settleFullyAllocatedLedgerRows($updated);
+            $this->settleFullyAllocatedLedgerRows($settled);
 
-            return $updated;
+            return $settled;
         });
+
+        /*
+         * 2026-09-15 — THIS is where the money email belongs, and where it
+         * now lives.
+         *
+         * CommissionPaid is the one notification type in this file with email
+         * enabled (config/notifications.php), and it used to fire the instant
+         * an admin pressed "จ่ายแล้ว" on the payout screen — which was the
+         * moment they DECIDED to pay, not the moment the money moved. Agents
+         * were emailed "เงินเข้าแล้ว" while accounting had not yet opened the
+         * bank.
+         *
+         * Here it fires after the transfer has been confirmed by the person
+         * who saw it happen, which is the only point at which the sentence is
+         * true.
+         */
+        $baht = number_format((int) $updated->amount_satang / 100, 2);
+        $withReference = $updated->transfer_reference
+            ? " (อ้างอิง {$updated->transfer_reference})"
+            : '';
+
+        if ($updated->agent) {
+            $this->notifier->notify(
+                $updated->agent,
+                NotificationType::CommissionPaid,
+                'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
+                "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",
+                '/withdrawals',
+                ['commission_withdrawal_request_id' => $updated->id],
+            );
+        }
+
+        return $updated;
+    }
+
+    /**
+     * One message to the agent about their own payout.
+     *
+     * A closure rather than a finished string so every caller formats the
+     * amount the same way — BR-3 says satang all the way to the display
+     * layer, and this is the display layer.
+     */
+    private function tellAgent(CommissionWithdrawalRequest $request, string $title, callable $body): void
+    {
+        if (! $request->agent) {
+            return;
+        }
+
+        $this->notifier->notify(
+            $request->agent,
+            NotificationType::CommissionWithdrawalDecided,
+            $title,
+            $body(number_format((int) $request->amount_satang / 100, 2)),
+            '/withdrawals',
+            ['commission_withdrawal_request_id' => $request->id],
+        );
     }
 
     /**

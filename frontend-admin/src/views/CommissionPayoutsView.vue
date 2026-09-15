@@ -68,6 +68,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import CommissionLedgerPanel from './CommissionLedgerPanel.vue'
+import CommissionPayoutQueuePanel from './CommissionPayoutQueuePanel.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -150,69 +151,54 @@ interface LedgerItem {
   created_at: string
 }
 
-/**
- * 2026-09-15 — "จ่ายแล้ว", HERE, on the row somebody is looking at.
+/*
+ * 2026-09-15 — THE INSTANT "จ่ายแล้ว" WAS REMOVED FROM THIS SCREEN (แนวทาง C).
  *
- * This drill-down used to be strictly read-only, and marking anything paid
- * meant leaving for a second screen in a different menu (see
- * CommissionLedgerPanel's docblock) — so a payout run was: read the totals
- * here, download the file here, then go somewhere else and find the same rows
- * again. That is the whole of what the owner asked to be one place.
+ * It lived here for one day. It settled a commission row the moment an admin
+ * pressed it and emailed the agent that their money had arrived — which, for
+ * a company that transfers by hand through its bank and only hears back from
+ * accounting days later, meant an email sent before the money moved and a
+ * ledger row that could never be corrected afterwards (BR-4).
  *
- * Reloads BOTH after a success: the row's own status, and the per-agent
- * summary above it, whose "รอจ่าย" total this just changed. Reloading only one
- * leaves the screen disagreeing with itself about the same money.
+ * What replaced it is ตั้งจ่าย below. The tombstone is here rather than a
+ * silent deletion because "why can I no longer mark a single row paid on this
+ * screen" is a question somebody will ask.
  */
-const markingId = ref<number | null>(null)
-const markError = ref('')
-
-async function markEntryPaid(entry: LedgerItem, agent: AgentSummaryItem): Promise<void> {
-  if (markingId.value !== null) return
-
-  markingId.value = entry.id
-  markError.value = ''
-  try {
-    await api.post(`/commission-ledger/${entry.id}/mark-paid`)
-    await Promise.all([loadAll(), toggleDetail(agent, { keepOpen: true })])
-  } catch (e) {
-    markError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
-  } finally {
-    markingId.value = null
-  }
-}
 
 /**
- * 2026-09-15 — "จ่ายทั้งหมดของคนนี้", the owner's request.
+ * "ตั้งจ่าย" — raise a payout for everything this agent is owed.
  *
- * A payout run is one person and a page of rows. Settling them one press at a
- * time is a run that can stop halfway, and — because a ledger row cannot be
- * corrected once written (BR-4) — halfway is a state nothing can tidy up
- * afterwards.
+ * ── WHAT THE PRESS DOES, AND DELIBERATELY DOES NOT DO ──
  *
- * ── TWO PRESSES, NOT ONE ──
+ * It creates a payout in the รอบจ่าย queue, already approved — the admin
+ * pressing it IS the approval — and changes no commission row. The rows are
+ * settled, and the agent emailed, only when somebody records the bank
+ * transfer on that queue, which is the day after accounting actually sends
+ * it. That gap is the whole reason this screen changed shape.
  *
- * The first press only asks. It is the difference between a slip that scrolls
- * past and a slip that pays out forty thousand baht permanently, and the
- * confirm strip names the amount rather than saying "are you sure" — the
- * number is the thing being agreed to.
+ * ── THE AMOUNT IS THE SERVER'S ──
  *
- * ── THE AMOUNT ON SCREEN IS PART OF THE REQUEST ──
- *
- * `expected_total_satang` is what this row was showing. The server sums the
- * pending rows again and refuses the whole run if they disagree, so a sale
- * that completed while this page sat open cannot be swept into a press the
- * admin made before it existed. A 422 here is that refusal, and its message
- * says to refresh — which is why the server's own wording is shown rather
- * than a generic "บันทึกไม่สำเร็จ".
+ * A payout settles the agent's WHOLE outstanding balance;
+ * `expected_total_satang` is only what this row was showing, sent so the
+ * server can refuse the press if a sale completed while the page sat open.
+ * That is also why the button is hidden under a date filter: the total beside
+ * it is then a slice of the balance, and a payout is not raised for a slice.
  */
 const confirmPayoutId = ref<number | null>(null)
 const payingAgentId = ref<number | null>(null)
 const payoutError = ref('')
-const payoutDone = ref<{ agent_id: number; count: number; satang: number } | null>(null)
+const payoutDone = ref<{ agent_id: number; satang: number } | null>(null)
 
-/** Nothing measured, or nothing owed — either way there is no run to offer. */
+/**
+ * Hidden rather than disabled under a date filter: a greyed-out money button
+ * invites a click that then has to explain itself, and the line under the
+ * filter bar says what to do instead.
+ */
+const dateFilterActive = computed(() => Boolean(filters.value.date_from || filters.value.date_to))
+
 function canPayAll(agent: AgentSummaryItem): boolean {
   return agent.is_company_share !== true
+    && !dateFilterActive.value
     && agent.total_pending_satang !== null
     && agent.total_pending_satang > 0
 }
@@ -229,31 +215,24 @@ async function payAll(agent: AgentSummaryItem): Promise<void> {
   payingAgentId.value = agent.agent_id
   payoutError.value = ''
   try {
-    const res = await api.post<{ data: { batch_id: string; paid_count: number; paid_satang: number } }>(
-      '/commission-ledger/mark-paid',
+    const res = await api.post<{ data: { id: number; amount_satang: number } }>(
+      '/commission-withdrawals/payout',
       {
         agent_id: agent.agent_id,
-        // The SAME range the total above was computed from. Sending one and
-        // not the other would have the server settle a different set than the
-        // number the admin just agreed to.
-        ...(filters.value.date_from ? { date_from: filters.value.date_from } : {}),
-        ...(filters.value.date_to ? { date_to: filters.value.date_to } : {}),
         expected_total_satang: agent.total_pending_satang,
       },
     )
     confirmPayoutId.value = null
-    payoutDone.value = { agent_id: agent.agent_id, count: res.data.paid_count, satang: res.data.paid_satang }
+    payoutDone.value = { agent_id: agent.agent_id, satang: res.data.amount_satang }
+    // The agent's "รอจ่าย" does not change — the ledger is untouched — but the
+    // balance is now reserved against an open payout, so the button must stop
+    // offering to raise a second one for the same money.
     await loadAll()
-    // Only when the drill-down for THIS person is open: reloading a panel the
-    // admin has open for somebody else would swap it under them.
-    if (detailAgentId.value === agent.agent_id) {
-      await toggleDetail(agent, { keepOpen: true })
-    }
   } catch (e) {
     // e.message is Laravel's own field error (see ApiError.extractMessage) —
-    // for the 422 above that is the sentence naming both totals and telling
+    // for a stale total that is the sentence naming both figures and telling
     // the reader to refresh, which no generic copy could replace.
-    payoutError.value = e instanceof ApiError ? e.message : 'จ่ายทั้งหมดไม่สำเร็จ'
+    payoutError.value = e instanceof ApiError ? e.message : 'ตั้งจ่ายไม่สำเร็จ'
   } finally {
     payingAgentId.value = null
   }
@@ -333,6 +312,13 @@ async function loadAll() {
 }
 onMounted(loadAll)
 function applyFilters() {
+  loadAll()
+}
+
+/** Puts the ตั้งจ่าย buttons back — see the note under the filter bar. */
+function clearDateFilter(): void {
+  filters.value.date_from = ''
+  filters.value.date_to = ''
   loadAll()
 }
 
@@ -521,15 +507,37 @@ const kpis = computed(() => [
  * watched: this is a starting point somebody handed over, and re-applying it
  * would fight the next click.
  */
+/*
+ * 2026-09-15 — THREE VIEWS, IN THE ORDER THE WORK HAPPENS (แนวทาง C).
+ *
+ * Owner: "ระบบเราใช้วิธีโอนเองผ่านระบบการทำงาน Bank เราไม่ได้ Payment auto ซึ่ง
+ * ต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้วจึงมากดยืนยัน."
+ *
+ * That is a three-day process — decide, accounting transfers, confirm — and
+ * this screen used to collapse it into one irreversible click that also
+ * emailed the agent their money had arrived. คำขอเบิกค่าคอม, in a different
+ * menu, already modelled the process correctly and was always empty because
+ * this screen had consumed the same rows.
+ *
+ * So they are one screen now, read left to right: who is owed → what is in
+ * flight → the individual rows behind either. The queue in the middle is the
+ * old menu, unchanged in behaviour and now fed from both directions.
+ */
 const VIEWS = [
-  { id: 'agents' as const, label: 'รายตัวแทน', hint: 'สำหรับรอบจ่ายเงิน — ยอดรวมต่อคน บัญชีธนาคาร และไฟล์ CSV' },
+  { id: 'agents' as const, label: 'ตั้งจ่าย', hint: 'ใครค้างรับเท่าไร — ตั้งจ่าย บัญชีธนาคาร และไฟล์ CSV' },
+  { id: 'queue' as const, label: 'รอบจ่าย', hint: 'อนุมัติคำขอ · ส่งบัญชีโอน · กลับมากดยืนยันเมื่อโอนจริงแล้ว' },
   { id: 'entries' as const, label: 'รายรายการ', hint: 'ทุกแถวในบัญชี สำหรับตรวจสอบดีลเดียว' },
 ]
 
-const view = ref<'agents' | 'entries'>(
+const view = ref<'agents' | 'queue' | 'entries'>(
   route.query.view === 'entries' || (route.query.view === undefined && typeof route.query.tab === 'string')
     ? 'entries'
-    : 'agents',
+    // `?view=queue` is where /commission-withdrawals now redirects, so an old
+    // bookmark or a notification link lands on the queue rather than on a
+    // dead route.
+    : route.query.view === 'queue'
+      ? 'queue'
+      : 'agents',
 )
 
 // BR-3 — satang in, baht out. Divide by 100 only here, at the display layer.
@@ -591,6 +599,11 @@ watch(() => activeCompany.companyId, () => { loadAll() })
          destination. It loads and filters itself; see its own docblock. -->
     <CommissionLedgerPanel v-if="view === 'entries'" />
 
+    <!-- รอบจ่าย — the old คำขอเบิกค่าคอม menu, now the middle of this screen
+         rather than a place to go looking for. Same component behaviour; it
+         loads and filters itself. -->
+    <CommissionPayoutQueuePanel v-else-if="view === 'queue'" />
+
     <template v-else>
     <div class="mt-4 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
       <DateRangeFilter v-model:date-from="filters.date_from" v-model:date-to="filters.date_to" :years-back="3" :years-forward="0" />
@@ -621,6 +634,23 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         {{ exporting ? 'กำลังส่งออก...' : 'ส่งออก CSV' }}
       </button>
     </div>
+
+    <!--
+      2026-09-15 — why the ตั้งจ่าย buttons vanished.
+
+      A payout is raised for an agent's WHOLE outstanding balance, and under a
+      date filter the figure on each row is a slice of it. Rather than pay a
+      number that does not match the one on screen — or silently pay a
+      different one — the buttons go and this says so, with the way back.
+    -->
+    <p
+      v-if="dateFilterActive"
+      class="mt-3 text-[12.5px] text-slate-500"
+      data-test="payout-date-filter-note"
+    >
+      กรองตามวันที่อยู่ — ตั้งจ่ายไม่ได้ เพราะการตั้งจ่ายคิดจากยอดค้างทั้งหมดของตัวแทน ไม่ใช่เฉพาะช่วงที่กรอง
+      <button type="button" class="ml-1 font-bold text-brand-600 hover:underline" @click="clearDateFilter">ล้างวันที่</button>
+    </p>
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -724,11 +754,12 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 ดูรายละเอียด
               </button>
               <!--
-                จ่ายทั้งหมดของคนนี้ (2026-09-15). Hidden, not disabled, when
-                there is nothing owed or the filter excluded the bucket: a
-                greyed-out payout button invites a click that would have to
-                explain itself, and "ไม่ได้แสดง (ถูกกรองออก)" is not an amount
-                anybody can agree to pay.
+                ตั้งจ่าย (2026-09-15, แนวทาง C). Raises a payout into the
+                รอบจ่าย queue — it does NOT settle anything. Hidden, not
+                disabled, when there is nothing owed, when the bucket was
+                filtered out, or when a date filter is on: each of those is a
+                state where the number beside it is not the balance a payout
+                would be for.
               -->
               <button
                 v-if="canPayAll(s)"
@@ -739,7 +770,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 @click="askToPayAll(s)"
               >
                 <Icon name="money" :size="14" />
-                จ่ายทั้งหมด
+                ตั้งจ่าย
               </button>
             </div>
           </div>
@@ -758,12 +789,19 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             :data-test="`pay-all-confirm-${s.agent_id}`"
           >
             <p class="text-[12.5px] text-slate-700">
-              บันทึกว่าจ่ายค่าคอมทั้งหมดของ <span class="font-bold">{{ s.agent_name ?? '—' }}</span>
+              ตั้งจ่ายค่าคอมของ <span class="font-bold">{{ s.agent_name ?? '—' }}</span>
               เป็นเงิน <span class="font-bold tabular-nums">{{ formatSatangOrUnmeasured(s.total_pending_satang) }}</span>
-              ({{ s.entry_count }} รายการในช่วงที่กรองอยู่)
+              ({{ s.entry_count }} รายการ)
             </p>
+            <!--
+              WHAT THIS PRESS IS AND IS NOT. The old copy here said "บันทึกว่า
+              โอนเงินแล้ว … แก้ไขย้อนหลังไม่ได้", which was true of the button
+              this replaced and is now the opposite of what happens: nothing is
+              settled yet, and the run can still be dealt with on the queue.
+            -->
             <p class="mt-1 text-[11.5px] text-slate-500">
-              เป็นการบันทึกว่าโอนเงินแล้ว ระบบไม่ได้โอนเงินให้ และแก้ไขย้อนหลังไม่ได้
+              ยังไม่ปิดรายการค่าคอม และยังไม่แจ้งตัวแทนว่าเงินเข้า — รายการจะไปรออยู่ที่แท็บ
+              <b>รอบจ่าย</b> ให้ส่งฝ่ายบัญชีโอน แล้วกลับมากด “บันทึกว่าโอนแล้ว” อีกครั้ง
             </p>
             <div class="mt-2 flex items-center gap-2">
               <button
@@ -773,7 +811,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 :data-test="`pay-all-submit-${s.agent_id}`"
                 @click="payAll(s)"
               >
-                {{ payingAgentId === s.agent_id ? 'กำลังบันทึก…' : 'ยืนยันจ่ายทั้งหมด' }}
+                {{ payingAgentId === s.agent_id ? 'กำลังบันทึก…' : 'ยืนยันตั้งจ่าย' }}
               </button>
               <button
                 type="button"
@@ -794,7 +832,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             class="mt-2 text-[12px] font-bold text-emerald-600"
             :data-test="`pay-all-done-${s.agent_id}`"
           >
-            บันทึกแล้ว {{ payoutDone.count }} รายการ รวม {{ formatSatang(payoutDone.satang) }}
+            ตั้งจ่าย {{ formatSatang(payoutDone.satang) }} เรียบร้อย — ดูต่อที่แท็บ <b>รอบจ่าย</b>
           </p>
           <div v-if="bankEditId === s.agent_id" class="mt-3 pt-3 border-t border-slate-100">
             <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
@@ -857,12 +895,6 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               </span>
             </div>
 
-            <!-- OUTSIDE the load/empty chain below, not inside it: a failed
-                 "จ่ายแล้ว" is about the press that just happened, and slipping
-                 it into that v-if chain silently turned "no entries" into
-                 "else if the last write failed". -->
-            <p v-if="markError" class="mb-2 text-[12px] font-bold text-rose-600" data-test="detail-mark-error">{{ markError }}</p>
-
             <div v-if="detailLoading" class="text-xs text-slate-400">กำลังโหลด...</div>
             <div v-else-if="detailError" class="text-xs text-rose-600">{{ detailError }}</div>
             <div v-else-if="!detailEntries.length" class="text-xs text-slate-400">ไม่มีรายการคอมมิชชั่น</div>
@@ -877,7 +909,6 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                     <th class="py-1.5 pr-3 font-bold">โปรโมชั่น</th>
                     <th class="py-1.5 pr-3 font-bold text-right">ค่าคอม</th>
                     <th class="py-1.5 font-bold">สถานะ</th>
-                    <th class="py-1.5 font-bold text-right"><span class="sr-only">จ่ายเงิน</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -899,25 +930,6 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                       >
                         {{ e.payment_status === 'paid' ? 'จ่ายแล้ว' : 'รอจ่าย' }}
                       </span>
-                    </td>
-                    <!--
-                      The action that used to live on a different menu. Same
-                      two exclusions as the ledger panel: an already-paid row
-                      has nothing to do, and the company's own share is money
-                      that never moves, so there is no transfer to record.
-                    -->
-                    <td class="py-2 text-right whitespace-nowrap">
-                      <span v-if="e.is_company_share" class="text-[10px] text-slate-400">ไม่ต้องโอน</span>
-                      <button
-                        v-else-if="e.payment_status === 'pending'"
-                        type="button"
-                        class="px-2.5 py-1 rounded-lg bg-brand-600 text-white text-[11px] font-bold hover:bg-brand-700 disabled:opacity-50"
-                        :disabled="markingId !== null"
-                        :data-test="`detail-mark-paid-${e.id}`"
-                        @click="markEntryPaid(e, s)"
-                      >
-                        {{ markingId === e.id ? 'กำลังบันทึก…' : 'จ่ายแล้ว' }}
-                      </button>
                     </td>
                   </tr>
                 </tbody>

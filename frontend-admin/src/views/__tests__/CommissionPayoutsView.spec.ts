@@ -149,7 +149,7 @@ beforeEach(() => {
   get.mockReset()
   put.mockReset()
   post.mockReset()
-  post.mockResolvedValue({ data: { batch_id: 'b-1', paid_count: 3, paid_satang: TWO_THOUSAND_BAHT } })
+  post.mockResolvedValue({ data: { id: 1, amount_satang: TWO_THOUSAND_BAHT } })
 })
 
 describe('unfiltered — both buckets were measured', () => {
@@ -286,19 +286,21 @@ describe('the two views of one payout screen', () => {
 })
 
 /**
- * 2026-09-15 — "จ่ายทั้งหมดของคนนี้", the owner's request.
+ * 2026-09-15 — "ตั้งจ่าย" (แนวทาง C).
  *
- * A payout run is one person and a page of rows, and settling them one press
- * at a time is a run that can stop halfway — in a ledger where nothing can be
- * corrected afterwards (BR-4).
+ * Owner: "ระบบเราใช้วิธีโอนเองผ่านระบบการทำงาน Bank เราไม่ได้ Payment auto ซึ่ง
+ * ต้องได้รับข้อมูลจากฝ่ายบัญชีก่อนว่าโอนแล้วจึงมากดยืนยัน."
  *
- * That immutability is what every test here is really about. A bulk money
- * button makes two new mistakes possible that thirty single presses did not:
- * paying on a slip, and paying rows that arrived after the number on screen
- * was computed. The server refuses the second; this layer has to not cause
- * the first, and has to send the server what it needs to refuse the second.
+ * The button that stood here for one day settled the commission rows on the
+ * press and emailed the agent that their money had arrived — days before
+ * accounting actually sent it, and permanently (BR-4). It now RAISES a payout
+ * into the รอบจ่าย queue instead and touches no ledger row.
+ *
+ * So these tests are mostly about what the press does NOT do. A screen that
+ * still talks about settling, or that still posts to the endpoint which
+ * settles, would be the same defect with a new label.
  */
-describe('จ่ายทั้งหมดของคนนี้', () => {
+describe('ตั้งจ่าย', () => {
   it('does not write on the first press', async () => {
     const wrapper = await mountView([makeRow({ agent_id: 1 })])
 
@@ -308,9 +310,13 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
     expect(wrapper.find('[data-test="pay-all-confirm-1"]').exists()).toBe(true)
   })
 
-  it('names the amount in the confirmation, not just "are you sure"', async () => {
-    // The number is the thing being agreed to. This is the last moment it can
-    // be checked against the bank file.
+  it('names the amount, and says plainly that nothing is settled yet', async () => {
+    /*
+     * The old copy here read "บันทึกว่าโอนเงินแล้ว … แก้ไขย้อนหลังไม่ได้",
+     * which was true of the button this replaced and is now the opposite of
+     * what happens. Wrong-but-reassuring copy on a money button is worse than
+     * none.
+     */
     const wrapper = await mountView([makeRow({ agent_id: 1, agent_name: 'สมชาย' })])
 
     await wrapper.get('[data-test="pay-all-1"]').trigger('click')
@@ -318,18 +324,17 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
     const confirm = wrapper.get('[data-test="pay-all-confirm-1"]').text()
     expect(confirm).toContain('สมชาย')
     expect(confirm).toContain('2,000 บาท')
-    // And what it is NOT: the system does not move money, and this cannot be
-    // undone. Both are things an admin assumes the opposite of by default.
-    expect(confirm).toContain('ระบบไม่ได้โอนเงินให้')
-    expect(confirm).toContain('แก้ไขย้อนหลังไม่ได้')
+    expect(confirm).toContain('ยังไม่ปิดรายการค่าคอม')
+    expect(confirm).toContain('รอบจ่าย')
+    expect(confirm).not.toContain('แก้ไขย้อนหลังไม่ได้')
   })
 
-  it('sends the total that was on screen, so the server can refuse a stale press', async () => {
+  it('raises a payout instead of settling the ledger', async () => {
     /*
-     * THE ONE THAT MATTERS. Between this page loading and the button being
-     * pressed, a sale can complete and write a new pending row. Sending the
-     * figure the admin actually saw is what lets the server refuse instead of
-     * sweeping that row into a press nobody made.
+     * THE ONE THAT MATTERS. /commission-ledger/mark-paid closes the rows on
+     * the spot; /commission-withdrawals/payout puts them in a queue that
+     * waits for the bank. Posting to the wrong one would restore the exact
+     * behaviour แนวทาง C exists to remove, with the new wording on top of it.
      */
     const wrapper = await mountView([makeRow({ agent_id: 42 })])
 
@@ -337,39 +342,27 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
     await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
     await flushPromises()
 
-    expect(post).toHaveBeenCalledWith('/commission-ledger/mark-paid', {
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout', {
       agent_id: 42,
       expected_total_satang: TWO_THOUSAND_BAHT,
     })
   })
 
-  it('sends the date range currently applied, so it settles the set it quoted', async () => {
-    // The total above the button was computed with these filters. Paying a
-    // wider set than the one that produced the number is paying an amount
-    // nobody approved.
-    const wrapper = await mountView([makeRow({ agent_id: 42 })])
+  it('sends the total that was on screen, so the server can refuse a stale press', async () => {
+    // Between the page loading and the press, a sale can complete. Sending
+    // the figure the admin actually saw is what lets the server refuse rather
+    // than raise a payout larger than the one authorised.
+    const wrapper = await mountView([makeRow({ agent_id: 42, total_pending_satang: 123_400 })])
 
-    const dates = wrapper.findComponent(DateRangeFilter)
-    dates.vm.$emit('update:dateFrom', '2026-01-01')
-    dates.vm.$emit('update:dateTo', '2026-03-31')
-    await flushPromises()
     await wrapper.get('[data-test="pay-all-42"]').trigger('click')
     await wrapper.get('[data-test="pay-all-submit-42"]').trigger('click')
     await flushPromises()
 
-    expect(post).toHaveBeenCalledWith('/commission-ledger/mark-paid', {
-      agent_id: 42,
-      date_from: '2026-01-01',
-      date_to: '2026-03-31',
-      expected_total_satang: TWO_THOUSAND_BAHT,
-    })
+    expect(post.mock.calls[0]?.[1]).toMatchObject({ expected_total_satang: 123_400 })
   })
 
-  it('reports what was actually settled, from the server, not from the screen', async () => {
-    // The count and total come back from the write. Echoing the figures this
-    // page was already showing would report a success that never happened the
-    // moment the two disagree.
-    post.mockResolvedValue({ data: { batch_id: 'b-9', paid_count: 7, paid_satang: 987_600 } })
+  it('reports what the server raised, and points at where it went', async () => {
+    post.mockResolvedValue({ data: { id: 9, amount_satang: 987_600 } })
     const wrapper = await mountView([makeRow({ agent_id: 42 })])
 
     await wrapper.get('[data-test="pay-all-42"]').trigger('click')
@@ -377,16 +370,11 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
     await flushPromises()
 
     const done = wrapper.get('[data-test="pay-all-done-42"]').text()
-    expect(done).toContain('7 รายการ')
     expect(done).toContain('9,876 บาท')
+    expect(done).toContain('รอบจ่าย')
   })
 
-  it('shows the server\'s own refusal, because it is the one that says what to do', async () => {
-    /*
-     * A 422 here means the pending total moved. The server's sentence names
-     * both figures and says to refresh; a generic "บันทึกไม่สำเร็จ" would send
-     * the admin to press the same button again.
-     */
+  it("shows the server's own refusal, because it is the one that says what to do", async () => {
     post.mockRejectedValue(new FakeApiError(422, {
       errors: { expected_total_satang: ['ยอดค้างจ่ายของคนนี้เปลี่ยนไปแล้ว — กรุณารีเฟรชหน้าจอแล้วลองใหม่'] },
     }))
@@ -402,6 +390,23 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
     expect(wrapper.find('[data-test="pay-all-done-42"]').exists()).toBe(false)
   })
 
+  it('goes away under a date filter, and says why', async () => {
+    /*
+     * A payout is raised for the agent's WHOLE outstanding balance. Under a
+     * date filter the figure on the row is a slice of it, so a button there
+     * would either pay a different number from the one beside it or have to
+     * explain itself after the press.
+     */
+    const wrapper = await mountView([makeRow({ agent_id: 1 })])
+
+    const dates = wrapper.findComponent(DateRangeFilter)
+    dates.vm.$emit('update:dateFrom', '2026-01-01')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="payout-date-filter-note"]').text()).toContain('ยอดค้างทั้งหมด')
+  })
+
   it('is not offered when nothing is owed', async () => {
     const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: 0 })])
 
@@ -410,17 +415,13 @@ describe('จ่ายทั้งหมดของคนนี้', () => {
 
   it('is not offered when the filter excluded the pending bucket', async () => {
     // §3.7 (F-10) again, with money attached: null is "nobody measured this".
-    // A payout button over an unmeasured bucket would have to send an amount
-    // the screen does not have.
     const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: null })])
 
     expect(wrapper.find('[data-test="pay-all-1"]').exists()).toBe(false)
   })
 
-  it('is not offered on the company\'s own share', async () => {
-    // That money is already with the company. "จ่ายแล้ว" on it would record a
-    // transfer to itself — which the server also refuses, because a guard that
-    // lives only here is one a stale tab walks past.
+  it("is not offered on the company's own share", async () => {
+    // That money is already with the company; there is no transfer to raise.
     const wrapper = await mountView([
       makeRow({ agent_id: 90, agent_name: 'Thai Life insurance', is_company_share: true }),
     ])

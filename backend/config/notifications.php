@@ -63,6 +63,24 @@ return [
             NotificationType::OrderPaymentFailed->value => true,
             NotificationType::OrderRefundReported->value => true,
             NotificationType::Announcement->value => true,
+            /*
+             * 2026-09-15 — both ENABLED, by the same test as the rest: would
+             * the recipient be worse off finding out next time they opened
+             * the app?
+             *
+             * commission_withdrawal_requested — yes, and it is the only one
+             * here aimed at an ADMIN. An agent who has asked for their money
+             * is blocked until a human opens a queue; if nobody opens it, the
+             * request simply sits, and the agent has no way to escalate.
+             *
+             * commission_withdrawal_decided — yes, and most of all when the
+             * answer is no. The admin is REQUIRED to type a reason for a
+             * refusal precisely because the agent needs it, and until this
+             * existed that reason lived only on a screen the agent had to
+             * think to go and open.
+             */
+            NotificationType::CommissionWithdrawalRequested->value => true,
+            NotificationType::CommissionWithdrawalDecided->value => true,
 
             NotificationType::ExamPassed->value => false,
             NotificationType::ExamFailed->value => false,

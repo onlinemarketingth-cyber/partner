@@ -200,19 +200,24 @@ const filteredEntries = computed(() => {
   return rows
 })
 
-const marking = ref<number | null>(null)
-async function markPaid(entry: LedgerItem) {
-  marking.value = entry.id
-  errorMessage.value = ''
-  try {
-    await api.post(`/commission-ledger/${entry.id}/mark-paid`)
-    await loadAll()
-  } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
-  } finally {
-    marking.value = null
-  }
-}
+/*
+ * 2026-09-15 — THIS PANEL IS READ-ONLY AGAIN (แนวทาง C).
+ *
+ * markPaid() lived here from the day the ledger screen existed: one press,
+ * one commission row settled, one email to the agent saying their money had
+ * arrived. For a company that transfers by hand through its bank and hears
+ * back from accounting days later, that email was sent before the money
+ * moved — and a ledger row cannot be corrected afterwards (BR-4).
+ *
+ * Every payout now goes through the รอบจ่าย queue: ตั้งจ่าย raises it, and
+ * the rows are settled only when somebody records the actual transfer. Two
+ * ways to settle the same row is the confusion the owner asked to remove, so
+ * the second one is gone rather than hidden.
+ *
+ * POST /commission-ledger/{id}/mark-paid still exists and is still audited —
+ * it is the correction path for money settled outside the system entirely
+ * (cash, an offset) — but no screen offers it any more.
+ */
 
 function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH') + ' บาท'
@@ -326,18 +331,13 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               </span>
             </div>
             <!--
-              NO PAYOUT BUTTON ON THE COMPANY'S OWN ROW (2026-09-15).
+              THE COMPANY'S OWN ROW STILL SAYS WHY IT IS DIFFERENT.
 
-              "จ่ายแล้ว" records a transfer. The company transferring to
-              itself is not a thing that happens — the money never left — so
-              the button would only ever create a payment record with no
-              payment behind it, and a ledger row cannot be corrected
-              afterwards (BR-4).
-
-              Hidden, not disabled, and a sentence in its place: the house
-              rule on this screen is that a control somebody cannot use is not
-              shown, and a dead button here would read as a permission problem
-              rather than as an answer.
+              No payout button survives on this panel at all now (see the
+              script's tombstone), but this line is not about a missing
+              button — it answers "is this money owed to somebody?" for a row
+              that looks exactly like one that is. The money never left the
+              company, so nothing about it will ever appear in รอบจ่าย either.
             -->
             <span
               v-if="e.is_company_share"
@@ -346,14 +346,6 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             >
               เงินอยู่กับบริษัทอยู่แล้ว ไม่ต้องโอน
             </span>
-            <button
-              v-else-if="e.payment_status === 'pending'"
-              :disabled="marking === e.id"
-              class="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 whitespace-nowrap"
-              @click="markPaid(e)"
-            >
-              {{ marking === e.id ? 'กำลังบันทึก...' : 'จ่ายแล้ว' }}
-            </button>
           </div>
         </div>
       </TransitionGroup>
