@@ -110,10 +110,85 @@ const loading = ref(true)
 const errorMessage = ref('')
 const requests = ref<WithdrawalRequest[]>([])
 // Opens on the queue that needs a human, not on everything.
+/*
+ * 2026-09-15 — THE THREE-STEP RAIL (แบบ A).
+ *
+ * Owner: "มันดูแล้วไม่เข้าใจทันทีว่า User เข้ามาต้องทำอะไร ดูอะไรบ้าง".
+ *
+ * The screen was four boxes of equal weight — heading, filter chips, a
+ * settings read-out, an empty state and a four-bullet explainer — and not one
+ * figure anywhere. A reader could not learn where the money was or what to
+ * press.
+ *
+ * The chips were already the three states; they just looked like filters
+ * rather than a process. They are now a band that carries each step's COUNT
+ * and MONEY, with arrows between, so "where is this money and what is left
+ * for me" is answered before anything is clicked. Filtering still happens by
+ * pressing a step — the same act, now with the reason for it on screen.
+ *
+ * The figures are server-computed (GET /commission-withdrawals/summary,
+ * scoped by the same `visibleTo()` as the list) rather than counted from the
+ * loaded page: this panel loads ONE status at a time, twenty rows at a time,
+ * so anything derived here would describe the page and be read as describing
+ * the step.
+ */
+interface StepSummary { count: number; satang: number }
+
+const summary = ref<Record<string, StepSummary>>({})
+const summaryFailed = ref(false)
+
+const RAIL: Array<{ value: WithdrawalStatus; step: number; label: string; hint: string }> = [
+  { value: 'pending_review', step: 1, label: 'รอตรวจสอบ', hint: 'รอคุณตัดสินใจ' },
+  { value: 'approved', step: 2, label: 'รอโอน', hint: 'อยู่ที่ฝ่ายบัญชี' },
+  { value: 'transferred', step: 3, label: 'โอนแล้ว', hint: 'ปิดรายการแล้ว' },
+]
+
+const rail = computed(() => RAIL.map((step) => ({
+  ...step,
+  count: summary.value[step.value]?.count ?? 0,
+  satang: summary.value[step.value]?.satang ?? 0,
+})))
+
+async function loadSummary(): Promise<void> {
+  try {
+    const res = await api.get<{ data: Record<string, StepSummary> }>(
+      activeCompany.scopedPath('/commission-withdrawals/summary'),
+    )
+    summary.value = res.data
+    summaryFailed.value = false
+  } catch {
+    /*
+     * A band that cannot be read must not print zeros: "รอโอน 0 บาท" is a
+     * statement that nothing is owed, and this is the screen where somebody
+     * decides whether a payout run is finished. The rail hides itself and
+     * says so — the queue underneath still works.
+     */
+    summary.value = {}
+    summaryFailed.value = true
+  }
+}
+
 const activeTab = ref<'' | WithdrawalStatus>('pending_review')
 const busyId = ref<number | null>(null)
 
 const heading = computed(() => TABS.find((t) => t.value === activeTab.value)?.label ?? '')
+
+/**
+ * What the reader is meant to DO with the tab they are looking at.
+ *
+ * One sentence, above the list, because "รอโอน" names a STATE and not a job —
+ * and the job is the thing the owner could not find anywhere on this screen.
+ */
+const INSTRUCTIONS: Record<string, string> = {
+  pending_review: 'ตรวจแล้วกดอนุมัติ หรือไม่อนุมัติพร้อมเหตุผล',
+  approved: 'ส่งให้ฝ่ายบัญชีโอน แล้วกลับมากดบันทึกว่าโอนแล้ว',
+  transferred: 'ปิดเรียบร้อยแล้ว ดูอย่างเดียว',
+  rejected: 'ไม่อนุมัติไปแล้ว — เงินกลับไปให้ตัวแทนขอใหม่ได้',
+  cancelled: 'ตัวแทนยกเลิกเอง',
+  '': 'ทุกสถานะรวมกัน',
+}
+
+const instruction = computed(() => INSTRUCTIONS[activeTab.value] ?? '')
 
 
 function formatSatang(satang: number): string {
@@ -171,7 +246,10 @@ async function act(id: number, path: string, body?: Record<string, unknown>): Pr
   errorMessage.value = ''
   try {
     await api.post(`/commission-withdrawals/${id}/${path}`, body)
-    await load()
+    // Both, always: a decision moves a row from one step to the next, so a
+    // reloaded list under a stale band would show the row gone from รอตรวจสอบ
+    // while the band still counted it there.
+    await Promise.all([load(), loadSummary()])
   } catch (e) {
     const parsed = e instanceof ApiError ? (e.body as { errors?: Record<string, string[]>; message?: string }) : null
     errorMessage.value =
@@ -213,7 +291,7 @@ function markTransferred(r: WithdrawalRequest): void {
 
 onMounted(async () => {
   await activeCompany.loadCompanies()
-  await Promise.all([load(), loadSetting()])
+  await Promise.all([load(), loadSetting(), loadSummary()])
 })
 
 // The minimum-withdrawal box is per company too, and it sits directly above
@@ -222,6 +300,7 @@ onMounted(async () => {
 watch(() => activeCompany.companyId, () => {
   void load()
   void loadSetting()
+  void loadSummary()
 })
 </script>
 
@@ -239,42 +318,78 @@ watch(() => activeCompany.companyId, () => {
     HeroHeader. See CommissionPayoutsView, which hosts it.
   -->
   <div>
-    <div class="mt-4 flex flex-wrap gap-2">
+    <!--
+      ═══ THE RAIL (แบบ A, 2026-09-15) ═══
+
+      These were four flat chips that filtered a list and said nothing else.
+      They are the same three states, drawn as the process they are, each
+      carrying its own count and its own money — so a reader learns the whole
+      flow and where they stand from one band, before pressing anything.
+
+      Still buttons, still filters. The arrows are decoration with a job:
+      they say the money moves left to right and cannot skip a step.
+    -->
+    <div v-if="!summaryFailed" class="mt-4 flex items-stretch gap-0" data-test="queue-rail">
+      <template v-for="(step, i) in rail" :key="step.value">
+        <div v-if="i > 0" class="flex items-center px-2 shrink-0" aria-hidden="true">
+          <Icon name="chevron_right" :size="18" class="text-slate-300" />
+        </div>
+        <button
+          type="button"
+          class="flex-1 min-w-0 text-left px-4 py-3 rounded-2xl border transition-colors"
+          :class="activeTab === step.value
+            ? 'border-2 border-brand-600 bg-brand-50'
+            : 'border-slate-200 bg-white hover:border-slate-300'"
+          :aria-pressed="activeTab === step.value"
+          :data-test="`queue-step-${step.value}`"
+          @click="selectTab(step.value)"
+        >
+          <span class="flex items-center gap-2">
+            <span
+              class="inline-flex items-center justify-center w-5 h-5 rounded-md text-[11px] font-extrabold"
+              :class="activeTab === step.value ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-600'"
+            >{{ step.step }}</span>
+            <span class="text-[13.5px] font-extrabold" :class="activeTab === step.value ? 'text-brand-700' : 'text-slate-700'">{{ step.label }}</span>
+          </span>
+          <span class="block mt-2 text-[21px] font-extrabold text-slate-900 tabular-nums">
+            {{ formatSatang(step.satang) }}
+          </span>
+          <span class="block mt-0.5 text-[12px]" :class="step.count > 0 && step.value === 'pending_review' ? 'text-amber-700 font-bold' : 'text-slate-500'">
+            {{ step.count }} รายการ · {{ step.hint }}
+          </span>
+        </button>
+      </template>
+    </div>
+
+    <!-- The band failed to load. Zeros here would read as "nothing is owed"
+         on the screen where somebody decides a payout run is finished. -->
+    <p v-else class="mt-4 text-xs text-rose-600" data-test="queue-rail-error">
+      อ่านยอดรวมของแต่ละขั้นไม่สำเร็จ — รายการด้านล่างยังใช้งานได้ตามปกติ
+    </p>
+
+    <!-- "ทั้งหมด" is not a step, so it is not in the rail. It stays as the
+         way out of the three-step view for anyone looking for a row they
+         cannot place. -->
+    <div class="mt-2 flex items-center gap-3">
       <button
-        v-for="tab in TABS"
-        :key="tab.value"
         type="button"
-        class="px-3 py-1.5 rounded-full text-xs font-bold border transition-colors"
-        :class="
-          activeTab === tab.value
-            ? 'bg-slate-900 border-slate-900 text-white'
-            : 'bg-white border-slate-200 text-slate-600 hover:border-slate-400'
-        "
-        @click="selectTab(tab.value)"
+        class="text-[12.5px] font-bold transition-colors"
+        :class="activeTab === '' ? 'text-brand-700' : 'text-slate-400 hover:text-slate-600'"
+        data-test="queue-step-all"
+        @click="selectTab('')"
       >
-        {{ tab.label }}
+        {{ activeTab === '' ? '· กำลังแสดงทุกสถานะ' : 'ดูทุกสถานะ' }}
       </button>
     </div>
 
-    <!-- 2026-09-13 — the floor, READ-ONLY. It explains refusals, which is why
-         it is on this page at all; it is no longer edited here, which is why
-         there is no input. See the script's own note. -->
-    <div class="mt-4 bg-white border border-slate-200 rounded-2xl px-4 py-3" data-test="withdrawal-minimum-readout">
-      <p class="text-xs text-slate-500">ยอดขั้นต่ำในการเบิกของบริษัทนี้</p>
-      <p class="text-sm font-bold text-slate-900 mt-0.5">
-        <span v-if="minWithdrawalUnknown" class="text-rose-600">อ่านค่าไม่สำเร็จ</span>
-        <span v-else-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — ตัวแทนเบิกเท่าไรก็ได้</span>
-        <span v-else>{{ formatSatang(minWithdrawalSatang) }}</span>
-      </p>
-      <p class="text-xs text-slate-400 mt-1">
-        แก้ไขที่
-        <RouterLink :to="{ name: 'commission-plan-settings' }" class="font-bold text-brand-600 hover:underline" data-test="link-commission-step4">
-          ตั้งค่าค่าแนะนำ → ขั้นที่ 4 →
-        </RouterLink>
-      </p>
-    </div>
-
     <p v-if="errorMessage" class="mt-4 text-sm font-bold text-rose-600">{{ errorMessage }}</p>
+
+    <!-- One line, where the eye already is: what this tab is, and what the
+         reader is expected to do with it. -->
+    <p v-if="!loading && requests.length" class="mt-5 text-sm font-bold text-slate-700" data-test="queue-instruction">
+      {{ heading }} {{ requests.length }} รายการ
+      <span class="font-normal text-slate-500">— {{ instruction }}</span>
+    </p>
 
     <LoadingSkeleton v-if="loading" class="mt-4" />
 
@@ -287,34 +402,29 @@ watch(() => activeCompany.companyId, () => {
       />
 
       <!--
-        2026-09-15 — WHAT LANDS HERE, now that both doors lead to this queue.
+        2026-09-15 (แบบ A) — FOUR BULLETS BECAME ONE SENTENCE.
 
-        The previous version of this box explained that the queue could be
-        empty forever because settling rows on จ่ายเงิน took them out of
-        what an agent could ask for. That is no longer true and the box would
-        now be actively misleading: ตั้งจ่าย raises a payout INTO this queue
-        rather than closing the rows behind it.
+        The list version of this was written to answer "ทำไมข้อมูลไม่ขึ้น" and
+        did — at the cost of being the largest thing on the screen. An
+        explainer outweighing the work is exactly what the owner was looking
+        at when they said the page never told them what to do.
 
-        Kept, rather than deleted, because an empty queue on a money screen
-        still reads as a broken page — it just needs to say a different true
-        thing now.
+        The rail above now answers most of it in numbers. What is left is the
+        one fact a number cannot carry: nothing arrives here by itself.
       -->
-      <div class="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5" data-test="withdrawal-empty-help">
-        <p class="text-[13px] font-extrabold text-slate-900">รายการมาจาก 2 ทาง</p>
-        <ul class="mt-1.5 space-y-1 text-[12.5px] text-slate-600 list-disc pl-4">
-          <li>
-            <b>ตัวแทนขอเบิก</b> — ตัวแทนกดขอเองในพอร์ทัล เข้ามาที่แท็บ <b>รอตรวจสอบ</b> ให้คุณอนุมัติหรือไม่อนุมัติ
-          </li>
-          <li>
-            <b>บริษัทตั้งจ่าย</b> — คุณกด <b>ตั้งจ่าย</b> ในแท็บรายตัวแทน เข้ามาที่แท็บ <b>รอโอน</b> เลย เพราะการกดของคุณคือการอนุมัติอยู่แล้ว
-          </li>
-          <li>
-            ทั้งสองทางจบเหมือนกัน — ส่งให้ฝ่ายบัญชีโอนผ่านธนาคาร แล้วกลับมากด <b>บันทึกว่าโอนแล้ว</b> ตรงนั้นค่าคอมถึงจะถูกปิด และตัวแทนถึงจะได้อีเมลว่าเงินเข้าแล้ว
-          </li>
-          <li>
-            ว่างอยู่แปลว่ายังไม่มีใครขอ และคุณยังไม่ได้ตั้งจ่ายใคร — ลองแท็บ <b>ทั้งหมด</b> เผื่อมีรายการที่โอนไปแล้ว
-          </li>
-        </ul>
+      <div class="mt-3 rounded-2xl border border-slate-200 bg-white px-5 py-6 text-center" data-test="withdrawal-empty-help">
+        <p class="text-[15px] font-extrabold text-slate-900">ไม่มีอะไรรออยู่ในขั้นนี้</p>
+        <p class="mt-1.5 text-[13px] text-slate-500">
+          รายการจะเข้ามาเมื่อ<b class="font-bold text-slate-700">ตัวแทนกดขอเบิก</b>
+          หรือเมื่อ<b class="font-bold text-slate-700">คุณกดตั้งจ่าย</b>ให้ใครสักคน
+        </p>
+        <RouterLink
+          :to="{ name: 'commission-payouts' }"
+          class="inline-flex items-center justify-center h-[40px] min-w-[90px] px-5 mt-4 rounded-[0.65rem] border-2 border-brand-600 text-brand-600 text-sm font-extrabold hover:bg-brand-50"
+          data-test="link-payouts"
+        >
+          ไปหน้าตั้งจ่าย
+        </RouterLink>
       </div>
     </template>
 
@@ -399,5 +509,28 @@ watch(() => activeCompany.companyId, () => {
         </div>
       </div>
     </div>
+
+    <!--
+      2026-09-15 (แบบ A) — THE FLOOR, DEMOTED TO A FOOTNOTE.
+
+      Read-only, and always was; what changed is its weight. It answers "why
+      was that request refused" — a question nobody asks until a refusal has
+      happened — so it no longer sits between the reader and the queue as one
+      of four boxes of equal size.
+    -->
+    <p class="mt-6 text-xs text-slate-400" data-test="withdrawal-minimum-readout">
+      <span v-if="minWithdrawalUnknown" class="text-rose-600 font-bold">อ่านยอดขั้นต่ำในการเบิกไม่สำเร็จ</span>
+      <template v-else>
+        ยอดขั้นต่ำในการเบิกของบริษัทนี้:
+        <b class="font-bold text-slate-500">
+          <span v-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — ตัวแทนเบิกเท่าไรก็ได้</span>
+          <span v-else>{{ formatSatang(minWithdrawalSatang) }}</span>
+        </b>
+      </template>
+      ·
+      <RouterLink :to="{ name: 'commission-plan-settings' }" class="font-bold text-brand-600 hover:underline" data-test="link-commission-step4">
+        แก้ที่ตั้งค่าค่าแนะนำ → ขั้นที่ 4
+      </RouterLink>
+    </p>
   </div>
 </template>

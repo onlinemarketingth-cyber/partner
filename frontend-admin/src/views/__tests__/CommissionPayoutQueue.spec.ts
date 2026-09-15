@@ -80,9 +80,13 @@ function payout(over: Record<string, unknown> = {}) {
   }
 }
 
+/** What GET /commission-withdrawals/summary answers, per test. */
+let summaryRows: Record<string, { count: number; satang: number }> = {}
+
 function wireApi(rows: unknown[]) {
   get.mockImplementation(async (path: string) => {
     if (String(path).startsWith('/commission-withdrawal-settings')) return { min_withdrawal_satang: null }
+    if (String(path).startsWith('/commission-withdrawals/summary')) return { data: summaryRows }
     if (String(path).startsWith('/commission-withdrawals')) return { data: rows }
     if (String(path).startsWith('/agent-commission-summary')) return { data: [], computed_at: '2026-09-15T00:00:00Z' }
     if (String(path).startsWith('/companies')) return { data: [TLI] }
@@ -110,6 +114,11 @@ beforeEach(() => {
   post.mockReset()
   post.mockResolvedValue({ data: {} })
   routeQuery.value = {}
+  summaryRows = {
+    pending_review: { count: 1, satang: 90000 },
+    approved: { count: 2, satang: 245000 },
+    transferred: { count: 9, satang: 1248000 },
+  }
   useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
 })
 
@@ -135,34 +144,28 @@ describe('every row says whose decision it was', () => {
   })
 })
 
-describe('an empty queue explains the new world, not the old one', () => {
-  it('names both doors', async () => {
-    const wrapper = await mountPanel([])
-
-    const help = wrapper.get('[data-test="withdrawal-empty-help"]').text()
-    expect(help).toContain('ตัวแทนขอเบิก')
-    expect(help).toContain('บริษัทตั้งจ่าย')
-  })
-
-  it('says where the money is actually closed, and when the agent hears', async () => {
+describe('an empty queue says the one thing the numbers cannot', () => {
+  it('names both doors, in one sentence', async () => {
     /*
-     * The step the whole change exists for: the commission is not settled and
-     * the agent is not told anything about money arriving until somebody
-     * records the real bank transfer.
+     * This used to be four bullets and was the biggest thing on the screen —
+     * an explainer outweighing the work, which is what the owner was looking
+     * at when they said the page never told them what to do. The rail now
+     * carries the numbers; this carries the fact they cannot: nothing lands
+     * here by itself.
      */
     const wrapper = await mountPanel([])
 
     const help = wrapper.get('[data-test="withdrawal-empty-help"]').text()
-    expect(help).toContain('บันทึกว่าโอนแล้ว')
-    expect(help).toContain('อีเมล')
+    expect(help).toContain('ตัวแทนกดขอเบิก')
+    expect(help).toContain('ตั้งจ่าย')
   })
 
-  it('no longer claims the queue can be empty forever', async () => {
-    // Yesterday's true sentence, today's false one: ตั้งจ่าย raises a payout
-    // INTO this queue rather than closing the rows behind it.
+  it('offers the way out instead of leaving the reader at a dead end', async () => {
+    // An empty queue on a money screen is a moment where the reader has to
+    // go somewhere; ตั้งจ่าย is the only place a payout can be started.
     const wrapper = await mountPanel([])
 
-    expect(wrapper.get('[data-test="withdrawal-empty-help"]').text()).not.toContain('ไม่ใช่ระบบเสีย')
+    expect(wrapper.find('[data-test="link-payouts"]').exists()).toBe(true)
   })
 
   it('gets out of the way once there is a queue', async () => {
@@ -170,5 +173,86 @@ describe('an empty queue explains the new world, not the old one', () => {
 
     expect(wrapper.find('[data-test="withdrawal-empty-help"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('สมชาย ใจดี')
+  })
+})
+
+/**
+ * 2026-09-15 (แบบ A) — THE THREE-STEP RAIL.
+ *
+ * Owner: "มันดูแล้วไม่เข้าใจทันทีว่า User เข้ามาต้องทำอะไร ดูอะไรบ้าง".
+ *
+ * Four flat chips became a band carrying each step's count and money. The
+ * figures are server-computed on purpose — this panel loads one status at a
+ * time, twenty rows at a time, so anything counted here would describe the
+ * PAGE while being read as describing the STEP.
+ */
+describe('the rail', () => {
+  it('shows the money and the count in every step', async () => {
+    const wrapper = await mountPanel([payout()])
+
+    const pending = wrapper.get('[data-test="queue-step-pending_review"]').text()
+    expect(pending).toContain('900.00 บาท')
+    expect(pending).toContain('1 รายการ')
+
+    expect(wrapper.get('[data-test="queue-step-approved"]').text()).toContain('2,450.00 บาท')
+    expect(wrapper.get('[data-test="queue-step-transferred"]').text()).toContain('12,480.00 บาท')
+  })
+
+  it('marks the step being read', async () => {
+    const wrapper = await mountPanel([payout()])
+
+    expect(wrapper.get('[data-test="queue-step-pending_review"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-test="queue-step-approved"]').attributes('aria-pressed')).toBe('false')
+  })
+
+  it('filters the list when a step is pressed', async () => {
+    // The chips it replaced were filters; that has to survive the redraw, or
+    // the band is decoration.
+    const wrapper = await mountPanel([payout()])
+
+    await wrapper.get('[data-test="queue-step-approved"]').trigger('click')
+    await flushPromises()
+
+    expect(get).toHaveBeenCalledWith(expect.stringContaining('status=approved'))
+  })
+
+  it('hides itself rather than printing zeros it could not read', async () => {
+    /*
+     * THE ONE THAT MATTERS. "รอโอน 0 บาท" is a statement that nothing is
+     * owed, on the screen where somebody decides whether a payout run is
+     * finished. A failed read must not be able to say that.
+     */
+    get.mockImplementation(async (path: string) => {
+      if (String(path).startsWith('/commission-withdrawals/summary')) throw new Error('500')
+      if (String(path).startsWith('/commission-withdrawal-settings')) return { min_withdrawal_satang: null }
+      if (String(path).startsWith('/commission-withdrawals')) return { data: [payout()] }
+
+      return { data: [] }
+    })
+    const active = useActiveCompanyStore()
+    active.companies = [TLI]
+    active.selectedId = TLI.id
+
+    const wrapper = mount(CommissionPayoutQueuePanel, {
+      global: { stubs: { EmptyState: true, Icon: true, LoadingSkeleton: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="queue-rail"]').exists()).toBe(false)
+    // find(), not get(): get()'s wrapper has `exists` removed from its type,
+    // and this is the third time that has reached a type-check this week.
+    expect(wrapper.find('[data-test="queue-rail-error"]').exists()).toBe(true)
+    // Asserted as the ABSENCE of the band, not as the absence of the string
+    // "0 บาท" — every amount on the page ends in one (2,500.00 บาท), so that
+    // spelling matched the rows it was meant to ignore.
+    expect(wrapper.findAll('[data-test^="queue-step-"]').filter((b) => b.text().includes('รายการ'))).toHaveLength(0)
+    // The queue underneath is unaffected — the band is context, not the work.
+    expect(wrapper.text()).toContain('สมชาย ใจดี')
+  })
+
+  it('says what to DO with the step, not just what it is called', async () => {
+    const wrapper = await mountPanel([payout()])
+
+    expect(wrapper.get('[data-test="queue-instruction"]').text()).toContain('อนุมัติ')
   })
 })

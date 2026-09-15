@@ -35,6 +35,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import AppCard from '@/design-system/components/AppCard.vue'
 import AppList from '@/design-system/components/AppList.vue'
 import AppListGroupHeader from '@/design-system/components/AppListGroupHeader.vue'
+import { RouterLink } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
 
 const theme = useThemeStore()
@@ -85,7 +86,70 @@ async function loadAll() {
     hasLoadedOnce.value = true
   }
 }
-onMounted(loadAll)
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-15 — THE WAY TO ASK FOR THE MONEY, ON THE PAGE THAT SHOWS IT.
+ *
+ * Owner: "หน้า frontend ผมไม่เห็นปุ่ม UI ที่กดเพื่อทำการเบิกมาที่ระบบ admin เลย".
+ *
+ * They were right, and it was worse than a missing button. /withdrawals has
+ * existed since August, but the ONLY link to it was in TopNavigation's item
+ * row — which is `hidden lg:flex`. BottomNav, the whole of navigation on a
+ * phone, never listed it. So on the device most agents use, the page could
+ * not be reached at all: the feature shipped, and nobody could start it.
+ *
+ * The entry point belongs here rather than in a sixth bottom-nav slot: this
+ * is the screen an agent opens to look at their money, and "how do I get
+ * paid" is the question they are already holding. ค่าแนะนำ is in the bottom
+ * nav, so it is one tap away at every width.
+ *
+ * ── THE FIGURE IS THE SERVER'S ──
+ *
+ * Not summed from the ledger below it. The real balance also subtracts
+ * requests already open and absorbs reversals, so a total counted here would
+ * be a bigger number than the server will honour — printed directly above
+ * the button that asks for it. Same endpoint WithdrawalsView uses, for the
+ * same reason.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface PayoutStatus {
+  available_satang: number
+  min_withdrawal_satang: number | null
+  payout_details_complete: boolean
+}
+
+const payout = ref<PayoutStatus | null>(null)
+
+async function loadPayout(): Promise<void> {
+  try {
+    payout.value = await api.get<PayoutStatus>('/commission-withdrawals/available')
+  } catch {
+    /*
+     * Hidden, never zeroed. "ยอดที่เบิกได้ 0 บาท" is a statement that the
+     * agent has earned nothing withdrawable — the single most discouraging
+     * sentence this screen could print, and one nobody measured. A failed
+     * read leaves the card off; the ledger underneath still loads.
+     */
+    payout.value = null
+  }
+}
+
+/** Below the company's floor, so the server would refuse the request. */
+const belowMinimum = computed(() =>
+  payout.value !== null
+  && payout.value.min_withdrawal_satang !== null
+  && payout.value.available_satang < payout.value.min_withdrawal_satang,
+)
+
+const canRequest = computed(() =>
+  payout.value !== null
+  && payout.value.available_satang > 0
+  && payout.value.payout_details_complete
+  && !belowMinimum.value,
+)
+
+onMounted(() => {
+  void loadAll()
+  void loadPayout()
+})
 
 const activeTab = ref<'all' | 'pending' | 'paid'>('all')
 const tabs = computed(() => [
@@ -168,6 +232,68 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
         </div>
       </template>
     </HeroHeader>
+
+    <!--
+      2026-09-15 — ยอดที่เบิกได้ + the button that asks for it.
+
+      Placed between the header and the ledger on purpose: the agent has just
+      read what they earned, and this is the next thing they want. Every
+      branch below is a state the server can actually be in — and the card
+      renders nothing at all when the balance could not be read, because a
+      confident "0 บาท" here is the most discouraging thing this page could
+      say, and it would be a number nobody measured.
+    -->
+    <AppCard v-if="payout" class="mt-4" data-test="withdraw-cta">
+      <div class="flex flex-wrap items-center justify-between gap-4">
+        <div class="min-w-0">
+          <p class="text-[12px] text-ink-card-subtle">{{ td('withdrawal.available') }}</p>
+          <p class="text-2xl font-extrabold text-ink-brand mt-0.5 tabular-nums">
+            {{ formatSatang(payout.available_satang) }}
+          </p>
+          <p v-if="payout.min_withdrawal_satang !== null" class="text-[12px] text-ink-card-subtle mt-1">
+            {{ td('withdrawal.minimum') }} {{ formatSatang(payout.min_withdrawal_satang) }}
+          </p>
+        </div>
+
+        <RouterLink
+          v-if="canRequest"
+          :to="{ name: 'withdrawals' }"
+          class="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 rounded-xl bg-brand-600 text-white text-sm font-extrabold active:scale-95 transition"
+          data-test="withdraw-cta-button"
+        >
+          <Icon name="invoice" :size="16" />
+          {{ td('withdrawal.go') }}
+        </RouterLink>
+
+        <!-- Blocked by incomplete payout details: the server refuses this
+             request, so the page says why and points at the one place that
+             fixes it instead of offering a form that cannot succeed. -->
+        <RouterLink
+          v-else-if="payout.available_satang > 0 && !payout.payout_details_complete"
+          :to="{ name: 'profile' }"
+          class="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 rounded-xl border-2 border-brand-600 text-ink-brand text-sm font-extrabold active:scale-95 transition"
+          data-test="withdraw-cta-blocked"
+        >
+          <Icon name="user" :size="16" />
+          {{ td('withdrawal.blocked_cta') }}
+        </RouterLink>
+
+        <p v-else-if="belowMinimum" class="text-[12.5px] text-ink-card-muted max-w-[16rem]" data-test="withdraw-cta-below-min">
+          {{ td('withdrawal.below_minimum') }}
+        </p>
+
+        <p v-else class="text-[12.5px] text-ink-card-muted max-w-[16rem]" data-test="withdraw-cta-none">
+          {{ td('withdrawal.none_available') }}
+        </p>
+      </div>
+
+      <p
+        v-if="payout.available_satang > 0 && !payout.payout_details_complete"
+        class="text-[12.5px] text-ink-card-muted mt-3"
+      >
+        {{ td('withdrawal.blocked_body') }}
+      </p>
+    </AppCard>
 
     <!-- TASK-079 Phase 2 (UX audit): this banner used to be a dead end —
          a failed load left the agent with nothing to tap but the browser

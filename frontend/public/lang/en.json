@@ -107,7 +107,10 @@
     "amount_invalid": "Enter a valid amount",
     "blocked_title": "Not ready to withdraw",
     "blocked_body": "Add your identity document and bank account first.",
-    "blocked_cta": "Go to profile"
+    "blocked_cta": "Go to profile",
+    "go": "Request a withdrawal",
+    "none_available": "Nothing available to withdraw right now — a request may still be open, or this round was already scheduled for payout.",
+    "below_minimum": "Below your company's minimum withdrawal."
   },
   "payout": {
     "incomplete_title": "Payout details incomplete",

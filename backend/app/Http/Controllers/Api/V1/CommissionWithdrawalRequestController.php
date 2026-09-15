@@ -41,11 +41,38 @@ class CommissionWithdrawalRequestController extends Controller
     {
         $this->authorize('viewAny', CommissionWithdrawalRequest::class);
 
-        $user = $request->user();
-
-        $query = CommissionWithdrawalRequest::query()
+        $query = $this->visibleTo($request)
             ->with(['agent', 'decidedBy', 'items'])
             ->latest('id');
+
+        // The admin queue's default question is "what is waiting for me",
+        // so an explicit ?status= narrows it. Validated against the enum
+        // rather than passed through, so a typo is an empty filter the
+        // caller can see rather than a silent full listing.
+        if ($status = $request->query('status')) {
+            $parsed = WithdrawalStatus::tryFrom((string) $status);
+            $query->where('status', $parsed?->value ?? '__none__');
+        }
+
+        return CommissionWithdrawalRequestResource::collection($query->paginate(20));
+    }
+
+    /**
+     * The rows THIS caller may see — the one definition, used by the list
+     * and by the summary above it.
+     *
+     * 2026-09-15 — extracted when the queue gained a summary band. Two
+     * copies of this scoping is the shape where a Super Admin's header
+     * company applies to the list and not to the totals printed over it:
+     * the screen would then show one tenant's rows under another tenant's
+     * money, which is the exact defect CompanyScopeFilter was added to fix
+     * in the first place.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<CommissionWithdrawalRequest>
+     */
+    private function visibleTo(Request $request): \Illuminate\Database\Eloquent\Builder
+    {
+        $query = CommissionWithdrawalRequest::query();
 
         /*
          * TASK-209 / ADR-038 — THE HEADER'S COMPANY SCOPE, MISSING UNTIL
@@ -64,20 +91,60 @@ class CommissionWithdrawalRequestController extends Controller
          */
         CompanyScopeFilter::apply($query, $request);
 
+        $user = $request->user();
+
         if (! $user->isSuperAdmin() && ! $user->isCompanyAdmin()) {
             $query->where('agent_id', $user->id);
         }
 
-        // The admin queue's default question is "what is waiting for me",
-        // so an explicit ?status= narrows it. Validated against the enum
-        // rather than passed through, so a typo is an empty filter the
-        // caller can see rather than a silent full listing.
-        if ($status = $request->query('status')) {
-            $parsed = WithdrawalStatus::tryFrom((string) $status);
-            $query->where('status', $parsed?->value ?? '__none__');
+        return $query;
+    }
+
+    /**
+     * 2026-09-15 — HOW MUCH MONEY IS SITTING IN EACH STEP.
+     *
+     * Owner: "มันดูแล้วไม่เข้าใจทันทีว่า User เข้ามาต้องทำอะไร ดูอะไรบ้าง".
+     *
+     * The queue loads ONE status at a time, so the screen could say what was
+     * in front of the reader and nothing about the two steps either side of
+     * it — four boxes of chrome and no number anywhere. This is the band that
+     * fixes that: one figure per step, so "where is the money right now" is
+     * answered before anything has to be clicked.
+     *
+     * ── NO DATE WINDOW, DELIBERATELY ──
+     *
+     * Every figure counts exactly the rows its own tab lists. A "this month"
+     * total on โอนแล้ว would read better and disagree with the list under it
+     * the moment anybody opened that tab — and a headline figure that does
+     * not match the rows beneath it is worse than no figure.
+     *
+     * @return array{data: array<string, array{count: int, satang: int}>}
+     */
+    public function summary(Request $request): array
+    {
+        $this->authorize('viewAny', CommissionWithdrawalRequest::class);
+
+        $rows = $this->visibleTo($request)
+            ->selectRaw('status, COUNT(*) as row_count, COALESCE(SUM(amount_satang), 0) as total_satang')
+            ->groupBy('status')
+            ->get()
+            ->keyBy('status');
+
+        $summary = [];
+
+        // EVERY status, present or not. A missing key would make the screen
+        // choose between rendering nothing and inventing a zero; zero is the
+        // true answer here and the server is the one that knows it.
+        foreach (WithdrawalStatus::cases() as $status) {
+            $row = $rows->get($status->value);
+
+            $summary[$status->value] = [
+                'count' => (int) ($row->row_count ?? 0),
+                'satang' => (int) ($row->total_satang ?? 0),
+            ];
         }
 
-        return CommissionWithdrawalRequestResource::collection($query->paginate(20));
+        return ['data' => $summary];
     }
 
     /**

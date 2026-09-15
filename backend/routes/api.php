@@ -1313,6 +1313,17 @@ Route::prefix('v1')->group(function () {
         Route::get('/commission-withdrawals/available', [CommissionWithdrawalRequestController::class, 'available']);
 
         /*
+         * 2026-09-15 — the count and the money in each step of the queue.
+         *
+         * The queue lists one status at a time, so without this the screen
+         * could say nothing about the two steps either side of the one being
+         * read. Same visibility rules as the list itself (one `visibleTo()`
+         * in the Controller), so the totals can never describe rows the
+         * reader is not allowed to see.
+         */
+        Route::get('/commission-withdrawals/summary', [CommissionWithdrawalRequestController::class, 'summary']);
+
+        /*
          * 2026-09-15 — "ตั้งจ่าย": an ADMIN raises the payout instead of the
          * agent asking for it.
          *
