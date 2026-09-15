@@ -22,6 +22,7 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
@@ -105,6 +106,24 @@ const activeTab = ref<'' | WithdrawalStatus>('pending_review')
 const busyId = ref<number | null>(null)
 
 const heading = computed(() => TABS.find((t) => t.value === activeTab.value)?.label ?? '')
+
+/*
+ * 2026-09-15 — HEADER FIGURES THAT DESCRIBE THE TAB, AND SAY SO.
+ *
+ * Every other admin screen carries KPIs in its header, and this one looked
+ * unfinished without them. The honest ones here are NOT company-wide totals:
+ * this page loads one status at a time (`?status=`), so the only numbers it
+ * actually has are about the rows currently listed. The labels therefore name
+ * the tab rather than the company — a header reading "รอโอนรวม" over a list
+ * filtered to "โอนแล้ว" would be a figure about money nobody measured.
+ */
+const kpis = computed(() => [
+  { label: `${heading.value} (รายการ)`, value: requests.value.length },
+  {
+    label: `${heading.value} (ยอดรวม)`,
+    value: formatSatang(requests.value.reduce((sum, r) => sum + r.amount_satang, 0)),
+  },
+])
 
 function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' บาท'
@@ -216,8 +235,27 @@ watch(() => activeCompany.companyId, () => {
 </script>
 
 <template>
-  <main class="p-6 max-w-5xl mx-auto">
-    <HeroHeader title="คำขอเบิกค่าคอมมิชชั่น" subtitle="ตรวจสอบ อนุมัติ และบันทึกการโอนเงินให้ตัวแทน" />
+  <!--
+    2026-09-15 — FULL WIDTH, like every other admin screen.
+
+    This was `p-6 max-w-5xl mx-auto`: a centred column roughly half the width
+    of the window, while จ่ายเงิน, แผนคอมมิชชั่น, จัดการตัวแทน and the rest all
+    use `min-h-screen px-4 py-6 lg:px-8`. The queue rows are wide — amount,
+    agent, bank account, three buttons — so the narrow column was also the
+    place where they wrapped soonest.
+  -->
+  <main class="min-h-screen px-4 py-6 lg:px-8">
+    <HeroHeader
+      icon="money"
+      title="คำขอเบิกค่าคอมมิชชั่น"
+      subtitle="ตรวจสอบ อนุมัติ และบันทึกการโอนเงินให้ตัวแทน"
+      description="ตัวแทนกดขอเบิกเองจากพอร์ทัล → ที่นี่คืออนุมัติ แล้วบันทึกว่าโอนจริงแล้ว — ยอดที่เบิกได้มาจากค่าคอมที่ยัง “รอจ่าย” เท่านั้น"
+      :kpis="kpis"
+      accent-color="brand"
+      storage-key="commission-withdrawals"
+    />
+
+    <CompanyScopeNotice action="ดูคำขอเบิกค่าคอม" />
 
     <div class="mt-4 flex flex-wrap gap-2">
       <button
@@ -239,7 +277,7 @@ watch(() => activeCompany.companyId, () => {
     <!-- 2026-09-13 — the floor, READ-ONLY. It explains refusals, which is why
          it is on this page at all; it is no longer edited here, which is why
          there is no input. See the script's own note. -->
-    <div class="mt-4 bg-white border border-slate-200 rounded-2xl px-4 py-3 max-w-xl" data-test="withdrawal-minimum-readout">
+    <div class="mt-4 bg-white border border-slate-200 rounded-2xl px-4 py-3" data-test="withdrawal-minimum-readout">
       <p class="text-xs text-slate-500">ยอดขั้นต่ำในการเบิกของบริษัทนี้</p>
       <p class="text-sm font-bold text-slate-900 mt-0.5">
         <span v-if="minWithdrawalUnknown" class="text-rose-600">อ่านค่าไม่สำเร็จ</span>
@@ -258,13 +296,53 @@ watch(() => activeCompany.companyId, () => {
 
     <LoadingSkeleton v-if="loading" class="mt-4" />
 
-    <EmptyState
-      v-else-if="requests.length === 0"
-      icon="money"
-      :title="`ไม่มีรายการ${heading}`"
-      message="เมื่อมีตัวแทนส่งคำขอเบิก รายการจะแสดงที่นี่"
-      class="mt-4"
-    />
+    <template v-else-if="requests.length === 0">
+      <EmptyState
+        icon="money"
+        :title="`ไม่มีรายการ${heading}`"
+        message="เมื่อมีตัวแทนส่งคำขอเบิก รายการจะแสดงที่นี่"
+        class="mt-4"
+      />
+
+      <!--
+        2026-09-15 — WHY IT IS EMPTY, NOT JUST THAT IT IS.
+
+        Owner: "ทำไมข้อมูลไม่ขึ้น". An empty queue on a money screen reads as a
+        broken page, and the old empty state ("เมื่อมีตัวแทนส่งคำขอเบิก…") was
+        true without being an answer: it never said that this queue only ever
+        fills from the AGENT's side, nor that settling rows directly on
+        จ่ายเงิน removes them from what an agent is able to ask for.
+
+        Those two routes to the same money genuinely compete — a company that
+        pays its agents from the payout screen will see this page empty
+        forever, and that is correct behaviour rather than a fault. Saying so
+        here is the difference between an admin checking the other tabs and an
+        admin filing a bug.
+      -->
+      <div class="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5" data-test="withdrawal-empty-help">
+        <p class="text-[13px] font-extrabold text-slate-900">รายการมาจากไหน</p>
+        <ul class="mt-1.5 space-y-1 text-[12.5px] text-slate-600 list-disc pl-4">
+          <li>
+            ตัวแทนเป็นคนกดขอเบิกเองในพอร์ทัลตัวแทน (เมนู <b>เบิกค่าคอม</b>) — หน้านี้ไม่มีปุ่มสร้างคำขอแทนตัวแทน
+          </li>
+          <li>
+            ตัวแทนขอได้เฉพาะค่าคอมที่สถานะยัง <b>“รอจ่าย”</b> เท่านั้น
+          </li>
+          <li>
+            ถ้าคุณกด <b>“จ่ายแล้ว”</b> หรือ <b>“จ่ายทั้งหมด”</b> ในหน้า
+            <RouterLink :to="{ name: 'commission-management' }" class="font-bold text-brand-600 hover:underline" data-test="link-payouts">จ่ายเงิน</RouterLink>
+            ไปแล้ว ค่าคอมก้อนนั้นจะถูกปิดไปเลย ตัวแทนจะขอเบิกไม่ได้อีก และหน้านี้จะว่างตลอด — ไม่ใช่ระบบเสีย
+          </li>
+          <li>
+            ลองกดแท็บ <b>ทั้งหมด</b> ด้านบนดูก่อน เผื่อมีคำขอที่อนุมัติหรือโอนไปแล้ว
+          </li>
+        </ul>
+        <p class="mt-2 text-[12px] text-slate-500">
+          พูดง่าย ๆ คือมีสองทางจ่ายเงินให้ตัวแทน และใช้ทางไหนทางหนึ่ง —
+          <b>คุณจ่ายเอง</b> ที่หน้าจ่ายเงิน หรือ <b>ให้ตัวแทนขอเบิก</b> แล้วมาอนุมัติที่หน้านี้
+        </p>
+      </div>
+    </template>
 
     <div v-else class="mt-4 space-y-3">
       <div
