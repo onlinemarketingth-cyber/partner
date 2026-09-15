@@ -28,7 +28,10 @@ class CommissionLedgerController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = CommissionLedger::with(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime']);
+        // `company` carries only the two columns CommissionLedgerResource's
+        // `is_company_share` needs — loaded here so that flag costs one query
+        // for the page instead of one per row.
+        $query = CommissionLedger::with(['referral.client', 'agent', 'certTierAtTime', 'product', 'overrideSourceAgent', 'appliedPricePromotionAtTime', 'company:id,commission_house_user_id']);
 
         // TASK-209 — Super Admin's header company scope, applied in SQL.
         CompanyScopeFilter::apply($query, $request);

@@ -586,3 +586,60 @@ describe('UserManagementView — who may redeem a voucher', () => {
     expect(btn(wrapper, 'voucher-staff-hint').text()).toContain('ตัดสิทธิ์บัตรกำนัล')
   })
 })
+
+/**
+ * 2026-09-15 — THE COMPANY'S OWN SEAT IN THE USER LIST.
+ *
+ * A company can place itself at the top of its hierarchy and be paid a
+ * leader's override (ขั้นตอนที่ 4.2). That seat is a real `users` row — the
+ * whole point of the design, so the payout walk needs no special case — which
+ * means it appears here looking like a person.
+ *
+ * UserPolicy already refuses update, deactivate and move on it, so every
+ * button disappears on its own. What has to be here is the LABEL: a row with
+ * a company's name, no controls and no explanation reads as a permission bug,
+ * and the next admin to see it files one.
+ */
+describe('the company commission seat', () => {
+  it('is labelled, so a row with no buttons is an answer rather than a bug', async () => {
+    mockUsers([
+      makeUser({ id: 7 }),
+      makeUser({
+        id: 90,
+        name: 'ไทยประกันชีวิต',
+        role: 'company_admin',
+        email: 'house.4@commission.internal',
+        is_commission_house_account: true,
+        // What the server actually sends for it — see UserPolicy.
+        permissions: { ...ALL, update: false, deactivate: false, move_company: false },
+      }),
+    ])
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="house-account-badge-90"]').text()).toBe('บัญชีบริษัท')
+    expect(wrapper.find('[data-test="house-account-badge-7"]').exists()).toBe(false)
+  })
+
+  it('carries none of the buttons a person gets', async () => {
+    /*
+     * Asserted through the RENDERED row rather than by re-deriving the rule
+     * here, because that is this screen's own contract: every button is gated
+     * on the server's answer for that row. If the policy ever stops refusing,
+     * this fails — which is the point.
+     */
+    mockUsers([
+      makeUser({
+        id: 90,
+        name: 'ไทยประกันชีวิต',
+        role: 'company_admin',
+        is_commission_house_account: true,
+        permissions: { ...ALL, update: false, deactivate: false, move_company: false },
+      }),
+    ])
+    const wrapper = await mountView()
+
+    for (const control of ['edit-user', 'reset-password', 'move-company', 'demote']) {
+      expect(wrapper.find(`[data-test="${control}"]`).exists()).toBe(false)
+    }
+  })
+})

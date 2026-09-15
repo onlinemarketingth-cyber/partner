@@ -118,6 +118,25 @@ export interface AgentItem {
   // convenience; the server is still the real guard (BR-6).
   manager_id?: number | null
   manager?: { id: number; name: string } | null
+  /**
+   * 2026-09-15 — the two facts about the company's own seat in its hierarchy.
+   *
+   * A company can place itself at the TOP of its manager chain and be paid a
+   * leader's override (ขั้นตอนที่ 4.2 of the commission screen). That seat is
+   * a real users row, which is why this modal has to know about it:
+   *
+   *   * `is_commission_house_account` — this row IS the seat, so every
+   *     control here belongs to a person it is not;
+   *   * `manager_is_commission_house_account` — this person reports TO the
+   *     seat, so their upline is a statement rather than a pick. The seat is
+   *     not in the dropdown (it is not an agent) and clearing the field would
+   *     take the company out of its own payout chain.
+   *
+   * Server-computed, both of them — the frontend must never infer either
+   * from a name or a role.
+   */
+  is_commission_house_account?: boolean
+  manager_is_commission_house_account?: boolean
   // TASK-044 Phase A — bank payout details. As of TASK-047, UserResource
   // now reveals the REAL bank_account_number here (Company Admin/Super
   // Admin managing an agent within their own company — see that

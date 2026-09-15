@@ -331,6 +331,104 @@ class CommissionHouseAccountTest extends TestCase
             ->assertForbidden();
     }
 
+    // ── The screens that list money and people ───────────────────────
+
+    public function test_the_payout_list_marks_the_companys_own_row(): void
+    {
+        /*
+         * The admin's จ่ายคอมมิชชั่น screen lists ledger rows with a
+         * "จ่ายแล้ว" button on each. The company's row must not carry one:
+         * marking it paid records a transfer the company made to itself, and
+         * the number then disagrees with the bank forever (BR-4 — it cannot
+         * be undone). The flag is what lets the screen hide the button.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $this->sell($world);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $rows = collect($this->actingAs($superAdmin)
+            ->getJson('/api/v1/commission-ledger?company_id='.$world['company']->id)
+            ->assertOk()
+            ->json('data'));
+
+        $this->assertTrue($rows->firstWhere('agent.id', $house->id)['is_company_share']);
+        $this->assertFalse($rows->firstWhere('agent.id', $world['agent']->id)['is_company_share']);
+    }
+
+    public function test_the_per_agent_summary_separates_the_companys_share(): void
+    {
+        // Same list, different screen: this one is a payout RUN, and the seat
+        // has no bank details because it is not a person to transfer to.
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $this->sell($world);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $rows = collect($this->actingAs($superAdmin)
+            ->getJson('/api/v1/agent-commission-summary?company_id='.$world['company']->id)
+            ->assertOk()
+            ->json('data'));
+
+        $this->assertTrue($rows->firstWhere('agent_id', $house->id)['is_company_share']);
+        $this->assertFalse($rows->firstWhere('agent_id', $world['agent']->id)['is_company_share']);
+    }
+
+    public function test_the_user_list_says_which_row_is_the_seat_and_who_reports_to_it(): void
+    {
+        /*
+         * Two different facts, and the console needs both: the seat itself
+         * gets a label and loses the controls a person has, while an agent
+         * reporting to it needs their upline shown as a statement — the seat
+         * is not in the picker (it is not an agent), and clearing the field
+         * would take the company out of its own payout chain.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $rows = collect($this->actingAs($superAdmin)
+            ->getJson('/api/v1/users?company_id='.$world['company']->id)
+            ->assertOk()
+            ->json('data'));
+
+        $seat = $rows->firstWhere('id', $house->id);
+        $agent = $rows->firstWhere('id', $world['agent']->id);
+
+        $this->assertTrue($seat['is_commission_house_account']);
+        $this->assertFalse($seat['manager_is_commission_house_account']);
+        $this->assertFalse($agent['is_commission_house_account']);
+        $this->assertTrue($agent['manager_is_commission_house_account']);
+    }
+
+    public function test_the_user_list_offers_the_seat_none_of_a_persons_buttons(): void
+    {
+        /*
+         * The user-management screen states its own rule: every button is
+         * gated on the SERVER's answer for that row. So the refusal lives in
+         * UserPolicy, and this asserts what the screen actually receives —
+         * four copies of the condition in four v-ifs is four places for the
+         * fifth screen to forget it.
+         */
+        $world = $this->world(agentRate: 300, leaderRate: 200);
+        $house = $this->houseAccounts()->create($world['company']);
+        $superAdmin = User::factory()->superAdmin()->create();
+
+        $rows = collect($this->actingAs($superAdmin)
+            ->getJson('/api/v1/users?with_permissions=1&company_id='.$world['company']->id)
+            ->assertOk()
+            ->json('data'));
+
+        $seat = $rows->firstWhere('id', $house->id);
+        $agent = $rows->firstWhere('id', $world['agent']->id);
+
+        $this->assertFalse($seat['permissions']['update']);
+        $this->assertFalse($seat['permissions']['deactivate']);
+        $this->assertFalse($seat['permissions']['move_company']);
+        // The control: an ordinary agent in the same company keeps everything.
+        $this->assertTrue($agent['permissions']['update']);
+    }
+
     // ── Fixtures ─────────────────────────────────────────────────────
 
     private function houseAccounts(): CommissionHouseAccountService

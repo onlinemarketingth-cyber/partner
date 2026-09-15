@@ -261,7 +261,27 @@ const canBeCompanyAdmin = computed(() => editOriginal.value.role === 'company_ad
  * Reading the LIVE toggle (not the snapshot) so the control disappears the
  * moment it is switched on, which is also what makes the save guard honest.
  */
-const uplineIsEditable = computed(() => !editForm.value.is_team_leader)
+/**
+ * 2026-09-15 — THE UPLINE IS NOW A THING A TEAM LEADER HAS.
+ *
+ * TASK-130 §2b hid this control for anybody with the leadership flag, on the
+ * grounds that "they sit at the top of their own branch". That premise stopped
+ * being true when a company could place ITSELF at the top of the hierarchy
+ * (ขั้นตอนที่ 4.2): a team leader reports to the company seat now, the system
+ * attaches them automatically, and hiding the field meant an admin had no way
+ * to see that the leader's own sales are also charged a company share.
+ *
+ * So the rule splits in two. The field is SHOWN whenever there is something
+ * true to say, and it is EDITABLE only when the value is one a person may
+ * choose — never when it is the company's seat, which is not in the picker
+ * (it is not an agent) and which clearing would take the company out of its
+ * own payout chain.
+ */
+const uplineIsHouseAccount = computed(() => agent.value?.manager_is_commission_house_account === true)
+const uplineIsEditable = computed(() => !editForm.value.is_team_leader && !uplineIsHouseAccount.value)
+const uplineIsVisible = computed(() => uplineIsEditable.value || uplineIsHouseAccount.value)
+/** This row IS the company's seat — nothing in this modal applies to it. */
+const subjectIsHouseAccount = computed(() => agent.value?.is_commission_house_account === true)
 
 // ── Opening ──────────────────────────────────────────────────────────
 
@@ -1222,9 +1242,27 @@ watch(
                    of their own branch, so the control has no meaning and an
                    empty dropdown only invites an admin to fill it in. The
                    value already on file is left untouched (uplineIsEditable). -->
-              <div v-if="uplineIsEditable">
+              <div v-if="uplineIsVisible">
                 <label class="text-xs font-bold text-slate-500">หัวหน้า (Upline)</label>
+                <!--
+                  THE COMPANY'S SEAT IS A STATEMENT, NOT A PICK (2026-09-15).
+                  It is not in the options (the roster is agents only), and the
+                  only thing an admin could do to this field is empty it —
+                  which silently stops the company earning on this person, with
+                  no error and nothing on screen to notice. Same treatment the
+                  rate form's locked scope already uses.
+                -->
+                <div
+                  v-if="uplineIsHouseAccount"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50/60 text-sm flex flex-wrap items-center gap-2"
+                  data-test="upline-house-account"
+                >
+                  <span class="font-bold text-slate-900">{{ agent?.manager?.name ?? 'บัญชีบริษัท' }}</span>
+                  <span class="text-[11px] font-bold rounded-full px-2 py-0.5 bg-emerald-100 text-emerald-800">บัญชีบริษัท</span>
+                  <span class="ml-auto text-[11px] text-slate-500">ยอดสุดของสายงาน · เปลี่ยนที่นี่ไม่ได้</span>
+                </div>
                 <select
+                  v-else
                   v-model="editForm.manager_id"
                   :disabled="editIsReadOnly"
                   class="mt-1 w-full px-3 py-2 rounded-lg border text-sm bg-white disabled:bg-slate-50 disabled:text-slate-400"

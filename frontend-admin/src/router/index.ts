@@ -178,11 +178,26 @@ const router = createRouter({
       component: () => import('../views/OrderPaymentsView.vue'),
       meta: { navLabel: 'คำสั่งซื้อ / การชำระเงิน' },
     },
+    /*
+     * 2026-09-15 — ONE PAYOUT SCREEN, TWO VIEWS.
+     *
+     * Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
+     *
+     * This path used to render the flat ledger (CommissionManagementView) while
+     * '/agent-commission-summary', filed under a DIFFERENT pillar, grouped the
+     * same rows by agent and owned the bank details and the payout CSV — and
+     * that screen's drill-down already fetched this endpoint with ?agent_id=.
+     * A payout run therefore needed both menus.
+     *
+     * CommissionPayoutsView is the merge. The flat ledger survives as its
+     * "รายรายการ" view (CommissionLedgerPanel); '?tab=' still lands there, so
+     * the dashboard's existing deep link keeps its meaning.
+     */
     {
       path: '/commission',
       name: 'commission-management',
-      component: () => import('../views/CommissionManagementView.vue'),
-      meta: { navLabel: 'Commission' },
+      component: () => import('../views/CommissionPayoutsView.vue'),
+      meta: { navLabel: 'จ่ายเงิน' },
     },
     // TASK-050 — "ทีมขาย" leadership cockpit: manager_id reporting
     // roll-up (per-agent client/deal counts + close rate) built
@@ -297,17 +312,19 @@ const router = createRouter({
       component: () => import('../views/AnnouncementsView.vue'),
       meta: { navLabel: 'ข่าวสารถึง Agent' },
     },
-    // TASK-043 — per-agent commission summary ("ค่าคอมมิชชั่น" sub-item
-    // under the "จัดการตัวแทน" pillar). Deliberately a different screen
-    // from '/commission' (CommissionManagementView — flat ledger rows):
-    // this one is grouped-by-agent totals from the new
-    // GET /agent-commission-summary endpoint. Not a replacement for
-    // '/commission' — both stay.
+    /*
+     * TASK-043's per-agent summary used to live here, under the จัดการตัวแทน
+     * pillar, and the note that stood in this spot said the two screens were
+     * "deliberately different" and that "both stay". That was the defence of a
+     * split the owner then had to navigate every payout run.
+     *
+     * 2026-09-15 — they are one screen at '/commission'. The path is kept as a
+     * REDIRECT rather than deleted: it is bookmarked, and a dead admin URL
+     * teaches people the console lost a page rather than moved it.
+     */
     {
       path: '/agent-commission-summary',
-      name: 'agent-commission-summary',
-      component: () => import('../views/AgentCommissionSummaryView.vue'),
-      meta: { navLabel: 'ค่าคอมมิชชั่น' },
+      redirect: { name: 'commission-management' },
     },
     // TASK-040 — "มุมมองสินค้า" (ABC grading + price promotions). Same
     // deliberate omission from AdminNavigation.vue's top nav as the 3

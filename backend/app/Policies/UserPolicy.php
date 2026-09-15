@@ -46,7 +46,36 @@ class UserPolicy
 
     public function update(User $user, User $target): bool
     {
+        if ($this->isCommissionHouseAccount($target)) {
+            return false;
+        }
+
         return $this->view($user, $target);
+    }
+
+    /**
+     * 2026-09-15 — THE COMPANY'S OWN SEAT IN ITS HIERARCHY IS NOT A PERSON.
+     *
+     * A company can place itself at the top of its manager chain and be paid
+     * a leader's override (ขั้นตอนที่ 4.2). The seat is a real `users` row —
+     * that is the whole design, so the payout walk needs no special case —
+     * which means it turns up in the user-management list with the full set
+     * of buttons a person gets: edit, reset password, move company,
+     * deactivate. Every one of them is a way for the company's own margin to
+     * stop arriving, or to arrive somewhere else.
+     *
+     * REFUSED IN THE POLICY, not in each screen. This codebase's user list
+     * states its own rule — "every button is gated on the SERVER's answer for
+     * this row, never on a rule re-derived here" — and four `v-if`s carrying a
+     * copy of this condition is four places for the fifth screen to forget it.
+     *
+     * Switching the seat on and off is CommissionHouseAccountService's job.
+     * It has to move every agent's `manager_id` in the same breath, which none
+     * of the controls above do.
+     */
+    private function isCommissionHouseAccount(User $target): bool
+    {
+        return $target->isCommissionHouseAccount();
     }
 
     /**
@@ -78,6 +107,10 @@ class UserPolicy
 
     public function delete(User $user, User $target): bool
     {
+        if ($this->isCommissionHouseAccount($target)) {
+            return false;
+        }
+
         if ($user->id === $target->id) {
             // Never allow deactivating your own account through this
             // endpoint — an obvious self-lockout risk, same defensive
@@ -103,6 +136,8 @@ class UserPolicy
      */
     public function move(User $user, User $target): bool
     {
-        return $user->isSuperAdmin() && ! $target->isSuperAdmin();
+        return $user->isSuperAdmin()
+            && ! $target->isSuperAdmin()
+            && ! $this->isCommissionHouseAccount($target);
     }
 }

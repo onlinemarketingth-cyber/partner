@@ -192,7 +192,19 @@ const navItems: NavItem[] = [
       // cockpit lives as a sub-menu of "จัดการตัวแทน", right BEFORE
       // "ค่าคอมมิชชั่น", rather than as its own top-level pillar.
       { name: 'sales-team', icon: 'chart', label: { th: 'ทีมขาย', en: 'Sales Team' } },
-      { name: 'agent-commission-summary', icon: 'money', label: { th: 'ค่าคอมมิชชั่น', en: 'Commission Summary' } },
+      /*
+       * 2026-09-15 — "ค่าคอมมิชชั่น" WAS HERE and has moved to the Commission
+       * pillar, where the rest of the money lives.
+       *
+       * Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
+       * It was the odd one out: an admin doing a payout run started in this
+       * pillar for the totals and the CSV, then crossed to Commission for the
+       * button that marks anything paid. The two screens are now one
+       * (CommissionPayoutsView), under one menu.
+       *
+       * "ทีมขาย" above deliberately STAYS — it is a performance cockpit, not a
+       * payout tool (owner: "อยู่ที่เดิม").
+       */
       { name: 'announcements', icon: 'megaphone', label: { th: 'ข่าวสาร', en: 'Announcements' } },
       { name: 'agent-promotions', icon: 'tag', label: { th: 'Promotion', en: 'Promotion' } },
       { name: 'reward-center', icon: 'trophy', label: { th: 'ศูนย์รางวัล', en: 'Reward Center' } },
@@ -239,7 +251,14 @@ const navItems: NavItem[] = [
     icon: 'money',
     label: { th: 'Commission', en: 'Commission' },
     subMenus: [
-      { name: 'commission-management', icon: 'money', label: { th: 'จ่ายคอมมิชชั่น', en: 'Payouts' } },
+      /*
+       * 2026-09-15 — "จ่ายคอมมิชชั่น" became "จ่ายเงิน" when the per-agent
+       * summary merged into it. The shorter label is the honest one: the page
+       * now answers both "who do I pay and how much" and "why is this row what
+       * it is", and naming it after only the ledger half would send anybody
+       * looking for the payout file back to the pillar it just left.
+       */
+      { name: 'commission-management', icon: 'money', label: { th: 'จ่ายเงิน', en: 'Payouts' } },
       // 2026-08-27 — agent-initiated payout requests. Under Commission
       // rather than its own pillar: it is the same money as "จ่ายคอมมิชชั่น"
       // above, one step earlier in the process.

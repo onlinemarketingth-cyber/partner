@@ -201,6 +201,32 @@ class UserResource extends JsonResource
                 'id' => $this->manager->id,
                 'name' => $this->manager->name,
             ] : null),
+            /*
+             * 2026-09-15 — THE COMPANY'S OWN SEAT IN ITS HIERARCHY.
+             *
+             * Two different questions, both needed by the admin console and
+             * neither derivable from the other:
+             *
+             *   · `is_commission_house_account` — THIS row is the seat, so the
+             *     user list marks it and hides the controls a person gets.
+             *   · `manager_is_commission_house_account` — this person reports
+             *     to the seat. The upline field shows that as a statement
+             *     rather than an editable name, because the seat is not in
+             *     the picker (it is not an agent) and clearing the field
+             *     would take the company out of its own payout chain.
+             *
+             * Both compare ids against the ALREADY-LOADED company, so a list
+             * of fifty users costs no extra queries. Absent when company was
+             * not loaded, in which case the screen falls back to hiding
+             * nothing — the honest default for a payload that did not ask.
+             */
+            'is_commission_house_account' => $this->relationLoaded('company')
+                && $this->company?->commission_house_user_id !== null
+                && (int) $this->company->commission_house_user_id === (int) $this->id,
+            'manager_is_commission_house_account' => $this->relationLoaded('company')
+                && $this->manager_id !== null
+                && $this->company?->commission_house_user_id !== null
+                && (int) $this->company->commission_house_user_id === (int) $this->manager_id,
             // TASK-044 Phase A — bank payout details. bank_account_number
             // is masked to last-4 by default (see $revealBankAccountNumber
             // docblock above); bank_name/bank_account_holder_name are not

@@ -65,7 +65,9 @@
  * cosmetic choices.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
+import CommissionLedgerPanel from './CommissionLedgerPanel.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -73,6 +75,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+
+const route = useRoute()
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
 
@@ -140,8 +144,41 @@ interface LedgerItem {
   payment_status: 'pending' | 'paid'
   earned_via: 'direct' | 'renewal' | 'override' | 'binary_match' | 'matrix_override' | 'stairstep_override' | 'generation_override' | 'promotion_bonus'
   override_source_agent: { id: number; name: string } | null
+  /** 2026-09-15 — the payee is the COMPANY itself; nothing is transferred. */
+  is_company_share?: boolean
   paid_at: string | null
   created_at: string
+}
+
+/**
+ * 2026-09-15 — "จ่ายแล้ว", HERE, on the row somebody is looking at.
+ *
+ * This drill-down used to be strictly read-only, and marking anything paid
+ * meant leaving for a second screen in a different menu (see
+ * CommissionLedgerPanel's docblock) — so a payout run was: read the totals
+ * here, download the file here, then go somewhere else and find the same rows
+ * again. That is the whole of what the owner asked to be one place.
+ *
+ * Reloads BOTH after a success: the row's own status, and the per-agent
+ * summary above it, whose "รอจ่าย" total this just changed. Reloading only one
+ * leaves the screen disagreeing with itself about the same money.
+ */
+const markingId = ref<number | null>(null)
+const markError = ref('')
+
+async function markEntryPaid(entry: LedgerItem, agent: AgentSummaryItem): Promise<void> {
+  if (markingId.value !== null) return
+
+  markingId.value = entry.id
+  markError.value = ''
+  try {
+    await api.post(`/commission-ledger/${entry.id}/mark-paid`)
+    await Promise.all([loadAll(), toggleDetail(agent, { keepOpen: true })])
+  } catch (e) {
+    markError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
+  } finally {
+    markingId.value = null
+  }
 }
 
 // TASK-047 point 4/5 — agent profile header + avatar/initial-circle,
@@ -281,8 +318,15 @@ const detailTotal = ref(0)
 // backend surface needed).
 const agentDetail = ref<AgentDetail | null>(null)
 const agentDetailLoading = ref(false)
-async function toggleDetail(agent: AgentSummaryItem) {
-  if (detailAgentId.value === agent.agent_id) {
+/**
+ * `keepOpen` — reload the open panel in place rather than toggling it shut.
+ *
+ * Added 2026-09-15 with the in-panel "จ่ายแล้ว": a write has to refresh the
+ * rows it changed, and the toggle semantics would have closed the panel the
+ * admin is working in on every single press.
+ */
+async function toggleDetail(agent: AgentSummaryItem, options: { keepOpen?: boolean } = {}) {
+  if (detailAgentId.value === agent.agent_id && options.keepOpen !== true) {
     detailAgentId.value = null
     return
   }
@@ -389,6 +433,27 @@ const kpis = computed(() => [
   { label: 'จำนวน Agent', value: summaries.value.length },
 ])
 
+/*
+ * WHICH VIEW, AND WHERE THE STARTING ONE COMES FROM.
+ *
+ * `?view=` names it outright. `?tab=` is the OLD /commission link shape — the
+ * dashboard's "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still points at it — and a link
+ * that names a ledger tab is asking for the ledger, so it lands there and the
+ * panel reads its own `?tab=` as it always did. Read once at setup, never
+ * watched: this is a starting point somebody handed over, and re-applying it
+ * would fight the next click.
+ */
+const VIEWS = [
+  { id: 'agents' as const, label: 'รายตัวแทน', hint: 'สำหรับรอบจ่ายเงิน — ยอดรวมต่อคน บัญชีธนาคาร และไฟล์ CSV' },
+  { id: 'entries' as const, label: 'รายรายการ', hint: 'ทุกแถวในบัญชี สำหรับตรวจสอบดีลเดียว' },
+]
+
+const view = ref<'agents' | 'entries'>(
+  route.query.view === 'entries' || (route.query.view === undefined && typeof route.query.tab === 'string')
+    ? 'entries'
+    : 'agents',
+)
+
 // BR-3 — satang in, baht out. Divide by 100 only here, at the display layer.
 function formatSatang(satang: number): string {
   return (satang / 100).toLocaleString('th-TH') + ' บาท'
@@ -403,16 +468,52 @@ watch(() => activeCompany.companyId, () => { loadAll() })
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="money"
-      title="ค่าคอมมิชชั่น"
-      subtitle="สรุปยอดคอมมิชชั่นรายตัวแทน"
-      description="ยอดรวมต่อ Agent จากรายการ Commission Ledger จริง — ดูรายการย่อยรายตัวได้ที่หน้า Commission Ledger"
-      :kpis="kpis"
+      title="จ่ายเงิน"
+      subtitle="ค่าคอมมิชชั่นของบริษัทนี้"
+      description="ยอดรวมต่อคน สำหรับรอบจ่ายเงิน · หรือดูทีละรายการเพื่อตรวจสอบดีลเดียว — ตัวเลขทั้งหมดมาจาก Commission Ledger จริง"
+      :kpis="view === 'agents' ? kpis : []"
       accent-color="brand"
       storage-key="agent-commission-summary"
     />
 
     <CompanyScopeNotice action="ดูสรุปคอมมิชชั่น" />
 
+    <!--
+      TWO VIEWS OF THE SAME MONEY (2026-09-15).
+
+      Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
+
+      These were two menu items in two different pillars — "ค่าคอมมิชชั่น" under
+      จัดการตัวแทน and "จ่ายคอมมิชชั่น" under Commission — over the same ledger,
+      and a payout run needed both: the totals, the bank details and the CSV
+      here, the button that actually marks a row paid over there.
+
+      NOT tabs over two data sets. One question asked two ways: รายตัวแทน is
+      "who do I pay, and how much", รายรายการ is "why is this number what it
+      is". Which is also why they keep separate fetches and filters — a shared
+      query would make each of them worse at its own question.
+    -->
+    <div class="mt-4 flex flex-wrap items-center gap-1" role="group" aria-label="มุมมอง" data-test="payout-view-switch">
+      <button
+        v-for="v in VIEWS"
+        :key="v.id"
+        type="button"
+        class="px-3.5 py-2 rounded-lg text-[13px] font-bold transition-colors"
+        :class="view === v.id ? 'bg-brand-600 text-white' : 'text-slate-500 hover:bg-slate-100'"
+        :aria-pressed="view === v.id"
+        :data-test="`payout-view-${v.id}`"
+        @click="view = v.id"
+      >
+        {{ v.label }}
+      </button>
+      <span class="ml-2 text-[12px] text-slate-400">{{ VIEWS.find((v) => v.id === view)?.hint }}</span>
+    </div>
+
+    <!-- รายรายการ — the old /commission page, now a view rather than a
+         destination. It loads and filters itself; see its own docblock. -->
+    <CommissionLedgerPanel v-if="view === 'entries'" />
+
+    <template v-else>
     <div class="mt-4 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
       <DateRangeFilter v-model:date-from="filters.date_from" v-model:date-to="filters.date_to" :years-back="3" :years-forward="0" />
       <div>
@@ -607,6 +708,12 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               </span>
             </div>
 
+            <!-- OUTSIDE the load/empty chain below, not inside it: a failed
+                 "จ่ายแล้ว" is about the press that just happened, and slipping
+                 it into that v-if chain silently turned "no entries" into
+                 "else if the last write failed". -->
+            <p v-if="markError" class="mb-2 text-[12px] font-bold text-rose-600" data-test="detail-mark-error">{{ markError }}</p>
+
             <div v-if="detailLoading" class="text-xs text-slate-400">กำลังโหลด...</div>
             <div v-else-if="detailError" class="text-xs text-rose-600">{{ detailError }}</div>
             <div v-else-if="!detailEntries.length" class="text-xs text-slate-400">ไม่มีรายการคอมมิชชั่น</div>
@@ -621,6 +728,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                     <th class="py-1.5 pr-3 font-bold">โปรโมชั่น</th>
                     <th class="py-1.5 pr-3 font-bold text-right">ค่าคอม</th>
                     <th class="py-1.5 font-bold">สถานะ</th>
+                    <th class="py-1.5 font-bold text-right"><span class="sr-only">จ่ายเงิน</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -643,6 +751,25 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                         {{ e.payment_status === 'paid' ? 'จ่ายแล้ว' : 'รอจ่าย' }}
                       </span>
                     </td>
+                    <!--
+                      The action that used to live on a different menu. Same
+                      two exclusions as the ledger panel: an already-paid row
+                      has nothing to do, and the company's own share is money
+                      that never moves, so there is no transfer to record.
+                    -->
+                    <td class="py-2 text-right whitespace-nowrap">
+                      <span v-if="e.is_company_share" class="text-[10px] text-slate-400">ไม่ต้องโอน</span>
+                      <button
+                        v-else-if="e.payment_status === 'pending'"
+                        type="button"
+                        class="px-2.5 py-1 rounded-lg bg-brand-600 text-white text-[11px] font-bold hover:bg-brand-700 disabled:opacity-50"
+                        :disabled="markingId !== null"
+                        :data-test="`detail-mark-paid-${e.id}`"
+                        @click="markEntryPaid(e, s)"
+                      >
+                        {{ markingId === e.id ? 'กำลังบันทึก…' : 'จ่ายแล้ว' }}
+                      </button>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -654,6 +781,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         </div>
       </div>
       </template>
+    </template>
     </template>
   </main>
 </template>

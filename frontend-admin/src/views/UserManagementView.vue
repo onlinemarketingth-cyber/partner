@@ -96,6 +96,17 @@ interface UserRow {
   company: { id: number; name: string } | null
   is_active: boolean
   is_team_leader: boolean
+  /**
+   * 2026-09-15 — this row is the COMPANY's own seat in its hierarchy, not a
+   * person (ขั้นตอนที่ 4.2 of the commission screen).
+   *
+   * Every action button on this screen is already gated on
+   * `permissions.*`, and UserPolicy answers false for this row on all three
+   * — so the flag is here for ONE reason: to say what the row is. A row with
+   * a company's name and no buttons, and no explanation, reads as a
+   * permission bug.
+   */
+  is_commission_house_account?: boolean
   last_login_at: string | null
   created_at: string
   permissions: RowPermissions
@@ -570,6 +581,18 @@ onMounted(() => {
                   {{ user.name }}
                   <span v-if="user.id === auth.user?.id" class="ml-1 text-[10px] font-bold text-slate-400">(คุณ)</span>
                   <span v-if="user.is_team_leader" class="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500">หัวหน้าทีม</span>
+                  <!-- Says what the row IS. The buttons are already gone
+                       (UserPolicy refuses all three), and a row with a
+                       company's name, no controls and no label reads as a
+                       permission bug rather than as an answer. -->
+                  <span
+                    v-if="user.is_commission_house_account"
+                    class="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800"
+                    :data-test="`house-account-badge-${user.id}`"
+                    title="บัญชีที่บริษัทใช้รับค่าคอมหัวหน้าทีม — ตั้งค่าที่ขั้นตอนที่ 4.2 ของหน้าคอมมิชชั่น"
+                  >
+                    บัญชีบริษัท
+                  </span>
                 </td>
                 <td class="px-4 py-2.5 text-slate-600">{{ user.email }}</td>
                 <td class="px-4 py-2.5">

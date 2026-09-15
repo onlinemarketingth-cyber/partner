@@ -25,6 +25,25 @@ class CommissionLedgerResource extends JsonResource
                 'id' => $this->agent->id,
                 'name' => $this->agent->name,
             ]),
+            /*
+             * 2026-09-15 — IS THIS ROW THE COMPANY'S OWN SHARE?
+             *
+             * The company can hold a seat at the top of its own hierarchy and
+             * be paid a leader's override (CommissionHouseAccountService), so
+             * the payout list now contains rows whose payee is the company
+             * itself. They must not carry a "จ่ายแล้ว" button: marking one
+             * paid records a transfer the company made to itself, which is
+             * not a thing that happens and is a number that then disagrees
+             * with the bank.
+             *
+             * Compared as ids against the ledger's OWN company rather than
+             * asked of the agent, so a page of fifty rows costs no queries.
+             * `company:id,commission_house_user_id` is eager-loaded by
+             * CommissionLedgerController for exactly this line.
+             */
+            'is_company_share' => $this->relationLoaded('company')
+                && $this->company?->commission_house_user_id !== null
+                && (int) $this->company->commission_house_user_id === (int) $this->agent_id,
             'cert_tier_at_time' => $this->whenLoaded('certTierAtTime', fn () => [
                 'id' => $this->certTierAtTime->id,
                 'key' => $this->certTierAtTime->key,

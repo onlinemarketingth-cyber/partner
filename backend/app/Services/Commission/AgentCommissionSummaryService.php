@@ -4,6 +4,7 @@ namespace App\Services\Commission;
 
 use App\Enums\PaymentStatus;
 use App\Models\CommissionLedger;
+use App\Models\Company;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -76,7 +77,7 @@ class AgentCommissionSummaryService
      * paymentStatus = Pending and reads only total_pending_satang, which is
      * the measured side of that call.
      *
-     * @return Collection<int, array{agent_id: int, agent_name: ?string, total_paid_satang: ?int, total_pending_satang: ?int, entry_count: int, bank_name: ?string, bank_account_number: ?string, bank_account_holder_name: ?string, avatar_url: ?string, cert_tier: ?array{id: int, key: string, name: string}}>
+     * @return Collection<int, array{agent_id: int, agent_name: ?string, total_paid_satang: ?int, total_pending_satang: ?int, entry_count: int, bank_name: ?string, bank_account_number: ?string, bank_account_holder_name: ?string, avatar_url: ?string, cert_tier: ?array{id: int, key: string, name: string}, is_company_share: bool}>
      */
     public function buildSummary(
         User $actor,
@@ -154,6 +155,18 @@ class AgentCommissionSummaryService
         // passed tiers per agent are resolved by ordering
         // cert_tiers.sort_order DESC and keeping only the first row per
         // agent_id (->unique('user_id') keeps the first occurrence).
+        /*
+         * 2026-09-15 — which of these payees are companies rather than
+         * people. One query for the page; ids are unique across tenants, so
+         * a flat list is exact and reveals nothing — it only labels rows
+         * this method was already returning.
+         */
+        $houseUserIds = Company::withTrashed()
+            ->whereNotNull('commission_house_user_id')
+            ->pluck('commission_house_user_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
         $certTiersByAgentId = DB::table('user_certifications')
             ->join('cert_tiers', 'cert_tiers.id', '=', 'user_certifications.cert_tier_id')
             ->whereIn('user_certifications.user_id', $rows->pluck('agent_id'))
@@ -163,7 +176,7 @@ class AgentCommissionSummaryService
             ->keyBy('user_id');
 
         return $rows
-            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId) {
+            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId, $houseUserIds) {
                 // BR-3 — SUM() over an already-integer satang column is
                 // still integer arithmetic; cast defensively since raw
                 // SQL aggregates come back as strings from the PDO
@@ -216,6 +229,19 @@ class AgentCommissionSummaryService
                     'cert_tier' => ($tier = $certTiersByAgentId->get($row->agent_id))
                         ? ['id' => $tier->id, 'key' => $tier->key, 'name' => $tier->name]
                         : null,
+                    /*
+                     * 2026-09-15 — THE COMPANY'S OWN SHARE, NOT AN AGENT'S.
+                     *
+                     * A company can hold a seat at the top of its hierarchy
+                     * and be paid a leader's override
+                     * (CommissionHouseAccountService), and this summary groups
+                     * by agent_id — so that seat appears here as a payee with
+                     * no bank details, in a list whose entire purpose is a
+                     * payout run. Flagged rather than filtered out: the number
+                     * is one an admin wants (it is what the setting earned),
+                     * it just must never be queued for a transfer.
+                     */
+                    'is_company_share' => in_array((int) $row->agent_id, $houseUserIds, true),
                 ];
             })
             // ?? 0 here is an ORDERING fallback only — it never reaches the

@@ -42,6 +42,18 @@ const { FakeApiError } = vi.hoisted(() => ({
   },
 }))
 
+/*
+ * 2026-09-15 — this view reads `?view=` / `?tab=` at setup to choose which of
+ * its two payout views opens (see CommissionPayoutsView). An unmocked router
+ * makes `useRoute()` undefined and every test here dies in setup, on a line
+ * that has nothing to do with what it asserts.
+ */
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' },
+}))
+
 vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
@@ -55,7 +67,7 @@ vi.mock('@/api/client', () => ({
   ApiError: FakeApiError,
 }))
 
-import AgentCommissionSummaryView from '../AgentCommissionSummaryView.vue'
+import CommissionPayoutsView from '../CommissionPayoutsView.vue'
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 // BR-3 — the API sends integer satang. 1,500.00 THB = 150_000 satang.
@@ -99,7 +111,7 @@ function wireApi(rows: ReturnType<typeof makeRow>[]) {
 
 async function mountView(rows: ReturnType<typeof makeRow>[]) {
   wireApi(rows)
-  const wrapper = mount(AgentCommissionSummaryView)
+  const wrapper = mount(CommissionPayoutsView, { global: { stubs: { CommissionLedgerPanel: true } } })
   await flushPromises()
   return wrapper
 }
@@ -218,5 +230,37 @@ describe('the company share is reported apart from the agents', () => {
 
     expect(wrapper.find('[data-test="company-share-row-1"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('ส่วนของบริษัท')
+  })
+})
+
+/**
+ * 2026-09-15 — ONE MENU, TWO VIEWS.
+ *
+ * Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
+ *
+ * Two screens in two different pillars used to show the same ledger: this one
+ * grouped by agent with the bank details and the CSV, and /commission as flat
+ * rows with the only button that marks anything paid. A payout run needed
+ * both. They are one screen now.
+ *
+ * What is pinned here is the part a refactor loses silently: the deep link.
+ * The dashboard's "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still points at
+ * /commission?tab=paid, and that link means "show me the paid LEDGER ROWS" —
+ * so it has to land on the row view, not on the per-agent default.
+ */
+describe('the two views of one payout screen', () => {
+  it('opens on the per-agent view, because that is what a payout run needs', async () => {
+    const wrapper = await mountView([makeRow()])
+
+    expect(wrapper.get('[data-test="payout-view-agents"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('commission-ledger-panel-stub').exists()).toBe(false)
+  })
+
+  it('switches to the row view without leaving the page', async () => {
+    const wrapper = await mountView([makeRow()])
+
+    await wrapper.get('[data-test="payout-view-entries"]').trigger('click')
+
+    expect(wrapper.find('commission-ledger-panel-stub').exists()).toBe(true)
   })
 })

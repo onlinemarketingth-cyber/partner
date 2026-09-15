@@ -1,27 +1,42 @@
 <script setup lang="ts">
 /**
- * CommissionManagementView — Admin company-wide commission ledger +
- * the "mark paid" action (Phase 8). Ported from the Agent Portal's
- * read-only CommissionView.vue, with the one write action this app is
- * actually allowed to do (CommissionLedgerPolicy::markPaid — Company
- * Admin/Super Admin only, an Agent marking their own commission "paid"
- * would be an obvious self-dealing gap, already enforced server-side).
+ * CommissionLedgerPanel — every commission row in the company, one line each,
+ * with the one write action this app is allowed to make: "จ่ายแล้ว".
  *
- * BR-3: money is integer satang server-side; divided by 100 only here,
- * at the display layer. BR-4: entries are immutable except
- * payment_status/paid_at — no other field is ever editable here.
+ * ── 2026-09-15: THIS WAS A WHOLE MENU ITEM, AND IT SHOULD NOT HAVE BEEN ──
+ *
+ * Owner: "ค่าคอมมิชชั่นมันกระจายอยู่หลายเมนูมาก ผมอยากรวมเป็น Menu ที่เดียว".
+ *
+ * It lived at /commission as "จ่ายคอมมิชชั่น" while a second screen —
+ * "ค่าคอมมิชชั่น", filed under จัดการตัวแทน — grouped the SAME rows by agent,
+ * carried the bank details and produced the payout CSV. Worse, that screen's
+ * own drill-down already fetched this exact endpoint with ?agent_id=. So a
+ * payout run meant two menus, two pillars and the same money twice: totals and
+ * the file on one page, the button that actually marks anything paid on the
+ * other.
+ *
+ * Same shape as the 3.3-versus-resolution-table duplication a day earlier, and
+ * the same fix: this is now a VIEW inside CommissionPayoutsView ("รายรายการ"),
+ * not a destination. It keeps its own fetch and filters because the two views
+ * genuinely ask different questions — per agent for paying people, per row for
+ * auditing one deal — and sharing a query would make each worse.
+ *
+ * WHAT IT NO LONGER OWNS: the page header, the company-scope notice and the
+ * KPI tiles' housing. The host draws those once for both views.
+ *
+ * BR-3: money is integer satang server-side; divided by 100 only here, at the
+ * display layer. BR-4: entries are immutable except payment_status/paid_at —
+ * no other field is ever editable here.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
-import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 const route = useRoute()
-import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
 
@@ -215,33 +230,31 @@ watch(() => activeCompany.companyId, () => { loadAll() })
 </script>
 
 <template>
-  <main class="min-h-screen px-4 py-6 lg:px-8">
-    <HeroHeader
-      icon="money"
-      title="Commission Ledger"
-      subtitle="คอมมิชชั่นทั้งบริษัท"
-      description="รายการเป็นแบบอ่านอย่างเดียว ยกเว้นสถานะการจ่ายเงิน (BR-4) — Agent ไม่สามารถ mark paid ให้ตัวเองได้"
-      :kpis="kpis"
-      accent-color="brand"
-      storage-key="admin-commission"
-    >
-      <template #tabs>
-        <div class="flex gap-1 px-4 py-2 overflow-x-auto">
-          <button
-            v-for="t in tabs"
-            :key="t.id"
-            type="button"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors"
-            :class="activeTab === t.id ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
-            @click="activeTab = t.id as TabId"
-          >
-            {{ t.label }} ({{ t.count }})
-          </button>
-        </div>
-      </template>
-    </HeroHeader>
-
-    <CompanyScopeNotice action="ดูคอมมิชชั่นรายบริษัท" />
+  <div>
+    <!-- The paid/unpaid split, and the three totals that used to live in the
+         HeroHeader this panel no longer owns. Kept as a strip rather than
+         dropped: "how much is still owed across the company" is the question
+         somebody opens this view to answer. -->
+    <div class="mt-4 flex flex-wrap items-center gap-2" data-test="ledger-status-tabs">
+      <span
+        v-for="k in kpis"
+        :key="k.label"
+        class="text-xs text-slate-500"
+      >{{ k.label }} <b class="text-slate-900">{{ k.value }}</b></span>
+      <span class="ml-auto flex flex-wrap gap-1">
+        <button
+          v-for="t in tabs"
+          :key="t.id"
+          type="button"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold whitespace-nowrap transition-colors"
+          :class="activeTab === t.id ? 'bg-brand-50 text-brand-700' : 'text-slate-500 hover:bg-slate-100'"
+          :data-test="`ledger-tab-${t.id}`"
+          @click="activeTab = t.id as TabId"
+        >
+          {{ t.label }} ({{ t.count }})
+        </button>
+      </span>
+    </div>
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}
@@ -345,5 +358,5 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         </div>
       </TransitionGroup>
     </template>
-  </main>
+  </div>
 </template>
