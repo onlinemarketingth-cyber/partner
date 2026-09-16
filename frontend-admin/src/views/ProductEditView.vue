@@ -185,6 +185,16 @@ interface Product {
   category: ProductCategory | null
   name: string
   price_satang: number
+  /*
+   * 2026-09-16 — what this product COSTS us, in satang, or null when nobody
+   * has recorded it.
+   *
+   * null and 0 are not the same answer here, for higher stakes than PV below:
+   * a 0 substituted for an absent cost reports every sale of this product as
+   * pure profit on the business overview. The overview excludes an uncosted
+   * sale from gross profit entirely and says how many it could not measure.
+   */
+  cost_satang: number | null
   // 2026-09-12 — PV, this product's commissionable value in satang (BR-3),
   // or null when nobody has set one. null and 0 are NOT the same answer:
   // null is "no PV yet" (the readiness banner warns about it and the server
@@ -574,6 +584,9 @@ function apiErrorMessage(e: unknown, fallback: string): string {
 interface BasicsForm {
   name: string
   price_thb: string | number
+  // 2026-09-16 — cost in BAHT while being typed, same shape as price_thb.
+  // '' is the "no cost recorded" sentinel and maps to an explicit null.
+  cost_thb: string | number
   // 2026-09-12 — PV in BAHT while it is being typed, exactly like price_thb
   // above; saveBasics() does the BR-3 satang conversion. '' is the "no PV
   // set" sentinel and maps to an explicit null, never to 0 — see the
@@ -613,6 +626,7 @@ interface BasicsForm {
 const basicsForm = ref<BasicsForm>({
   name: '',
   price_thb: '',
+  cost_thb: '',
   pv_thb: '',
   is_active: true,
   brand_id: '',
@@ -969,6 +983,9 @@ function syncBasicsFormFromProduct(p: Product) {
   basicsForm.value = {
     name: p.name,
     price_thb: p.price_satang / 100,
+    // Same null-vs-0 care as pv_thb below, and for a bigger number: a cost
+    // of 0 is a real (if unusual) answer, a blank field is "nobody has said".
+    cost_thb: p.cost_satang === null || p.cost_satang === undefined ? '' : p.cost_satang / 100,
     // Tested against null explicitly rather than with `??`/a falsy check: a
     // stored 0 is a real PV and has to show as 0, while null is the only
     // value that may leave the field blank.
@@ -1018,6 +1035,10 @@ async function saveBasics() {
       brand_id: Number(basicsForm.value.brand_id),
       category_id: Number(basicsForm.value.category_id),
       price_satang: Math.round(Number(basicsForm.value.price_thb) * 100), // THB -> satang (BR-3)
+      // '' -> explicit null, never 0. See the cost_satang field on Product.
+      cost_satang: basicsForm.value.cost_thb === ''
+        ? null
+        : Math.round(Number(basicsForm.value.cost_thb) * 100),
       // 2026-09-12 — PV is commission CONFIGURATION, not product data: whoever
       // can move it can move every agent's payout without ever opening a
       // commission screen, which is why Store/UpdateProductRequest PROHIBIT
@@ -2581,6 +2602,34 @@ function goToVideoSettings() {
                Empty = null, not 0. null means "no PV set" (warned about in
                step 2, and the server falls back to the sale price); 0 means
                this product pays nothing. -->
+          <!-- 2026-09-16 — the cost the business overview computes gross
+               profit from. Owner asked for กำไรขั้นต้น, and this is the one
+               number the schema could not supply.
+
+               Not Super-Admin-gated like PV beside it: PV decides what agents
+               are PAID (which is why a Company Admin must not touch it), while
+               a cost decides what the company's own margin report says. The
+               person running the company is the person who knows it.
+
+               Blank = null = "not recorded", and the overview then leaves this
+               product's sales out of gross profit rather than calling them
+               free. -->
+          <div>
+            <label class="text-sm font-bold text-slate-500">ต้นทุนต่อหน่วย (บาท)</label>
+            <input
+              v-model="basicsForm.cost_thb"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="ยังไม่กำหนด"
+              data-test="cost-input"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+            />
+            <p class="mt-1 text-xs text-slate-400">
+              ใช้คำนวณกำไรขั้นต้นในหน้า ภาพรวมธุรกิจ · เว้นว่าง = ยอดขายของสินค้านี้จะไม่ถูกนำไปคิดกำไร (ไม่ใช่คิดเป็นกำไรเต็ม)
+              · ระบบเก็บต้นทุน ณ วันที่ขายไว้กับคำสั่งซื้อ การแก้ตรงนี้จึงไม่กระทบกำไรย้อนหลัง
+            </p>
+          </div>
           <div v-if="isSuperAdmin">
             <label class="text-sm font-bold text-slate-500">PV (มูลค่าที่ใช้คิดค่าคอม)</label>
             <input

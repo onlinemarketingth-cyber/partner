@@ -154,6 +154,25 @@ class OrderService
                 $referral->product,
                 (int) $referral->company_id,
             ),
+            /*
+             * 2026-09-16 — WHAT THIS SALE COST US, FROZEN HERE.
+             *
+             * Owner asked for gross profit on the business overview, which
+             * needs a cost per sale. The product's cost is what it costs
+             * TODAY; this is what it cost when the sale happened.
+             *
+             * Snapshotted for the same reason amount_satang above is: a
+             * supplier price rise next quarter must not silently rewrite this
+             * quarter's margin. The "มุมมองสินค้า" screen multiplies today's
+             * PRICE by historical sales and has exactly that defect — the
+             * whole point of this column is not to repeat it.
+             *
+             * NULL when the product has no cost recorded, and it stays NULL
+             * forever after. A zero would report this sale as pure profit,
+             * which is a confident wrong number; the overview counts these
+             * orders separately and says how many it could not measure.
+             */
+            'cost_satang_at_time' => $referral->product?->cost_satang,
             'payment_method' => $method,
             'status' => OrderStatus::Pending,
             /*

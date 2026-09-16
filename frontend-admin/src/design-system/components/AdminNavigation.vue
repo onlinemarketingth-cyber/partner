@@ -249,6 +249,41 @@ const navItems: NavItem[] = [
       { name: 'commission-runs', icon: 'invoice', label: { th: 'รอบจ่าย', en: 'Payout runs' } },
     ],
   },
+  /*
+   * ═══ รายงาน (2026-09-16) ═══
+   *
+   * Owner: "ที่ผมว่ามันยังขาดจริง คือหน้าที่ให้ทีมบริหารค่าคอมได้ ตัวเลขที่จำเป็น
+   * ต่างๆ สำหรับผู้บริหารในการบริหารการเงิน ยอดขาย สินค้าขายดีต่างๆ".
+   *
+   * A survey of what already existed found the numbers were largely there and
+   * scattered — and one screen, "มุมมองสินค้า" (/product-performance), had NO
+   * entry in this menu at all. Its only way in was a link-out from the product
+   * catalogue, so a report about which products sell could only be found by
+   * somebody who already knew it existed.
+   *
+   * So this pillar is not only a home for the new business overview: it is
+   * where reporting stops being scattered. "นโยบายและรายงาน" moves here out of
+   * ตั้งค่าระบบ for the same reason — it is three reports, and it was filed
+   * under configuration because that is where its activity log used to live
+   * (the log itself stays in Settings, where TASK-258 deliberately put it).
+   *
+   * Placed after ค่าแนะนำ on purpose: two of its three screens report on the
+   * money the pillars before it produce, so it reads as their summary rather
+   * than as another place to do work.
+   *
+   * ภาพรวมธุรกิจ leads it: it is the screen somebody opens to ask how the
+   * business is doing, and the other two answer narrower questions under it.
+   */
+  {
+    name: 'business-overview',
+    icon: 'chart',
+    label: { th: 'รายงาน', en: 'Reports' },
+    subMenus: [
+      { name: 'business-overview', icon: 'chart', label: { th: 'ภาพรวมธุรกิจ', en: 'Business overview' } },
+      { name: 'product-performance', icon: 'cube', label: { th: 'มุมมองสินค้า', en: 'Product performance' } },
+      { name: 'policy-report', icon: 'shield', label: { th: 'นโยบายและรายงาน', en: 'Policy & Reports' } },
+    ],
+  },
   {
     name: 'product-catalog',
     icon: 'cube',
@@ -338,8 +373,12 @@ const navItems: NavItem[] = [
       // entry, ABOVE the reports page it used to hide inside. "ใครทำอะไรไป
       // บ้างในระบบ" is a question asked far more often than any of the three
       // reports beside it, and a tab is not a menu.
+      // 2026-09-16 — "นโยบายและรายงาน" moved OUT of here into the new รายงาน
+      // pillar. The activity log stays: TASK-258 pulled it out of that
+      // reports page on purpose, because "ใครทำอะไรไปบ้างในระบบ" is asked far
+      // more often than any of the three reports it used to hide behind, and
+      // it belongs next to the account administration above it.
       { name: 'activity-log', icon: 'document', label: { th: 'บันทึกการใช้งานระบบ', en: 'Activity log' } },
-      { name: 'policy-report', icon: 'shield', label: { th: 'นโยบายและรายงาน', en: 'Policy & Reports' } },
     ],
   },
   // ADR-033 (TASK-189) §2.1/F2 — voucher redemption lookup. Its own

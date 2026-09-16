@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\V1\AffiliateLinkRedirectController;
 use App\Http\Controllers\Api\V1\AgentApprovalController;
 use App\Http\Controllers\Api\V1\AgentCommissionSummaryController;
 use App\Http\Controllers\Api\V1\AgentDashboardMetricsController;
+use App\Http\Controllers\Api\V1\BusinessOverviewController;
 use App\Http\Controllers\Api\V1\AgentInviteLinkController;
 use App\Http\Controllers\Api\V1\AgentPromotionController;
 use App\Http\Controllers\Api\V1\AgentRankController;
@@ -850,6 +851,21 @@ Route::prefix('v1')->group(function () {
         // 6-month series, pipeline funnel, cert/lead-source distributions,
         // top agents). Company Admin / Super Admin only (enforced in Controller).
         Route::get('/agent-dashboard-metrics', [AgentDashboardMetricsController::class, 'index']);
+
+        /*
+         * 2026-09-16 — ภาพรวมธุรกิจ. Owner: "หน้าที่ให้ทีมบริหาร … ตัวเลขที่
+         * จำเป็นต่างๆ สำหรับผู้บริหารในการบริหารการเงิน ยอดขาย สินค้าขายดี".
+         *
+         * ONE endpoint for the whole screen rather than a page that stitches
+         * the existing report endpoints together: four of those bucket on four
+         * different date columns, so assembling them client-side would put
+         * four different meanings of "September" side by side and subtract
+         * them from each other. See BusinessOverviewService's own docblock.
+         *
+         * Same ability as the dashboard above it — this is the same audience
+         * asking a bigger question, not a new privilege.
+         */
+        Route::get('/business-overview', [BusinessOverviewController::class, 'index']);
 
         // Academy — ERD-001 §Academy, BR-1. cert-tiers is read-only
         // global config; module-completions/exam-attempts are

@@ -114,6 +114,10 @@ class Product extends Model
         'catalog_item_id',
         'name',
         'price_satang',
+        // 2026-09-16 — what the NEXT sale of this product costs us. Copied
+        // onto each order as cost_satang_at_time; nullable, and a null means
+        // "nobody has recorded this", never zero.
+        'cost_satang',
         // 2026-09-12 — PV / commissionable value, on the same integer
         // satang scale as price (BR-3, see the migration and
         // App\Enums\CommissionBasis). Only ever READ when the selling
@@ -164,6 +168,7 @@ class Product extends Model
     {
         return [
             'price_satang' => 'integer',
+            'cost_satang' => 'integer',
             'pv_satang' => 'integer',
             'is_active' => 'boolean',
             'commission_plan_type' => CommissionPlanType::class,

@@ -406,6 +406,20 @@ export const routes: RouteRecordRaw[] = [
     // deliberate omission from AdminNavigation.vue's top nav as the 3
     // routes above (already 9+ items) — reached only via
     // ProductCatalogView.vue's link-out.
+    /*
+     * 2026-09-16 — ภาพรวมธุรกิจ, the first item of the new รายงาน pillar.
+     *
+     * Owner: "ตัวเลขที่จำเป็นต่างๆ สำหรับผู้บริหารในการบริหารการเงิน ยอดขาย
+     * สินค้าขายดีต่างๆ". Under /reports/ rather than beside the agent
+     * dashboard at '/': the two answer different questions for different
+     * people, and this one is where reporting stops being scattered.
+     */
+    {
+      path: '/reports/business',
+      name: 'business-overview',
+      component: () => import('../views/BusinessOverviewView.vue'),
+      meta: { navLabel: 'ภาพรวมธุรกิจ' },
+    },
     {
       path: '/product-performance',
       name: 'product-performance',

@@ -43,6 +43,16 @@ class UpdateProductRequest extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'price_satang' => ['sometimes', 'required', 'integer', 'min:0'],
             /*
+             * 2026-09-16 — what this product costs us, for gross profit.
+             *
+             * Nullable and optional: every product that exists today has no
+             * cost, and a required field would block every save until somebody
+             * went back through the whole catalogue. A NULL is honest —
+             * "nobody recorded this" — and the business overview counts those
+             * sales separately rather than reporting them as pure profit.
+             */
+            'cost_satang' => ['sometimes', 'nullable', 'integer', 'min:0'],
+            /*
              * 2026-09-12 — PV / commissionable value, satang scale (BR-3).
              *
              * SUPER ADMIN ONLY, and prohibited rather than silently

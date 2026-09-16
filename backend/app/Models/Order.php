@@ -43,6 +43,11 @@ class Order extends Model
         'order_number',
         'public_token',
         'amount_satang',
+        // 2026-09-16 — the product's cost at the moment this order was
+        // created, so gross profit on a past quarter is not recomputed with
+        // today's supplier price. Written once by OrderService; NULL when the
+        // product has no cost recorded, and deliberately left NULL.
+        'cost_satang_at_time',
         'payment_method',
         'status',
         'slip_path',

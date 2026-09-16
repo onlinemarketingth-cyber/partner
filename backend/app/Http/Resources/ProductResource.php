@@ -64,6 +64,18 @@ class ProductResource extends JsonResource
              */
             'price_satang' => $this->price_satang,
             /*
+             * 2026-09-16 — what this product costs us, or null when nobody
+             * has recorded it.
+             *
+             * Raw, with no fallback: the edit screen has to be able to tell
+             * "costs nothing" from "nobody has said", because only one of
+             * those can be used to compute a gross profit. The same reasoning
+             * as pv_satang immediately below, and for higher stakes — a zero
+             * substituted here would report every sale of this product as
+             * pure profit.
+             */
+            'cost_satang' => $this->cost_satang,
+            /*
              * 2026-09-12 — PV / commissionable value, or null when this
              * product has none. Exposed raw, with no fallback baked in:
              * the admin screen has to be able to tell "worth 0 PV" from

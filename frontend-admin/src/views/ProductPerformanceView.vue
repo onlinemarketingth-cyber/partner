@@ -73,8 +73,21 @@ async function loadAbcGrades() {
   abcLoading.value = true
   abcError.value = ''
   try {
-    const path = abcWindow.value ? `/products-abc-grades?window_days=${abcWindow.value}` : '/products-abc-grades'
-    const res = await api.get<{ data: AbcGradeRow[]; window_days: number | null; computed_at: string }>(path)
+    /*
+     * 2026-09-16 — scoped, like every other report on this app.
+     *
+     * This one call went out unscoped while the rest of the screen used
+     * activeCompany.scopedPath(). For a Company Admin it made no difference —
+     * the server narrows to their own company either way. For a SUPER ADMIN
+     * it did: the header said "Thai Life insurance" and these grades were
+     * every tenant's sales added together. A company name at the top of the
+     * page and another company's numbers under it is the same defect that was
+     * found on the withdrawal queue in September.
+     */
+    const base = abcWindow.value ? `/products-abc-grades?window_days=${abcWindow.value}` : '/products-abc-grades'
+    const res = await api.get<{ data: AbcGradeRow[]; window_days: number | null; computed_at: string }>(
+      activeCompany.scopedPath(base),
+    )
     abcRows.value = res.data
   } catch (e) {
     abcError.value = apiErrorMessage(e, 'โหลดข้อมูลเกรดสินค้าไม่สำเร็จ')

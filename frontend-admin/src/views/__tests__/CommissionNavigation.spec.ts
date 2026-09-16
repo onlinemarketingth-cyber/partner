@@ -230,3 +230,50 @@ describe('the settings page moved to ตั้งค่าระบบ', () => {
     expect(subs).toContain('ตั้งค่าค่าแนะนำ')
   })
 })
+
+/**
+ * ═══ รายงาน — the pillar that stopped reporting being scattered ═══
+ *
+ * Owner, 2026-09-16, on where the coming business-overview screen should
+ * live: they picked a new pillar over hanging it off an existing one, because
+ * the alternative left the reports that already exist in three different
+ * places.
+ *
+ * The test worth having here is not "a pillar renders". It is that the ONE
+ * screen which had no menu entry at all now has one. /product-performance was
+ * reachable only from a link-out on the product catalogue, so a report about
+ * which products sell could be found only by somebody who already knew it was
+ * there — which is the same as not having it.
+ */
+describe('the รายงาน pillar', () => {
+  function subsOf(pillarLabel: string): string[] {
+    activeRoute.value = { name: 'product-performance', path: '/product-performance', query: {} }
+    const wrapper = mountNav()
+    const pillars = wrapper.findAll('[data-test^="nav-pillar-"]').map((el) => el.text())
+
+    expect(pillars.some((l) => l.includes(pillarLabel))).toBe(true)
+
+    return wrapper.findAll('[data-test^="nav-sub-"]').map((el) => el.text())
+  }
+
+  it('gives มุมมองสินค้า a way in that is not a link-out from somewhere else', () => {
+    expect(subsOf('รายงาน')).toContain('มุมมองสินค้า')
+  })
+
+  it('carries นโยบายและรายงาน, which is three reports and was filed under settings', () => {
+    expect(subsOf('รายงาน')).toContain('นโยบายและรายงาน')
+  })
+
+  it('leaves the activity log in ตั้งค่าระบบ', () => {
+    /*
+     * The control. TASK-258 pulled the log OUT of the reports page on purpose
+     * — "ใครทำอะไรไปบ้างในระบบ" is asked far more often than any report beside
+     * it — so moving the reports page must not quietly drag the log with it.
+     */
+    activeRoute.value = { name: 'theme-settings', path: '/theme-settings', query: {} }
+    const subs = mountNav().findAll('[data-test^="nav-sub-"]').map((el) => el.text())
+
+    expect(subs).toContain('บันทึกการใช้งานระบบ')
+    expect(subs).not.toContain('นโยบายและรายงาน')
+  })
+})
