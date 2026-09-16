@@ -21,6 +21,7 @@ use App\Support\Media\RangeFileResponder;
 use App\Support\PortalOrigin;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -111,6 +112,10 @@ class PublicProductShareController extends Controller
      *     order could be paid but never confirmed (ADR-026 §3.7)
      *   - the product or its pipeline template cannot be read
      *
+     * …AND EVERY REFUSAL SAYS WHY, IN THE SERVER LOG (2026-09-16). Identical
+     * on the wire, distinguishable to us — see
+     * ProductShareCheckoutService::refuse(). `grep public_checkout.refused`.
+     *
      * ag-dev note for ag-lead/ag-qa: TASK-136's spec and TASK-140's
      * acceptance criteria both say the honeypot should "return the same
      * body as success". That is literally impossible here and the
@@ -143,6 +148,34 @@ class PublicProductShareController extends Controller
          * writing it through unchecked would let anyone have us email a
          * customer a link to their own copy of our payment page.
          */
+        /*
+         * 2026-09-16 — the honeypot is the ONE refusal the Service never
+         * sees, so it is the one reason that has to be written down here.
+         * Same shape, same level, same message string as the other four
+         * (ProductShareCheckoutService::refuse) so one grep finds all five:
+         *
+         *   grep public_checkout.refused storage/logs/laravel.log
+         *
+         * The response below is untouched — identical bytes to the other
+         * four refusals, which is the whole property this endpoint is built
+         * around.
+         */
+        if (! empty($request->validated('hp_field'))) {
+            Log::warning(ProductShareCheckoutService::REFUSAL_LOG_MESSAGE, [
+                'reason' => ProductShareCheckoutService::REFUSED_HONEYPOT,
+                'token' => $link->token,
+                'link_id' => $link->id,
+                'company_id' => $link->company_id,
+                'agent_id' => $link->agent_id,
+                'product_id' => $link->product_id,
+                // Only for this one reason, and only ever the USER AGENT —
+                // a customer whose password manager filled the hidden field
+                // looks exactly like a bot from the data, and this is the
+                // single cheapest fact that tells the two apart.
+                'user_agent' => (string) $request->userAgent(),
+            ]);
+        }
+
         $order = empty($request->validated('hp_field'))
             ? $service->checkout(
                 $link,

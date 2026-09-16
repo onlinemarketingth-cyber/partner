@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "note": "English dictionary for the Agent Portal. Every key present in th.json must exist here too — a missing key renders the raw dot-key on screen, which reads as a broken page rather than as a missing translation."
+    "note": "English dictionary for the Member Portal. Every key present in th.json must exist here too — a missing key renders the raw dot-key on screen, which reads as a broken page rather than as a missing translation."
   },
   "common": {
     "save": "Save",
@@ -68,7 +68,7 @@
     "clients": "Clients",
     "products": "Products",
     "academy": "Academy",
-    "commission": "Commission",
+    "commission": "Referral fee",
     "withdrawals": "Withdrawals",
     "leaderboard": "Leaderboard",
     "affiliate_links": "Affiliate Links",
@@ -79,13 +79,13 @@
     "products2": "Products",
     "profile2": "Profile",
     "affiliate2": "Affiliate links",
-    "commission2": "Commission",
+    "commission2": "Referral fee",
     "my_team2": "My team",
     "home2": "Home"
   },
   "withdrawal": {
-    "title": "Withdraw commission",
-    "subtitle": "Request the commission you have earned",
+    "title": "Withdraw referral fee",
+    "subtitle": "Request the referral fee you have earned",
     "available": "Available to withdraw",
     "minimum": "Minimum withdrawal",
     "amount_label": "Amount to withdraw (THB)",
@@ -114,9 +114,9 @@
   },
   "payout": {
     "incomplete_title": "Payout details incomplete",
-    "incomplete_body": "You need both an identity document and full bank details before you can withdraw commission. You can fill these in at any time.",
+    "incomplete_body": "You need both an identity document and full bank details before you can withdraw referral fee. You can fill these in at any time.",
     "id_document": "Identity document",
-    "id_document_why": "Used to verify you before commission is transferred — visible only to you (admins see it masked).",
+    "id_document_why": "Used to verify you before referral fee is transferred — visible only to you (admins see it masked).",
     "id_type_thai": "Thai national ID",
     "id_type_passport": "Passport",
     "id_number_thai": "Thai national ID (13 digits)",
@@ -336,7 +336,7 @@
     "whole_downline": "Entire downline",
     "no_match": "No members match this filter",
     "try_all_tab": "Try the “All” tab and expand the tree to see deeper levels",
-    "their_commission": "Their commission",
+    "their_commission": "Their referral fee",
     "my_override": "My override",
     "filter_note": "Filters only what is already loaded — choose “All” and expand the tree to load deeper levels",
     "visibility_prefix": "Your company lets team leaders see only",
@@ -432,7 +432,7 @@
     "holder_ph": "Account holder's full name",
     "name_ph": "e.g. Kasikornbank",
     "title": "Bank account",
-    "help": "Used to transfer your commission — visible only to you (admins see the number masked)",
+    "help": "Used to transfer your referral fee — visible only to you (admins see the number masked)",
     "save": "Save bank account"
   },
   "filter": {
@@ -448,7 +448,7 @@
     "photo_hint": "jpg / png / webp, up to 4MB",
     "save_name": "Save name",
     "email_notifications": "Email notifications",
-    "email_notifications_help": "Email me when my account is approved, commission is paid, a client pays, and when there is a new announcement",
+    "email_notifications_help": "Email me when my account is approved, referral fee is paid, a client pays, and when there is a new announcement",
     "current_password": "Current password",
     "new_password": "New password",
     "confirm_new_password": "Confirm new password",
@@ -461,14 +461,14 @@
     "cannot_open": "Could not open this file"
   },
   "commission": {
-    "split": "Split commission",
+    "split": "Split referral fee",
     "split_none": "Not shared with anyone",
-    "no_split": "Do not split commission",
+    "no_split": "Do not split referral fee",
     "split_ph": "% the other member receives (1-99)",
-    "empty": "No commission entries yet",
-    "subtitle": "A summary of your commission",
-    "description": "Commission appears here automatically once a client you referred has paid",
-    "empty_help": "Commission is recorded automatically when a deal reaches “Payment received”"
+    "empty": "No referral fee entries yet",
+    "subtitle": "A summary of your referral fee",
+    "description": "Referral fee appears here automatically once a client you referred has paid",
+    "empty_help": "Referral fee is recorded automatically when a deal reaches “Payment received”"
   },
   "pipeline": {
     "title": "Sales pipeline",
@@ -481,8 +481,8 @@
     "confirm_paid": "Confirm that payment for this order has been received",
     "step": "Step:",
     "collect_now": "Collect payment",
-    "empty_help": "Deals start from “+ Add a product of interest” on a client — commission is calculated when the deal reaches “Payment received”",
-    "commission_warning": "Once confirmed, commission is calculated immediately and cannot be changed afterwards",
+    "empty_help": "Deals start from “+ Add a product of interest” on a client — referral fee is calculated when the deal reaches “Payment received”",
+    "commission_warning": "Once confirmed, referral fee is calculated immediately and cannot be changed afterwards",
     "no_branch": "No branch specified",
     "meeting_no": "Meeting {n}",
     "advance_to": "Advance to {stage}",
@@ -576,7 +576,7 @@
     "signed_in_admin": "You are signed in with an administrator account",
     "choose_view": "Choose which view to open",
     "admin_view": "Administrator view",
-    "admin_view_help": "Manage companies, members, products and commission",
+    "admin_view_help": "Manage companies, members, products and referral fee",
     "member_view": "Member view",
     "member_view_help": "See exactly what a member sees — an administrator account has no sales of its own, so every figure reads 0. That is not a fault.",
     "change_mind": "You can switch at any time — return here from the “Administrator view” button in the top bar"

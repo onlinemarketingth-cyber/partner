@@ -404,7 +404,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/agent-promotions',
       name: 'agent-promotions',
       component: () => import('../views/AgentPromotionsView.vue'),
-      meta: { navLabel: 'Promotion สำหรับ Agent' },
+      meta: { navLabel: 'Promotion สำหรับสมาชิก' },
     },
     {
       path: '/reward-center',
@@ -416,7 +416,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/announcements',
       name: 'announcements',
       component: () => import('../views/AnnouncementsView.vue'),
-      meta: { navLabel: 'ข่าวสารถึง Agent' },
+      meta: { navLabel: 'ข่าวสารถึงสมาชิก' },
     },
     /*
      * TASK-043's per-agent summary used to live here, under the จัดการตัวแทน

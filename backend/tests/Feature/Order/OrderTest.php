@@ -165,6 +165,71 @@ class OrderTest extends TestCase
             ->assertJsonPath('data.permissions.confirm', false);
     }
 
+    // ── Who the screen may offer a STAFF SLIP UPLOAD to ──────────────
+    //
+    // 2026-09-16. POST /orders/{order}/slip has existed since the
+    // 2026-08-21 audit follow-up and no screen called it, so an admin
+    // holding a photo the customer sent over LINE had to ask them to upload
+    // it themselves — for money the company already had. The button is only
+    // safe to render from a server answer, for the same reason `confirm` is:
+    // half a Policy re-derived on the client is a 403 discovered by pressing.
+
+    public function test_the_screen_may_offer_a_staff_slip_upload_on_an_order_still_awaiting_payment(): void
+    {
+        /*
+         * The case `confirm` is deliberately FALSE in. An order with nothing
+         * on file cannot be confirmed by anybody — and it is exactly the one
+         * that needs a slip attaching. If these two permissions were ever
+         * collapsed into one, this test is what fails.
+         */
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+        $order->forceFill(['status' => OrderStatus::Pending, 'slip_path' => null])->save();
+
+        foreach ([
+            User::factory()->superAdmin()->create(),
+            User::factory()->companyAdmin()->create(['company_id' => $company->id]),
+        ] as $actor) {
+            $this->actingAs($actor)
+                ->getJson("/api/v1/orders/{$order->id}")
+                ->assertOk()
+                ->assertJsonPath('data.permissions.upload_slip', true)
+                ->assertJsonPath('data.permissions.confirm', false);
+        }
+    }
+
+    public function test_the_screen_offers_no_staff_slip_upload_to_the_selling_agent(): void
+    {
+        // The earner does not supply the proof of their own sale — the same
+        // line OrderPolicy::submitSlip draws, answered before the button is
+        // drawn rather than after it is pressed.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+        $order->forceFill(['status' => OrderStatus::Pending, 'slip_path' => null])->save();
+
+        $this->actingAs($agent)
+            ->getJson("/api/v1/orders/{$order->id}")
+            ->assertOk()
+            ->assertJsonPath('data.permissions.upload_slip', false);
+    }
+
+    public function test_the_screen_offers_no_staff_slip_upload_on_an_order_already_paid(): void
+    {
+        // Matches OrderController::uploadSlip's own refusal (isPayable), so
+        // a button that appears is a button the server will accept.
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $order = $this->orderAwaitingVerification($company, $agent);
+        $order->forceFill(['status' => OrderStatus::Paid, 'paid_at' => now()])->save();
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->getJson("/api/v1/orders/{$order->id}")
+            ->assertOk()
+            ->assertJsonPath('data.permissions.upload_slip', false);
+    }
+
     public function test_agent_can_create_an_order_for_their_own_referral(): void
     {
         $company = Company::factory()->create();

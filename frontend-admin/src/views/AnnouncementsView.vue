@@ -555,7 +555,7 @@ async function confirmDeleteAnnouncement() {
 }
 
 function audienceLabel(item: AnnouncementItem): string {
-  if (item.audience !== 'cert_tier') return 'Agent ทั้งหมด'
+  if (item.audience !== 'cert_tier') return 'สมาชิกทั้งหมด'
   const tierName = item.target_cert_tier_name ?? '-'
   return `Cert Tier: ${tierName}${item.target_cert_tier_mode === 'and_above' ? ' ขึ้นไป' : ''}`
 }
@@ -604,7 +604,7 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
 
 <template>
   <main class="min-h-screen px-4 py-6 lg:px-8">
-    <HeroHeader icon="megaphone" title="ข่าวสารถึง Agent" subtitle="สร้างประกาศ — แสดงเป็น Banner Modal เต็มจอบน Agent Portal (Mobile) และในหน้ารวมข่าวสาร" accent-color="brand" storage-key="announcements">
+    <HeroHeader icon="megaphone" title="ข่าวสารถึงสมาชิก" subtitle="สร้างประกาศ — แสดงเป็น Banner Modal เต็มจอบน Member Portal (Mobile) และในหน้ารวมข่าวสาร" accent-color="brand" storage-key="announcements">
       <template #actions>
         <!-- Human request (2026-08-02): "ใส่รูปเฟือง setting ที่ข้างปุ่ม
              สร้างประกาศ" — opens the Banner Settings modal below. -->
@@ -722,7 +722,7 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
           <div>
             <label class="text-sm font-bold text-slate-500">กลุ่มเป้าหมาย</label>
             <select v-model="form.audience" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="all_agents">Agent ทั้งหมด</option>
+              <option value="all_agents">สมาชิกทั้งหมด</option>
               <option value="cert_tier">ตาม Cert Tier</option>
             </select>
           </div>
@@ -840,7 +840,7 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
                เป็นแบบ banner ได้แบบ Product" — modal และ banner ไม่ผูกกัน
                เลือกอย่างใดอย่างหนึ่ง ทั้งสองอย่าง หรือไม่เลือกเลยก็ได้ -->
           <div class="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
-            <p class="text-sm font-bold text-slate-700">การแสดงผลบน Agent Portal</p>
+            <p class="text-sm font-bold text-slate-700">การแสดงผลบน Member Portal</p>
             <label class="mt-2 flex items-center gap-2 text-sm font-bold text-slate-500">
               <input v-model="form.show_as_modal" type="checkbox" />
               เด้งเป็น Modal
@@ -938,7 +938,7 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
              repeat_count ด้านบน ไม่ใช่ต่อประกาศ -->
         <div class="mt-4 pt-4 border-t border-slate-100">
           <p class="text-sm font-bold text-slate-700">รูปแบบการแสดง Banner</p>
-          <p class="text-xs text-slate-400 mt-0.5">เลือกลักษณะการแสดงผลของ modal ประกาศบน Agent Portal</p>
+          <p class="text-xs text-slate-400 mt-0.5">เลือกลักษณะการแสดงผลของ modal ประกาศบน Member Portal</p>
           <div class="mt-2 space-y-2">
             <label
               v-for="opt in DISPLAY_STYLE_OPTIONS"

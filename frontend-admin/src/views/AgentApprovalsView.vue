@@ -347,7 +347,7 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
     <EmptyState
       v-else-if="!approvalRows.length"
       icon="user_plus"
-      :title="approvalStatus === 'pending' ? 'ไม่มี Agent รออนุมัติ' : 'ไม่มีรายการในสถานะนี้'"
+      :title="approvalStatus === 'pending' ? 'ไม่มีสมาชิกรออนุมัติ' : 'ไม่มีรายการในสถานะนี้'"
       class="mt-4"
     />
     <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">

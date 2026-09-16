@@ -75,7 +75,7 @@ const navItems: NavItem[] = [
     { name: 'referrals', icon: 'user_plus', label: { th: 'SWS Referral', en: 'SWS Referral' } },
     { name: 'pipeline', icon: 'pipeline', label: { th: 'Pipeline', en: 'Pipeline' } },
     { name: 'academy', icon: 'book', label: { th: 'Academy', en: 'Academy' } },
-    { name: 'commission', icon: 'money', label: { th: 'ค่าแนะนำ', en: 'Commission' } },
+    { name: 'commission', icon: 'money', label: { th: 'ค่าแนะนำ', en: 'Referral fee' } },
     // 2026-08-27 — sits right after the ledger it draws on.
     { name: 'withdrawals', icon: 'invoice', label: { th: 'เบิกค่าแนะนำ', en: 'Withdrawals' } },
     { name: 'leaderboard', icon: 'trophy', label: { th: 'Leaderboard', en: 'Leaderboard' } },

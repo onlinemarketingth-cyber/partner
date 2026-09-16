@@ -7,6 +7,7 @@ use App\Enums\WithdrawalStatus;
 use App\Models\CommissionLedger;
 use App\Models\Company;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -70,7 +71,6 @@ class AgentCommissionSummaryService
      * it is, and not as a literal buried in a loop.
      */
     private const PENDING_ITEMS_PER_ROW = 3;
-
 
     /**
      * TASK-179 §3.7 (F-10) — NULL, NOT ZERO, for a bucket the filter
@@ -387,14 +387,14 @@ class AgentCommissionSummaryService
      * and a client-supplied company_id is never trusted for that role, and the
      * one place both readers get that from is this method.
      *
-     * @return \Illuminate\Database\Eloquent\Builder<CommissionLedger>
+     * @return Builder<CommissionLedger>
      */
     private function scopedLedger(
         User $actor,
         ?int $companyId,
         ?string $dateFrom,
         ?string $dateTo,
-    ): \Illuminate\Database\Eloquent\Builder {
+    ): Builder {
         $query = CommissionLedger::query();
 
         if (! $actor->isSuperAdmin()) {

@@ -19,6 +19,7 @@ use App\Services\Gamification\GamificationService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 /**
  * TASK-136 (ADR-019 + ADR-017 + ADR-026) — turns a public product-share
@@ -50,9 +51,48 @@ use Illuminate\Support\Facades\DB;
  * indistinguishable generic message. A public endpoint must not be an
  * oracle for another company's internal configuration (§6), and a
  * customer cannot act on "the agent's certification lapsed" anyway.
+ *
+ * Since 2026-09-16 each refusal ALSO writes its reason to the server log
+ * (refuse() below). That is not a softening of the rule above — the rule is
+ * about what leaves this system, and nothing about the response changed.
  */
 class ProductShareCheckoutService
 {
+    /**
+     * 2026-09-16 — THE REASON, WRITTEN DOWN WHERE ONLY WE CAN READ IT.
+     *
+     * The response stays byte-identical across every refusal, and that is
+     * the point of it (see the class docblock and the Controller's). The
+     * cost of that property landed on us instead: a customer reports "ไม่
+     * สามารถทำรายการสั่งซื้อจากลิงก์นี้ได้", and answering WHY meant hand-
+     * checking four data conditions and one bot trap against production,
+     * per report. Browser DevTools cannot help — from outside, all five
+     * refusals ARE the same event.
+     *
+     * So the reason goes to the server log, where the customer and any bot
+     * probing this endpoint cannot see it. Nothing about the HTTP response
+     * changes: same status, same sentence, same bytes, same timing class.
+     * The anti-oracle property is intact; we just stopped throwing away the
+     * one fact we already had.
+     *
+     * These are log values, not an API contract — they are matched by
+     * `grep public_checkout.refused` and by the tests, and nothing is
+     * allowed to branch on them.
+     */
+    public const REFUSED_AGENT_NOT_CERTIFIED = 'agent_not_certified';
+
+    public const REFUSED_PRODUCT_NOT_FOUND = 'product_not_found';
+
+    public const REFUSED_PRODUCT_NOT_SELLABLE = 'product_not_sellable';
+
+    public const REFUSED_PAYMENT_UNREACHABLE = 'payment_unreachable';
+
+    /** Fired in the Controller — the only refusal that never reaches this class. */
+    public const REFUSED_HONEYPOT = 'honeypot';
+
+    /** The one string to grep for in storage/logs/laravel.log. */
+    public const REFUSAL_LOG_MESSAGE = 'public_checkout.refused';
+
     /**
      * // TODO: CONFIRM (business rule) — the duplicate-submit window.
      *
@@ -104,7 +144,7 @@ class ProductShareCheckoutService
         // minted earlier must not keep selling on their behalf. Risk R3:
         // gating on the visitor instead would be no gate at all.
         if (! $link->agent || ! $link->agent->hasPassedCertTier('basic')) {
-            return null;
+            return $this->refuse(self::REFUSED_AGENT_NOT_CERTIFIED, $link);
         }
 
         // Resolved from the LINK's company (BR-6). This runs
@@ -120,7 +160,7 @@ class ProductShareCheckoutService
             ->find($link->product_id);
 
         if (! $product) {
-            return null;
+            return $this->refuse(self::REFUSED_PRODUCT_NOT_FOUND, $link);
         }
 
         // TASK-156 §3 — "ปิดการใช้งาน ซ่อนทุกที่" (human, 2026-08-10): an
@@ -145,7 +185,7 @@ class ProductShareCheckoutService
          * the company never listed.
          */
         if (! $product->isSellableBy((int) $link->company_id)) {
-            return null;
+            return $this->refuse(self::REFUSED_PRODUCT_NOT_SELLABLE, $link);
         }
 
         // TASK-253 / ADR-040 — the SHARE LINK's company owns this checkout;
@@ -165,7 +205,9 @@ class ProductShareCheckoutService
         // view-only share page plus the "สนใจ ให้ติดต่อกลับ" lead form
         // (TASK-137).
         if (! $this->pipelineTemplateResolver->paymentReachableFromEntry($template)) {
-            return null;
+            return $this->refuse(self::REFUSED_PAYMENT_UNREACHABLE, $link, [
+                'template_id' => $template?->id,
+            ]);
         }
 
         // Duplicate-submit reuse BEFORE the transaction: if this customer
@@ -291,6 +333,44 @@ class ProductShareCheckoutService
 
             return $order;
         });
+    }
+
+    /**
+     * Say no, and write down why — for us, not for the caller.
+     *
+     * Always returns null, so every refusal site reads
+     * `return $this->refuse(REASON, $link);` and the branch's behaviour is
+     * unchanged from the day it was written. Nothing here can alter the
+     * response: the Controller sees null exactly as before.
+     *
+     * ── WHAT IS DELIBERATELY NOT LOGGED ──
+     *
+     * The customer's name, phone and email. This is a PDPA-relevant form and
+     * a refused checkout is the one case where we have no order and no
+     * consent record to attach them to, so logging them would create
+     * personal data in a file nobody is auditing. The ids below identify the
+     * CONFIGURATION that refused, which is the thing anybody debugging this
+     * actually needs; the phone is one join away in the rare case it matters.
+     *
+     * `warning`, not `info`: on a healthy deployment this line means either a
+     * customer was turned away from a sale, or a bot found us. Both are
+     * things somebody should see; neither is an error this process can fix.
+     *
+     * @param  array<string, mixed>  $context
+     */
+    private function refuse(string $reason, ProductShareLink $link, array $context = []): null
+    {
+        Log::warning(self::REFUSAL_LOG_MESSAGE, [
+            'reason' => $reason,
+            'token' => $link->token,
+            'link_id' => $link->id,
+            'company_id' => $link->company_id,
+            'agent_id' => $link->agent_id,
+            'product_id' => $link->product_id,
+            ...$context,
+        ]);
+
+        return null;
     }
 
     /**

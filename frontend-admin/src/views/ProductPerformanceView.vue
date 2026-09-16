@@ -346,7 +346,7 @@ watch(() => activeCompany.companyId, () => { loadAbcGrades(); loadPromotions() }
     <div class="mt-4 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
       ต้องการให้โบนัสพิเศษกับ agent แทนการลดราคาสินค้า?
       <RouterLink :to="{ name: 'agent-promotions' }" class="font-bold text-brand-600 hover:text-brand-700">
-        ไปที่หน้า Promotion สำหรับ Agent
+        ไปที่หน้า Promotion สำหรับสมาชิก
       </RouterLink>
       — หน้านี้ใช้สำหรับลดราคาสินค้าที่แสดงให้ลูกค้าเห็นเท่านั้น
     </div>

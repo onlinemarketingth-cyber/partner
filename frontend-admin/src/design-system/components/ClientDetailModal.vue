@@ -573,7 +573,7 @@ async function downloadDocument(doc: ClientDocumentItem): Promise<void> {
 
                 <!-- ── Agent ที่เกี่ยวข้อง ── -->
                 <section class="rounded-xl border border-slate-200 p-4">
-                  <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Agent ที่เกี่ยวข้อง</h3>
+                  <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">สมาชิกที่เกี่ยวข้อง</h3>
                   <div class="flex flex-wrap gap-2">
                     <span
                       v-for="a in relatedAgents"

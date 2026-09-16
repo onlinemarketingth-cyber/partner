@@ -5,6 +5,7 @@ namespace App\Services\Sales;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalStatus;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -457,7 +458,7 @@ class BusinessOverviewService
      * them (BR-6) — a null companyId is the deliberate Super-Admin read-across,
      * never an accident.
      */
-    private function paidOrders(?int $companyId, Carbon $from, Carbon $to): \Illuminate\Database\Query\Builder
+    private function paidOrders(?int $companyId, Carbon $from, Carbon $to): Builder
     {
         return DB::table('orders')
             ->when($companyId !== null, fn ($q) => $q->where('orders.company_id', $companyId))

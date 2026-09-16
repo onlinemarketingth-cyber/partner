@@ -3,7 +3,9 @@
 namespace App\Services\Sales;
 
 use App\Models\AuditLog;
+use App\Models\Order;
 use App\Models\User;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -82,7 +84,7 @@ class OrderCostBackfillService
                 'company_id' => $orders->first()->company_id,
                 'actor_user_id' => $actor->id,
                 'action' => 'orders.cost_backfilled',
-                'auditable_type' => \App\Models\Order::class,
+                'auditable_type' => Order::class,
                 'auditable_id' => $orders->first()->id,
                 'old_values' => null,
                 'new_values' => [
@@ -103,7 +105,7 @@ class OrderCostBackfillService
      * overview: an order that is paid next week would otherwise be left
      * without a cost forever, since OrderService only stamps at creation.
      */
-    private function backfillable(?int $companyId): \Illuminate\Database\Query\Builder
+    private function backfillable(?int $companyId): Builder
     {
         return DB::table('orders')
             ->join('products', 'products.id', '=', 'orders.product_id')

@@ -100,7 +100,7 @@ const kpis = computed(() => {
 
   return [
     { label: 'ดีล/สินค้าที่สนใจ', value: c.referrals.length },
-    { label: 'Agent ที่เกี่ยวข้อง', value: relatedAgents.value.length },
+    { label: 'สมาชิกที่เกี่ยวข้อง', value: relatedAgents.value.length },
     { label: 'เอกสารแนบ', value: documents.value.length },
   ]
 })
@@ -347,7 +347,7 @@ async function downloadDocument(doc: ClientDocumentItem) {
         <!-- ═══ c. Agent ที่เกี่ยวข้อง ═══ -->
         <section class="bg-white/95 border border-slate-200 rounded-xl p-5 mt-4">
           <h2 class="text-sm font-bold text-slate-700 flex items-center gap-2 mb-1">
-            <Icon name="users" :size="16" class="text-brand-600" /> Agent ที่เกี่ยวข้อง
+            <Icon name="users" :size="16" class="text-brand-600" /> สมาชิกที่เกี่ยวข้อง
           </h2>
           <p class="text-xs text-slate-400 mb-3">ลูกค้ารายนี้เกี่ยวข้องกับ Agent ทั้งหมด {{ relatedAgents.length }} คน</p>
           <div class="flex flex-wrap gap-2">

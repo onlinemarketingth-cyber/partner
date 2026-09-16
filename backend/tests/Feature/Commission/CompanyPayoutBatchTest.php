@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Commission;
 
+use App\Enums\IdDocumentType;
 use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalStatus;
 use App\Models\CommissionLedger;
@@ -306,7 +307,7 @@ class CompanyPayoutBatchTest extends TestCase
             'last_name' => $name !== null ? (explode(' ', $name)[1] ?? '') : 'ทดสอบ',
             ...($payable ? [
                 'national_id' => '1234567890123',
-                'id_document_type' => \App\Enums\IdDocumentType::ThaiNationalId,
+                'id_document_type' => IdDocumentType::ThaiNationalId,
                 'bank_name' => 'กสิกรไทย',
                 'bank_account_number' => '1234567890',
                 'bank_account_holder_name' => 'สมาชิก ทดสอบ',

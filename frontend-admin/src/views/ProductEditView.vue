@@ -3214,7 +3214,7 @@ function goToVideoSettings() {
               <Icon name="image" :size="14" /> รูปสินค้า
               <span v-if="coverMedia.length" class="text-xs font-bold text-slate-400">({{ coverMedia.length }} รูป)</span>
             </p>
-            <span class="text-xs text-slate-400">แสดงบนการ์ดสินค้าใน Agent Portal และหน้าแชร์ · รูปภาพเท่านั้น</span>
+            <span class="text-xs text-slate-400">แสดงบนการ์ดสินค้าใน Member Portal และหน้าแชร์ · รูปภาพเท่านั้น</span>
           </div>
           <p class="text-xs text-slate-400 mb-3">
             รูปที่ติดป้าย <span class="font-bold text-amber-600">หลัก</span> คือรูปที่ขึ้นบนการ์ด — รูปที่เหลือแสดงเป็นแกลเลอรีในหน้าสินค้า

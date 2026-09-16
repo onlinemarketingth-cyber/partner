@@ -580,7 +580,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       <div>
         <label class="text-xs font-bold text-slate-500">บทบาท</label>
         <select v-model="createForm.role" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-          <option value="agent">Agent</option>
+          <option value="agent">Member</option>
           <option value="company_admin">Company Admin</option>
         </select>
       </div>

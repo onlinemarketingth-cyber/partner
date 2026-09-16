@@ -1230,7 +1230,7 @@ watch(
                   class="mt-1 w-full px-3 py-2 rounded-lg border text-sm bg-white disabled:bg-slate-50 disabled:text-slate-400"
                   :class="inputBorderClass('role')"
                 >
-                  <option value="agent">Agent</option>
+                  <option value="agent">Member</option>
                   <option v-if="canBeCompanyAdmin" value="company_admin">Company Admin</option>
                 </select>
                 <p v-if="editFieldErrors.role" class="text-[11px] text-rose-600 mt-1">{{ editFieldErrors.role }}</p>

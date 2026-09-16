@@ -29,6 +29,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const get = vi.fn()
 const post = vi.fn()
+const postForm = vi.fn()
 const download = vi.fn()
 
 /**
@@ -52,6 +53,7 @@ vi.mock('@/api/client', () => ({
     get: (...args: unknown[]) => get(...args),
     put: vi.fn(),
     post: (...args: unknown[]) => post(...args),
+    postForm: (...args: unknown[]) => postForm(...args),
     getBlob: vi.fn(),
     download: (...args: unknown[]) => download(...args),
   },
@@ -99,7 +101,7 @@ const ORDER: {
   paid_at: string | null
   verified_by: { id: number; name: string } | null
   created_at: string
-  permissions: { confirm: boolean }
+  permissions: { confirm: boolean; upload_slip: boolean }
 } = {
   id: 1,
   order_number: 'ORD-0001',
@@ -122,7 +124,7 @@ const ORDER: {
   paid_at: null,
   verified_by: null,
   created_at: '2026-08-20T03:00:00Z',
-  permissions: { confirm: false },
+  permissions: { confirm: false, upload_slip: false },
 }
 
 function mockApi(orders = [ORDER]) {
@@ -499,5 +501,171 @@ describe('OrderPaymentsView — the table', () => {
     expect(text).toContain('ปิดการขายอัตโนมัติไม่สำเร็จ')
     expect(text).not.toContain('บัตรถูกปฏิเสธ')
     expect(text).not.toContain('ผู้ให้บริการแจ้งว่ามีการคืนเงิน')
+  })
+})
+
+/**
+ * 2026-09-16 — "อัปโหลดสลิปแทนลูกค้า".
+ *
+ * `POST /orders/{order}/slip` was built in the 2026-08-21 audit follow-up for
+ * the customer who pays cash at a branch or sends the photo over LINE, and no
+ * screen ever called it. So the staff answer to "I already have your money
+ * and your slip" was to ask the customer to go and upload it themselves.
+ *
+ * ── WHAT THESE TESTS ARE HOLDING IN PLACE ──
+ *
+ * 1. THE BUTTON IS SERVER-GATED. `permissions.upload_slip` answers both "may
+ *    I" and "is there anything to attach". Re-deriving either from the status
+ *    string is how the button comes back 403 or 422 after being pressed.
+ * 2. IT IS NOT A SECOND CONFIRM. Uploading moves the order into รอตรวจสลิป
+ *    and stops. Somebody then judges the slip with the button that already
+ *    exists — the same two steps, the same queue, the same audit trail as a
+ *    customer's own upload.
+ * 3. IT REFRESHES BOTH HALVES. The row leaves รอชำระเงิน and joins รอตรวจสลิป,
+ *    so two tab counts change; reloading only the list leaves the counts
+ *    lying, which is the defect this file's header names.
+ */
+describe('OrderPaymentsView — attaching a slip on the customer\'s behalf', () => {
+  const PAYABLE = {
+    ...ORDER,
+    status: 'pending',
+    status_label: 'รอชำระเงิน',
+    has_slip: false,
+    permissions: { confirm: false, upload_slip: true },
+  }
+
+  /**
+   * `/companies` is answered properly here, unlike the describes above.
+   *
+   * The view calls loadCompanies() on mount, and the store DROPS the picked
+   * company when the response does not contain it (a deleted tenant must not
+   * stay selected). The shared mockApi() answers every non-summary path with
+   * the order list, so the id survives only until that promise resolves —
+   * long enough for an assertion about the requests made during mount, and
+   * not long enough for one about a refresh afterwards, which is what this
+   * describe does.
+   */
+  function mockApiWithCompanies(orders: unknown[]) {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/companies') return { data: [{ id: 4, name: 'ไทยประกันชีวิต', slug: 'thailife' }] }
+      if (path.startsWith('/orders/summary')) return { data: SUMMARY }
+
+      return { data: orders }
+    })
+  }
+
+  beforeEach(() => {
+    // NO setActivePinia here, deliberately. vitest.setup.ts already hands
+    // every test a fresh Pinia and registers it as `config.global.plugins`.
+    // Creating another one here would make the store this block configures a
+    // DIFFERENT instance from the one the mounted component resolves — the
+    // company would read as picked in the test and as null in the view, and
+    // the only symptom would be an unscoped request.
+    get.mockReset()
+    post.mockReset()
+    postForm.mockReset()
+    localStorage.clear()
+
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+    const store = useActiveCompanyStore()
+    store.companies = [{ id: 4, name: 'ไทยประกันชีวิต', slug: 'thailife' }]
+    store.setCompany(4)
+  })
+
+  async function pickFile(wrapper: Awaited<ReturnType<typeof mountView>>) {
+    await wrapper.find('[data-test="upload-slip"]').trigger('click')
+
+    const input = wrapper.find('[data-test="slip-file-input"]')
+    const file = new File(['slip-bytes'], 'slip-from-line.jpg', { type: 'image/jpeg' })
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    return file
+  }
+
+  it('offers the upload only when the server says so', async () => {
+    mockApi([PAYABLE])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="upload-slip"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="upload-slip"]').text()).toContain('อัปโหลดสลิปแทนลูกค้า')
+  })
+
+  it('hides it when the server says this user may not, whatever the status', async () => {
+    // The selling agent, on their own pending sale: the status alone would
+    // say yes. OrderPolicy::submitSlip says no, and the server's answer wins.
+    mockApi([{ ...PAYABLE, permissions: { confirm: false, upload_slip: false } }])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="upload-slip"]').exists()).toBe(false)
+  })
+
+  it('hides it on a row that already has a slip — that row needs judging, not a slip', async () => {
+    mockApi([{ ...PAYABLE, has_slip: true }])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="upload-slip"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="view-slip"]').exists()).toBe(true)
+  })
+
+  it('posts the chosen file as multipart to the order it was pressed on', async () => {
+    mockApi([PAYABLE])
+    const wrapper = await mountView()
+    const file = await pickFile(wrapper)
+
+    expect(postForm).toHaveBeenCalledTimes(1)
+    const [path, form] = postForm.mock.calls[0] as [string, FormData]
+    expect(path).toBe('/orders/1/slip')
+    expect(form.get('slip')).toBe(file)
+  })
+
+  it('does NOT confirm the payment in the same press', async () => {
+    // Attaching proof and accepting it are two acts by design — see
+    // OrderPolicy::submitSlip. One button doing both would settle a payment
+    // with nothing on screen in between.
+    mockApi([PAYABLE])
+    const wrapper = await mountView()
+    await pickFile(wrapper)
+
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('reloads the counts as well as the rows', async () => {
+    mockApiWithCompanies([PAYABLE])
+    const wrapper = await mountView()
+    get.mockClear()
+    await pickFile(wrapper)
+
+    expect(requestedPaths()).toContain('/orders/summary?company_id=4')
+    expect(requestedPaths().some((p) => p.startsWith('/orders?'))).toBe(true)
+  })
+
+  it('shows the server\'s refusal in full rather than a generic failure', async () => {
+    // "อัปโหลดสลิปได้เฉพาะคำสั่งซื้อที่ยังรอชำระเงินอยู่เท่านั้น (สถานะปัจจุบัน: …)"
+    // names the actual state. Flattening it discards the only sentence that
+    // tells the admin what happened.
+    mockApi([PAYABLE])
+    const wrapper = await mountView()
+
+    const refusal = new ApiErrorStub('อัปโหลดสลิปได้เฉพาะคำสั่งซื้อที่ยังรอชำระเงินอยู่เท่านั้น (สถานะปัจจุบัน: ชำระเงินแล้ว)')
+    postForm.mockRejectedValueOnce(refusal)
+
+    await pickFile(wrapper)
+
+    expect(wrapper.text()).toContain('สถานะปัจจุบัน: ชำระเงินแล้ว')
+  })
+
+  it('clears the input so the same file can be picked again after a failure', async () => {
+    // A browser does not re-emit `change` for an unchanged value, so without
+    // this the retry path is "pick a different file, then pick the right one".
+    mockApi([PAYABLE])
+    const wrapper = await mountView()
+    postForm.mockRejectedValueOnce(new ApiErrorStub('boom'))
+
+    await pickFile(wrapper)
+
+    expect((wrapper.find('[data-test="slip-file-input"]').element as HTMLInputElement).value).toBe('')
   })
 })

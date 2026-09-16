@@ -341,7 +341,7 @@ describe('ThemeSettingsView — TASK-175 four tabs, one form', () => {
     for (const label of [TAB_COLORS, TAB_FONTS_LOGOS, TAB_NAMING, TAB_OTHER]) {
       await tab(wrapper, label).trigger('click')
 
-      const preview = wrapper.findAll('h2').find((h) => h.text() === 'ตัวอย่าง (Agent Portal)')
+      const preview = wrapper.findAll('h2').find((h) => h.text() === 'ตัวอย่าง (Member Portal)')
       expect(preview).toBeDefined()
       // Structural, not just present: the preview column must live OUTSIDE the
       // tabbed editor column. Inside it, it would inherit a tab's `v-show` and

@@ -14,6 +14,7 @@ use App\Models\CommissionWithdrawalRequest;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
 use App\Services\Notification\NotificationService;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -179,11 +180,11 @@ class CommissionWithdrawalService
      * recalled.
      *
      * @param  list<array{agent: User, expected_total_satang: int}>  $payees
-     * @return \Illuminate\Support\Collection<int, CommissionWithdrawalRequest>
+     * @return Collection<int, CommissionWithdrawalRequest>
      *
      * @throws ValidationException
      */
-    public function payOutMany(array $payees, User $actor): \Illuminate\Support\Collection
+    public function payOutMany(array $payees, User $actor): Collection
     {
         $opened = DB::transaction(function () use ($payees, $actor) {
             $raised = collect();
@@ -493,9 +494,9 @@ class CommissionWithdrawalService
      * own admins are told instead; they are the people who will see the money
      * arrive, and adminsOf() already leaves the seat out of that list.
      *
-     * @return \Illuminate\Support\Collection<int, User>
+     * @return Collection<int, User>
      */
-    private function audienceFor(User $payee): \Illuminate\Support\Collection
+    private function audienceFor(User $payee): Collection
     {
         return $payee->isCommissionHouseAccount()
             ? $this->adminsOf($payee)
@@ -512,9 +513,9 @@ class CommissionWithdrawalService
      * for one tenant's payout run, and a platform operator does not want every
      * company's withdrawal traffic in their inbox.
      *
-     * @return \Illuminate\Support\Collection<int, User>
+     * @return Collection<int, User>
      */
-    private function adminsOf(User $agent): \Illuminate\Support\Collection
+    private function adminsOf(User $agent): Collection
     {
         if ($agent->company_id === null) {
             return collect();
@@ -743,9 +744,9 @@ class CommissionWithdrawalService
      * cost is an email, never a settled ledger row that nobody was told about.
      *
      * @param  array<int, CommissionWithdrawalRequest>  $requests
-     * @return \Illuminate\Support\Collection<int, CommissionWithdrawalRequest>
+     * @return Collection<int, CommissionWithdrawalRequest>
      */
-    public function markManyTransferred(array $requests, User $actor, ?string $reference = null): \Illuminate\Support\Collection
+    public function markManyTransferred(array $requests, User $actor, ?string $reference = null): Collection
     {
         $settled = DB::transaction(function () use ($requests, $actor, $reference) {
             $done = collect();

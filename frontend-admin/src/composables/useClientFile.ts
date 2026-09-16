@@ -299,7 +299,7 @@ export function useClientFile() {
         paymentLabel = 'แนบสลิปแล้ว รอตรวจสอบ'
         // A slip on an unpaid order is somebody's job, and it outranks the
         // pipeline's next stage: the deal cannot move until an agent looks.
-        waitingOn = 'รอ Agent ตรวจสอบสลิป'
+        waitingOn = 'รอสมาชิกตรวจสอบสลิป'
       } else {
         payment = 'awaiting'
         paymentLabel = 'รอชำระเงิน'

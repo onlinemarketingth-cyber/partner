@@ -10,6 +10,7 @@ use App\Models\Company;
 use App\Models\User;
 use App\Services\Commission\CommissionHouseAccountService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Tests\TestCase;
 
 /**
@@ -387,9 +388,9 @@ class CommissionBulkPayoutTest extends TestCase
      * Pending ledger rows for one payee.
      *
      * @param  list<int>  $amountsSatang
-     * @return \Illuminate\Support\Collection<int, CommissionLedger>
+     * @return Collection<int, CommissionLedger>
      */
-    private function owe(Company $company, User $payee, array $amountsSatang): \Illuminate\Support\Collection
+    private function owe(Company $company, User $payee, array $amountsSatang): Collection
     {
         return collect($amountsSatang)->map(fn (int $satang) => CommissionLedger::factory()->create([
             'company_id' => $company->id,

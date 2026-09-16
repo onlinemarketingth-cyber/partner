@@ -297,7 +297,7 @@ function validateForm(): string {
   if (!form.value.starts_at) return 'กรุณาระบุวันที่เริ่มต้น'
   if (form.value.ends_at && form.value.ends_at < form.value.starts_at) return 'วันสิ้นสุดต้องไม่ก่อนวันเริ่มต้น'
   if (form.value.target_type === 'cert_tier' && !form.value.target_cert_tier_id) return 'กรุณาเลือก Cert Tier เป้าหมาย'
-  if (form.value.target_type === 'specific_agents' && !form.value.target_agent_ids.length) return 'กรุณาเลือก Agent อย่างน้อย 1 คน'
+  if (form.value.target_type === 'specific_agents' && !form.value.target_agent_ids.length) return 'กรุณาเลือกสมาชิกอย่างน้อย 1 คน'
   if (form.value.bonus_value_input === '' || form.value.bonus_value_input === null) return 'กรุณาระบุมูลค่าโบนัส'
   if (!form.value.payout_timing) return 'กรุณาเลือกรูปแบบการจ่ายโบนัส'
   return ''
@@ -362,7 +362,7 @@ async function confirmDeletePromotion() {
 }
 
 function targetSummary(p: PromotionItem): string {
-  if (p.target_type === 'all_agents') return 'Agent ทั้งหมด'
+  if (p.target_type === 'all_agents') return 'สมาชิกทั้งหมด'
   if (p.target_type === 'cert_tier') {
     const tierName = p.target_cert_tier_name ?? '-'
     return `Cert Tier: ${tierName}${p.target_cert_tier_mode === 'and_above' ? ' ขึ้นไป' : ''}`
@@ -387,7 +387,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="tag"
-      title="Promotion สำหรับ Agent"
+      title="Promotion สำหรับสมาชิก"
       subtitle="แคมเปญโบนัสพิเศษแบบเจาะกลุ่ม (ตาม Cert Tier หรือรายบุคคล)"
       accent-color="brand"
       storage-key="agent-promotions"
@@ -503,7 +503,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
           <div>
             <label class="text-sm font-bold text-slate-500">กลุ่มเป้าหมาย</label>
             <select v-model="form.target_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <option value="all_agents">Agent ทั้งหมด</option>
+              <option value="all_agents">สมาชิกทั้งหมด</option>
               <option value="cert_tier">ตาม Cert Tier</option>
               <option value="specific_agents">เลือกเฉพาะราย</option>
             </select>
@@ -540,7 +540,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
                 <input type="checkbox" :checked="form.target_agent_ids.includes(a.id)" @change="toggleTargetAgent(a.id)" />
                 {{ a.name }}
               </label>
-              <p v-if="!agentOptionsForForm.length" class="px-3 py-2 text-xs text-slate-400">ไม่มี Agent ให้เลือก</p>
+              <p v-if="!agentOptionsForForm.length" class="px-3 py-2 text-xs text-slate-400">ไม่มีสมาชิกให้เลือก</p>
             </div>
           </div>
 

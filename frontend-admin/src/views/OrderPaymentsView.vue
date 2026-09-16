@@ -101,7 +101,7 @@ interface OrderRow {
    * Missing permissions read as NO, matching every other screen: failing
    * closed costs a button, failing open ships a 403.
    */
-  permissions?: { confirm: boolean }
+  permissions?: { confirm: boolean; upload_slip?: boolean }
 }
 
 interface SummaryRow {
@@ -366,6 +366,85 @@ async function confirmPayment(order: OrderRow): Promise<void> {
 }
 
 /**
+ * Attach a slip the customer sent somewhere else.
+ *
+ * ── THE SITUATION (2026-08-21 audit, UI 2026-09-16) ──
+ *
+ * A customer pays and sends the photo over LINE, or pays cash at a branch.
+ * The order sits in รอชำระเงิน and the only route forward was to ask the
+ * customer to open /pay and upload it themselves — for money the company
+ * already has. `POST /orders/{order}/slip` was built for exactly this and
+ * then had no button for three weeks.
+ *
+ * ── WHY IT DOES NOT ALSO CONFIRM ──
+ *
+ * Uploading moves the order to รอตรวจสลิป, where the existing "อนุมัติการ
+ * ชำระเงิน" button picks it up — the same two steps a customer-uploaded slip
+ * goes through, in the same queue, leaving the same audit trail. Collapsing
+ * them into one press would let a member of staff assert a payment and settle
+ * it in a single action with nothing on screen in between, which is the
+ * separation OrderPolicy::submitSlip's docblock accepts precisely BECAUSE the
+ * staff upload is recorded as its own audited event.
+ *
+ * ── WHY A HIDDEN <input type="file"> AND NOT A MODAL ──
+ *
+ * There is one field and no decisions. A modal would add two clicks to an
+ * action whose whole content is "choose this photo"; the confirmation the
+ * admin actually wants comes after, when the row moves to รอตรวจสลิป and
+ * "ดูสลิป" appears on it.
+ */
+const uploadingId = ref<number | null>(null)
+const slipInputEl = ref<HTMLInputElement | null>(null)
+const uploadTargetId = ref<number | null>(null)
+
+function canUploadSlip(order: OrderRow): boolean {
+  // Server-derived, like `confirm`. Re-deriving "is this payable" from the
+  // status string here is how a button comes back 422 — the server already
+  // answered, for this user and this order.
+  return order.permissions?.upload_slip === true
+}
+
+function pickSlip(order: OrderRow): void {
+  uploadTargetId.value = order.id
+  // The same input is reused for every row; clearing it first means picking
+  // the SAME file twice in a row still fires `change` (a browser does not
+  // re-emit for an unchanged value), which is the retry path after a failed
+  // upload.
+  if (slipInputEl.value) slipInputEl.value.value = ''
+  slipInputEl.value?.click()
+}
+
+async function uploadSlip(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  const orderId = uploadTargetId.value
+
+  if (!file || orderId === null) return
+
+  uploadingId.value = orderId
+  errorMessage.value = ''
+
+  try {
+    const form = new FormData()
+    form.append('slip', file)
+    await api.postForm(`/orders/${orderId}/slip`, form)
+    await refreshAll()
+  } catch (e) {
+    // Shown in full for the same reason confirmPayment's is: the server's
+    // refusal names the actual problem ("อัปโหลดสลิปได้เฉพาะคำสั่งซื้อที่ยัง
+    // รอชำระเงินอยู่เท่านั้น (สถานะปัจจุบัน: …)"), and flattening that to
+    // "อัปโหลดไม่สำเร็จ" throws away the sentence that says what to do.
+    errorMessage.value = e instanceof ApiError
+      ? `อัปโหลดสลิปไม่สำเร็จ: ${e.message}`
+      : 'อัปโหลดสลิปไม่สำเร็จ'
+  } finally {
+    uploadingId.value = null
+    uploadTargetId.value = null
+    input.value = ''
+  }
+}
+
+/**
  * A confirmed payment changes BOTH the row and the counts.
  *
  * Reloading only the list would leave the tab still reading "4" over three
@@ -562,6 +641,21 @@ function badgeClasses(tone: string): string {
                   >
                     <Icon name="document" :size="14" /> ดูรายละเอียด
                   </button>
+                  <!-- Before ดูสลิป in the DOM but only ever visible when
+                       there is no slip to look at: the two are alternatives,
+                       not a pair. An order with a slip needs judging; one
+                       without needs a slip. -->
+                  <button
+                    v-if="canUploadSlip(order) && !order.has_slip"
+                    type="button"
+                    data-test="upload-slip"
+                    :disabled="uploadingId !== null"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-60 transition"
+                    @click="pickSlip(order)"
+                  >
+                    <Icon name="upload" :size="14" />
+                    {{ uploadingId === order.id ? 'กำลังอัปโหลด...' : 'อัปโหลดสลิปแทนลูกค้า' }}
+                  </button>
                   <button
                     v-if="order.has_slip"
                     type="button"
@@ -621,6 +715,18 @@ function badgeClasses(tone: string): string {
         </tbody>
       </table>
     </div>
+
+    <!-- One input for the whole table, driven by pickSlip(). The accept list
+         mirrors the server's mimes rule exactly (jpg/jpeg/png/webp) so the
+         file picker cannot offer a file the upload will then reject. -->
+    <input
+      ref="slipInputEl"
+      type="file"
+      accept="image/jpeg,image/png,image/webp"
+      class="hidden"
+      data-test="slip-file-input"
+      @change="uploadSlip"
+    />
 
     <OrderDetailModal :order-id="openOrderId" @close="openOrderId = null" />
 

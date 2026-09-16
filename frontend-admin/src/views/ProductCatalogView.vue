@@ -1324,7 +1324,7 @@ const deleteProductBody = computed(() => {
 
   if (!product.is_shared) {
     return `ซ่อนแพ็กเกจ "${product.name}" ออกจาก ${companyName(product.company_id) ?? 'บริษัทนี้'}?\n\n`
-      + '• Agent ของบริษัทนี้จะไม่เห็นแพ็กเกจนี้บนหน้าร้านทันที\n'
+      + '• สมาชิกของบริษัทนี้จะไม่เห็นแพ็กเกจนี้บนหน้าร้านทันที\n'
       + '• บริษัทอื่นไม่ได้รับผลกระทบ\n'
       + '• ข้อมูลไม่ได้หายถาวร กู้คืนได้ที่แท็บ "ถังขยะ"'
       + blockers
@@ -2561,7 +2561,7 @@ function toggleRefForm(): void {
           placeholder="ติ๊กเลือกบริษัท..."
         />
         <div>
-          <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Agent Portal)</label>
+          <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Member Portal)</label>
           <IconPicker v-model="categoryForm.icon" fallback-icon="box" fallback-label="ยังไม่ได้เลือกไอคอน" clear-label="ล้างไอคอน" />
         </div>
         <div class="flex justify-end">
@@ -2597,7 +2597,7 @@ function toggleRefForm(): void {
                 placeholder="ติ๊กเลือกบริษัท..."
               />
               <div>
-                <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Agent Portal)</label>
+                <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ — แสดงบนหน้าร้าน Member Portal)</label>
                 <IconPicker v-model="editCategoryForm.icon" fallback-icon="box" fallback-label="ยังไม่ได้เลือกไอคอน" clear-label="ล้างไอคอน" />
               </div>
               <div class="flex items-center gap-4">
@@ -3116,7 +3116,7 @@ function toggleRefForm(): void {
 
     <section v-if="activeTab === 'banners'" class="mt-4">
       <p class="text-xs text-slate-400 mb-2">
-        แบนเนอร์หน้าร้าน Agent Portal (สไลด์ได้ 3 ตำแหน่ง) — คลิกแล้วพาไปหน้าสินค้า, URL ภายนอก, หรือหน้าภายในระบบ ตามที่ตั้งค่าไว้ · เลือกหลายรูปพร้อมกันเพื่อสร้างหลายแบนเนอร์ในครั้งเดียว
+        แบนเนอร์หน้าร้าน Member Portal (สไลด์ได้ 3 ตำแหน่ง) — คลิกแล้วพาไปหน้าสินค้า, URL ภายนอก, หรือหน้าภายในระบบ ตามที่ตั้งค่าไว้ · เลือกหลายรูปพร้อมกันเพื่อสร้างหลายแบนเนอร์ในครั้งเดียว
       </p>
       <div class="flex justify-end mb-2">
         <button
@@ -3234,7 +3234,7 @@ function toggleRefForm(): void {
         v-if="!banners.length"
         icon="image"
         title="ยังไม่มีแบนเนอร์"
-        message="เพิ่มแบนเนอร์แรกเพื่อแสดงในหน้าร้าน Agent Portal"
+        message="เพิ่มแบนเนอร์แรกเพื่อแสดงในหน้าร้าน Member Portal"
         cta-label="+ เพิ่มแบนเนอร์แรก"
         :cta-disabled="false"
         @cta="openCreateBannerForm"

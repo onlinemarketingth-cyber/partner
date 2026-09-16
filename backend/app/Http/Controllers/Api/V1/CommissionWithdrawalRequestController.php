@@ -17,6 +17,7 @@ use App\Models\User;
 use App\Services\Commission\CommissionWithdrawalService;
 use App\Support\CompanyScopeFilter;
 use App\Support\CsvCell;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -73,9 +74,9 @@ class CommissionWithdrawalRequestController extends Controller
      * money, which is the exact defect CompanyScopeFilter was added to fix
      * in the first place.
      *
-     * @return \Illuminate\Database\Eloquent\Builder<CommissionWithdrawalRequest>
+     * @return Builder<CommissionWithdrawalRequest>
      */
-    private function visibleTo(Request $request): \Illuminate\Database\Eloquent\Builder
+    private function visibleTo(Request $request): Builder
     {
         $query = CommissionWithdrawalRequest::query();
 
@@ -581,9 +582,9 @@ class CommissionWithdrawalRequestController extends Controller
      * out of it describe the same set. Three separately-written filter blocks is
      * how that promise is broken by a later edit to two of them.
      *
-     * @return \Illuminate\Database\Eloquent\Builder<CommissionWithdrawalRequest>
+     * @return Builder<CommissionWithdrawalRequest>
      */
-    private function reportQuery(Request $request): \Illuminate\Database\Eloquent\Builder
+    private function reportQuery(Request $request): Builder
     {
         $validated = $request->validate([
             'statuses' => ['sometimes', 'array'],

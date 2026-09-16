@@ -173,6 +173,29 @@ class OrderResource extends JsonResource
                 'confirm' => (bool) $request->user()?->can('confirm', $this->resource)
                     && $this->isPayable()
                     && ($this->status === OrderStatus::AwaitingVerification || $this->hasGatewayPayment()),
+
+                /*
+                 * 2026-09-16 — attach a slip on the customer's behalf.
+                 *
+                 * POST /orders/{order}/slip has existed since the 2026-08-21
+                 * audit follow-up (cash at a branch, a slip sent over LINE)
+                 * and no screen has ever called it, so the staff answer to
+                 * "the customer already paid me, here is the photo" was to
+                 * ask them to re-send it through /pay.
+                 *
+                 * ── WHY THIS IS NOT `confirm` ──
+                 *
+                 * The policy is the same (OrderPolicy::submitSlip delegates
+                 * to confirm) but the WHAT half is deliberately wider: this
+                 * is the action for an order with NOTHING on file, which is
+                 * exactly the state `confirm` above is false in. An order
+                 * still รอชำระเงิน can take a slip; one already paid,
+                 * cancelled or refunded cannot, and `isPayable()` is the same
+                 * predicate OrderController::uploadSlip refuses on — so a
+                 * button that appears is a button the server will accept.
+                 */
+                'upload_slip' => (bool) $request->user()?->can('submitSlip', $this->resource)
+                    && $this->isPayable(),
             ],
         ];
     }

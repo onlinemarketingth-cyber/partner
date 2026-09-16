@@ -279,7 +279,7 @@ watch(
             <thead>
               <tr class="border-b border-slate-100 text-left">
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500">บริษัท</th>
-                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">จำนวน Agent</th>
+                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">จำนวนสมาชิก</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">รออนุมัติ</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">Referral ทั้งหมด</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">ชำระเงินสำเร็จ</th>

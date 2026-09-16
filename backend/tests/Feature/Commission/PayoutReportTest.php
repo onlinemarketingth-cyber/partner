@@ -8,6 +8,7 @@ use App\Models\CommissionWithdrawalRequest;
 use App\Models\Company;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -398,7 +399,7 @@ class PayoutReportTest extends TestCase
          * able to put them where it says it does.
          */
         if ($createdAt !== null) {
-            \Illuminate\Support\Facades\DB::table('commission_withdrawal_requests')
+            DB::table('commission_withdrawal_requests')
                 ->where('id', $row->id)
                 ->update(['created_at' => $createdAt]);
 

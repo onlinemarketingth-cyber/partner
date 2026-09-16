@@ -199,11 +199,15 @@ const checkoutForm = ref({
   phone: '',
   email: '',
   consent: false,
-  // Honeypot. Never shown, never focusable, never autofilled — a human
-  // cannot fill it, so anything in it came from a bot. The backend
-  // treats a filled hp_field as just another generic refusal
-  // (StoreProductShareCheckoutRequest accepts it as nullable precisely
-  // so the 422 does not announce "caught you").
+  // Honeypot. Never shown, never focusable, and — since 2026-09-16 —
+  // never AUTOFILLED either, which is the part that had been costing real
+  // orders. See the field's comment in the template for what changed and
+  // why the "never display:none" rule was dropped.
+  //
+  // The backend treats a filled hp_field as just another generic refusal
+  // (StoreProductShareCheckoutRequest accepts it as nullable precisely so
+  // the 422 does not announce "caught you") and now logs the reason
+  // server-side, so the next customer report is answerable in one grep.
   hp_field: '',
 })
 
@@ -733,7 +737,7 @@ function openLightbox(material: SalesMaterialItem) {
             {{ formatBaht(product.payable_price_satang) }}
           </p>
         </div>
-        <AppButton class="shrink-0" @click="openCheckout">{{ td('share.buy_now') }}</AppButton>
+        <AppButton class="shrink-0" data-test="buy-now" @click="openCheckout">{{ td('share.buy_now') }}</AppButton>
       </div>
     </div>
 
@@ -821,13 +825,58 @@ function openLightbox(material: SalesMaterialItem) {
               </p>
             </div>
 
-            <!-- Honeypot. Present in the DOM (a bot that reads the form
-                 will fill it) but unreachable for a human: off-screen,
-                 not tabbable, not autofillable, hidden from screen
-                 readers. Never `display:none` — some bots skip those. -->
-            <div aria-hidden="true" class="absolute -left-[9999px] top-0 w-px h-px overflow-hidden">
-              <label for="checkout-hp">Company</label>
-              <input id="checkout-hp" v-model="checkoutForm.hp_field" type="text" tabindex="-1" autocomplete="off" />
+            <!--
+              Honeypot. Present in the DOM so a bot that reads the form fills
+              it; a filled value is refused by the backend as one more
+              indistinguishable 422.
+
+              ── 2026-09-16: THIS TRAP WAS CATCHING CUSTOMERS ──
+
+              It previously carried `<label>Company</label>` and sat merely
+              off-screen. Both halves of that were wrong in the same way.
+
+              A password manager filling an identity (1Password, Chrome,
+              Safari) looks for a field that means "organisation" and fills
+              it — `Company` is the exact word it searches for — and it fills
+              fields that are off-screen, because plenty of real forms put
+              real fields off-screen. So a customer who had never seen this
+              input, and could not have typed in it, arrived at the server
+              looking precisely like a bot and was told the link did not
+              work. The trap caught nobody else: any bot sophisticated enough
+              to run a browser already skips off-screen inputs.
+
+              Two changes, and the reasoning for dropping the old rule:
+
+              1. `display:none`, which the old comment forbade on the grounds
+                 that some crawlers skip hidden fields. That is true and it
+                 is the smaller loss. The crawlers this actually stops are
+                 the ones that parse the HTML and POST every input they find
+                 — they do not run CSS at all and fill this either way. The
+                 ones that DO evaluate styles skipped the off-screen version
+                 too. So the rule was costing real sales to defend against a
+                 class of bot it never caught.
+              2. A name no autofiller recognises. `hp_field` stays as the
+                 wire name the backend expects; the label is gone entirely
+                 (nothing reads it — the div is aria-hidden) and the input is
+                 marked `autocomplete="off"` as a second line of defence for
+                 the browsers that honour it.
+            -->
+            <!-- The `hidden` ATTRIBUTE, not a `hidden` utility class: it is
+                 display:none from the user-agent stylesheet, so the field
+                 stays hidden even if this app's CSS fails to load or a
+                 utility class is purged — and a purged class here does not
+                 fail loudly, it silently shows a customer a box labelled
+                 nothing and then refuses their order. -->
+            <div aria-hidden="true" hidden>
+              <input
+                id="checkout-hp"
+                v-model="checkoutForm.hp_field"
+                type="text"
+                name="hp_field"
+                tabindex="-1"
+                autocomplete="off"
+                data-test="checkout-honeypot"
+              />
             </div>
 
             <!-- PDPA (§6) — explicit, never pre-ticked, and the wording

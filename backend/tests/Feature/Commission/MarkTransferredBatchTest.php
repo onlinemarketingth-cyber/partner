@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Commission;
 
+use App\Enums\IdDocumentType;
 use App\Enums\NotificationType;
 use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalStatus;
@@ -11,6 +12,7 @@ use App\Models\Company;
 use App\Models\Notification as NotificationModel;
 use App\Models\Product;
 use App\Models\User;
+use App\Services\Commission\CommissionWithdrawalService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -304,7 +306,7 @@ class MarkTransferredBatchTest extends TestCase
         $agent = User::factory()->agent()->create([
             'company_id' => $company->id,
             'national_id' => '1234567890123',
-            'id_document_type' => \App\Enums\IdDocumentType::ThaiNationalId,
+            'id_document_type' => IdDocumentType::ThaiNationalId,
             'bank_name' => 'กสิกรไทย',
             'bank_account_number' => '1234567890',
             'bank_account_holder_name' => 'สมาชิก ทดสอบ',
@@ -322,7 +324,7 @@ class MarkTransferredBatchTest extends TestCase
 
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
 
-        return app(\App\Services\Commission\CommissionWithdrawalService::class)
+        return app(CommissionWithdrawalService::class)
             ->payOut($agent, $satang, $admin);
     }
 }

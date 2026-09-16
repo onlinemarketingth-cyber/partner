@@ -466,7 +466,7 @@ watch(() => activeCompany.companyId, () => loadAll())
                 <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">สถานะ</th>
                 <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200">ดีล / สินค้า</th>
                 <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">การชำระเงิน</th>
-                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">Agent</th>
+                <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">สมาชิก</th>
                 <th class="text-left text-[12px] font-bold uppercase tracking-wider text-slate-400 px-4 py-3.5 border-b border-slate-200 whitespace-nowrap">อัปเดตล่าสุด</th>
               </tr>
             </thead>

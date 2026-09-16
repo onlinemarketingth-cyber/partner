@@ -25,12 +25,18 @@
  * StoreAffiliateLeadRequest — required-field + focus-on-invalid pattern
  * reused from RegisterView.vue verbatim.
  *
- * Honeypot (hp_field): visually hidden off-screen, never `display:none`
- * (some crawlers skip those but still fill merely-offscreen fields) —
- * real visitors never see or fill it; a filled value makes the backend
- * silently no-op while still returning the same success response
- * (AffiliateLeadCaptureController::store()), so this field must NEVER
- * gain a visible label, placeholder, or validation error.
+ * Honeypot (hp_field): hidden — real visitors never see or fill it; a
+ * filled value makes the backend silently no-op while still returning the
+ * same success response (AffiliateLeadCaptureController::store()), so this
+ * field must NEVER gain a visible label, placeholder, or validation error.
+ *
+ * 2026-09-16 — the old rule here was "off-screen, never `display:none`,
+ * because some crawlers skip hidden fields". It was dropped after the same
+ * trick on the product-share checkout was found refusing real buyers: a
+ * password manager fills an off-screen field exactly as it fills an on-screen
+ * one. The crawlers the rule protected against are the ones that never
+ * evaluate CSS and fill this either way; the ones that do evaluate it skipped
+ * the off-screen version too. See ProductShareView.vue for the full reasoning.
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -369,10 +375,21 @@ async function submitLead() {
             <p v-if="productError" class="text-xs text-ink-danger mt-1">{{ productError }}</p>
           </div>
 
-          <!-- Honeypot — see file header comment. Off-screen, never display:none. -->
-          <div style="position: absolute; left: -9999px; top: -9999px; opacity: 0; height: 0; width: 0; overflow: hidden;" aria-hidden="true">
-            <label>Leave this field empty</label>
-            <input v-model="form.hp_field" type="text" tabindex="-1" autocomplete="off" />
+          <!-- Honeypot — see file header comment. Hidden with the `hidden`
+               ATTRIBUTE since 2026-09-16, for the reason set out in
+               ProductShareView.vue: an off-screen field is one a password
+               manager fills, and here a false positive is worse than on
+               checkout — the backend no-ops silently and returns SUCCESS, so
+               the visitor is thanked and their lead is never recorded. -->
+          <div hidden aria-hidden="true">
+            <input
+              v-model="form.hp_field"
+              type="text"
+              name="hp_field"
+              tabindex="-1"
+              autocomplete="off"
+              data-test="lead-honeypot"
+            />
           </div>
 
           <div>

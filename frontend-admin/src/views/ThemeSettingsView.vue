@@ -1446,7 +1446,7 @@ onMounted(loadPresets)
       icon="sparkles"
       icon-color="text-brand-600"
       title="ตั้งค่าระบบ"
-      subtitle="ธีม / แบรนด์ ของ Agent Portal และค่าตั้งวิดีโอของบริษัทคุณ"
+      subtitle="ธีม / แบรนด์ ของ Member Portal และค่าตั้งวิดีโอของบริษัทคุณ"
       accent-color="brand"
       storage-key="admin-theme-settings"
     >
@@ -2234,7 +2234,7 @@ onMounted(loadPresets)
         <section v-show="activeTab === 'other'" class="bg-white/95 border border-slate-200 rounded-2xl p-5">
           <h2 class="text-sm font-bold text-slate-900 mb-1">หน้าร้าน (Storefront) — สินค้าแนะนำ</h2>
           <p class="text-xs text-slate-400 mb-4">
-            จำนวนช่องสินค้าที่แสดงในแถว "แนะนำสำหรับคุณ" บน Agent Portal — ปักหมุดเองไม่ครบจำนวนนี้ ระบบจะเติมด้วยสินค้าขายดี (เกรด ABC) อัตโนมัติ
+            จำนวนช่องสินค้าที่แสดงในแถว "แนะนำสำหรับคุณ" บน Member Portal — ปักหมุดเองไม่ครบจำนวนนี้ ระบบจะเติมด้วยสินค้าขายดี (เกรด ABC) อัตโนมัติ
           </p>
           <div class="flex items-center gap-3">
             <label class="text-xs font-bold text-slate-500 shrink-0">จำนวนสินค้าแนะนำ</label>
@@ -2261,7 +2261,7 @@ onMounted(loadPresets)
       <!-- ══════════ RIGHT: live preview (sticky) ══════════ -->
       <div class="lg:sticky lg:top-20 self-start">
         <div class="bg-white/95 border border-slate-200 rounded-2xl p-5">
-          <h2 class="text-sm font-bold text-slate-900 mb-4">ตัวอย่าง (Agent Portal)</h2>
+          <h2 class="text-sm font-bold text-slate-900 mb-4">ตัวอย่าง (Member Portal)</h2>
 
           <!-- iPhone-shaped mock (≈19.5:9, Dynamic Island), mirroring the mobile Agent Portal shell. -->
           <div class="relative mx-auto w-[280px] h-[606px] rounded-[3rem] border-[11px] border-slate-900 overflow-hidden shadow-2xl flex flex-col" :style="previewBackgroundStyle">
