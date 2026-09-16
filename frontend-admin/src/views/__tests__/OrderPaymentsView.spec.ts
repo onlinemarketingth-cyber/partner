@@ -101,7 +101,18 @@ const ORDER: {
   paid_at: string | null
   verified_by: { id: number; name: string } | null
   created_at: string
-  permissions: { confirm: boolean; upload_slip: boolean }
+  /**
+   * `upload_slip` is OPTIONAL here, matching OrderRow in the view.
+   *
+   * Not a convenience for the four older tests that spread
+   * `permissions: { confirm: true }` — it is the shape the API really has.
+   * A frontend deployed ahead of its backend receives a permissions object
+   * with `confirm` and no `upload_slip`, and the screen must read that as
+   * NO and render no button. Declaring it required here would make those
+   * four tests a type error AND delete the only coverage of the
+   * deployed-ahead case, which is the state every deploy passes through.
+   */
+  permissions: { confirm: boolean; upload_slip?: boolean }
 } = {
   id: 1,
   order_number: 'ORD-0001',
@@ -597,6 +608,17 @@ describe('OrderPaymentsView — attaching a slip on the customer\'s behalf', () 
     // The selling agent, on their own pending sale: the status alone would
     // say yes. OrderPolicy::submitSlip says no, and the server's answer wins.
     mockApi([{ ...PAYABLE, permissions: { confirm: false, upload_slip: false } }])
+    const wrapper = await mountView()
+
+    expect(wrapper.find('[data-test="upload-slip"]').exists()).toBe(false)
+  })
+
+  it('hides it when the server does not mention the permission at all', async () => {
+    // The deployed-ahead case: this frontend live, the backend that sends
+    // `upload_slip` not yet. Missing must read as NO, like every other
+    // permission on this screen — failing closed costs a button, failing
+    // open ships a 403.
+    mockApi([{ ...PAYABLE, permissions: { confirm: false } }])
     const wrapper = await mountView()
 
     expect(wrapper.find('[data-test="upload-slip"]').exists()).toBe(false)
