@@ -41,64 +41,11 @@ vi.mock('vue-router', () => ({
   RouterLink: { name: 'RouterLink', props: ['to'], template: '<a><slot /></a>' },
 }))
 
-import CommissionLedgerPanel from '../CommissionLedgerPanel.vue'
 import AgentEditModal from '../AgentEditModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 const TLI = { id: 4, name: 'Thai Life insurance', slug: 'tli' }
-
-function ledgerRow(over: Record<string, unknown> = {}) {
-  return {
-    id: 1,
-    referral: { id: 5, client: { id: 6, name: 'คุณลูกค้า' } },
-    agent: { id: 42, name: 'สมชาย' },
-    cert_tier_at_time: { id: 1, key: 'basic', name: 'Basic' },
-    product: { id: 3, name: 'GENESENN 1-Year Vital Blueprint' },
-    rate_type_applied: 'percentage',
-    rate_applied: 500,
-    amount_satang: 149500,
-    payment_status: 'pending',
-    earned_via: 'direct',
-    override_source_agent: null,
-    is_company_share: false,
-    paid_at: null,
-    created_at: '2026-09-14T00:00:00Z',
-    ...over,
-  }
-}
-
-/** The company's own override row, as the server flags it. */
-const COMPANY_ROW = ledgerRow({
-  id: 2,
-  agent: { id: 90, name: 'Thai Life insurance' },
-  cert_tier_at_time: null,
-  earned_via: 'override',
-  override_source_agent: { id: 42, name: 'สมชาย' },
-  amount_satang: 44850,
-  is_company_share: true,
-})
-
-async function mountPayouts(rows: unknown[]) {
-  get.mockImplementation(async (path: string) => {
-    if (String(path).startsWith('/companies')) return { data: [TLI] }
-
-    return { data: rows }
-  })
-
-  const active = useActiveCompanyStore()
-  active.companies = [TLI]
-  active.selectedId = TLI.id
-
-  const wrapper = mount(CommissionLedgerPanel, {
-    global: {
-      stubs: { EmptyState: true, Icon: true, LoadingSkeleton: true },
-    },
-  })
-  await flushPromises()
-
-  return wrapper
-}
 
 beforeEach(() => {
   get.mockReset()
@@ -108,64 +55,27 @@ beforeEach(() => {
 })
 
 /*
- * 2026-09-15 — mounted as a PANEL now, not a page. The flat ledger moved
- * inside CommissionPayoutsView as its "รายรายการ" view when the two payout
- * menus merged; nothing about what it renders per row changed.
+ * ── 2026-09-16: THE LEDGER-PANEL TESTS MOVED, AND ONE OF THEM WAS WRONG ──
+ *
+ * A `describe('the payout list')` block stood here, mounting
+ * CommissionLedgerPanel and asserting that the company's own row was marked
+ * "ส่วนของบริษัท" and carried the note "เงินอยู่กับบริษัทอยู่แล้ว ไม่ต้องโอน".
+ *
+ * Both halves are gone for different reasons, and neither quietly:
+ *
+ *   · THE PANEL. รายรายการ was folded into ตั้งจ่าย (owner: "ผมว่ามันทับซ้อน").
+ *     What it uniquely showed — the payout type and whose sale produced an
+ *     override — is now two columns of that screen's drill-down, and the
+ *     company row's marking is pinned in CommissionPayoutsView.spec.ts.
+ *
+ *   · THE NOTE WAS FALSE BY THEN. "ไม่ต้องโอน" was true for exactly one day.
+ *     The owner then asked for the company's share to be payable
+ *     ("ให้เพิ่มทำจ่ายบริษัทให้เลือกได้ด้วย") and it is transferred to a real
+ *     company bank account like anybody else's. A test asserting the old
+ *     sentence would have kept a contradiction alive on the screen.
+ *
+ * What remains below is about AgentEditModal, which the seat also changes.
  */
-describe('the payout list', () => {
-  it('marks the company row and leaves the agent row alone', async () => {
-    const wrapper = await mountPayouts([ledgerRow(), COMPANY_ROW])
-
-    expect(wrapper.get('[data-test="company-share-2"]').text()).toBe('ส่วนของบริษัท')
-    expect(wrapper.find('[data-test="company-share-1"]').exists()).toBe(false)
-  })
-
-  it('offers no way to mark the company row paid', async () => {
-    /*
-     * The one that matters. "จ่ายแล้ว" records a transfer; the company
-     * transferring to itself is not a thing that happens, so the button would
-     * only ever create a payment record with no payment behind it — and BR-4
-     * means nobody can take it back.
-     */
-    const wrapper = await mountPayouts([COMPANY_ROW])
-
-    expect(wrapper.text()).not.toContain('กำลังบันทึก')
-    expect(wrapper.get('[data-test="company-share-note-2"]').text()).toContain('ไม่ต้องโอน')
-    expect(post).not.toHaveBeenCalled()
-  })
-
-  it('says nothing special about an ordinary pending row', async () => {
-    /*
-     * 2026-09-15 — this used to assert that an ordinary row still HAD a
-     * "จ่ายแล้ว" button, as the control for the guard above. That button no
-     * longer exists anywhere on this panel: settling a row on the spot is
-     * what แนวทาง C removed, because the company transfers by hand and only
-     * confirms afterwards. Payouts are raised on ตั้งจ่าย and settled on
-     * รอบจ่าย.
-     *
-     * The control it was providing still matters, so it is kept in the only
-     * form still available: the company-share NOTE is keyed on the flag and
-     * must not appear on an ordinary row, whatever its earned_via.
-     */
-    const wrapper = await mountPayouts([ledgerRow({ earned_via: 'override' })])
-
-    expect(wrapper.find('[data-test="company-share-note-1"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="company-share-1"]').exists()).toBe(false)
-  })
-
-  it('offers no way to settle any row from here at all', async () => {
-    // The panel is an audit view again. Two ways to settle one commission row
-    // is the confusion the owner asked to remove, so the second one is gone
-    // rather than hidden behind a permission.
-    const wrapper = await mountPayouts([ledgerRow(), COMPANY_ROW])
-
-    await wrapper.findAll('button').forEach(async (button) => {
-      expect(button.text()).not.toBe('จ่ายแล้ว')
-    })
-    expect(post).not.toHaveBeenCalled()
-  })
-})
-
 describe('the upline field of somebody who reports to the seat', () => {
   async function mountModal(subject: Record<string, unknown>) {
     get.mockImplementation(async (path: string) => {

@@ -146,7 +146,7 @@ function wireApi(rows: ReturnType<typeof makeRow>[]) {
  */
 async function mountView(rows: ReturnType<typeof makeRow>[], view: 'pending' | 'paid' | 'all' = 'all') {
   wireApi(rows)
-  const wrapper = mount(CommissionPayoutsView, { global: { stubs: { CommissionLedgerPanel: true } } })
+  const wrapper = mount(CommissionPayoutsView)
   await flushPromises()
 
   if (view !== 'pending') {
@@ -252,7 +252,7 @@ describe('ค้างจ่าย is the view the screen opens on', () => {
     // THE ONE THAT MATTERS for the owner's complaint. Work and history looked
     // identical because the screen opened on "ทั้งหมด".
     wireApi([makeRow()])
-    mount(CommissionPayoutsView, { global: { stubs: { CommissionLedgerPanel: true } } })
+    mount(CommissionPayoutsView)
     await flushPromises()
 
     expect(get).toHaveBeenCalledWith(expect.stringContaining('payment_status=pending'))

@@ -347,10 +347,10 @@ const kpiCards = computed<Kpi[]>(() => {
        * screen already has a "จ่ายแล้ว" tab, so the link opens that tab and
        * the two numbers agree. No caveat, because none would be true.
        */
-      // 2026-09-15 — was { name: 'commission-management', query: { tab: 'paid' } }.
-      // /commission is a redirect now and the ledger lives at its own route;
-      // pointing straight at it saves a hop and keeps ?tab= meaningful.
-      to: { name: 'commission-entries', query: { tab: 'paid' } },
+      // 2026-09-16 — รายรายการ was folded into ตั้งจ่าย, which reads ?view=
+      // to choose its tab. Pointing at the surviving screen directly rather
+      // than through the redirect that still covers the old link.
+      to: { name: 'commission-payouts', query: { view: 'paid' } },
     },
     {
       label: td('dash.kpi_clients'),

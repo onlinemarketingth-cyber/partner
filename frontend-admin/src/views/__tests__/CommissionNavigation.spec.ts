@@ -81,15 +81,38 @@ beforeEach(() => {
   useAuthStore().user = { id: 1, name: 'ผู้ดูแลระบบ', role: 'super_admin' } as never
 })
 
-describe('the three pages each have a real route', () => {
+describe('each page has a real route', () => {
   it.each([
     ['commission-payouts', '/commission/payouts'],
     ['commission-runs', '/commission/runs'],
-    ['commission-entries', '/commission/entries'],
   ])('%s is at %s', (name, path) => {
     // Real paths rather than ?view=, so each is bookmarkable and the menu
     // highlight needs nothing cleverer than a route name.
     expect(routeNamed(name)?.path).toBe(path)
+  })
+
+  it('keeps /commission/entries resolving after รายรายการ was folded in', () => {
+    /*
+     * 2026-09-16 — the third page is gone (owner: "ผมว่ามันทับซ้อน"), but its
+     * PATH is in bookmarks and in the dashboard's own card. Kept as a
+     * redirect rather than deleted: a 404 on a link somebody saved is how a
+     * consolidation gets remembered as a regression.
+     */
+    const entries = routeNamed('commission-entries')
+
+    expect(entries?.path).toBe('/commission/entries')
+    expect(entries?.redirect).toBeDefined()
+  })
+
+  it('carries the query across that redirect', () => {
+    // ?tab=paid means "show me what has been paid". Dropping it would land
+    // the reader on the queue of money still owed instead.
+    const to = (routeNamed('commission-entries')?.redirect as (t: unknown) => { name: string; query: Record<string, unknown> })({
+      query: { tab: 'paid' },
+    })
+
+    expect(to.name).toBe('commission-payouts')
+    expect(to.query).toEqual({ tab: 'paid' })
   })
 })
 
@@ -117,17 +140,21 @@ describe('/commission keeps every link that was already written down', () => {
     expect(to.name).toBe('commission-runs')
   })
 
-  it('sends ?tab= to the ledger AND carries the tab with it', () => {
+  it('sends ?tab= to ตั้งจ่าย AND carries the tab with it', () => {
     /*
      * THE ONE THAT MATTERS. The dashboard card counts commission already
-     * PAID and opens the ledger on that tab. Dropping the query would land
+     * PAID and opens the screen on that tab. Dropping the query would land
      * the reader on รอจ่าย — a different number from the one they clicked.
+     *
+     * 2026-09-16 — the destination changed from the ledger page to ตั้งจ่าย
+     * when the two merged; the QUERY surviving the hop is what this pins, and
+     * that has not changed.
      */
     const to = (redirect() as (t: unknown) => { name: string; query: Record<string, unknown> })({
       query: { tab: 'paid' },
     })
 
-    expect(to.name).toBe('commission-entries')
+    expect(to.name).toBe('commission-payouts')
     expect(to.query).toEqual({ tab: 'paid' })
   })
 
@@ -148,11 +175,17 @@ describe('the pillar', () => {
     expect(referral).toBe(agents + 1)
   })
 
-  it('holds the three payout pages and nothing else', () => {
+  it('holds the two payout pages and nothing else', () => {
     const wrapper = mountNav()
     const subs = wrapper.findAll('[data-test^="nav-sub-"]').map((el) => el.text())
 
-    expect(subs).toEqual(['ตั้งจ่าย', 'รอบจ่าย', 'รายรายการ'])
+    /*
+     * 2026-09-16 — two, not three. รายรายการ repeated these two screens'
+     * status tabs and their company totals (computed a second time, in the
+     * browser, over one page of a paginated endpoint), and the one thing it
+     * alone showed moved into ตั้งจ่าย's drill-down.
+     */
+    expect(subs).toEqual(['ตั้งจ่าย', 'รอบจ่าย'])
   })
 })
 

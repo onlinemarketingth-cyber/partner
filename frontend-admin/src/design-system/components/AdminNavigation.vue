@@ -238,10 +238,15 @@ const navItems: NavItem[] = [
     label: { th: 'ค่าแนะนำ', en: 'Referral' },
     subMenus: [
       // Read left to right, in the order the work happens: who is owed →
-      // what is in flight with the bank → the individual rows behind either.
+      // what is in flight with the bank.
+      //
+      // 2026-09-16 — "รายรายการ" was a third item here and is gone. It
+      // repeated these two screens' tabs and totals, and the one thing it
+      // alone showed (payout type, and whose sale produced an override) moved
+      // into ตั้งจ่าย's per-agent drill-down, which was already fetching both
+      // fields and discarding them. The route survives as a redirect.
       { name: 'commission-payouts', icon: 'money', label: { th: 'ตั้งจ่าย', en: 'Raise payouts' } },
       { name: 'commission-runs', icon: 'invoice', label: { th: 'รอบจ่าย', en: 'Payout runs' } },
-      { name: 'commission-entries', icon: 'list', label: { th: 'รายรายการ', en: 'Ledger' } },
     ],
   },
   {

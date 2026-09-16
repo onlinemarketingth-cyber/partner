@@ -57,10 +57,11 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 
+const route = useRoute()
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
 
@@ -107,6 +108,58 @@ interface AgentSummaryItem {
   cert_tier: { id: number; key: string; name: string } | null
 }
 
+/**
+ * 2026-09-16 — WHAT THE รายรายการ PAGE KNEW, MOVED IN HERE.
+ *
+ * Owner: "ที่คุณออกแบบใหม่มา 2 หน้า … หน้านี้ยังจำเป็นไหม ผมว่ามันทับซ้อน".
+ *
+ * It was, once these two fields moved. รายรายการ was the only screen in the
+ * app that said WHY a person is paid for a sale they did not make — the payout
+ * type, and whose sale produced an override — and this drill-down, which reads
+ * the very same endpoint, was throwing both away.
+ *
+ * That is the same defect TASK-215 fixed on the old screen in August: one sale
+ * writes three rows (the seller's own rate, the leader's override, a campaign
+ * bonus) and without these fields they render as three identical lines with
+ * three different amounts, which reads as "this sale paid the same agent three
+ * times".
+ */
+type EarnedVia =
+  | 'direct'
+  | 'renewal'
+  | 'override'
+  | 'binary_match'
+  | 'matrix_override'
+  | 'stairstep_override'
+  | 'generation_override'
+  | 'promotion_bonus'
+
+/**
+ * Thai label + colour per payout type. Deliberately NOT one neutral chip for
+ * everything: "ค่าคอมของตัวเอง" and "ค่าคอมหัวหน้าทีม" land in different
+ * people's pockets for different reasons, and being able to tell them apart at
+ * a glance is the whole point.
+ */
+const earnedViaLabels: Record<EarnedVia, { label: string; cls: string }> = {
+  direct: { label: 'ค่าคอมของตัวเอง', cls: 'bg-brand-50 text-brand-700' },
+  renewal: { label: 'ค่าคอมปีต่ออายุ', cls: 'bg-sky-50 text-sky-700' },
+  override: { label: 'ค่าคอมหัวหน้าทีม', cls: 'bg-amber-100 text-amber-800' },
+  binary_match: { label: 'Binary (จับคู่ขา)', cls: 'bg-violet-50 text-violet-700' },
+  matrix_override: { label: 'Matrix (ชั้นล่าง)', cls: 'bg-violet-50 text-violet-700' },
+  stairstep_override: { label: 'อันดับ (ส่วนต่าง)', cls: 'bg-violet-50 text-violet-700' },
+  generation_override: { label: 'Generation', cls: 'bg-violet-50 text-violet-700' },
+  promotion_bonus: { label: 'โบนัสแคมเปญ', cls: 'bg-emerald-50 text-emerald-700' },
+}
+
+function earnedViaBadge(e: LedgerItem): { label: string; cls: string } {
+  // An unknown or absent value must read as unknown, never silently as
+  // "direct" — mislabelling a payout type is the exact failure these badges
+  // exist to remove.
+  return e.earned_via
+    ? (earnedViaLabels[e.earned_via] ?? { label: e.earned_via, cls: 'bg-slate-100 text-slate-600' })
+    : { label: 'ไม่ระบุประเภท', cls: 'bg-slate-100 text-slate-500' }
+}
+
 interface LedgerItem {
   id: number
   referral: { id: number; client: { id: number; name: string } | null } | null
@@ -119,7 +172,8 @@ interface LedgerItem {
   sale_price_satang_at_time: number | null
   applied_price_promotion: { id: number; note: string | null; discounted_price_satang: number } | null
   payment_status: 'pending' | 'paid'
-  earned_via: 'direct' | 'renewal' | 'override' | 'binary_match' | 'matrix_override' | 'stairstep_override' | 'generation_override' | 'promotion_bonus'
+  earned_via: EarnedVia | null
+  /** Whose sale produced this override — null on a row the agent earned themselves. */
   override_source_agent: { id: number; name: string } | null
   is_company_share?: boolean
   paid_at: string | null
@@ -160,10 +214,31 @@ const summaries = ref<AgentSummaryItem[]>([])
  * used to open on "ทั้งหมด", so an agent settled in full six months ago sat in
  * the same list, in the same shape, as one owed money today.
  */
+/**
+ * 2026-09-16 — WHERE A LINK CAN ASK FOR A DIFFERENT VIEW.
+ *
+ * รายรายการ was folded into this screen, and two links in the wild named its
+ * tab: the dashboard's "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card, and the old
+ * /commission?tab= redirect. Both mean "show me what has been PAID", which is
+ * a different set from this screen's default — so they are honoured rather
+ * than silently landing somebody on the unpaid queue.
+ *
+ * Read ONCE at setup, never watched: this is a starting point somebody handed
+ * over, and re-applying it would fight the next tab the reader clicks.
+ */
+function viewFromQuery(): '' | 'pending' | 'paid' {
+  const asked = route.query.view ?? route.query.tab
+
+  if (asked === 'paid') return 'paid'
+  if (asked === 'all') return ''
+
+  return 'pending'
+}
+
 const filters = ref({
   date_from: '',
   date_to: '',
-  payment_status: 'pending' as '' | 'pending' | 'paid',
+  payment_status: viewFromQuery(),
 })
 
 /** Free-text narrowing of what is already on screen — never a server query. */
@@ -887,6 +962,11 @@ watch(() => activeCompany.companyId, () => {
                         <tr class="text-left text-slate-400 border-b border-slate-200">
                           <th class="py-1.5 pr-3 font-bold">วันที่ขาย</th>
                           <th class="py-1.5 pr-3 font-bold">ชื่อลูกค้า</th>
+                          <!-- 2026-09-16 — the two columns that used to live
+                               only on รายรายการ. Without them an override and
+                               a direct commission on the same sale are two
+                               identical lines with different amounts. -->
+                          <th class="py-1.5 pr-3 font-bold">ประเภท</th>
                           <th class="py-1.5 pr-3 font-bold">ชื่อสินค้า</th>
                           <th class="py-1.5 pr-3 font-bold text-right">ราคาที่ขายได้</th>
                           <th class="py-1.5 pr-3 font-bold">โปรโมชั่น</th>
@@ -898,6 +978,22 @@ watch(() => activeCompany.companyId, () => {
                         <tr v-for="e in detailEntries" :key="e.id" class="border-b border-slate-100 last:border-0">
                           <td class="py-2 pr-3 text-slate-500 whitespace-nowrap">{{ formatDate(e.created_at) }}</td>
                           <td class="py-2 pr-3 text-slate-700 font-bold">{{ e.referral?.client?.name ?? '—' }}</td>
+                          <td class="py-2 pr-3 whitespace-nowrap">
+                            <span
+                              class="px-2 py-0.5 rounded-md text-[10.5px] font-bold"
+                              :class="earnedViaBadge(e).cls"
+                              :data-test="`entry-via-${e.id}`"
+                            >{{ earnedViaBadge(e).label }}</span>
+                            <!-- Whose sale earned it. Only meaningful on an
+                                 override row, where the payee is the RECIPIENT
+                                 and not the seller — the single most misread
+                                 thing this list ever showed. -->
+                            <span
+                              v-if="e.override_source_agent"
+                              class="block text-[10.5px] text-amber-700 font-bold mt-0.5"
+                              :data-test="`entry-source-${e.id}`"
+                            >จากการขายของ {{ e.override_source_agent.name }}</span>
+                          </td>
                           <td class="py-2 pr-3 text-slate-500">{{ e.product?.name ?? '—' }}</td>
                           <td class="py-2 pr-3 text-slate-700 text-right whitespace-nowrap">
                             {{ e.sale_price_satang_at_time !== null ? formatSatang(e.sale_price_satang_at_time) : '—' }}

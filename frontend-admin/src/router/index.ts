@@ -198,9 +198,10 @@ export const routes: RouteRecordRaw[] = [
      * that screen's drill-down already fetched this endpoint with ?agent_id=.
      * A payout run therefore needed both menus.
      *
-     * CommissionPayoutsView is the merge. The flat ledger survives as its
-     * "รายรายการ" view (CommissionLedgerPanel); '?tab=' still lands there, so
-     * the dashboard's existing deep link keeps its meaning.
+     * CommissionPayoutsView is the merge. The flat ledger survived beside it
+     * as "รายรายการ" for one more release and was folded in on 2026-09-16
+     * (see that route below); '?tab=' still reaches the screen that owns the
+     * paid rows, so the dashboard's existing deep link keeps its meaning.
      */
     {
       /*
@@ -224,7 +225,7 @@ export const routes: RouteRecordRaw[] = [
         // "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still wrote it), and the ledger
         // panel still reads it — so the query travels with the redirect.
         if (to.query.view === 'entries' || typeof to.query.tab === 'string') {
-          return { name: 'commission-entries', query: to.query }
+          return { name: 'commission-payouts', query: to.query }
         }
 
         return { name: 'commission-payouts' }
@@ -242,11 +243,29 @@ export const routes: RouteRecordRaw[] = [
       component: () => import('../views/CommissionRunsView.vue'),
       meta: { navLabel: 'รอบจ่าย' },
     },
+    /*
+     * 2026-09-16 — รายรายการ WAS FOLDED INTO ตั้งจ่าย.
+     *
+     * Owner: "หน้านี้ยังจำเป็นไหมทำหน้าที่อะไร ผมว่ามันทับซ้อน แล้วก็ยังมีหน้าที่
+     * ดูข้อมูลได้ไม่ครบถ้วนด้วย".
+     *
+     * Both halves were true. It repeated ตั้งจ่าย's status tabs and its
+     * company-wide totals — computed a second time, in the browser, over ONE
+     * PAGE of a paginated endpoint, so past fifteen rows it printed a page
+     * total under a company label. And the one thing it alone knew (the payout
+     * type and the sale behind an override) was two fields the ตั้งจ่าย
+     * drill-down already fetched and threw away. Those moved; this went.
+     *
+     * A REDIRECT, not a deletion: /commission/entries is in bookmarks and in
+     * the dashboard's own card, and `?tab=paid` on those links means "show me
+     * what has been paid" — which CommissionPayoutsView now reads (see
+     * viewFromQuery there). Dropping the query would send a reader who asked
+     * for settled money to the queue of money still owed.
+     */
     {
       path: '/commission/entries',
       name: 'commission-entries',
-      component: () => import('../views/CommissionEntriesView.vue'),
-      meta: { navLabel: 'รายรายการ' },
+      redirect: (to) => ({ name: 'commission-payouts', query: to.query }),
     },
     // TASK-050 — "ทีมขาย" leadership cockpit: manager_id reporting
     // roll-up (per-agent client/deal counts + close rate) built

@@ -608,11 +608,12 @@ describe('AgentDashboardOverview — every number opens what it counts', () => {
     const wrapper = await mountDashboard()
 
     expect(destinationOf(wrapper, 2)).toEqual({
-      // 2026-09-15 — the ledger is its own route now (/commission/entries);
-      // /commission is a redirect. Pointing at the redirect still worked, but
-      // through a hop that could silently drop the query it depends on.
-      name: 'commission-entries',
-      query: { tab: 'paid' },
+      // 2026-09-16 — รายรายการ was folded into ตั้งจ่าย, which reads ?view=
+      // to pick its tab. The card counts commission already PAID, so it has
+      // to name that view: the screen's own default is money still OWED,
+      // which is a different number from the one that was clicked.
+      name: 'commission-payouts',
+      query: { view: 'paid' },
     })
   })
 
