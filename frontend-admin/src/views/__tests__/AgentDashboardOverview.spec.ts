@@ -382,12 +382,12 @@ describe('pipeline funnel — the server owns the stage list', () => {
 // §4.2 — labels that describe the quantity actually being shown
 // ════════════════════════════════════════════════════════════════════════
 describe('labels match the definitions', () => {
-  it('calls the pending queue ผู้ใช้ (any role), never ตัวแทน (§3.4)', async () => {
+  it('calls the pending queue ผู้ใช้ (any role), never สมาชิก (§3.4)', async () => {
     wireApi(makeMetrics())
     const wrapper = await mountDashboard()
 
     expect(wrapper.text()).toContain('ผู้ใช้ที่รออนุมัติ')
-    expect(wrapper.text()).not.toContain('ตัวแทนที่รออนุมัติ')
+    expect(wrapper.text()).not.toContain('สมาชิกที่รออนุมัติ')
   })
 
   it('does not label the sales card "(จ่ายแล้ว)" — that reads as a commission payout', async () => {
@@ -414,11 +414,11 @@ describe('labels match the definitions', () => {
     expect(wrapper.text()).not.toContain('ดีลปิด ÷ ดีลทั้งหมด')
   })
 
-  it('says the Top ตัวแทน ranking counts PAID commission only', async () => {
+  it('says the Top สมาชิก ranking counts PAID commission only', async () => {
     wireApi(makeMetrics())
     const wrapper = await mountDashboard()
 
-    expect(wrapper.text()).toContain('ค่าคอมมิชชั่นที่จ่ายแล้วสูงสุด')
+    expect(wrapper.text()).toContain('ค่าแนะนำที่จ่ายแล้วสูงสุด')
   })
 })
 
@@ -464,7 +464,7 @@ describe('cert tier donut', () => {
     wireApi(makeMetrics())
     const wrapper = await mountDashboard()
 
-    expect(wrapper.text()).toContain('นับตัวแทนที่ใช้งานอยู่ 12 คน')
+    expect(wrapper.text()).toContain('นับสมาชิกที่ใช้งานอยู่ 12 คน')
   })
 })
 

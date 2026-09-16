@@ -71,15 +71,15 @@ enum NotificationType: string
             self::FollowUpDue => 'ติดตามลูกค้า',
             self::ExamPassed => 'สอบผ่าน',
             self::ExamFailed => 'สอบไม่ผ่าน',
-            self::CommissionPaid => 'ค่าคอมมิชชั่น',
+            self::CommissionPaid => 'ค่าแนะนำ',
             self::ApprovalStatus => 'สถานะอนุมัติ',
             self::Reward => 'รางวัล',
             self::System => 'ระบบ',
             self::OrderPaymentConfirmed => 'ยืนยันการชำระเงิน',
             self::OrderPaymentFailed => 'ชำระเงินไม่สำเร็จ',
             self::OrderRefundReported => 'แจ้งการคืนเงิน',
-            self::CommissionWithdrawalRequested => 'คำขอเบิกค่าคอม',
-            self::CommissionWithdrawalDecided => 'ผลคำขอเบิกค่าคอม',
+            self::CommissionWithdrawalRequested => 'คำขอเบิกค่าแนะนำ',
+            self::CommissionWithdrawalDecided => 'ผลคำขอเบิกค่าแนะนำ',
         };
     }
 }

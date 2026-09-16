@@ -63,6 +63,16 @@ use Illuminate\Support\Facades\Storage;
 class AgentCommissionSummaryService
 {
     /**
+     * How many unpaid sales each row carries — see pendingItemsFor().
+     *
+     * Three fits the two lines the payout row has for it. Raising this is a
+     * decision about the SCREEN, so it lives here where the query that honours
+     * it is, and not as a literal buried in a loop.
+     */
+    private const PENDING_ITEMS_PER_ROW = 3;
+
+
+    /**
      * TASK-179 §3.7 (F-10) — NULL, NOT ZERO, for a bucket the filter
      * excluded.
      *
@@ -87,25 +97,7 @@ class AgentCommissionSummaryService
         ?string $dateTo = null,
         ?PaymentStatus $paymentStatus = null,
     ): Collection {
-        $query = CommissionLedger::query();
-
-        if (! $actor->isSuperAdmin()) {
-            // Company Admin — hard-scoped to their own company (BR-6),
-            // never trust a client-supplied company_id for this role.
-            $query->where('company_id', $actor->company_id);
-        } elseif ($companyId !== null) {
-            $query->where('company_id', $companyId);
-        }
-
-        // TASK-044 §2 — additive date-range filter on created_at, on top
-        // of the tenant scoping above (never a substitute for it).
-        if ($dateFrom !== null) {
-            $query->whereDate('created_at', '>=', $dateFrom);
-        }
-
-        if ($dateTo !== null) {
-            $query->whereDate('created_at', '<=', $dateTo);
-        }
+        $query = $this->scopedLedger($actor, $companyId, $dateFrom, $dateTo);
 
         // TASK-044 §2 — when a status filter is given, narrow the rows
         // BEFORE aggregation rather than aggregating everything and
@@ -228,6 +220,35 @@ class AgentCommissionSummaryService
             ->selectRaw('commission_withdrawal_requests.agent_id AS agent_id, SUM(commission_withdrawal_items.allocated_satang) AS reserved_satang')
             ->pluck('reserved_satang', 'agent_id');
 
+        /*
+         * ═══ 2026-09-17 — WHAT WAS SOLD, ON THE ROW ITSELF ═══
+         *
+         * Owner: "ให้แสดงสินค้าและราคาขาย ในช่องแรกเลย".
+         *
+         * The screen said "1 รายการ" and nothing else. Whoever is about to
+         * transfer money to this person could see the amount and not what it
+         * was for without opening the drill-down — one press per payee, on the
+         * screen whose whole job is to decide a payout round at a glance.
+         *
+         * PENDING ROWS ONLY, and named so. This list answers "what is this
+         * unpaid balance made of", which is the question step ① asks; folding
+         * settled sales into it would put products on the row that the amount
+         * beside them does not include.
+         *
+         * Scoped by re-deriving the same company and date filters rather than
+         * reusing $query: that builder has already had GROUP BY and a raw
+         * aggregate select applied to it, and cloning it would return sums, not
+         * rows. Two places applying one scope is a risk, so it is applied by
+         * the same private method both times.
+         */
+        $itemsByAgentId = $this->pendingItemsFor(
+            $rows->pluck('agent_id')->all(),
+            $actor,
+            $companyId,
+            $dateFrom,
+            $dateTo,
+        );
+
         $certTiersByAgentId = DB::table('user_certifications')
             ->join('cert_tiers', 'cert_tiers.id', '=', 'user_certifications.cert_tier_id')
             ->whereIn('user_certifications.user_id', $rows->pluck('agent_id'))
@@ -237,7 +258,7 @@ class AgentCommissionSummaryService
             ->keyBy('user_id');
 
         return $rows
-            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId, $houseUserIds, $reservedByAgentId) {
+            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId, $houseUserIds, $reservedByAgentId, $itemsByAgentId) {
                 // BR-3 — SUM() over an already-integer satang column is
                 // still integer arithmetic; cast defensively since raw
                 // SQL aggregates come back as strings from the PDO
@@ -341,11 +362,126 @@ class AgentCommissionSummaryService
                     'available_satang' => $totalPending === null
                         ? null
                         : max(0, $totalPending - (int) ($reservedByAgentId[$row->agent_id] ?? 0)),
+                    /*
+                     * 2026-09-17 — the products behind the UNPAID balance, so
+                     * the row says what the money is for.
+                     *
+                     * Capped (see pendingItemsFor). `entry_count` above is the
+                     * honest total, so a screen showing three of eleven can say
+                     * so rather than implying it has them all.
+                     */
+                    'pending_items' => $itemsByAgentId[(int) $row->agent_id] ?? [],
                 ];
             })
             // ?? 0 here is an ORDERING fallback only — it never reaches the
             // response, where the excluded bucket must stay null (§3.7).
             ->sortByDesc(fn (array $row) => ($row['total_paid_satang'] ?? 0) + ($row['total_pending_satang'] ?? 0))
             ->values();
+    }
+
+    /**
+     * The tenant and date scope every read in this service starts from.
+     *
+     * Extracted 2026-09-17 when a second query needed it. BR-6 is not a filter
+     * you write twice: a Company Admin is hard-scoped to their own company here
+     * and a client-supplied company_id is never trusted for that role, and the
+     * one place both readers get that from is this method.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<CommissionLedger>
+     */
+    private function scopedLedger(
+        User $actor,
+        ?int $companyId,
+        ?string $dateFrom,
+        ?string $dateTo,
+    ): \Illuminate\Database\Eloquent\Builder {
+        $query = CommissionLedger::query();
+
+        if (! $actor->isSuperAdmin()) {
+            // Company Admin — hard-scoped to their own company (BR-6), never
+            // trust a client-supplied company_id for this role.
+            $query->where('company_id', $actor->company_id);
+        } elseif ($companyId !== null) {
+            $query->where('company_id', $companyId);
+        }
+
+        // TASK-044 §2 — additive date-range filter on created_at, on top of the
+        // tenant scoping above (never a substitute for it).
+        if ($dateFrom !== null) {
+            $query->whereDate('created_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo !== null) {
+            $query->whereDate('created_at', '<=', $dateTo);
+        }
+
+        return $query;
+    }
+
+    /**
+     * 2026-09-17 — the unpaid sales behind each payee's balance.
+     *
+     * Owner: "ให้แสดงสินค้าและราคาขาย ในช่องแรกเลย".
+     *
+     * ── WHY IT IS CAPPED ──
+     *
+     * A payee with forty unpaid entries would otherwise ship forty product
+     * names to a screen that has room for two lines, on every row of the list.
+     * Three is what fits; `entry_count` is already on the row, so the screen can
+     * say "และอีก 37 รายการ" truthfully rather than implying it has them all.
+     *
+     * ── WHY NEWEST FIRST ──
+     *
+     * Not "biggest first". An admin scanning this row is checking that the
+     * balance looks like recent activity they recognise; ordering by amount
+     * would hide today's sale behind a large one from March.
+     *
+     * @param  array<int, mixed>  $agentIds
+     * @return array<int, array<int, array{product_name: string|null, sale_price_satang: int|null, amount_satang: int}>>
+     */
+    private function pendingItemsFor(
+        array $agentIds,
+        User $actor,
+        ?int $companyId,
+        ?string $dateFrom,
+        ?string $dateTo,
+    ): array {
+        if ($agentIds === []) {
+            return [];
+        }
+
+        $rows = $this->scopedLedger($actor, $companyId, $dateFrom, $dateTo)
+            ->where('payment_status', PaymentStatus::Pending->value)
+            ->whereIn('agent_id', $agentIds)
+            ->with('product:id,name')
+            ->latest('id')
+            ->get(['id', 'agent_id', 'product_id', 'sale_price_satang_at_time', 'amount_satang']);
+
+        $byAgent = [];
+
+        foreach ($rows as $row) {
+            $agentId = (int) $row->agent_id;
+
+            // Capped HERE rather than with a per-agent LIMIT in SQL: one query
+            // for the page beats one per payee, and a list this size is cheaper
+            // to trim in PHP than to window in a portable way (production is
+            // MySQL, the test suite is SQLite).
+            if (count($byAgent[$agentId] ?? []) >= self::PENDING_ITEMS_PER_ROW) {
+                continue;
+            }
+
+            $byAgent[$agentId][] = [
+                'product_name' => $row->product?->name,
+                // Null is a real answer: rows written before the snapshot column
+                // existed have no price, and inventing one would be a business
+                // value nobody recorded (BR-7).
+                'sale_price_satang' => $row->sale_price_satang_at_time === null
+                    ? null
+                    : (int) $row->sale_price_satang_at_time,
+                'amount_satang' => (int) $row->amount_satang,
+            ];
+        }
+
+        return $byAgent;
     }
 }

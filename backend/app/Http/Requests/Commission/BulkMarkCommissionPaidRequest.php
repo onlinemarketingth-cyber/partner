@@ -54,7 +54,7 @@ class BulkMarkCommissionPaidRequest extends FormRequest
     public function attributes(): array
     {
         return [
-            'agent_id' => 'ตัวแทน',
+            'agent_id' => 'สมาชิก',
             'date_from' => 'วันที่เริ่มต้น',
             'date_to' => 'วันที่สิ้นสุด',
             'expected_total_satang' => 'ยอดค้างจ่ายที่แสดงบนหน้าจอ',

@@ -89,7 +89,7 @@ onMounted(loadPendingApprovals)
  */
 function approvalProvenance(item: AgentItem): string {
   if (!item.approval_source) {
-    return 'ไม่มีข้อมูลผู้อนุมัติ (อนุมัติก่อนระบบเริ่มบันทึกที่มา หรือเป็นตัวแทนที่ผู้ดูแลสร้างเอง)'
+    return 'ไม่มีข้อมูลผู้อนุมัติ (อนุมัติก่อนระบบเริ่มบันทึกที่มา หรือเป็นสมาชิกที่ผู้ดูแลสร้างเอง)'
   }
   const who = item.approved_by?.name ?? 'ไม่ทราบชื่อ (ผู้อนุมัติอยู่นอกขอบเขตข้อมูลของบริษัทนี้)'
   return item.approval_source === 'team_leader' ? `อนุมัติโดยหัวหน้าทีม: ${who}` : `อนุมัติโดยผู้ดูแล: ${who}`
@@ -316,12 +316,12 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
     <HeroHeader
       icon="clock"
       title="รออนุมัติ"
-      subtitle="คิวอนุมัติตัวแทนที่สมัครเข้ามาเอง"
+      subtitle="คิวอนุมัติสมาชิกที่สมัครเข้ามาเอง"
       accent-color="brand"
       storage-key="agent-approvals"
     />
 
-    <CompanyScopeNotice action="ตรวจอนุมัติตัวแทน" />
+    <CompanyScopeNotice action="ตรวจอนุมัติสมาชิก" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

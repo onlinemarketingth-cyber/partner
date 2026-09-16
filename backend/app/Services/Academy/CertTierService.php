@@ -42,10 +42,10 @@ class CertTierService
      * @var list<array{0: string, 1: string, 2: string}>
      */
     private const REFERENCES = [
-        ['user_certifications', 'cert_tier_id', 'ตัวแทนที่สอบผ่านระดับนี้'],
-        ['commission_ledger', 'cert_tier_id_at_time', 'รายการค่าคอมมิชชั่นที่บันทึกไว้'],
-        ['commission_rules', 'cert_tier_id', 'อัตราค่าคอมมิชชั่น'],
-        ['commission_override_rules', 'manager_cert_tier_id', 'อัตราค่าคอมหัวหน้าทีม'],
+        ['user_certifications', 'cert_tier_id', 'สมาชิกที่สอบผ่านระดับนี้'],
+        ['commission_ledger', 'cert_tier_id_at_time', 'รายการค่าแนะนำที่บันทึกไว้'],
+        ['commission_rules', 'cert_tier_id', 'อัตราค่าแนะนำ'],
+        ['commission_override_rules', 'manager_cert_tier_id', 'อัตราค่าแนะนำหัวหน้าทีม'],
         ['modules', 'cert_tier_id', 'โมดูลใน Academy'],
         ['exams', 'cert_tier_id', 'แบบทดสอบ'],
         ['agent_promotions', 'target_cert_tier_id', 'Promotion ที่เจาะระดับนี้'],

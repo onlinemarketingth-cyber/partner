@@ -280,7 +280,7 @@ describe('the panel speaks about ONE product when the scope is one product', () 
 
     const panel = wrapper.get('[data-test="rate-impact-summary"]').text()
     expect(panel).toContain('GENESENN Health Tracker V8')
-    expect(panel).toContain('ตัวแทนที่ปิดการขาย')
+    expect(panel).toContain('สมาชิกที่ปิดการขาย')
     expect(panel).toContain('178.00')
     expect(panel).toContain('297.00')
     // baht of WHAT — the unit that was missing entirely.

@@ -86,6 +86,22 @@ interface AgentSummaryItem {
   total_paid_satang: number | null
   total_pending_satang: number | null
   entry_count: number
+  /**
+   * 2026-09-17 — the unpaid sales behind this balance, so the row says what the
+   * money is for (owner: "ให้แสดงสินค้าและราคาขาย ในช่องแรกเลย").
+   *
+   * CAPPED by the server at three. `entry_count` above is the true total, and
+   * the difference between them is what the row prints as "และอีก N รายการ" —
+   * three of eleven must never read as all eleven.
+   *
+   * `sale_price_satang` is null on a sale recorded before the price snapshot
+   * existed. That is a real answer and is rendered as one (BR-7).
+   */
+  pending_items?: Array<{
+    product_name: string | null
+    sale_price_satang: number | null
+    amount_satang: number
+  }>
   bank_name: string | null
   bank_account_number: string | null
   bank_account_holder_name: string | null
@@ -163,9 +179,9 @@ type EarnedVia =
  * a glance is the whole point.
  */
 const earnedViaLabels: Record<EarnedVia, { label: string; cls: string }> = {
-  direct: { label: 'ค่าคอมของตัวเอง', cls: 'bg-brand-50 text-brand-700' },
-  renewal: { label: 'ค่าคอมปีต่ออายุ', cls: 'bg-sky-50 text-sky-700' },
-  override: { label: 'ค่าคอมหัวหน้าทีม', cls: 'bg-amber-100 text-amber-800' },
+  direct: { label: 'ค่าแนะนำสมาชิก', cls: 'bg-brand-50 text-brand-700' },
+  renewal: { label: 'ค่าแนะนำปีต่ออายุ', cls: 'bg-sky-50 text-sky-700' },
+  override: { label: 'ค่าแนะนำหัวหน้าทีม', cls: 'bg-amber-100 text-amber-800' },
   binary_match: { label: 'Binary (จับคู่ขา)', cls: 'bg-violet-50 text-violet-700' },
   matrix_override: { label: 'Matrix (ชั้นล่าง)', cls: 'bg-violet-50 text-violet-700' },
   stairstep_override: { label: 'อันดับ (ส่วนต่าง)', cls: 'bg-violet-50 text-violet-700' },
@@ -234,7 +250,7 @@ type Group = 'payable' | 'blocked' | 'review' | 'transfer'
 /** Which kind of thing a row in this group is. Drives the heading badge. */
 const GROUPS: Record<Group, { label: string; unit: 'people' | 'requests' }> = {
   payable: { label: 'ขั้นที่ 1 · ตั้งจ่ายได้เลย', unit: 'people' },
-  blocked: { label: 'ติดปัญหา — มีค่าคอมแต่ตั้งจ่ายไม่ได้', unit: 'people' },
+  blocked: { label: 'ติดปัญหา — มีค่าแนะนำแต่ตั้งจ่ายไม่ได้', unit: 'people' },
   review: { label: 'ขั้นที่ 2 · รอคุณตรวจสอบ', unit: 'requests' },
   transfer: { label: 'ขั้นที่ 3 · รอฝ่ายบัญชีโอน', unit: 'requests' },
 }
@@ -515,7 +531,7 @@ const steps = computed(() => {
       satang: review?.satang ?? null,
       count: review?.count ?? null,
       unit: 'ใบ',
-      note: 'ตัวแทนกดขอเบิกเอง',
+      note: 'สมาชิกกดขอเบิกเอง',
     },
     {
       key: 'transfer' as const,
@@ -547,6 +563,7 @@ const peopleRows = computed<AgentSummaryItem[]>(() =>
 
 const showsPeople = computed(() => GROUPS[group.value].unit === 'people')
 
+
 function matchesSearch(name: string | null): boolean {
   const needle = search.value.trim().toLowerCase()
 
@@ -572,6 +589,24 @@ const selectedRequests = ref<Set<number>>(new Set())
 
 const canSelectPeople = computed(() => group.value === 'payable')
 const canSelectRequests = computed(() => group.value === 'transfer')
+
+/**
+ * 2026-09-17 — the bank column exists only where the bank account is the
+ * problem.
+ *
+ * Owner: "บัญชีธนาคารหากมีแล้วไม่ต้องแสดง เปลี่ยนแปลงน้อย แก้ไขไม่บ่อย".
+ *
+ * Every row in ขั้นที่ 1 has a complete account by construction — that is the
+ * rule that put it there instead of in ติดปัญหา — so the column restated
+ * something true of every row, in a quarter of the table's width, about a field
+ * that changes once a year. In กลุ่มติดปัญหา it is the thing being repaired.
+ */
+const showBankColumn = computed(() => group.value === 'blocked')
+
+/** Kept in one place so the two full-width editor rows can never mis-span. */
+const peopleColumnCount = computed(
+  () => (canSelectPeople.value ? 1 : 0) + 1 + (showBankColumn.value ? 1 : 0) + 2,
+)
 
 function toggleAgent(s: AgentSummaryItem): void {
   if (!canSelectPeople.value || !isPayable(s)) return
@@ -690,7 +725,7 @@ async function submitBatch(): Promise<void> {
         withdrawal_request_ids: selectedRequestRows.value.map((r) => r.id),
         transfer_reference: transferReference.value.trim() || null,
       })
-      batchDone.value = `บันทึกว่าโอนแล้ว ${attempted} ใบ รวม ${formatSatang(attemptedSatang)} — ปิดรายการค่าคอมและแจ้งตัวแทนเรียบร้อย`
+      batchDone.value = `บันทึกว่าโอนแล้ว ${attempted} ใบ รวม ${formatSatang(attemptedSatang)} — ปิดรายการค่าแนะนำและแจ้งสมาชิกเรียบร้อย`
       transferReference.value = ''
     } else {
       await api.post('/commission-withdrawals/payout-batch', {
@@ -758,7 +793,7 @@ function openReject(r: WithdrawalRequest): void {
 
 function submitReject(r: WithdrawalRequest): void {
   if (!rejectReason.value.trim()) {
-    errorMessage.value = 'กรุณาระบุเหตุผลที่ไม่อนุมัติ — ตัวแทนจะเห็นข้อความนี้'
+    errorMessage.value = 'กรุณาระบุเหตุผลที่ไม่อนุมัติ — สมาชิกจะเห็นข้อความนี้'
 
     return
   }
@@ -939,7 +974,7 @@ watch(() => activeCompany.companyId, () => {
       icon="money"
       title="จ่ายค่าแนะนำ"
       subtitle="งานทั้งเส้นอยู่หน้านี้ — กดที่ขั้นเพื่อสลับกลุ่ม แล้วทำให้จบทีละขั้น"
-      description="ตั้งจ่าย → ตรวจสอบคำขอของตัวแทน → ส่งฝ่ายบัญชีโอน → กลับมากดบันทึกว่าโอนแล้ว · ค่าแนะนำจะถูกปิดและตัวแทนจะได้อีเมลก็ต่อเมื่อกดขั้นสุดท้ายเท่านั้น"
+      description="ตั้งจ่าย → ตรวจสอบคำขอของสมาชิก → ส่งฝ่ายบัญชีโอน → กลับมากดบันทึกว่าโอนแล้ว · ค่าแนะนำจะถูกปิดและสมาชิกจะได้อีเมลก็ต่อเมื่อกดขั้นสุดท้ายเท่านั้น"
       :kpis="kpis"
       accent-color="brand"
       storage-key="commission-payouts"
@@ -1000,7 +1035,7 @@ watch(() => activeCompany.companyId, () => {
       <span class="w-7 h-7 rounded-lg bg-amber-700 text-white inline-flex items-center justify-center text-sm font-extrabold shrink-0">!</span>
       <div class="min-w-0">
         <p class="text-[13.5px] font-extrabold text-amber-900">
-          {{ blockedRows.length }} รายมีค่าคอม แต่ตั้งจ่ายไม่ได้
+          {{ blockedRows.length }} รายมีค่าแนะนำ แต่ตั้งจ่ายไม่ได้
           <span v-if="blockedSatang !== null" class="tabular-nums">· {{ formatSatang(blockedSatang) }}</span>
         </p>
         <p class="text-[12px] text-amber-800 truncate">
@@ -1163,7 +1198,7 @@ watch(() => activeCompany.companyId, () => {
           : group === 'blocked' ? 'ไม่มีใครติดปัญหา'
           : group === 'review' ? 'ไม่มีคำขอรอตรวจสอบ'
           : 'ไม่มีใบที่รอฝ่ายบัญชีโอน'"
-        :message="group === 'review' ? 'รายการจะเข้ามาเมื่อตัวแทนกดขอเบิกเอง' : ''"
+        :message="group === 'review' ? 'รายการจะเข้ามาเมื่อสมาชิกกดขอเบิกเอง' : ''"
         class="mt-3"
         data-test="payout-group-empty"
       />
@@ -1195,9 +1230,20 @@ watch(() => activeCompany.companyId, () => {
                 />
                 <span class="ml-1.5 align-middle">เลือก</span>
               </th>
-              <th class="py-2.5 px-3">ผู้รับ</th>
-              <th class="py-2.5 px-3 w-24">รายการ</th>
-              <th class="py-2.5 px-3 w-64">บัญชีธนาคาร</th>
+              <th class="py-2.5 px-3">ผู้รับ · สินค้าที่ขายได้</th>
+              <!--
+                2026-09-17 — THE BANK COLUMN IS ONLY WHERE IT IS BROKEN.
+
+                Owner: "บัญชีธนาคารหากมีแล้วไม่ต้องแสดง เปลี่ยนแปลงน้อย แก้ไข
+                ไม่บ่อย".
+
+                In ขั้นที่ 1 every row has a complete account by construction —
+                that is what put it in this step rather than in ติดปัญหา — so
+                the column was a quarter of the table's width spent restating
+                something that is true of every row and changes once a year. In
+                กลุ่มติดปัญหา it is the thing that is wrong, so it stays there.
+              -->
+              <th v-if="showBankColumn" class="py-2.5 px-3 w-64">บัญชีธนาคาร</th>
               <th class="py-2.5 px-3 w-40 text-right">ยอดค้างจ่าย</th>
               <th class="py-2.5 pr-4 w-28"></th>
             </tr>
@@ -1273,13 +1319,58 @@ watch(() => activeCompany.companyId, () => {
                         ตั้งจ่ายเพิ่มได้ {{ formatSatang(availableOf(s) ?? 0) }}
                         <button type="button" class="font-bold text-brand-600 hover:underline" @click.stop="openGroup('transfer')">ดูขั้นที่ 3</button>
                       </p>
+
+                      <!--
+                        ═══ 2026-09-17 — WHAT THE MONEY IS FOR ═══
+
+                        Owner: "ให้แสดงสินค้าและราคาขาย ในช่องแรกเลย".
+
+                        The row used to say "1 รายการ" in a column of its own,
+                        which is a count of things it would not name. Somebody
+                        about to transfer money could see the amount and not
+                        what it was for without opening the drill-down — one
+                        press per payee, on the screen whose job is to decide a
+                        payout round at a glance.
+
+                        The server caps this at three (see
+                        AgentCommissionSummaryService::pendingItemsFor) and
+                        `entry_count` stays the true total, so the line below
+                        says how many are not shown rather than letting three
+                        of eleven read as all of them.
+                      -->
+                      <div
+                        v-if="(s.pending_items ?? []).length"
+                        class="mt-1 space-y-0.5"
+                        :data-test="`payout-items-${s.agent_id}`"
+                      >
+                        <p v-for="(item, i) in s.pending_items" :key="i" class="text-[11.5px] leading-snug">
+                          <span class="font-bold text-slate-700">{{ item.product_name ?? 'ไม่ระบุสินค้า' }}</span>
+                          <span class="text-slate-400">
+                            · ราคาขาย
+                            <!--
+                              Null is a real answer, not a missing one: rows
+                              written before the price snapshot existed have
+                              none, and printing 0 would be a sale price nobody
+                              recorded (BR-7).
+                            -->
+                            {{ item.sale_price_satang !== null ? formatSatang(item.sale_price_satang) : 'ไม่ได้บันทึกไว้' }}
+                          </span>
+                          <span class="text-amber-600 font-bold"> · ค่าแนะนำ {{ formatSatang(item.amount_satang) }}</span>
+                        </p>
+                        <p
+                          v-if="s.entry_count > (s.pending_items ?? []).length"
+                          class="text-[11px] text-slate-400"
+                          :data-test="`payout-items-more-${s.agent_id}`"
+                        >
+                          และอีก {{ s.entry_count - (s.pending_items ?? []).length }} รายการ — กด “ดูรายละเอียด” เพื่อดูทั้งหมด
+                        </p>
+                      </div>
+                      <p v-else class="mt-1 text-[11.5px] text-slate-400">{{ s.entry_count }} รายการ</p>
                     </div>
                   </div>
                 </td>
 
-                <td class="py-3 px-3 text-slate-500 whitespace-nowrap align-top">{{ s.entry_count }} รายการ</td>
-
-                <td class="py-3 px-3 align-top">
+                <td v-if="showBankColumn" class="py-3 px-3 align-top">
                   <!-- The seat is not a person: PUT /users/{id} refuses it, so
                        its account is edited where it was created. -->
                   <template v-if="s.is_company_share">
@@ -1364,7 +1455,7 @@ watch(() => activeCompany.companyId, () => {
 
               <!-- Bank editor, in the row it belongs to. -->
               <tr v-if="bankEditId === s.agent_id" :key="`bank-${s.agent_id}`" class="border-b border-slate-100 bg-slate-50/60">
-                <td :colspan="canSelectPeople ? 6 : 5" class="px-4 py-3">
+                <td :colspan="peopleColumnCount" class="px-4 py-3">
                   <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
                   <p v-else class="text-xs text-slate-400 mb-2">
                     ปัจจุบัน: ธนาคาร {{ s.bank_name || '-' }} · เลขบัญชี {{ s.bank_account_number || '-' }} · ชื่อบัญชี {{ s.bank_account_holder_name || '-' }}
@@ -1383,8 +1474,8 @@ watch(() => activeCompany.companyId, () => {
 
               <!-- Drill-down: products sold, clients bought, stored snapshot. -->
               <tr v-if="detailAgentId === s.agent_id" :key="`detail-${s.agent_id}`" class="border-b border-slate-100 bg-slate-50/60">
-                <td :colspan="canSelectPeople ? 6 : 5" class="px-4 py-3">
-                  <div v-if="agentDetailLoading" class="text-xs text-slate-400 mb-3">กำลังโหลดข้อมูลตัวแทน...</div>
+                <td :colspan="peopleColumnCount" class="px-4 py-3">
+                  <div v-if="agentDetailLoading" class="text-xs text-slate-400 mb-3">กำลังโหลดข้อมูลสมาชิก...</div>
                   <div v-else-if="agentDetail" class="flex items-center gap-2 mb-3 pb-3 border-b border-slate-200 text-xs text-slate-500">
                     <span>{{ agentDetail.email || '—' }}</span>
                     <span v-if="agentDetail.phone">· {{ agentDetail.phone }}</span>
@@ -1399,7 +1490,7 @@ watch(() => activeCompany.companyId, () => {
 
                   <div v-if="detailLoading" class="text-xs text-slate-400">กำลังโหลด...</div>
                   <div v-else-if="detailError" class="text-xs text-rose-600">{{ detailError }}</div>
-                  <div v-else-if="!detailEntries.length" class="text-xs text-slate-400">ไม่มีรายการคอมมิชชั่น</div>
+                  <div v-else-if="!detailEntries.length" class="text-xs text-slate-400">ไม่มีรายการค่าแนะนำ</div>
                   <div v-else class="overflow-x-auto">
                     <table class="w-full text-xs">
                       <thead>
@@ -1414,7 +1505,7 @@ watch(() => activeCompany.companyId, () => {
                           <th class="py-1.5 pr-3 font-bold">ชื่อสินค้า</th>
                           <th class="py-1.5 pr-3 font-bold text-right">ราคาที่ขายได้</th>
                           <th class="py-1.5 pr-3 font-bold">โปรโมชั่น</th>
-                          <th class="py-1.5 pr-3 font-bold text-right">ค่าคอม</th>
+                          <th class="py-1.5 pr-3 font-bold text-right">ค่าแนะนำ</th>
                           <th class="py-1.5 font-bold">สถานะ</th>
                         </tr>
                       </thead>
@@ -1533,7 +1624,7 @@ watch(() => activeCompany.companyId, () => {
                 <p class="text-[13px] font-bold text-slate-700 mt-1">{{ r.agent_name ?? '—' }}</p>
                 <p class="text-[11.5px] text-slate-500 mt-0.5">
                   {{ r.source === 'company_payout' ? 'ตั้งจ่ายเมื่อ' : 'ขอเมื่อ' }} {{ formatDate(r.created_at) }}
-                  <span v-if="r.item_count"> · {{ r.item_count }} รายการค่าคอม</span>
+                  <span v-if="r.item_count"> · {{ r.item_count }} รายการค่าแนะนำ</span>
                 </p>
                 <p v-if="r.bank_account_number_masked" class="text-[11.5px] text-slate-500 mt-0.5">
                   {{ r.bank_name }} {{ r.bank_account_number_masked }} · {{ r.bank_account_holder_name }}
@@ -1592,7 +1683,7 @@ watch(() => activeCompany.companyId, () => {
             :data-test="`payout-reject-panel-${r.id}`"
           >
             <p class="text-[12.5px] font-bold text-rose-800">
-              เหตุผลที่ไม่อนุมัติคำขอของ {{ r.agent_name ?? 'ตัวแทน' }} — ตัวแทนจะเห็นข้อความนี้
+              เหตุผลที่ไม่อนุมัติคำขอของ {{ r.agent_name ?? 'สมาชิก' }} — สมาชิกจะเห็นข้อความนี้
             </p>
             <textarea
               v-model="rejectReason"
@@ -1633,7 +1724,7 @@ watch(() => activeCompany.companyId, () => {
           <template v-else>
             ยอดขั้นต่ำในการเบิกของบริษัทนี้:
             <b class="font-bold text-slate-500">
-              <span v-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — ตัวแทนเบิกเท่าไรก็ได้</span>
+              <span v-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — สมาชิกเบิกเท่าไรก็ได้</span>
               <span v-else>{{ formatSatang(minWithdrawalSatang) }}</span>
             </b>
           </template>
@@ -1738,7 +1829,7 @@ watch(() => activeCompany.companyId, () => {
             <template v-if="transferReference.trim()"> · อ้างอิง <b>{{ transferReference.trim() }}</b></template>
           </p>
           <p class="mt-1 text-[12px] text-emerald-100">
-            ขั้นนี้จะ <b>ปิดรายการค่าคอมจริง</b> และ <b>ส่งอีเมลแจ้งตัวแทน</b> ว่าเงินเข้าแล้ว —
+            ขั้นนี้จะ <b>ปิดรายการค่าแนะนำจริง</b> และ <b>ส่งอีเมลแจ้งสมาชิก</b> ว่าเงินเข้าแล้ว —
             กดเมื่อฝ่ายบัญชียืนยันว่าโอนออกจากบัญชีบริษัทแล้วเท่านั้น
           </p>
         </template>
@@ -1749,7 +1840,7 @@ watch(() => activeCompany.companyId, () => {
             ทั้งหมดนี้จะถูกบันทึกพร้อมกัน ถ้ามีรายใดไม่ผ่านจะไม่บันทึกเลยสักราย
           </p>
           <p class="mt-1 text-[12px] text-brand-100">
-            ยังไม่ปิดรายการค่าคอม และยังไม่แจ้งตัวแทนว่าเงินเข้า — รายการจะไปรออยู่ที่ <b>ขั้นที่ 3 รอฝ่ายบัญชีโอน</b>
+            ยังไม่ปิดรายการค่าแนะนำ และยังไม่แจ้งสมาชิกว่าเงินเข้า — รายการจะไปรออยู่ที่ <b>ขั้นที่ 3 รอฝ่ายบัญชีโอน</b>
           </p>
         </template>
         <div class="mt-3 flex items-center gap-2">

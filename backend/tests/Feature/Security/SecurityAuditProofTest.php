@@ -163,7 +163,7 @@ class SecurityAuditProofTest extends TestCase
 
         $secret = Announcement::create([
             'company_id' => $victim->id,
-            'title' => 'แผนคอมมิชชั่นใหม่ ไตรมาส 4 (ยังไม่เผยแพร่)',
+            'title' => 'แผนค่าแนะนำใหม่ ไตรมาส 4 (ยังไม่เผยแพร่)',
             'content' => 'ภายในเท่านั้น',
             'audience' => 'all_agents',
             'published_at' => now()->addMonth(),

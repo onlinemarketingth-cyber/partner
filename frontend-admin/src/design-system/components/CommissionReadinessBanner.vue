@@ -80,9 +80,9 @@ const isMissing = computed(() => readiness.state === 'missing')
  * about money in a second place.
  */
 const headline = computed(() => {
-  if (isMissing.value) return 'ยังไม่ได้ตั้งค่าคอมมิชชั่น — ดีลที่ปิดได้จะไม่มีใครได้เงิน'
+  if (isMissing.value) return 'ยังไม่ได้ตั้งค่าแนะนำ — ดีลที่ปิดได้จะไม่มีใครได้เงิน'
 
-  return readiness.issues[0]?.label ?? 'ตั้งค่าคอมมิชชั่นยังไม่ครบถ้วน'
+  return readiness.issues[0]?.label ?? 'ตั้งค่าแนะนำยังไม่ครบถ้วน'
 })
 
 /**
@@ -98,8 +98,8 @@ const detail = computed(() => {
     const total = readiness.productsTotal
 
     return total > 0
-      ? `${stuck}สินค้า ${total} จาก ${total} รายการยังไม่มีอัตราค่าคอมที่ใช้ได้`
-      : `${stuck}ยังไม่มีอัตราค่าคอมที่ใช้ได้`
+      ? `${stuck}สินค้า ${total} จาก ${total} รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้`
+      : `${stuck}ยังไม่มีอัตราค่าแนะนำที่ใช้ได้`
   }
 
   // Amber: the headline already carries the first issue, so the detail line
@@ -194,7 +194,7 @@ watch(() => auth.isAuthenticated, (isAuthenticated) => {
       data-test="commission-readiness-action"
       @click="goToSettings"
     >
-      ไปตั้งค่าคอมมิชชั่น
+      ไปตั้งค่าแนะนำ
     </button>
     <button
       type="button"

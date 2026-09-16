@@ -91,14 +91,14 @@ const TABS: Array<{
   },
   {
     key: 'signup',
-    label: c('links.tab_signup', 'ลิงก์สมัครตัวแทน'),
+    label: c('links.tab_signup', 'ลิงก์สมัครสมาชิก'),
     icon: 'link',
-    title: c('signup.title', 'ลิงก์สมัครตัวแทน'),
+    title: c('signup.title', 'ลิงก์สมัครสมาชิก'),
     subtitle: c(
       'signup.subtitle',
-      'ลิงก์เปิดรับสมัครตัวแทนของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ',
+      'ลิงก์เปิดรับสมัครสมาชิกของบริษัท — คนที่กดลิงก์เข้าหน้าสมัครได้เลย ไม่ต้องกรอกรหัสเชิญ',
     ),
-    scopeAction: c('signup.scope_action', 'จัดการลิงก์สมัครตัวแทน'),
+    scopeAction: c('signup.scope_action', 'จัดการลิงก์สมัครสมาชิก'),
   },
   {
     key: 'team',

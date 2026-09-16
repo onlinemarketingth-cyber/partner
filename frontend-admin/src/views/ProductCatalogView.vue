@@ -204,7 +204,7 @@ const BANNER_INTERNAL_PATH_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '/referrals', label: 'SWS Referral' },
   { value: '/pipeline', label: 'ไปป์ไลน์การขาย' },
   { value: '/academy', label: 'Academy (คอร์สเรียน/สอบ)' },
-  { value: '/commission', label: 'ค่าคอมมิชชั่น' },
+  { value: '/commission', label: 'ค่าแนะนำ' },
   { value: '/leaderboard', label: 'Leaderboard' },
   { value: '/affiliate-links', label: 'ลิงก์พันธมิตรของฉัน' },
   { value: '/profile', label: 'โปรไฟล์' },
@@ -2184,8 +2184,8 @@ function toggleRefForm(): void {
     <HeroHeader
       icon="cube"
       title="Product catalog"
-      subtitle="แบรนด์ / หมวดหมู่ / แพ็กเกจ / อัตราคอมมิชชั่น"
-      description="ERD-001 §Product Catalog — BR-2, BR-3. ตัวเลขราคา/อัตราคอมมิชชั่นบางส่วนยังเป็นค่าตัวอย่างชั่วคราว (seed placeholder) รอค่าจริงยืนยัน (BR-7)"
+      subtitle="แบรนด์ / หมวดหมู่ / แพ็กเกจ / อัตราค่าแนะนำ"
+      description="ERD-001 §Product Catalog — BR-2, BR-3. ตัวเลขราคา/อัตราค่าแนะนำบางส่วนยังเป็นค่าตัวอย่างชั่วคราว (seed placeholder) รอค่าจริงยืนยัน (BR-7)"
       accent-color="brand"
       storage-key="product-catalog"
     >
@@ -3287,17 +3287,17 @@ function toggleRefForm(): void {
             <Icon name="money" :size="18" />
           </span>
           <div class="min-w-0">
-            <p class="text-sm font-bold text-slate-900">ย้ายไปหน้า "แผนคอมมิชชั่น" แล้ว</p>
+            <p class="text-sm font-bold text-slate-900">ย้ายไปหน้า "แผนค่าแนะนำ" แล้ว</p>
             <p class="mt-1 text-xs text-slate-500 leading-relaxed">
-              อัตราค่าคอมของ<b>ตัวแทนผู้ขาย</b>และของ<b>หัวหน้าทีม</b> ตอนนี้อยู่ในหน้าเดียวกัน
-              ที่แท็บ "อัตราค่าคอม" — กรองด้วยปุ่ม <b>ตัวแทนผู้ขาย / หัวหน้าทีม</b> ได้
+              อัตราค่าแนะนำของ<b>สมาชิกผู้ขาย</b>และของ<b>หัวหน้าทีม</b> ตอนนี้อยู่ในหน้าเดียวกัน
+              ที่แท็บ "อัตราค่าแนะนำ" — กรองด้วยปุ่ม <b>สมาชิกผู้ขาย / หัวหน้าทีม</b> ได้
               และหน้านั้นมีแท็บ "ภาพรวม" ที่บอกด้วยว่าสินค้าไหน<b>ตั้งค่ายังไม่ครบจนจะไม่มีใครได้เงิน</b>
             </p>
             <RouterLink
               :to="{ name: 'commission-plan-settings' }"
               class="mt-3 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700"
             >
-              ไปที่แผนคอมมิชชั่น →
+              ไปที่แผนค่าแนะนำ →
             </RouterLink>
           </div>
         </div>

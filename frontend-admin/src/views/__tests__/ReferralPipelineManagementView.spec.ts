@@ -144,7 +144,7 @@ function makeReferral(overrides: ReferralOverrides = {}) {
   const referral: Record<string, unknown> = {
     id,
     client: { id: 100 + id, name: overrides.name ?? `ลูกค้า ${id}`, phone: '0800000000' },
-    agent: { id: 9, name: 'ตัวแทน ก' },
+    agent: { id: 9, name: 'สมาชิก ก' },
     product: { id: 5, name: 'แพ็กเกจสุขภาพ', price_satang: EIGHT_NINE_HUNDRED_SATANG },
     branch: 'สีลม',
     current_stage: current,
@@ -413,7 +413,7 @@ describe('§4.2 — the action goes through ConfirmDialog', () => {
     // The dialog is up; the ledger has not been touched.
     expect(post).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('ยืนยันว่าได้รับเงิน 8,900.00 บาท สำหรับ ORD-TEST01 แล้ว?')
-    expect(wrapper.text()).toContain('ระบบจะบันทึกคอมมิชชั่นทันทีและแก้ไขภายหลังไม่ได้ (BR-4)')
+    expect(wrapper.text()).toContain('ระบบจะบันทึกค่าแนะนำทันทีและแก้ไขภายหลังไม่ได้ (BR-4)')
 
     await dialogConfirm(wrapper).trigger('click')
     await flushPromises()

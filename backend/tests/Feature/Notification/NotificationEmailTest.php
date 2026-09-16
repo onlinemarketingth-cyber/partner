@@ -160,7 +160,7 @@ class NotificationEmailTest extends TestCase
         Notification::fake();
         $agent = $this->agent(['email_notifications_enabled' => false]);
 
-        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าคอมมิชชั่นจ่ายแล้ว', null, '/commission');
+        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าแนะนำจ่ายแล้ว', null, '/commission');
 
         Notification::assertNothingSent();
         $this->assertNull($row->fresh()->email_due_at);
@@ -231,7 +231,7 @@ class NotificationEmailTest extends TestCase
         Mail::shouldReceive('mailer')->andThrow(new \RuntimeException('SMTP down'));
         $agent = $this->agent();
 
-        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าคอมมิชชั่นจ่ายแล้ว', null, '/commission');
+        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าแนะนำจ่ายแล้ว', null, '/commission');
 
         // The notification exists, the send was attempted and released back
         // for retry, and nothing was thrown at the caller.
@@ -364,7 +364,7 @@ class NotificationEmailTest extends TestCase
          */
         Notification::fake();
         $agent = $this->agent();
-        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าคอมมิชชั่นจ่ายแล้ว', null, '/commission');
+        $row = $this->service()->notify($agent, NotificationType::CommissionPaid, 'ค่าแนะนำจ่ายแล้ว', null, '/commission');
 
         // notify() already sent it inline; presenting it again must be a
         // refusal, not a second email.

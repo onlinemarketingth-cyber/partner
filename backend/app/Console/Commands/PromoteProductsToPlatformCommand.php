@@ -121,7 +121,7 @@ class PromoteProductsToPlatformCommand extends Command
                 ->count();
 
             if ($categoryRules > 0) {
-                $this->warn("  ข้าม  {$product->name} ({$owner}) — มีกฎค่าคอมผูกกับหมวดหมู่ \"{$product->category->name}\" อยู่ {$categoryRules} กฎ · ถ้าเลื่อนตอนนี้ กฎจะเลิก match เงียบ ๆ แล้วไปใช้เรตกลางของบริษัทแทน · ต้องให้คนตัดสินใจก่อน (ผูกกฎกับสินค้าโดยตรง หรือยอมรับเรตกลาง)");
+                $this->warn("  ข้าม  {$product->name} ({$owner}) — มีกฎค่าแนะนำผูกกับหมวดหมู่ \"{$product->category->name}\" อยู่ {$categoryRules} กฎ · ถ้าเลื่อนตอนนี้ กฎจะเลิก match เงียบ ๆ แล้วไปใช้เรตกลางของบริษัทแทน · ต้องให้คนตัดสินใจก่อน (ผูกกฎกับสินค้าโดยตรง หรือยอมรับเรตกลาง)");
                 $skipped++;
 
                 continue;

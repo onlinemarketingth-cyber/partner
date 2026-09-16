@@ -61,7 +61,7 @@ const sorted = computed(() =>
  * does nothing is worse than no control.
  */
 const COLUMNS: Array<{ label: string; field: SortableField | null }> = [
-  { label: 'ตัวแทน', field: null },
+  { label: 'สมาชิก', field: null },
   { label: 'ทีม', field: 'team' },
   { label: 'ลูกค้า', field: null },
   { label: 'ดีล (ปิด/ทั้งหมด)', field: null },
@@ -75,7 +75,7 @@ const COLUMNS: Array<{ label: string; field: SortableField | null }> = [
    * "we have paid this out". Shortening it here re-opened a decision that
    * had already been made and caught by an existing test.
    */
-  { label: 'ค่าคอม (จ่ายแล้ว)', field: 'commission' },
+  { label: 'ค่าแนะนำ (จ่ายแล้ว)', field: 'commission' },
   { label: 'Pipeline', field: null },
   { label: 'สถานะ', field: null },
 ]

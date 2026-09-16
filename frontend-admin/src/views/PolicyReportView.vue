@@ -201,7 +201,7 @@ function commissionHealthBadgeClass(has: boolean): string {
   return has ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
 }
 function commissionHealthBadgeLabel(has: boolean): string {
-  return has ? 'กำหนดแล้ว' : 'ยังไม่มีกฎคอมมิชชั่นเลย'
+  return has ? 'กำหนดแล้ว' : 'ยังไม่มีกฎค่าแนะนำเลย'
 }
 function gamificationHealthBadgeClass(has: boolean): string {
   return has ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
@@ -283,8 +283,8 @@ watch(
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">รออนุมัติ</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">Referral ทั้งหมด</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">ชำระเงินสำเร็จ</th>
-                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">คอมมิชชั่นจ่ายแล้ว</th>
-                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">คอมมิชชั่นค้างจ่าย</th>
+                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">ค่าแนะนำจ่ายแล้ว</th>
+                <th class="px-4 py-2.5 text-xs font-bold text-slate-500 text-right whitespace-nowrap">ค่าแนะนำค้างจ่าย</th>
               </tr>
             </thead>
             <tbody>
@@ -339,7 +339,7 @@ watch(
             <thead>
               <tr class="border-b border-slate-100 text-left">
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500">ชื่อลูกค้า</th>
-                <th class="px-4 py-2.5 text-xs font-bold text-slate-500">ตัวแทนผู้แนะนำ</th>
+                <th class="px-4 py-2.5 text-xs font-bold text-slate-500">สมาชิกผู้แนะนำ</th>
                 <th class="px-4 py-2.5 text-xs font-bold text-slate-500 whitespace-nowrap">วันที่สร้าง</th>
               </tr>
             </thead>
@@ -372,7 +372,7 @@ watch(
               <p class="text-sm font-bold text-slate-900">{{ row.company_name }}</p>
               <div class="flex flex-wrap gap-1.5">
                 <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="commissionHealthBadgeClass(row.has_commission_rules)">
-                  คอมมิชชั่น: {{ commissionHealthBadgeLabel(row.has_commission_rules) }}
+                  ค่าแนะนำ: {{ commissionHealthBadgeLabel(row.has_commission_rules) }}
                 </span>
                 <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" :class="gamificationHealthBadgeClass(row.has_gamification_overrides)">
                   Gamification: {{ gamificationHealthBadgeLabel(row.has_gamification_overrides) }}
@@ -381,7 +381,7 @@ watch(
             </div>
             <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs text-slate-500">
               <div>
-                <p class="text-slate-400">กฎคอมมิชชั่น</p>
+                <p class="text-slate-400">กฎค่าแนะนำ</p>
                 <p class="font-bold text-slate-700">{{ row.commission_rules_count.toLocaleString('th-TH') }}</p>
               </div>
               <div>

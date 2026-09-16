@@ -57,7 +57,7 @@ enum WithdrawalStatus: string
             self::PendingReview => 'รอตรวจสอบ',
             self::Approved => 'อนุมัติแล้ว รอโอน',
             self::Rejected => 'ไม่อนุมัติ',
-            self::Cancelled => 'ยกเลิกโดยตัวแทน',
+            self::Cancelled => 'ยกเลิกโดยสมาชิก',
             self::Transferred => 'โอนเงินแล้ว',
         };
     }

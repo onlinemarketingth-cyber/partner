@@ -165,7 +165,7 @@ const LABEL_FIELDS: { key: string; caption: string; placeholder: string }[] = [
   { key: 'nav_clients', caption: 'เมนู: ลูกค้า', placeholder: 'ลูกค้า' },
   { key: 'nav_products', caption: 'เมนู: สินค้า', placeholder: 'สินค้า' },
   { key: 'nav_academy', caption: 'เมนู: Academy', placeholder: 'Academy' },
-  { key: 'nav_commission', caption: 'เมนู: ค่าคอม', placeholder: 'ค่าคอม' },
+  { key: 'nav_commission', caption: 'เมนู: ค่าแนะนำ', placeholder: 'ค่าแนะนำ' },
   { key: 'nav_profile', caption: 'หน้าโปรไฟล์ (ไม่ใช่เมนูล่าง)', placeholder: 'โปรไฟล์' },
 ]
 
@@ -198,7 +198,7 @@ const NAV_ICON_FIELDS: { key: string; caption: string; fallback: string; inBotto
   { key: 'nav_clients', caption: 'เมนู: ลูกค้า', fallback: 'users', inBottomNav: true },
   { key: 'nav_products', caption: 'เมนู: สินค้า', fallback: 'box', inBottomNav: true },
   { key: 'nav_academy', caption: 'เมนู: Academy', fallback: 'brain', inBottomNav: true },
-  { key: 'nav_commission', caption: 'เมนู: ค่าคอม', fallback: 'money', inBottomNav: true },
+  { key: 'nav_commission', caption: 'เมนู: ค่าแนะนำ', fallback: 'money', inBottomNav: true },
   { key: 'nav_profile', caption: 'หน้าโปรไฟล์ (ไม่ใช่เมนูล่าง)', fallback: 'user', inBottomNav: false },
 ]
 
@@ -2337,9 +2337,9 @@ onMounted(loadPresets)
       ever needed — a company with no loaded theme has no link to show.
     -->
     <section v-if="theme" class="mt-4 bg-white/95 border border-slate-200 rounded-2xl p-5">
-      <h2 class="text-sm font-bold text-slate-900 mb-1">ลิงก์ Login สำหรับตัวแทน</h2>
+      <h2 class="text-sm font-bold text-slate-900 mb-1">ลิงก์ Login สำหรับสมาชิก</h2>
       <p class="text-xs text-slate-400 mb-4">
-        ส่งลิงก์นี้ (หรือให้สแกน QR) ให้ตัวแทนของบริษัทนี้ เพื่อให้หน้า Login แสดงสีธีมที่ตั้งไว้ตั้งแต่ก่อนเข้าสู่ระบบ
+        ส่งลิงก์นี้ (หรือให้สแกน QR) ให้สมาชิกของบริษัทนี้ เพื่อให้หน้า Login แสดงสีธีมที่ตั้งไว้ตั้งแต่ก่อนเข้าสู่ระบบ
       </p>
       <div class="flex flex-col sm:flex-row gap-4">
         <div class="flex-1 min-w-0">

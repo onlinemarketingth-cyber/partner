@@ -278,7 +278,7 @@ class CompanyPayoutFlowTest extends TestCase
                 'expected_total_satang' => 100000,
             ])
             ->assertStatus(422)
-            ->assertJsonFragment(['ตั้งจ่ายไม่ได้ — ตัวแทนคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ']);
+            ->assertJsonFragment(['ตั้งจ่ายไม่ได้ — สมาชิกคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ']);
     }
 
     // ── Somebody is told, at every step ───────────────────────────────
@@ -330,9 +330,9 @@ class CompanyPayoutFlowTest extends TestCase
         $this->owe($company, $agent, [100000]);
         $request = $this->payouts()->request($agent->fresh(), 100000);
 
-        $this->payouts()->reject($request, $admin, 'บัญชีธนาคารไม่ตรงกับชื่อตัวแทน');
+        $this->payouts()->reject($request, $admin, 'บัญชีธนาคารไม่ตรงกับชื่อสมาชิก');
 
-        $this->assertStringContainsString('บัญชีธนาคารไม่ตรงกับชื่อตัวแทน', $this->lastBody($agent));
+        $this->assertStringContainsString('บัญชีธนาคารไม่ตรงกับชื่อสมาชิก', $this->lastBody($agent));
     }
 
     public function test_the_money_email_fires_at_the_transfer_and_not_before(): void

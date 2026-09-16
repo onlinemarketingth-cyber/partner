@@ -142,8 +142,8 @@ async function load(): Promise<void> {
     isEnabled.value = false
     errorMessage.value =
       e instanceof ApiError
-        ? `โหลดค่าตั้งการแบ่งคอมมิชชั่นไม่สำเร็จ (${e.status})`
-        : 'โหลดค่าตั้งการแบ่งคอมมิชชั่นไม่สำเร็จ'
+        ? `โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ (${e.status})`
+        : 'โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ'
   } finally {
     loading.value = false
   }
@@ -194,7 +194,7 @@ watch(() => props.companyId, load, { immediate: true })
   -->
   <section class="bg-white/95 border border-slate-200 rounded-xl p-5">
     <p class="text-base font-bold text-slate-500 mb-1 flex items-center gap-1.5">
-      <Icon name="users" :size="14" /> การแบ่งคอมมิชชั่นกับตัวแทนร่วม
+      <Icon name="users" :size="14" /> การแบ่งค่าแนะนำกับสมาชิกร่วม
     </p>
     <!--
       2026-09-14 — rewritten for the person reading it.
@@ -212,15 +212,15 @@ watch(() => props.companyId, load, { immediate: true })
       internal names for "แอปของตัวแทน" and "ส่งรายชื่อลูกค้า".
     -->
     <p class="text-xs text-slate-500 mb-3 leading-relaxed">
-      ใช้เมื่อดีลหนึ่งมีตัวแทนช่วยกัน 2 คน เช่น คนหาลูกค้ากับคนปิดการขายเป็นคนละคน
+      ใช้เมื่อดีลหนึ่งมีสมาชิกช่วยกัน 2 คน เช่น คนหาลูกค้ากับคนปิดการขายเป็นคนละคน
     </p>
     <div class="text-xs text-slate-500 mb-3 space-y-1">
       <p>
-        <b class="text-slate-700">เปิด</b> — ตัวแทนใส่ชื่อ “ตัวแทนร่วม” และเลือกสัดส่วนที่แบ่งกันได้เองในแต่ละดีล
-        พอลูกค้าชำระเงิน ระบบจะจ่ายค่าคอมของดีลนั้นแยกให้ 2 คนตามสัดส่วนที่ใส่ไว้
+        <b class="text-slate-700">เปิด</b> — สมาชิกใส่ชื่อ “สมาชิกร่วม” และเลือกสัดส่วนที่แบ่งกันได้เองในแต่ละดีล
+        พอลูกค้าชำระเงิน ระบบจะจ่ายค่าแนะนำของดีลนั้นแยกให้ 2 คนตามสัดส่วนที่ใส่ไว้
       </p>
       <p>
-        <b class="text-slate-700">ปิด</b> — ค่าคอมเต็มจำนวนเข้าตัวแทนคนเดียว และตัวแทนจะไม่เห็นช่องใส่ตัวแทนร่วมเลย
+        <b class="text-slate-700">ปิด</b> — ค่าแนะนำเต็มจำนวนเข้าสมาชิกคนเดียว และสมาชิกจะไม่เห็นช่องใส่สมาชิกร่วมเลย
         (ชื่อที่เคยใส่ไว้ยังเก็บอยู่ ไม่ได้ถูกลบ)
       </p>
     </div>
@@ -245,7 +245,7 @@ watch(() => props.companyId, load, { immediate: true })
         <div class="flex items-start gap-3">
           <button
             type="button"
-            aria-label="เปิด/ปิด การแบ่งคอมมิชชั่นกับตัวแทนร่วม"
+            aria-label="เปิด/ปิด การแบ่งค่าแนะนำกับสมาชิกร่วม"
             @click="isEnabled = !isEnabled"
             class="relative w-14 h-7 shrink-0 rounded-full border transition-colors flex items-center px-1"
             :class="isEnabled ? 'bg-brand-600 border-brand-600' : 'bg-slate-100 border-slate-200'"
@@ -257,9 +257,9 @@ watch(() => props.companyId, load, { immediate: true })
             ></div>
           </button>
           <div class="min-w-0">
-            <p class="text-sm font-bold text-slate-900">เปิดให้ตัวแทนแบ่งค่าคอมกันเองในดีล</p>
+            <p class="text-sm font-bold text-slate-900">เปิดให้สมาชิกแบ่งค่าแนะนำกันเองในดีล</p>
             <p class="text-xs text-slate-400 leading-relaxed">
-              ปิดอยู่ = ตัวแทนจะไม่เห็นช่องแบ่งค่าคอม ทั้งในหน้าลูกค้าและตอนส่งรายชื่อลูกค้า
+              ปิดอยู่ = สมาชิกจะไม่เห็นช่องแบ่งค่าแนะนำ ทั้งในหน้าลูกค้าและตอนส่งรายชื่อลูกค้า
             </p>
           </div>
         </div>
@@ -281,14 +281,14 @@ watch(() => props.companyId, load, { immediate: true })
               กำลังจะเปิดกลับมา — ตรวจสอบดีลที่ค้างอยู่ก่อน
             </p>
             <p v-if="pendingCount !== undefined" class="text-xs text-amber-700 leading-relaxed">
-              ตอนนี้มีดีลที่ยังไม่ได้จ่ายค่าคอมอยู่
+              ตอนนี้มีดีลที่ยังไม่ได้จ่ายค่าแนะนำอยู่
               <span class="font-bold">{{ pendingCount }}</span>
-              รายการ ที่ยังมีชื่อ “ตัวแทนร่วม” ติดอยู่จากตอนก่อนปิด —
-              พอกดบันทึก ดีลเหล่านี้จะกลับมาแบ่งค่าคอมทันที โดยที่ไม่มีใครไปแก้ดีลนั้นเลย ·
-              ส่วนค่าคอมที่จ่ายไปแล้วไม่เปลี่ยน
+              รายการ ที่ยังมีชื่อ “สมาชิกร่วม” ติดอยู่จากตอนก่อนปิด —
+              พอกดบันทึก ดีลเหล่านี้จะกลับมาแบ่งค่าแนะนำทันที โดยที่ไม่มีใครไปแก้ดีลนั้นเลย ·
+              ส่วนค่าแนะนำที่จ่ายไปแล้วไม่เปลี่ยน
             </p>
             <p v-else class="text-xs text-amber-700 leading-relaxed">
-              ยังไม่ทราบว่ามีดีลค้างอยู่กี่รายการที่จะกลับมาแบ่งค่าคอม (อ่านตัวเลขไม่ได้) — ตรวจสอบก่อนเปิด
+              ยังไม่ทราบว่ามีดีลค้างอยู่กี่รายการที่จะกลับมาแบ่งค่าแนะนำ (อ่านตัวเลขไม่ได้) — ตรวจสอบก่อนเปิด
             </p>
           </div>
         </div>

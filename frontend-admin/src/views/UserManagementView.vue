@@ -173,10 +173,10 @@ function askRoleChange(user: UserRow, role: ManageableRole) {
 /** What the confirm dialog has to say BEFORE the click, per target role. */
 function roleChangeWarning(user: UserRow, role: ManageableRole): string {
   if (role === 'company_admin') {
-    return `${user.name} จะเข้าถึงข้อมูลทั้งบริษัทได้ — ลูกค้า คำสั่งซื้อ ค่าคอมมิชชั่น และการจัดการผู้ใช้ · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด เขาต้องเข้าสู่ระบบใหม่`
+    return `${user.name} จะเข้าถึงข้อมูลทั้งบริษัทได้ — ลูกค้า คำสั่งซื้อ ค่าแนะนำ และการจัดการผู้ใช้ · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด เขาต้องเข้าสู่ระบบใหม่`
   }
   if (role === 'voucher_staff') {
-    return `${user.name} จะเข้าได้เฉพาะหน้า "ตัดสิทธิ์บัตรกำนัล" หน้าเดียว — คำสั่งซื้อ ลูกค้า ค่าคอมมิชชั่น และรายชื่อผู้ใช้จะเข้าไม่ได้ทั้งหมด · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
+    return `${user.name} จะเข้าได้เฉพาะหน้า "ตัดสิทธิ์บัตรกำนัล" หน้าเดียว — คำสั่งซื้อ ลูกค้า ค่าแนะนำ และรายชื่อผู้ใช้จะเข้าไม่ได้ทั้งหมด · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
   }
 
   return `${user.name} จะกลับไปเห็นเฉพาะข้อมูลของตัวเอง และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที`
@@ -442,7 +442,7 @@ function roleLabel(role: string): string {
   if (role === 'company_admin') return 'ผู้ดูแลบริษัท'
   if (role === 'voucher_staff') return 'พนักงานหน้าร้าน'
 
-  return 'ตัวแทน'
+  return 'สมาชิก'
 }
 
 // ── Redemption right, granted per person ───────────────────────────────
@@ -515,7 +515,7 @@ onMounted(() => {
 
     <!-- The two invisible rules, said once, where they are read. -->
     <div class="mt-4 mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-      หน้านี้จัดการ <strong>ผู้ดูแลบริษัท</strong> และ <strong>ตัวแทน</strong> —
+      หน้านี้จัดการ <strong>ผู้ดูแลบริษัท</strong> และ <strong>สมาชิก</strong> —
       <strong>ไม่แสดง Super Admin</strong> เพราะสร้างและจัดการจากบรรทัดคำสั่งเท่านั้น (<code>admin:create-super</code>)
       ไม่ใช่เพราะยังไม่มี · ปุ่มแต่ละแถวขึ้นตาม<strong>สิทธิ์จริงของคุณ</strong> ที่เซิร์ฟเวอร์เป็นคนตอบ
       และคุณจะปิดบัญชีตัวเองไม่ได้
@@ -527,7 +527,7 @@ onMounted(() => {
         <select v-model="filters.role" data-test="role-filter" class="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white min-w-[12rem]" @change="load">
           <option value="">ทุกบทบาท</option>
           <option value="company_admin">ผู้ดูแลบริษัท</option>
-          <option value="agent">ตัวแทน</option>
+          <option value="agent">สมาชิก</option>
           <option value="voucher_staff">พนักงานหน้าร้าน</option>
         </select>
       </div>
@@ -589,7 +589,7 @@ onMounted(() => {
                     v-if="user.is_commission_house_account"
                     class="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800"
                     :data-test="`house-account-badge-${user.id}`"
-                    title="บัญชีที่บริษัทใช้รับค่าคอมหัวหน้าทีม — ตั้งค่าที่ขั้นตอนที่ 4.2 ของหน้าคอมมิชชั่น"
+                    title="บัญชีที่บริษัทใช้รับค่าแนะนำหัวหน้าทีม — ตั้งค่าที่ขั้นตอนที่ 4.2 ของหน้าค่าแนะนำ"
                   >
                     บัญชีบริษัท
                   </span>
@@ -809,13 +809,13 @@ onMounted(() => {
           <label class="text-xs font-bold text-slate-500">บทบาท</label>
           <select v-model="createForm.role" data-test="create-role" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
             <option value="company_admin">ผู้ดูแลบริษัท</option>
-            <option value="agent">ตัวแทน</option>
+            <option value="agent">สมาชิก</option>
             <option value="voucher_staff">พนักงานหน้าร้าน (ตัดสิทธิ์บัตรกำนัลอย่างเดียว)</option>
           </select>
           <!-- Said at the moment the choice is made, not discovered after the
                account is handed over. -->
           <p v-if="createForm.role === 'voucher_staff'" class="mt-1 text-[11px] text-slate-500" data-test="voucher-staff-hint">
-            บัญชีนี้จะเข้าได้เฉพาะหน้า <strong>ตัดสิทธิ์บัตรกำนัล</strong> หน้าเดียว — เห็นคำสั่งซื้อ ลูกค้า หรือค่าคอมมิชชั่นไม่ได้เลย
+            บัญชีนี้จะเข้าได้เฉพาะหน้า <strong>ตัดสิทธิ์บัตรกำนัล</strong> หน้าเดียว — เห็นคำสั่งซื้อ ลูกค้า หรือค่าแนะนำไม่ได้เลย
           </p>
         </div>
         <div class="mt-3">
@@ -922,7 +922,7 @@ onMounted(() => {
         <p class="text-sm font-bold text-slate-900">ย้ายผู้ใช้ไปบริษัทอื่น</p>
         <p class="mt-0.5 text-xs text-slate-400">{{ moving.name }} · ตอนนี้อยู่ {{ moving.company?.name ?? '—' }}</p>
         <p class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
-          ย้ายแล้วบัญชีนี้จะเห็นข้อมูลของบริษัทใหม่แทนบริษัทเดิมทั้งหมด — ลูกค้า ดีล และค่าคอมมิชชั่นที่เกิดขึ้นแล้วยังอยู่กับบริษัทเดิมตามเดิม
+          ย้ายแล้วบัญชีนี้จะเห็นข้อมูลของบริษัทใหม่แทนบริษัทเดิมทั้งหมด — ลูกค้า ดีล และค่าแนะนำที่เกิดขึ้นแล้วยังอยู่กับบริษัทเดิมตามเดิม
         </p>
 
         <label class="mt-3 block text-xs font-bold text-slate-500">บริษัทปลายทาง</label>

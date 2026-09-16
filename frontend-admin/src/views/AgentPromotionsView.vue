@@ -402,7 +402,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
       </template>
     </HeroHeader>
 
-    <CompanyScopeNotice action="จัดการโปรโมชั่นตัวแทน" />
+    <CompanyScopeNotice action="จัดการโปรโมชั่นสมาชิก" />
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
       {{ errorMessage }}

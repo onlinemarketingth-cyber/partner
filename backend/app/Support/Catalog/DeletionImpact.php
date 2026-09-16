@@ -61,8 +61,8 @@ final class DeletionImpact
             // are first because they are the BR-4 money records.
             'blockers' => [
                 'Referral / การขาย' => Referral::query()->where('product_id', $product->id)->count(),
-                'รายการคอมมิชชั่น' => CommissionLedger::query()->where('product_id', $product->id)->count(),
-                'อัตราคอมมิชชั่น' => $product->commissionRules()->count(),
+                'รายการค่าแนะนำ' => CommissionLedger::query()->where('product_id', $product->id)->count(),
+                'อัตราค่าแนะนำ' => $product->commissionRules()->count(),
                 'บทเรียน Academy' => $product->modules()->count(),
             ],
             'selling_companies' => self::sellingCompanies($product),
@@ -92,7 +92,7 @@ final class DeletionImpact
             'is_shared' => $category->company_id === null,
             'blockers' => [
                 'สินค้า' => $category->products()->count(),
-                'อัตราคอมมิชชั่นที่ผูกกับหมวดหมู่นี้' => CommissionRule::query()
+                'อัตราค่าแนะนำที่ผูกกับหมวดหมู่นี้' => CommissionRule::query()
                     ->where('product_category_id', $category->id)
                     ->count(),
             ],

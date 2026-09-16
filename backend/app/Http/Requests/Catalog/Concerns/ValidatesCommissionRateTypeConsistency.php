@@ -61,7 +61,7 @@ trait ValidatesCommissionRateTypeConsistency
 
         $validator->errors()->add(
             'rate_type',
-            "สินค้านี้ถูกตั้งค่ารูปแบบอัตราคอมมิชชั่นไว้แล้วเป็น \"{$configuredLabel}\" กรุณาเลือกรูปแบบเดียวกันสำหรับทุก tier ของสินค้านี้",
+            "สินค้านี้ถูกตั้งค่ารูปแบบอัตราค่าแนะนำไว้แล้วเป็น \"{$configuredLabel}\" กรุณาเลือกรูปแบบเดียวกันสำหรับทุก tier ของสินค้านี้",
         );
     }
 }

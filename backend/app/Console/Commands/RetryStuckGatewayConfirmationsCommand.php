@@ -121,7 +121,7 @@ class RetryStuckGatewayConfirmationsCommand extends Command
                 $actor = $referral->agent ?? $order->agent;
 
                 if (! $actor) {
-                    throw new \RuntimeException('ไม่พบตัวแทนเจ้าของรายการ');
+                    throw new \RuntimeException('ไม่พบสมาชิกเจ้าของรายการ');
                 }
 
                 $paid = DB::transaction(fn () => $orders->confirmPayment($order, $actor));

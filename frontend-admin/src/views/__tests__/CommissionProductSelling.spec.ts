@@ -389,7 +389,7 @@ describe('step 3 — a closed product is still fully editable', () => {
 
     await setProductRate.trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('อัตราค่าคอมตัวแทนผู้ขาย')
+    expect(wrapper.text()).toContain('อัตราค่าแนะนำสมาชิกผู้ขาย')
   })
 })
 

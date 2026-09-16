@@ -466,9 +466,9 @@ watch(() => activeCompany.companyId, () => { loadAll() })
 
         <form v-if="showAwardForm" class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitAward">
           <div>
-            <label class="text-xs font-bold text-slate-500">ตัวแทน</label>
+            <label class="text-xs font-bold text-slate-500">สมาชิก</label>
             <select v-model="awardForm.user_id" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-              <option value="" disabled>เลือกตัวแทน</option>
+              <option value="" disabled>เลือกสมาชิก</option>
               <option v-for="a in agents" :key="a.id" :value="a.id">{{ a.name }}</option>
             </select>
           </div>
@@ -525,7 +525,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       <!-- Level thresholds (Phase 9) -->
       <section v-if="activeTab === 'levels'" class="mt-4">
         <p class="text-xs text-slate-400 mb-2 px-1">
-          XP รวมของตัวแทน → Level (คำนวณจากตารางนี้ ไม่มีสูตรอัตโนมัติ) — ใช้ร่วมกับ Leaderboard
+          XP รวมของสมาชิก → Level (คำนวณจากตารางนี้ ไม่มีสูตรอัตโนมัติ) — ใช้ร่วมกับ Leaderboard
         </p>
         <div v-if="isSuperAdmin" class="flex justify-end mb-2">
           <button class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-xs font-bold hover:bg-gold-700" @click="openCreateLevelForm">

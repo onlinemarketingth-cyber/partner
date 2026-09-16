@@ -179,9 +179,9 @@ describe('/commission keeps every link that was already written down', () => {
 })
 
 describe('the pillar', () => {
-  it('sits directly after จัดการตัวแทน', async () => {
+  it('sits directly after จัดการสมาชิก', async () => {
     const labels = pillarLabels(mountNav())
-    const agents = labels.findIndex((l) => l.includes('จัดการตัวแทน'))
+    const agents = labels.findIndex((l) => l.includes('จัดการสมาชิก'))
     const referral = labels.findIndex((l) => l.includes('ค่าแนะนำ'))
 
     expect(agents).toBeGreaterThanOrEqual(0)

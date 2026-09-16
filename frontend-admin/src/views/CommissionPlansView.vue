@@ -341,8 +341,8 @@ type Step = 1 | 2 | 3 | 4
 const activeStep = ref<Step>(1)
 const stepDefs: { step: Step; label: string }[] = [
   { step: 1, label: 'เลือกบริษัท' },
-  { step: 2, label: 'เลือกแผนคอมมิชชั่น' },
-  { step: 3, label: 'ตั้งอัตราตัวแทนผู้ขาย' },
+  { step: 2, label: 'เลือกแผนค่าแนะนำ' },
+  { step: 3, label: 'ตั้งอัตราสมาชิกผู้ขาย' },
   { step: 4, label: 'ส่วนเพิ่มเติม' },
 ]
 /**
@@ -1400,7 +1400,7 @@ const leaderRateGroups = computed(() => [
     number: '4.3',
     title: 'ค่าเริ่มต้นทั้งบริษัท',
     hint: 'ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้ — ตั้งอันนี้อันเดียวก็ครอบคลุมทั้งบริษัท',
-    empty: 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าคอมเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
+    empty: 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าแนะนำเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
     rows: companyLeaderRules.value,
   },
   {
@@ -1473,7 +1473,7 @@ function resolveOverrideFor(product: ProductOption): CommissionOverrideRuleItem 
 type ReadinessLevel = 'ok' | 'warn' | 'bad'
 function productReadiness(p: ProductOption): { level: ReadinessLevel; message: string } {
   if (!resolveRuleFor(p)) {
-    return { level: 'bad', message: 'ยังไม่มีอัตราค่าคอม (ทั้งสินค้า/หมวดหมู่/บริษัท) — ดีลที่ปิดได้จะไม่มีใครได้เงินเลย' }
+    return { level: 'bad', message: 'ยังไม่มีอัตราค่าแนะนำ (ทั้งสินค้า/หมวดหมู่/บริษัท) — ดีลที่ปิดได้จะไม่มีใครได้เงินเลย' }
   }
 
   // Ranked right below "no rule": having several is not safer than having
@@ -1488,7 +1488,7 @@ function productReadiness(p: ProductOption): { level: ReadinessLevel; message: s
 
   const plan = p.effective_plan_type
   if (plan && structureReady.value[plan] === false) {
-    return { level: 'bad', message: `บริษัทยังไม่ได้ตั้งค่าโครงสร้าง ${planTypeLabels[plan]} — ตัวแทนผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร` }
+    return { level: 'bad', message: `บริษัทยังไม่ได้ตั้งค่าโครงสร้าง ${planTypeLabels[plan]} — สมาชิกผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร` }
   }
 
   // Unilevel and Affiliate are the two plans that pay the upline out of
@@ -2187,27 +2187,27 @@ const overrideModeOptions: Array<{
   {
     value: 'additive',
     title: 'บริษัทจ่ายเพิ่ม',
-    oneLine: 'ตัวแทนที่ปิดการขายได้เต็ม · หัวหน้าทีมได้เพิ่มจากบริษัท',
-    detail: 'ค่าคอมของหัวหน้าทีมเป็นต้นทุนใหม่ของบริษัท ไม่ไปแตะค่าคอมของคนปิดการขายเลย — ยิ่งสายลึก บริษัทยิ่งจ่ายรวมมากขึ้น',
+    oneLine: 'สมาชิกที่ปิดการขายได้เต็ม · หัวหน้าทีมได้เพิ่มจากบริษัท',
+    detail: 'ค่าแนะนำของหัวหน้าทีมเป็นต้นทุนใหม่ของบริษัท ไม่ไปแตะค่าแนะนำของคนปิดการขายเลย — ยิ่งสายลึก บริษัทยิ่งจ่ายรวมมากขึ้น',
   },
   {
     value: 'deduct_from_sale',
-    title: 'หักจากตัวแทน — คิด % จากยอดขาย',
-    oneLine: 'หัวหน้าทีมได้ % ของยอดขาย แต่เงินนั้นหักออกจากค่าคอมของคนปิดการขาย',
-    detail: 'ต้นทุนรวมของบริษัทเท่าเดิม แต่เป็นโหมดที่กินโควตาเร็วที่สุด เพราะ % คิดจากยอดขายทั้งก้อนในขณะที่เงินมาจากค่าคอมก้อนเล็ก ๆ ของตัวแทนเท่านั้น',
+    title: 'หักจากสมาชิก — คิด % จากยอดขาย',
+    oneLine: 'หัวหน้าทีมได้ % ของยอดขาย แต่เงินนั้นหักออกจากค่าแนะนำของคนปิดการขาย',
+    detail: 'ต้นทุนรวมของบริษัทเท่าเดิม แต่เป็นโหมดที่กินโควตาเร็วที่สุด เพราะ % คิดจากยอดขายทั้งก้อนในขณะที่เงินมาจากค่าแนะนำก้อนเล็ก ๆ ของสมาชิกเท่านั้น',
   },
   {
     value: 'deduct_from_commission',
-    title: 'หักจากตัวแทน — คิด % จากค่าคอมของตัวแทน',
-    oneLine: 'หัวหน้าทีมได้ % ของ "ค่าคอมที่ตัวแทนได้" ไม่ใช่ของยอดขาย',
+    title: 'หักจากสมาชิก — คิด % จากค่าแนะนำของสมาชิก',
+    oneLine: 'หัวหน้าทีมได้ % ของ "ค่าแนะนำที่สมาชิกได้" ไม่ใช่ของยอดขาย',
     detail: 'ต้นทุนรวมของบริษัทเท่าเดิม และหักน้อยกว่าแบบบนมาก เพราะฐานที่คิด % เล็กกว่า — ถ้าตั้งใจว่า "แบ่งกันเองในทีม" ส่วนใหญ่หมายถึงโหมดนี้',
   },
 ]
 
 const overrideModeLabels: Record<CommissionOverrideMode, string> = {
   additive: 'บริษัทจ่ายเพิ่ม',
-  deduct_from_sale: 'หักจากตัวแทน (คิดจากยอดขาย)',
-  deduct_from_commission: 'หักจากตัวแทน (คิดจากค่าคอมตัวแทน)',
+  deduct_from_sale: 'หักจากสมาชิก (คิดจากยอดขาย)',
+  deduct_from_commission: 'หักจากสมาชิก (คิดจากค่าแนะนำสมาชิก)',
 }
 
 /**
@@ -2944,11 +2944,11 @@ const readinessLevel = computed<ReadinessLevel>(() => {
 })
 
 const readinessHeadline = computed(() => {
-  if (commissionReadiness.state === null) return 'กำลังตรวจสอบสถานะการตั้งค่าค่าคอม…'
-  if (readinessLevel.value === 'ok') return 'พร้อมจ่ายค่าคอมแล้ว — ทุกสินค้ามีอัตราที่ใช้ได้'
-  if (readinessLevel.value === 'warn') return 'จ่ายตัวแทนผู้ขายได้แล้ว แต่หัวหน้าทีมยังไม่ได้ส่วนแบ่ง'
+  if (commissionReadiness.state === null) return 'กำลังตรวจสอบสถานะการตั้งค่าค่าแนะนำ…'
+  if (readinessLevel.value === 'ok') return 'พร้อมจ่ายค่าแนะนำแล้ว — ทุกสินค้ามีอัตราที่ใช้ได้'
+  if (readinessLevel.value === 'warn') return 'จ่ายสมาชิกผู้ขายได้แล้ว แต่หัวหน้าทีมยังไม่ได้ส่วนแบ่ง'
 
-  return 'ยังไม่พร้อมจ่ายค่าคอม — ดีลที่ปิดได้จะไม่มีใครได้เงิน'
+  return 'ยังไม่พร้อมจ่ายค่าแนะนำ — ดีลที่ปิดได้จะไม่มีใครได้เงิน'
 })
 
 /**
@@ -3092,12 +3092,12 @@ const viewingPlanType = ref<CommissionPlanType>('unilevel')
 const planExplainers: Record<CommissionPlanType, { title: string; how: string; affects: string }> = {
   unilevel: {
     title: 'Unilevel — ขายตรง + ส่วนแบ่งหัวหน้าสาย',
-    how: 'ตัวแทนได้จากยอดที่ตัวเองปิด และหัวหน้าสายได้ส่วนแบ่งจากยอดลูกทีม',
+    how: 'สมาชิกได้จากยอดที่ตัวเองปิด และหัวหน้าสายได้ส่วนแบ่งจากยอดลูกทีม',
     affects: 'แผนนี้ทำให้ขั้นที่ 4 มี "อัตราหัวหน้าทีม" ให้ตั้ง',
   },
   binary: {
     title: 'Binary — จ่ายจากยอดขาที่น้อยกว่า',
-    how: 'ตัวแทนมีสายซ้าย/ขวา ระบบจับคู่ยอดสองขาแล้วจ่ายจากขาที่น้อยกว่าตามรอบที่ตั้งไว้',
+    how: 'สมาชิกมีสายซ้าย/ขวา ระบบจับคู่ยอดสองขาแล้วจ่ายจากขาที่น้อยกว่าตามรอบที่ตั้งไว้',
     affects: 'แผนนี้ต้องตั้งอัตรา Matched และรอบคำนวณในขั้นนี้ก่อน ไม่งั้นไม่มีรอบไหนถูกประมวลผลเลย',
   },
   matrix: {
@@ -3107,7 +3107,7 @@ const planExplainers: Record<CommissionPlanType, { title: string; how: string; a
   },
   stairstep_breakaway: {
     title: 'อันดับ (Stairstep) — เลื่อนขั้นตามยอดสะสม',
-    how: 'ตัวแทนเลื่อนอันดับเมื่อยอดถึงเกณฑ์ และได้อัตราของอันดับนั้น อันดับ Breakaway จะตัดออกจากสายบน',
+    how: 'สมาชิกเลื่อนอันดับเมื่อยอดถึงเกณฑ์ และได้อัตราของอันดับนั้น อันดับ Breakaway จะตัดออกจากสายบน',
     affects: 'แผนนี้ต้องตั้งบันไดอันดับในขั้นนี้ — ถ้าไม่มีอันดับเลย จะไม่มีใครเลื่อนขั้นได้',
   },
   generation: {
@@ -4119,7 +4119,7 @@ watch(companyPlanType, (pt) => {
       icon="money"
       title="ตั้งค่าค่าแนะนำ"
       :subtitle="`กดทีละขั้น 1 → 4 · ตอนนี้อยู่ขั้นที่ ${activeStep} จาก 4`"
-      description="Unilevel/Binary/Matrix/Stairstep-Breakaway/Generation/Affiliate (ADR-011) — ตั้งครบทั้ง 4 ขั้นแล้วระบบถึงจะจ่ายค่าคอมได้"
+      description="Unilevel/Binary/Matrix/Stairstep-Breakaway/Generation/Affiliate (ADR-011) — ตั้งครบทั้ง 4 ขั้นแล้วระบบถึงจะจ่ายค่าแนะนำได้"
       accent-color="brand"
       storage-key="commission-plans"
     />
@@ -4261,7 +4261,7 @@ watch(companyPlanType, (pt) => {
           <!-- ═══════════ ขั้นที่ 1 · เลือกบริษัท ═══════════ -->
           <section v-if="activeStep === 1" class="space-y-4" data-test="step-panel-1">
             <div>
-              <p class="text-[17px] font-extrabold text-slate-900">ตั้งค่าคอมมิชชั่นของบริษัทไหน</p>
+              <p class="text-[17px] font-extrabold text-slate-900">ตั้งค่าแนะนำของบริษัทไหน</p>
               <p class="mt-1 text-[13px] text-slate-500">ทุกอย่างในขั้นที่ 2–4 เป็นของบริษัทที่เลือกไว้ตรงนี้เท่านั้น</p>
             </div>
 
@@ -4351,7 +4351,7 @@ watch(companyPlanType, (pt) => {
               data-test="commission-lock-note"
             >
               <Icon name="eye" :size="16" class="shrink-0 mt-0.5 text-slate-400" />
-              <p class="text-[12.5px] text-slate-500">คุณเปิดดูได้ทุกขั้นตอนแต่แก้ไขไม่ได้ — การตั้งค่าคอมมิชชั่นแก้ไขได้เฉพาะ Super Admin · ติดต่อผู้ดูแลระบบหากต้องการเปลี่ยน</p>
+              <p class="text-[12.5px] text-slate-500">คุณเปิดดูได้ทุกขั้นตอนแต่แก้ไขไม่ได้ — การตั้งค่าแนะนำแก้ไขได้เฉพาะ Super Admin · ติดต่อผู้ดูแลระบบหากต้องการเปลี่ยน</p>
             </div>
 
             <div v-if="effectiveCompanyId" class="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -4360,7 +4360,7 @@ watch(companyPlanType, (pt) => {
                 <p class="text-sm font-extrabold text-slate-900">{{ byCompany(products).length }} รายการ</p>
               </div>
               <div class="px-3 py-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                <p class="text-[11px] font-bold text-slate-400">แผนคอมมิชชั่นของบริษัท</p>
+                <p class="text-[11px] font-bold text-slate-400">แผนค่าแนะนำของบริษัท</p>
                 <p class="text-sm font-extrabold text-slate-900">{{ companyPlanType ? planTypeLabels[companyPlanType] : 'ยังไม่ทราบ' }}</p>
               </div>
               <!-- TASK-213 Phase 1's per-product verdict, kept as a breakdown.
@@ -4382,7 +4382,7 @@ watch(companyPlanType, (pt) => {
           <!-- ═══════════ ขั้นที่ 2 · เลือกแผนคอมมิชชั่น ═══════════ -->
           <section v-else-if="activeStep === 2" class="space-y-4" data-test="step-panel-2">
             <div>
-              <p class="text-[17px] font-extrabold text-slate-900">บริษัทนี้ใช้แผนคอมมิชชั่นแบบไหน</p>
+              <p class="text-[17px] font-extrabold text-slate-900">บริษัทนี้ใช้แผนค่าแนะนำแบบไหน</p>
               <p class="mt-1 text-[13px] text-slate-500">เลือกได้แผนเดียว — แผนที่เลือกจะเป็นตัวกำหนดว่าขั้นที่ 3 และ 4 มีอะไรให้ตั้งบ้าง</p>
             </div>
 
@@ -4390,7 +4390,7 @@ watch(companyPlanType, (pt) => {
               v-if="activeCompany.requiresCompanyPick"
               icon="building"
               title="กรุณาเลือกบริษัทก่อน"
-              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนคอมมิชชั่น"
+              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งค่าแผนค่าแนะนำ"
             />
             <template v-else>
               <!-- px-9 (36px side padding), owner 2026-09-12. The six labels
@@ -4474,7 +4474,7 @@ watch(companyPlanType, (pt) => {
               <div class="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
                 <Icon name="alert" :size="15" class="shrink-0 mt-0.5 text-amber-700" />
                 <span class="text-[12.5px] font-bold text-amber-800">
-                  การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+                  การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
                 </span>
               </div>
 
@@ -4493,7 +4493,7 @@ watch(companyPlanType, (pt) => {
                 and the reason a company picks one over the other.
               -->
               <div class="rounded-2xl border border-slate-200 bg-white px-4 py-4" data-test="basis-card">
-                <p class="text-[15px] font-extrabold text-slate-900">ค่าคอมคิดจากอะไร</p>
+                <p class="text-[15px] font-extrabold text-slate-900">ค่าแนะนำคิดจากอะไร</p>
                 <p class="mt-1 text-[12.5px] text-slate-500">
                   เลือกได้อย่างเดียวทั้งบริษัท — ส่วน % และจำนวนคงที่ยังตั้งได้รายสินค้าเหมือนเดิมในขั้นที่ 3
                 </p>
@@ -4511,7 +4511,7 @@ watch(companyPlanType, (pt) => {
                   <Icon name="alert" :size="16" class="shrink-0 mt-0.5 text-rose-600" />
                   <div class="min-w-0">
                     <p class="text-[13px] font-extrabold text-rose-700">อ่านค่าฐานการคำนวณไม่สำเร็จ</p>
-                    <p class="mt-0.5 text-[12.5px] text-rose-700">ระบบยังไม่ทราบว่าบริษัทนี้คิดค่าคอมจากราคาขายหรือ PV จึงยังไม่แสดงค่าที่เลือกไว้ — โหลดหน้านี้ใหม่อีกครั้ง หากยังไม่หายให้แจ้งผู้ดูแลระบบ</p>
+                    <p class="mt-0.5 text-[12.5px] text-rose-700">ระบบยังไม่ทราบว่าบริษัทนี้คิดค่าแนะนำจากราคาขายหรือ PV จึงยังไม่แสดงค่าที่เลือกไว้ — โหลดหน้านี้ใหม่อีกครั้ง หากยังไม่หายให้แจ้งผู้ดูแลระบบ</p>
                   </div>
                 </div>
 
@@ -4538,8 +4538,8 @@ watch(companyPlanType, (pt) => {
                       <span v-if="b === 'price'" class="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-600">ค่าเริ่มต้น</span>
                     </span>
                     <span class="mt-1.5 block text-[12.5px] text-slate-500">
-                      <template v-if="b === 'price'">% คิดจากยอดที่ลูกค้าจ่ายจริง — ลดราคาเมื่อไร ค่าคอมลดตาม</template>
-                      <template v-else>% คิดจาก PV ที่กำหนดไว้ให้สินค้าแต่ละตัว — ลดราคาแล้วค่าคอมไม่ลดตาม</template>
+                      <template v-if="b === 'price'">% คิดจากยอดที่ลูกค้าจ่ายจริง — ลดราคาเมื่อไร ค่าแนะนำลดตาม</template>
+                      <template v-else>% คิดจาก PV ที่กำหนดไว้ให้สินค้าแต่ละตัว — ลดราคาแล้วค่าแนะนำไม่ลดตาม</template>
                     </span>
                   </button>
                 </div>
@@ -4549,7 +4549,7 @@ watch(companyPlanType, (pt) => {
                   เปลี่ยนได้เฉพาะผู้ดูแลระบบ — ติดต่อผู้ดูแลระบบหากต้องการแก้ไข
                 </p>
                 <p class="mt-2 text-[12.5px] text-slate-400">
-                  การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+                  การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
                 </p>
               </div>
 
@@ -4571,7 +4571,7 @@ watch(companyPlanType, (pt) => {
                   <div>
                     <p class="text-[15px] font-extrabold text-slate-900">PV ของแต่ละสินค้า</p>
                     <p class="mt-1 text-[12.5px] text-slate-500">
-                      PV คือ "มูลค่าที่ใช้คิดค่าคอม" ของสินค้า ตั้งเป็นบาทเหมือนราคา เช่น ราคา 8,900 แต่ให้ PV 1,000
+                      PV คือ "มูลค่าที่ใช้คิดค่าแนะนำ" ของสินค้า ตั้งเป็นบาทเหมือนราคา เช่น ราคา 8,900 แต่ให้ PV 1,000
                     </p>
                   </div>
                   <span
@@ -4718,7 +4718,7 @@ watch(companyPlanType, (pt) => {
                       </p>
                     </div>
                     <span class="text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap" :class="c.commission_ledger_id ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'">
-                      {{ c.commission_ledger_id ? 'จ่ายแล้ว' : 'ไม่มีคอมมิชชั่น' }}
+                      {{ c.commission_ledger_id ? 'จ่ายแล้ว' : 'ไม่มีค่าแนะนำ' }}
                     </span>
                   </div>
                 </TransitionGroup>
@@ -4768,7 +4768,7 @@ watch(companyPlanType, (pt) => {
                 </div>
 
                 <div class="flex justify-between items-center mt-4 mb-2 px-1">
-                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Level</h3>
+                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราค่าแนะนำตาม Level</h3>
                   <button v-if="canEditCommissionConfig" class="btn-primary" data-test="add-level-rate" @click="showLevelRateForm = !showLevelRateForm">
                     + เพิ่ม Level
                   </button>
@@ -4851,7 +4851,7 @@ watch(companyPlanType, (pt) => {
                 </form>
 
                 <div class="flex justify-between items-center mt-4 mb-2 px-1">
-                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราคอมมิชชั่นตาม Generation</h3>
+                  <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider">อัตราค่าแนะนำตาม Generation</h3>
                   <button v-if="canEditCommissionConfig" class="btn-primary" data-test="add-generation-rule" @click="showGenerationRuleForm = !showGenerationRuleForm">
                     + เพิ่ม Generation
                   </button>
@@ -4894,7 +4894,7 @@ watch(companyPlanType, (pt) => {
           <!-- ═══════════ ขั้นที่ 3 · ตั้งอัตราตัวแทนผู้ขาย ═══════════ -->
           <section v-else-if="activeStep === 3" class="space-y-4" data-test="step-panel-3">
             <div>
-              <p class="text-[17px] font-extrabold text-slate-900">ตัวแทนผู้ขายได้กี่เปอร์เซ็นต์</p>
+              <p class="text-[17px] font-extrabold text-slate-900">สมาชิกผู้ขายได้กี่เปอร์เซ็นต์</p>
               <p class="mt-1 text-[13px] text-slate-500">ขั้นเดียวในหน้านี้ที่ขาดไม่ได้ — ถ้าไม่มีอัตราที่ใช้ได้ ดีลที่ปิดได้จะไม่มีใครได้เงิน</p>
               <!--
                 2026-09-12 — "5%" means two different amounts of money
@@ -4914,7 +4914,7 @@ watch(companyPlanType, (pt) => {
               v-if="activeCompany.requiresCompanyPick"
               icon="building"
               title="กรุณาเลือกบริษัทก่อน"
-              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งอัตราค่าคอม"
+              message="กลับไปที่ขั้นที่ 1 แล้วเลือกบริษัท เพื่อดูและตั้งอัตราค่าแนะนำ"
             />
             <template v-else>
               <!--
@@ -4944,10 +4944,10 @@ watch(companyPlanType, (pt) => {
                    A count elsewhere tells an admin something is wrong; only
                    this list can tell them WHICH ROW to remove. -->
               <div v-if="conflictingRuleIds.size" class="p-4 rounded-xl bg-rose-50 border border-rose-200" data-test="agent-rate-conflicts">
-                <p class="text-sm font-bold text-rose-800">พบอัตราตัวแทนซ้อนทับกัน {{ conflictingRuleIds.size }} รายการ</p>
+                <p class="text-sm font-bold text-rose-800">พบอัตราสมาชิกซ้อนทับกัน {{ conflictingRuleIds.size }} รายการ</p>
                 <p class="mt-1 text-xs text-rose-700 leading-relaxed">
                   แถวที่ติดป้าย <b>ซ้อนทับ</b> ด้านล่างมีผลพร้อมกันในขอบเขตเดียวกัน — ระบบเรียงตามวันที่เริ่มมีผลแล้วหยิบอันแรก
-                  <b>เมื่อวันเริ่มเท่ากันจึงหยิบอันไหนก็ได้ ทำนายไม่ได้</b> · ค่าคอมที่ลงบัญชีไปแล้วแก้ย้อนหลังไม่ได้ (BR-4)
+                  <b>เมื่อวันเริ่มเท่ากันจึงหยิบอันไหนก็ได้ ทำนายไม่ได้</b> · ค่าแนะนำที่ลงบัญชีไปแล้วแก้ย้อนหลังไม่ได้ (BR-4)
                   จึงควรลบให้เหลือรายการเดียวก่อนจะมีดีลปิดเพิ่ม
                 </p>
                 <p class="mt-1 text-xs text-rose-600">
@@ -5004,7 +5004,7 @@ watch(companyPlanType, (pt) => {
                     :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : ruleDateStatus(r) ? 'border-slate-200 bg-slate-50/70' : 'border-slate-200'"
                     :data-test="`company-default-rule-${r.id}`"
                   >
-                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">สมาชิกผู้ขาย</span>
                     <!-- Marked, not hidden. A row outside its dates is not
                          paying anybody today and still blocks a new rate from
                          being created over it — so it has to be visible and
@@ -5114,7 +5114,7 @@ watch(companyPlanType, (pt) => {
                     :class="conflictingRuleIds.has(r.id) ? 'border-rose-300 bg-rose-50/40' : ruleDateStatus(r) ? 'border-slate-200 bg-slate-50/70' : 'border-slate-200'"
                     :data-test="`category-rule-${r.id}`"
                   >
-                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">ตัวแทนผู้ขาย</span>
+                    <span class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-brand-50 text-brand-700">สมาชิกผู้ขาย</span>
                     <span
                       v-if="ruleDateStatus(r)"
                       class="text-[11px] font-bold rounded-full px-2.5 py-1 bg-slate-200 text-slate-600"
@@ -5240,7 +5240,7 @@ watch(companyPlanType, (pt) => {
                   <template #row-detail="{ row }">
                     <p class="text-[12px] font-extrabold text-slate-500 mb-1.5">สถานะของสินค้านี้</p>
                     <p class="text-[12.5px] text-slate-500" :data-test="`product-plan-${row.product_id}`">
-                      แผนค่าคอม: {{ rowPlanLabel(row) }}
+                      แผนค่าแนะนำ: {{ rowPlanLabel(row) }}
                     </p>
 
                     <p
@@ -5304,7 +5304,7 @@ watch(companyPlanType, (pt) => {
             <div>
               <p class="text-[17px] font-extrabold text-slate-900">ส่วนเพิ่มเติม</p>
               <p class="mt-1 text-[13px] text-slate-500">
-                ข้ามได้ทั้งหมด — ระบบจ่ายค่าคอมได้แล้วตั้งแต่จบขั้นที่ 3
+                ข้ามได้ทั้งหมด — ระบบจ่ายค่าแนะนำได้แล้วตั้งแต่จบขั้นที่ 3
               </p>
             </div>
 
@@ -5333,8 +5333,8 @@ watch(companyPlanType, (pt) => {
                 <div class="min-w-0">
                   <p class="text-[14px] font-extrabold text-sky-900">ขั้นนี้ไม่บังคับ — ข้ามไปได้เลยถ้ายังไม่ต้องใช้</p>
                   <p class="mt-1 text-[12.5px] text-sky-900/80">
-                    จบขั้นที่ 3 แล้วระบบจ่ายค่าคอมให้ “ตัวแทนที่ปิดการขาย” ได้ครบถ้วน · ขั้นที่ 4 คือการจ่ายให้ <b>คนอื่นนอกจากคนปิดการขาย</b>
-                    และเงื่อนไขการเบิก — ตั้งเมื่อไหร่ก็ได้ ไม่มีอะไรในนี้ที่ทำให้ค่าคอมหยุดจ่าย
+                    จบขั้นที่ 3 แล้วระบบจ่ายค่าแนะนำให้ “สมาชิกที่ปิดการขาย” ได้ครบถ้วน · ขั้นที่ 4 คือการจ่ายให้ <b>คนอื่นนอกจากคนปิดการขาย</b>
+                    และเงื่อนไขการเบิก — ตั้งเมื่อไหร่ก็ได้ ไม่มีอะไรในนี้ที่ทำให้ค่าแนะนำหยุดจ่าย
                   </p>
                   <ul class="mt-2.5 space-y-1.5 text-[12.5px] text-sky-900/90">
                     <!--
@@ -5350,7 +5350,7 @@ watch(companyPlanType, (pt) => {
                     -->
                     <li class="flex gap-2">
                       <span class="font-extrabold shrink-0">4.1</span>
-                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าคอมของคนปิดการขาย · ตั้งอันนี้ก่อน เพราะมันเปลี่ยนความหมายของ % ที่จะตั้งใน 4.3–4.5</span>
+                      <span><b>เงินของหัวหน้าทีมมาจากไหน</b> — บริษัทจ่ายเพิ่ม หรือหักจากค่าแนะนำของคนปิดการขาย · ตั้งอันนี้ก่อน เพราะมันเปลี่ยนความหมายของ % ที่จะตั้งใน 4.3–4.5</span>
                     </li>
                     <!--
                       2026-09-15 — 4.2 JOINED THE LIST between "มาจากไหน" and
@@ -5366,16 +5366,16 @@ watch(companyPlanType, (pt) => {
                       <span>
                         <b>อัตราหัวหน้าทีม</b> — หัวหน้าได้เท่าไหร่เมื่อลูกทีมปิดการขาย · แยกเป็น 3 ชั้น
                         (ค่าเริ่มต้นทั้งบริษัท / ตามหมวดหมู่ / ตามสินค้า) ชั้นที่เจาะจงกว่าทับชั้นที่กว้างกว่า ·
-                        ไม่ตั้งเลย = หัวหน้าไม่ได้อะไร (ตัวแทนยังได้ปกติ)
+                        ไม่ตั้งเลย = หัวหน้าไม่ได้อะไร (สมาชิกยังได้ปกติ)
                       </span>
                     </li>
                     <li class="flex gap-2">
                       <span class="font-extrabold shrink-0">4.6</span>
-                      <span><b>แบ่งค่าคอมผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
+                      <span><b>แบ่งค่าแนะนำผู้แนะนำ/ผู้ปิดการขาย</b> — ใช้เมื่อคนหาลูกค้ากับคนปิดดีลเป็นคนละคน</span>
                     </li>
                     <li class="flex gap-2">
                       <span class="font-extrabold shrink-0">4.7</span>
-                      <span><b>ยอดขั้นต่ำในการเบิก</b> — ตัวแทนต้องสะสมถึงเท่าไหร่จึงกดขอเบิกได้ · เว้นว่าง = ไม่มีขั้นต่ำ</span>
+                      <span><b>ยอดขั้นต่ำในการเบิก</b> — สมาชิกต้องสะสมถึงเท่าไหร่จึงกดขอเบิกได้ · เว้นว่าง = ไม่มีขั้นต่ำ</span>
                     </li>
                   </ul>
                   <p class="mt-2.5 text-[12px] font-bold text-sky-900/70">
@@ -5441,7 +5441,7 @@ watch(companyPlanType, (pt) => {
                   </span>
                 </div>
                 <p class="mt-1 text-[12.5px] text-slate-600">
-                  ตัดสินว่าค่าคอมของหัวหน้าทีมเป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าคอมของคนปิดการขาย</b> ·
+                  ตัดสินว่าค่าแนะนำของหัวหน้าทีมเป็น <b>ต้นทุนใหม่ของบริษัท</b> หรือ <b>หักออกจากค่าแนะนำของคนปิดการขาย</b> ·
                   อันนี้คือ <b>ค่าเริ่มต้น</b> — อัตราในข้อ 4.3–4.5 ที่ไม่ได้เลือกโหมดของตัวเองจะใช้อันนี้ แต่แต่ละอัตราตั้งของตัวเองทับได้
                 </p>
 
@@ -5471,7 +5471,7 @@ watch(companyPlanType, (pt) => {
                       </p>
                       <p class="text-[12px] text-slate-500 mt-0.5">
                         {{ overrideModeExample.baseLabel }} {{ formatSatang(overrideModeExample.baseSatang) }} ·
-                        ตัวแทน {{ overrideModeExample.sellerRateLabel }} · หัวหน้าทีม {{ overrideModeExample.leaderRateLabel }} · หัวหน้า 1 คน
+                        สมาชิก {{ overrideModeExample.sellerRateLabel }} · หัวหน้าทีม {{ overrideModeExample.leaderRateLabel }} · หัวหน้า 1 คน
                       </p>
                       <!-- Labelled, not hidden. A company with no rates yet is
                            exactly the one that has to understand the modes
@@ -5479,7 +5479,7 @@ watch(companyPlanType, (pt) => {
                            round illustration and says so, rather than
                            disappearing and leaving the choice unexplained. -->
                       <p v-if="overrideModeExample.hypothetical" class="text-[12px] font-bold text-amber-700 mt-1" data-test="override-example-hypothetical">
-                        ⚠ ยังไม่มีสินค้าที่มีทั้งอัตราตัวแทนและอัตราหัวหน้าทีม — ตัวเลขข้างล่างเป็น <b>ตัวอย่างสมมติ</b> เพื่ออธิบายเท่านั้น
+                        ⚠ ยังไม่มีสินค้าที่มีทั้งอัตราสมาชิกและอัตราหัวหน้าทีม — ตัวเลขข้างล่างเป็น <b>ตัวอย่างสมมติ</b> เพื่ออธิบายเท่านั้น
                       </p>
                     </div>
                     <table class="w-full text-[12.5px]">
@@ -5526,16 +5526,16 @@ watch(companyPlanType, (pt) => {
                       a person they forgot about.
                     -->
                     <p v-if="deepestManagerChain === 0">
-                      ตอนนี้บริษัทนี้ <b>ยังไม่มีสายงาน</b> (ไม่มีใครมีหัวหน้า) — ยังไม่มีใครได้ค่าคอมหัวหน้าทีม ไม่ว่าจะเลือกโหมดไหน
+                      ตอนนี้บริษัทนี้ <b>ยังไม่มีสายงาน</b> (ไม่มีใครมีหัวหน้า) — ยังไม่มีใครได้ค่าแนะนำหัวหน้าทีม ไม่ว่าจะเลือกโหมดไหน
                     </p>
                     <template v-else>
                       <p>
                         สายงานลึกที่สุดตอนนี้ <b>{{ deepestManagerChain }} ชั้น</b><template v-if="houseAccount"> (รวมบัญชีบริษัท 1 ชั้น)</template> — ดีลหนึ่งอาจมีหัวหน้าได้ถึง {{ deepestManagerChain }} คน
-                        และแบบ “หักจากตัวแทน” จะหัก <b>{{ deepestManagerChain }} เท่า</b>ของตัวเลขในตาราง
+                        และแบบ “หักจากสมาชิก” จะหัก <b>{{ deepestManagerChain }} เท่า</b>ของตัวเลขในตาราง
                       </p>
                       <p v-if="maxOverridePerLevelSatang !== null" class="mt-1">
                         ดังนั้นถ้าเลือกแบบหัก อัตราหัวหน้าทีมจะตั้งได้ไม่เกิน <b>{{ formatSatang(maxOverridePerLevelSatang) }} ต่อชั้น</b>
-                        (คิดจากสินค้าที่ตัวแทนได้ค่าคอมน้อยที่สุด) — เกินกว่านี้ระบบจะไม่ให้บันทึก
+                        (คิดจากสินค้าที่สมาชิกได้ค่าแนะนำน้อยที่สุด) — เกินกว่านี้ระบบจะไม่ให้บันทึก
                       </p>
                     </template>
                   </div>
@@ -5604,7 +5604,7 @@ watch(companyPlanType, (pt) => {
               >
                 <div class="flex flex-wrap items-center gap-2">
                   <p class="text-[15px] font-extrabold text-slate-900">
-                    <span class="text-slate-400 mr-1.5">4.2</span>ใครเป็นผู้รับค่าคอมหัวหน้าทีม
+                    <span class="text-slate-400 mr-1.5">4.2</span>ใครเป็นผู้รับค่าแนะนำหัวหน้าทีม
                   </p>
                   <span
                     class="text-[11px] font-bold rounded-full px-2.5 py-1"
@@ -5619,12 +5619,12 @@ watch(companyPlanType, (pt) => {
                      would change, in money terms rather than in settings. -->
                 <template v-if="!houseAccount">
                   <p class="mt-1 text-[12.5px] text-slate-500">
-                    ตอนนี้ค่าคอมหัวหน้าทีมจ่ายให้เฉพาะ <b>คนจริงที่อยู่เหนือคนปิดการขาย</b> ตามสายงาน —
-                    ตัวแทนที่ไม่มีหัวหน้า ขายแล้วไม่มีใครได้ส่วนนี้ และบริษัทไม่ได้เก็บไว้ด้วย
+                    ตอนนี้ค่าแนะนำหัวหน้าทีมจ่ายให้เฉพาะ <b>คนจริงที่อยู่เหนือคนปิดการขาย</b> ตามสายงาน —
+                    สมาชิกที่ไม่มีหัวหน้า ขายแล้วไม่มีใครได้ส่วนนี้ และบริษัทไม่ได้เก็บไว้ด้วย
                   </p>
                   <div v-if="canEditCommissionConfig && !showHouseAccountConfirm" class="mt-3">
                     <button type="button" class="btn-primary" data-test="house-account-enable" @click="openHouseAccountConfirm">
-                      ให้บริษัทรับค่าคอมหัวหน้าทีมด้วย
+                      ให้บริษัทรับค่าแนะนำหัวหน้าทีมด้วย
                     </button>
                   </div>
 
@@ -5651,7 +5651,7 @@ watch(companyPlanType, (pt) => {
                       placeholder="ชื่อบริษัท"
                     />
                     <ul class="mt-2.5 space-y-1 text-[12.5px] text-slate-600">
-                      <li>· ตัวแทนที่ยังไม่มีหัวหน้าทุกคนจะถูกผูกเข้าสายงานใต้บัญชีนี้ทันที</li>
+                      <li>· สมาชิกที่ยังไม่มีหัวหน้าทุกคนจะถูกผูกเข้าสายงานใต้บัญชีนี้ทันที</li>
                       <li>· บริษัทอยู่<b>ยอดสุด</b> จึงได้ส่วนแบ่งจาก<b>ทุกดีล</b> ไม่ใช่เฉพาะดีลที่ไม่มีหัวหน้า</li>
                       <li>· สายงานลึกขึ้น 1 ชั้น เพดานอัตราหัวหน้าทีมที่ตั้งได้จะแคบลง</li>
                       <li>· มีผลกับดีลที่เกิดหลังจากนี้เท่านั้น รายการที่ลงบัญชีไปแล้วไม่เปลี่ยน</li>
@@ -5740,7 +5740,7 @@ watch(companyPlanType, (pt) => {
                   </div>
                   <div v-if="renamingHouseAccount" class="mt-2.5 rounded-xl border border-brand-200 bg-white px-3.5 py-3" data-test="house-account-rename">
                     <label class="block text-[12px] font-bold text-slate-600 mb-1" for="house-account-rename-input">
-                      ชื่อที่จะแสดงบนรายการค่าคอมของบริษัท
+                      ชื่อที่จะแสดงบนรายการค่าแนะนำของบริษัท
                     </label>
                     <input
                       id="house-account-rename-input"
@@ -5751,7 +5751,7 @@ watch(companyPlanType, (pt) => {
                       data-test="house-account-rename-input"
                     />
                     <p class="mt-1 text-[11.5px] text-slate-500">
-                      เปลี่ยนเฉพาะชื่อที่แสดง · ไม่กระทบว่าใครขึ้นตรงกับบัญชีนี้ หรือค่าคอมที่ได้รับไปแล้ว
+                      เปลี่ยนเฉพาะชื่อที่แสดง · ไม่กระทบว่าใครขึ้นตรงกับบัญชีนี้ หรือค่าแนะนำที่ได้รับไปแล้ว
                     </p>
 
                     <!--
@@ -5812,7 +5812,7 @@ watch(companyPlanType, (pt) => {
                   <!-- Not offered as an undo: the rows it was already paid stay
                        where they are, because a ledger row is immutable. -->
                   <p class="mt-2 text-[12px] text-slate-500">
-                    ปิดใช้งานแล้วตัวแทนที่ขึ้นตรงกับบัญชีนี้จะกลับไปไม่มีหัวหน้า · ค่าคอมที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม
+                    ปิดใช้งานแล้วสมาชิกที่ขึ้นตรงกับบัญชีนี้จะกลับไปไม่มีหัวหน้า · ค่าแนะนำที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม
                   </p>
                 </template>
 
@@ -5850,7 +5850,7 @@ watch(companyPlanType, (pt) => {
                 </div>
                 <p class="mt-1 text-[12.5px] text-slate-600">
                   คนเหล่านี้มีลูกทีมอยู่จริง แต่ยังไม่ผ่านเกณฑ์ใบรับรอง — ระบบจะ<b>ข้ามไปเงียบ ๆ</b>
-                  ตอนคำนวณค่าคอม ไม่มีข้อความแจ้งเตือน และไม่มีรายการค้างไว้ให้ตามทีหลัง
+                  ตอนคำนวณค่าแนะนำ ไม่มีข้อความแจ้งเตือน และไม่มีรายการค้างไว้ให้ตามทีหลัง
                   ตั้งอัตราในข้อ 4.3–4.5 ไว้เท่าไรก็ไม่มีผลจนกว่าจะผ่านเกณฑ์
                 </p>
                 <ul class="mt-2.5 flex flex-wrap gap-2">
@@ -5915,7 +5915,7 @@ watch(companyPlanType, (pt) => {
                 </p>
 
                 <div v-if="leaderRateGaps.length" class="mb-3 px-3 py-2 rounded-lg bg-amber-100/70 text-xs font-bold text-amber-800">
-                  สินค้า {{ leaderRateGaps.length }} รายการยังไม่มีอัตราหัวหน้าทีมที่ใช้ได้ — ตัวแทนได้ตามปกติ แต่หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนั้น
+                  สินค้า {{ leaderRateGaps.length }} รายการยังไม่มีอัตราหัวหน้าทีมที่ใช้ได้ — สมาชิกได้ตามปกติ แต่หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนั้น
                 </div>
 
                 <div class="space-y-3">
@@ -6086,7 +6086,7 @@ watch(companyPlanType, (pt) => {
                   <span class="text-slate-400 mr-1.5">4.7</span>ยอดขั้นต่ำในการเบิก
                 </p>
                 <p class="mt-1 text-[12.5px] text-slate-500">
-                  ตัวแทนต้องมียอดค่าคอมสะสมถึงเท่าไหร่จึงจะกดขอเบิกได้ · <b>เว้นว่าง = ไม่มีขั้นต่ำ</b> (เบิกเท่าไรก็ได้)
+                  สมาชิกต้องมียอดค่าแนะนำสะสมถึงเท่าไหร่จึงจะกดขอเบิกได้ · <b>เว้นว่าง = ไม่มีขั้นต่ำ</b> (เบิกเท่าไรก็ได้)
                 </p>
 
                 <p v-if="minWithdrawalUnknown" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="withdrawal-min-unknown">
@@ -6118,7 +6118,7 @@ watch(companyPlanType, (pt) => {
                 <p class="mt-2 text-[12px] text-slate-400">
                   ดูคำขอที่รออนุมัติได้ที่
                   <RouterLink :to="{ name: 'commission-withdrawals' }" class="font-bold text-brand-600 hover:underline" data-test="link-withdrawal-queue">
-                    คำขอเบิกค่าคอม →
+                    คำขอเบิกค่าแนะนำ →
                   </RouterLink>
                 </p>
               </div>
@@ -6126,7 +6126,7 @@ watch(companyPlanType, (pt) => {
               <!-- Carried over from the setup hub the overview tab used to
                    host, so the entry point does not disappear with the tab. -->
               <p class="text-xs text-slate-400">
-                อยากให้ตัวแทนได้แต้ม/เหรียญ/ภารกิจเพิ่มด้วย?
+                อยากให้สมาชิกได้แต้ม/เหรียญ/ภารกิจเพิ่มด้วย?
                 <RouterLink :to="{ name: 'gamification-config' }" class="font-bold text-brand-600 hover:underline" data-test="link-gamification">
                   ตั้งค่า Gamification →
                 </RouterLink>
@@ -6189,7 +6189,7 @@ watch(companyPlanType, (pt) => {
           </button>
         </div>
         <p v-else class="ml-auto text-[12.5px] font-bold" :class="blockingStep ? 'text-amber-700' : 'text-emerald-700'">
-          {{ blockingStep ? `ครบทุกขั้นแล้ว แต่ยังติดอยู่ที่ขั้นที่ ${blockingStep}` : 'ครบทุกขั้นแล้ว — พร้อมจ่ายค่าคอม' }}
+          {{ blockingStep ? `ครบทุกขั้นแล้ว แต่ยังติดอยู่ที่ขั้นที่ ${blockingStep}` : 'ครบทุกขั้นแล้ว — พร้อมจ่ายค่าแนะนำ' }}
         </p>
       </div>
     </div>
@@ -6234,10 +6234,10 @@ watch(companyPlanType, (pt) => {
           <Icon name="alert" :size="20" class="shrink-0 mt-0.5 text-rose-600" />
           <div class="min-w-0">
             <p class="text-[16px] font-extrabold text-slate-900" data-test="start-here-title">
-              บริษัทนี้ยังจ่ายค่าคอมให้ใครไม่ได้
+              บริษัทนี้ยังจ่ายค่าแนะนำให้ใครไม่ได้
             </p>
             <p class="mt-1 text-[13px] text-slate-500">
-              ดีลที่ปิดได้ตอนนี้จะไม่มีใครได้เงิน และค่าคอมที่ไม่ได้ลงบัญชีไว้ ย้อนกลับไปแก้ทีหลังไม่ได้
+              ดีลที่ปิดได้ตอนนี้จะไม่มีใครได้เงิน และค่าแนะนำที่ไม่ได้ลงบัญชีไว้ ย้อนกลับไปแก้ทีหลังไม่ได้
             </p>
           </div>
         </div>
@@ -6266,7 +6266,7 @@ watch(companyPlanType, (pt) => {
       <form data-test="override-form" class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitOverrideRule">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
-            <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมหัวหน้าทีม</p>
+            <p class="text-xs font-bold tracking-wide text-amber-700">{{ editingOverrideId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าแนะนำหัวหน้าทีม</p>
             <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ overrideFormTargetLabel }}</h1>
           </div>
           <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetOverrideForm">
@@ -6315,9 +6315,9 @@ watch(companyPlanType, (pt) => {
             class="text-xs rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-slate-600"
             data-test="override-no-company-default"
           >
-            บริษัทนี้ <b>ยังไม่มีค่าเริ่มต้นทั้งบริษัท</b> — ถ้าบันทึกแบบนี้ หัวหน้าทีมจะได้ค่าคอมเฉพาะขอบเขตที่เลือกไว้เท่านั้น
+            บริษัทนี้ <b>ยังไม่มีค่าเริ่มต้นทั้งบริษัท</b> — ถ้าบันทึกแบบนี้ หัวหน้าทีมจะได้ค่าแนะนำเฉพาะขอบเขตที่เลือกไว้เท่านั้น
             <template v-if="leaderRateGaps.length">
-              ส่วนสินค้าอีก <b>{{ leaderRateGaps.length }} รายการ</b> หัวหน้าจะไม่ได้อะไร (ตัวแทนที่ปิดการขายยังได้ตามปกติ)
+              ส่วนสินค้าอีก <b>{{ leaderRateGaps.length }} รายการ</b> หัวหน้าจะไม่ได้อะไร (สมาชิกที่ปิดการขายยังได้ตามปกติ)
             </template>
             · ถ้าต้องการให้ครอบคลุมทุกสินค้า ให้เลือกขอบเขตเป็น <b>“ค่าเริ่มต้นทั้งบริษัท”</b> ก่อน แล้วค่อยเพิ่มอัตราเฉพาะทีหลัง
           </div>
@@ -6441,7 +6441,7 @@ watch(companyPlanType, (pt) => {
       <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRule">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
-            <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าคอมตัวแทนผู้ขาย</p>
+            <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าแนะนำสมาชิกผู้ขาย</p>
             <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ ruleFormTargetLabel }}</h1>
           </div>
           <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="resetRuleForm">
@@ -6519,7 +6519,7 @@ watch(companyPlanType, (pt) => {
                    product format), tell the admin which unit their number
                    means instead of leaving them to guess. -->
               <p v-if="!showRuleFormRateTypeSelector" class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ effectiveRuleFormRateType === 'percentage' ? percentageOptionLabel : rateTypeLabels.fixed_satang }}</p>
-              <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+              <p v-if="ruleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานค่าแนะนำที่กำหนด</p>
             </div>
             <RateImpactPreview
               kind="agent"
@@ -6557,7 +6557,7 @@ watch(companyPlanType, (pt) => {
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
         <div class="flex items-center gap-2 mb-2">
           <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
-          <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+          <p class="text-sm font-bold text-slate-900">เกินเพดานค่าแนะนำที่กำหนด</p>
         </div>
         <p class="text-xs text-slate-500 mb-4">{{ ruleCapGuard.violationMessage.value }}</p>
         <div class="flex justify-end">
@@ -6576,7 +6576,7 @@ watch(companyPlanType, (pt) => {
       <div class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
-            <p class="text-xs font-bold tracking-wide text-brand-700">คัดลอกอัตราค่าคอม</p>
+            <p class="text-xs font-bold tracking-wide text-brand-700">คัดลอกอัตราค่าแนะนำ</p>
             <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">
               คัดลอกมาที่ {{ activeCompany.companyName ?? 'บริษัทนี้' }}
             </h1>
@@ -6590,7 +6590,7 @@ watch(companyPlanType, (pt) => {
           <!-- The owner's question, answered where it gets asked. -->
           <p class="text-xs text-slate-500 leading-relaxed">
             ระบบไม่ตั้งอัตราเริ่มต้นให้เองเด็ดขาด — อัตราที่ระบบเดาให้กับอัตราที่คนตัดสินใจเองหน้าตาเหมือนกันทุกประการ
-            และเมื่อลงบัญชีค่าคอมไปแล้วแก้ย้อนหลังไม่ได้ (BR-4) · การคัดลอกไม่ใช่การเดา เพราะมี "บริษัทต้นทาง" ที่คนเลือกเอง
+            และเมื่อลงบัญชีค่าแนะนำไปแล้วแก้ย้อนหลังไม่ได้ (BR-4) · การคัดลอกไม่ใช่การเดา เพราะมี "บริษัทต้นทาง" ที่คนเลือกเอง
           </p>
 
           <div>
@@ -6617,7 +6617,7 @@ watch(companyPlanType, (pt) => {
           <div v-else-if="copyRatesPreview" class="space-y-3" data-test="copy-rates-summary">
             <p class="text-[13px] font-extrabold text-slate-900">
               จะสร้างใหม่ {{ copyRatesPreview.total_to_copy }} รายการ —
-              ตัวแทนผู้ขาย {{ copyRatesPreview.agent_rates.copied.length }} · หัวหน้าทีม {{ copyRatesPreview.leader_rates.copied.length }}
+              สมาชิกผู้ขาย {{ copyRatesPreview.agent_rates.copied.length }} · หัวหน้าทีม {{ copyRatesPreview.leader_rates.copied.length }}
             </p>
             <!-- Every copy starts today and has no end date, and that is not
                  guessable from the list — an admin reading "3.00%" here would
@@ -6625,7 +6625,7 @@ watch(companyPlanType, (pt) => {
             <p class="text-xs text-slate-400">ทุกรายการจะเริ่มมีผลวันนี้ และไม่มีวันสิ้นสุด · อัตราที่หมดอายุแล้วในบริษัทต้นทางจะไม่ถูกคัดลอก</p>
 
             <div v-if="copyRatesPreview.agent_rates.copied.length">
-              <p class="text-xs font-bold text-slate-500 mb-1">อัตราตัวแทนผู้ขาย</p>
+              <p class="text-xs font-bold text-slate-500 mb-1">อัตราสมาชิกผู้ขาย</p>
               <div class="space-y-1">
                 <div
                   v-for="(e, i) in copyRatesPreview.agent_rates.copied"
@@ -6704,7 +6704,7 @@ watch(companyPlanType, (pt) => {
       <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitLevelRate">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
-            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นรายชั้น (Matrix)</p>
+            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราค่าแนะนำรายชั้น (Matrix)</p>
             <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ levelRateForm.level === '' ? 'ยังไม่ได้ระบุชั้น' : `ชั้นที่ ${levelRateForm.level}` }}</h1>
           </div>
           <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showLevelRateForm = false">
@@ -6801,7 +6801,7 @@ watch(companyPlanType, (pt) => {
       <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitGenerationRule">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
-            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราคอมมิชชั่นราย Generation</p>
+            <p class="text-xs font-bold tracking-wide text-slate-400">อัตราค่าแนะนำราย Generation</p>
             <h1 class="mt-0.5 text-xl font-bold text-slate-900 break-words leading-snug">{{ generationRuleForm.generation_number === '' ? 'ยังไม่ได้ระบุ Generation' : `Generation ที่ ${generationRuleForm.generation_number}` }}</h1>
           </div>
           <button type="button" class="shrink-0 text-slate-400 hover:text-slate-600" @click="showGenerationRuleForm = false">
@@ -6846,7 +6846,7 @@ watch(companyPlanType, (pt) => {
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
         <div class="flex items-center gap-2 mb-2">
           <Icon name="info" :size="18" class="text-brand-600 shrink-0" />
-          <p class="text-sm font-bold text-slate-900">ลำดับการใช้ค่าคอมมิชชั่น</p>
+          <p class="text-sm font-bold text-slate-900">ลำดับการใช้ค่าแนะนำ</p>
         </div>
         <p class="text-xs text-slate-500 mb-4">{{ RESOLUTION_ORDER_NOTE }}</p>
         <div class="flex justify-end">
@@ -6873,7 +6873,7 @@ watch(companyPlanType, (pt) => {
           </div>
           <div class="p-3 rounded-lg bg-slate-50 border border-slate-200">
             <template v-if="simulateResult?.rule">
-              <p class="text-sm font-bold text-slate-900">คอมมิชชั่นทางตรง: {{ formatSatang(simulateResult.amountSatang) }}</p>
+              <p class="text-sm font-bold text-slate-900">ค่าแนะนำทางตรง: {{ formatSatang(simulateResult.amountSatang) }}</p>
               <p class="text-xs text-slate-400 mt-1">
                 อิงตามกฎ: {{ ruleScopeLabel(simulateResult.rule) }} · {{ formatRate(simulateResult.rule.rate_type, simulateResult.rule.rate_value) }}
               </p>
@@ -6888,9 +6888,9 @@ watch(companyPlanType, (pt) => {
                 <span v-else>(PV ของสินค้า)</span>
               </p>
             </template>
-            <p v-else class="text-xs text-rose-600">ยังไม่มีกฎคอมมิชชั่นที่ใช้ได้กับสินค้านี้</p>
+            <p v-else class="text-xs text-rose-600">ยังไม่มีกฎค่าแนะนำที่ใช้ได้กับสินค้านี้</p>
             <p class="text-xs text-slate-400 mt-2">
-              * ตัวอย่างนี้แสดงเฉพาะคอมมิชชั่นทางตรงจากยอดขาย ไม่รวมโครงสร้าง Override/Matrix/Generation/อันดับ ซึ่งคำนวณจริงที่ฝั่งเซิร์ฟเวอร์เมื่อมีการขายจริงเท่านั้น
+              * ตัวอย่างนี้แสดงเฉพาะค่าแนะนำทางตรงจากยอดขาย ไม่รวมโครงสร้าง Override/Matrix/Generation/อันดับ ซึ่งคำนวณจริงที่ฝั่งเซิร์ฟเวอร์เมื่อมีการขายจริงเท่านั้น
             </p>
           </div>
         </div>

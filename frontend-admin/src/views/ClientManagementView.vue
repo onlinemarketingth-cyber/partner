@@ -428,8 +428,8 @@ watch(() => activeCompany.companyId, () => loadAll())
     <!-- TASK-050 — active per-agent filter chip (drill-down from "ทีมขาย"). -->
     <div v-if="agentFilter" class="mt-4 flex items-center gap-2">
       <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-brand-50 text-brand-700 text-xs font-bold">
-        กรองตามตัวแทน: #{{ agentFilter }}<template v-if="agentFilterName"> · {{ agentFilterName }}</template>
-        <button type="button" class="hover:text-brand-900" title="ล้างตัวกรองตัวแทน" @click="clearAgentFilter">
+        กรองตามสมาชิก: #{{ agentFilter }}<template v-if="agentFilterName"> · {{ agentFilterName }}</template>
+        <button type="button" class="hover:text-brand-900" title="ล้างตัวกรองสมาชิก" @click="clearAgentFilter">
           <Icon name="close" :size="12" />
         </button>
       </span>

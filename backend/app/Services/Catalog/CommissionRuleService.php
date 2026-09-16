@@ -199,7 +199,7 @@ class CommissionRuleService
                 // twin message (UAT-016). This one is older and was always
                 // English; the admin UI renders a 422's field message
                 // verbatim, so it was always going to surface untranslated.
-                'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าคอมครอบคลุมช่วงเวลานี้อยู่แล้ว',
+                'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าแนะนำครอบคลุมช่วงเวลานี้อยู่แล้ว',
             ]);
         }
     }

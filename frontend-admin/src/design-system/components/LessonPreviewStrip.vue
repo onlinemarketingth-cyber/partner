@@ -207,7 +207,7 @@ const videoPosterSrc = computed(() => (inlineSrc.value ? `${inlineSrc.value}#t=0
   <button
     type="button"
     class="group flex-1 min-w-0 flex items-stretch gap-3 h-[120px] rounded-xl border border-slate-200 bg-white text-left overflow-hidden transition hover:border-brand-400 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-1"
-    :aria-label="`ดูตัวอย่างที่ตัวแทนจะเห็นของบทเรียน ${lesson.title} แบบขยาย`"
+    :aria-label="`ดูตัวอย่างที่สมาชิกจะเห็นของบทเรียน ${lesson.title} แบบขยาย`"
     @click="emit('open')"
   >
     <!-- ── Media box — fixed width, never stretched (object-cover) ──── -->
@@ -294,7 +294,7 @@ const videoPosterSrc = computed(() => (inlineSrc.value ? `${inlineSrc.value}#t=0
     <div class="min-w-0 flex-1 flex flex-col justify-center py-2 pr-3">
       <p class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
         <Icon name="eye" :size="13" class="text-slate-400 shrink-0" />
-        <span class="truncate">ตัวอย่างที่ตัวแทนจะเห็น</span>
+        <span class="truncate">ตัวอย่างที่สมาชิกจะเห็น</span>
       </p>
       <p class="mt-0.5 text-[11px] text-slate-400 truncate">{{ contentTypeLabel }} · {{ detailLine }}</p>
       <span
@@ -306,7 +306,7 @@ const videoPosterSrc = computed(() => (inlineSrc.value ? `${inlineSrc.value}#t=0
     </div>
   </button>
     <InfoPopover
-      label="ตัวอย่างที่ตัวแทนจะเห็น"
+      label="ตัวอย่างที่สมาชิกจะเห็น"
       :text="PREVIEW_NOT_RECORDED_EXPLANATION"
       class="mt-1"
     />

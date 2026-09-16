@@ -103,12 +103,12 @@ const STATUS_CHIPS = [
   { value: 'approved', label: 'รอโอน' },
   { value: 'transferred', label: 'โอนแล้ว' },
   { value: 'rejected', label: 'ไม่อนุมัติ' },
-  { value: 'cancelled', label: 'ตัวแทนยกเลิก' },
+  { value: 'cancelled', label: 'สมาชิกยกเลิก' },
 ] as const
 
 const SOURCE_CHIPS = [
   { value: 'company_payout', label: 'บริษัทตั้งจ่าย' },
-  { value: 'agent_request', label: 'ตัวแทนขอเอง' },
+  { value: 'agent_request', label: 'สมาชิกขอเอง' },
 ] as const
 
 const STATUS_CLASSES: Record<string, string> = {
@@ -317,7 +317,7 @@ const kpis = computed(() => [
     <HeroHeader
       icon="invoice"
       title="รายงานการจ่าย"
-      subtitle="อ่านอย่างเดียว — ทุกใบที่เคยตั้งจ่ายหรือตัวแทนขอเบิก พร้อมสถานะและเลขอ้างอิงการโอน"
+      subtitle="อ่านอย่างเดียว — ทุกใบที่เคยตั้งจ่ายหรือสมาชิกขอเบิก พร้อมสถานะและเลขอ้างอิงการโอน"
       description="กรองแล้วส่งออก CSV ได้ตามที่กรอง · ถ้าต้องการอนุมัติหรือบันทึกการโอน ให้ไปที่หน้า จ่ายค่าแนะนำ"
       :kpis="kpis"
       accent-color="brand"
@@ -521,7 +521,7 @@ const kpis = computed(() => [
         v-if="!rows.length"
         icon="invoice"
         :title="anyFilterActive ? 'ไม่มีใบที่ตรงกับตัวกรองนี้' : 'ยังไม่มีการจ่ายค่าแนะนำ'"
-        :message="anyFilterActive ? 'ลองล้างตัวกรองแล้วดูใหม่' : 'รายการจะเข้ามาเมื่อคุณกดตั้งจ่าย หรือเมื่อตัวแทนกดขอเบิกเอง'"
+        :message="anyFilterActive ? 'ลองล้างตัวกรองแล้วดูใหม่' : 'รายการจะเข้ามาเมื่อคุณกดตั้งจ่าย หรือเมื่อสมาชิกกดขอเบิกเอง'"
         class="mt-4"
         data-test="report-empty"
       />
@@ -615,7 +615,7 @@ const kpis = computed(() => [
 
       <p class="mt-3 text-[11.5px] text-slate-400">
         บัญชีรับเงินที่แสดงคือบัญชีที่<b class="text-slate-500">บันทึกไว้ตอนยื่นใบนั้น</b>
-        ไม่ใช่บัญชีปัจจุบันของตัวแทน — และแสดงเลขท้าย 4 ตัวเท่านั้น ทั้งบนหน้าจอและในไฟล์ CSV
+        ไม่ใช่บัญชีปัจจุบันของสมาชิก — และแสดงเลขท้าย 4 ตัวเท่านั้น ทั้งบนหน้าจอและในไฟล์ CSV
       </p>
     </template>
   </main>

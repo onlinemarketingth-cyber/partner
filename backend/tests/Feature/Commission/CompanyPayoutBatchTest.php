@@ -302,14 +302,14 @@ class CompanyPayoutBatchTest extends TestCase
     {
         $agent = User::factory()->agent()->create([
             'company_id' => $company->id,
-            'first_name' => $name !== null ? explode(' ', $name)[0] : 'ตัวแทน',
+            'first_name' => $name !== null ? explode(' ', $name)[0] : 'สมาชิก',
             'last_name' => $name !== null ? (explode(' ', $name)[1] ?? '') : 'ทดสอบ',
             ...($payable ? [
                 'national_id' => '1234567890123',
                 'id_document_type' => \App\Enums\IdDocumentType::ThaiNationalId,
                 'bank_name' => 'กสิกรไทย',
                 'bank_account_number' => '1234567890',
-                'bank_account_holder_name' => 'ตัวแทน ทดสอบ',
+                'bank_account_holder_name' => 'สมาชิก ทดสอบ',
             ] : []),
         ]);
 

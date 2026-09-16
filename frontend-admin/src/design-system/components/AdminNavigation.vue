@@ -167,7 +167,7 @@ const navItems: NavItem[] = [
   {
     name: 'agent-roster',
     icon: 'users',
-    label: { th: 'จัดการตัวแทน', en: 'Agents' },
+    label: { th: 'จัดการสมาชิก', en: 'Agents' },
     // TASK-043 §2 — sub-items in this exact order.
     // TASK-204 (human decision) — the first item used to be ONE route
     // ('agent-management') carrying 5 internal tabs behind its own tab bar.
@@ -180,7 +180,7 @@ const navItems: NavItem[] = [
       // its own pillar now. This menu is for the agent WORK screens, and
       // listing the dashboard here pushed the roster — the thing an admin
       // actually came for — into second place.
-      { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อตัวแทน', en: 'Agent Roster' } },
+      { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อสมาชิก', en: 'Agent Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
       // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
       // ลิงก์ทั้งบริษัท) collapsed into one, because their names could not be

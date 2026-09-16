@@ -399,7 +399,7 @@ async function confirmDeleteItem(): Promise<void> {
       icon="globe"
       title="แคตตาล็อกกลาง"
       subtitle="รายการต้นแบบ — ชื่อ แบรนด์ หมวดหมู่ ที่ทุกบริษัทหยิบไปใช้ให้ตรงกันได้"
-      description="ถ้าสินค้าของบริษัทไหนผูกกับรายการในนี้ ชื่อ แบรนด์ หมวดหมู่ และคำอธิบายของสินค้านั้นจะดึงมาจากที่นี่ — แก้ที่เดียว เปลี่ยนพร้อมกันทุกบริษัท ส่วนราคาและค่าคอมยังเป็นของแต่ละบริษัทแยกกันเหมือนเดิม แก้ไขได้เฉพาะ Super Admin"
+      description="ถ้าสินค้าของบริษัทไหนผูกกับรายการในนี้ ชื่อ แบรนด์ หมวดหมู่ และคำอธิบายของสินค้านั้นจะดึงมาจากที่นี่ — แก้ที่เดียว เปลี่ยนพร้อมกันทุกบริษัท ส่วนราคาและค่าแนะนำยังเป็นของแต่ละบริษัทแยกกันเหมือนเดิม แก้ไขได้เฉพาะ Super Admin"
       accent-color="brand"
       storage-key="catalog-management"
     >
@@ -535,7 +535,7 @@ async function confirmDeleteItem(): Promise<void> {
                in a success message. -->
           <p v-if="!editingItemId" data-test="propagation-notice" class="text-xs text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded-lg px-3 py-2">
             เมื่อบันทึก ระบบจะเพิ่มสินค้านี้ให้<strong>ทุกบริษัท</strong>โดยอัตโนมัติ และ<strong>ปิดการใช้งานไว้ทั้งหมด</strong>
-            — แต่ละบริษัทเปิดขายเองเมื่อพร้อม และตั้งราคา/ค่าคอมมิชชั่นของตัวเองได้
+            — แต่ละบริษัทเปิดขายเองเมื่อพร้อม และตั้งราคา/ค่าแนะนำของตัวเองได้
           </p>
           <p v-if="itemFormError" class="text-xs font-bold text-rose-600">{{ itemFormError }}</p>
           <div class="flex justify-end gap-2">

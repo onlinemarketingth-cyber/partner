@@ -454,7 +454,7 @@ describe('the platform delete says what it will actually do', () => {
 
   it('lists what is blocking the delete, with counts', async () => {
     // The refusal, said before the click rather than as a 422 afterwards.
-    impactPayload = impact({ blockers: { 'Referral / การขาย': 3, 'รายการคอมมิชชั่น': 0 } })
+    impactPayload = impact({ blockers: { 'Referral / การขาย': 3, 'รายการค่าแนะนำ': 0 } })
     const w = await mountView()
 
     await w.find('[data-test="delete-platform-product"]').trigger('click')
@@ -464,7 +464,7 @@ describe('the platform delete says what it will actually do', () => {
     expect(body).toContain('ลบไม่ได้ตอนนี้')
     expect(body).toContain('Referral / การขาย 3 รายการ')
     // A zero blocker is not a blocker; listing it would read as a reason.
-    expect(body).not.toContain('รายการคอมมิชชั่น 0')
+    expect(body).not.toContain('รายการค่าแนะนำ 0')
   })
 
   it('says plainly when a company package affects nobody else', async () => {

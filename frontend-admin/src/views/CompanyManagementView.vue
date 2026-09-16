@@ -185,12 +185,12 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
         <input v-model="createForm.slug" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div class="col-span-2">
-        <label class="text-xs font-bold text-slate-500">รูปแบบค่าคอมมิชชั่น (เลือกได้ 1 แบบต่อบริษัท)</label>
+        <label class="text-xs font-bold text-slate-500">รูปแบบค่าแนะนำ (เลือกได้ 1 แบบต่อบริษัท)</label>
         <select v-model="createForm.commission_plan_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
           <option v-for="pt in planTypeOptions" :key="pt" :value="pt">{{ planTypeLabels[pt] }}</option>
         </select>
         <p v-if="createForm.commission_plan_type !== 'unilevel'" class="mt-1 text-xs text-slate-400">
-          ต้องตั้งค่าที่หน้า "แผนคอมมิชชั่น" ก่อน ระบบจึงจะคำนวณค่าคอมมิชชั่นตามรูปแบบนี้ได้
+          ต้องตั้งค่าที่หน้า "แผนค่าแนะนำ" ก่อน ระบบจึงจะคำนวณค่าแนะนำตามรูปแบบนี้ได้
         </p>
       </div>
       <div class="col-span-2 flex justify-end gap-2">
@@ -224,7 +224,7 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
                   :to="{ name: 'commission-plan-settings' }"
                   class="text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-brand-600"
                 >
-                  ตั้งค่าแผนคอมมิชชั่น
+                  ตั้งค่าแผนค่าแนะนำ
                 </RouterLink>
               </div>
             </div>

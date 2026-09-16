@@ -770,7 +770,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
           ? `ยืนยันว่าได้รับเงิน ${formatBaht(pendingConfirm.order.amount_satang)} บาท สำหรับ ${pendingConfirm.order.order_number} แล้ว?`
           : ''
       "
-      body="ระบบจะบันทึกคอมมิชชั่นทันทีและแก้ไขภายหลังไม่ได้ (BR-4)"
+      body="ระบบจะบันทึกค่าแนะนำทันทีและแก้ไขภายหลังไม่ได้ (BR-4)"
       @confirm="confirmOrderPayment"
       @update:show="
         (v: boolean) => {

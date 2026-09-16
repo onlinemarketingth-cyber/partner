@@ -535,7 +535,7 @@ describe('CommissionPlansView — the start-here modal, and everything it refuse
     const wrapper = await mountView(missing)
 
     const modal = wrapper.get('[data-test="start-here-modal"]')
-    expect(modal.get('[data-test="start-here-title"]').text()).toContain('ยังจ่ายค่าคอมให้ใครไม่ได้')
+    expect(modal.get('[data-test="start-here-title"]').text()).toContain('ยังจ่ายค่าแนะนำให้ใครไม่ได้')
     expect(modal.text()).toContain('ไม่มีใครได้เงิน')
     // ONE primary action. A dialog with two equal buttons makes the reader
     // choose before they have read anything.

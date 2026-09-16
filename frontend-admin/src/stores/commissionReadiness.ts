@@ -246,7 +246,7 @@ export const useCommissionReadinessStore = defineStore('commissionReadiness', ()
        * warning: an admin who sees "โหลดไม่สำเร็จ" on every page learns to
        * ignore this strip, and then misses the real red one.
        */
-      loadError.value = e instanceof ApiError ? `โหลดสถานะค่าคอมไม่สำเร็จ (${e.status})` : 'โหลดสถานะค่าคอมไม่สำเร็จ'
+      loadError.value = e instanceof ApiError ? `โหลดสถานะค่าแนะนำไม่สำเร็จ (${e.status})` : 'โหลดสถานะค่าแนะนำไม่สำเร็จ'
     }
   }
 

@@ -77,8 +77,8 @@ import CoAgentEditor, { type CoAgentEditorReferral } from '../CoAgentEditor.vue'
 import AppButton from '../AppButton.vue'
 
 const OPTIONS = [
-  { id: 7, name: 'ตัวแทน ก' },
-  { id: 8, name: 'ตัวแทน ข' },
+  { id: 7, name: 'สมาชิก ก' },
+  { id: 8, name: 'สมาชิก ข' },
 ]
 
 function referralFixture(overrides: Partial<CoAgentEditorReferral> = {}): CoAgentEditorReferral {
@@ -167,7 +167,7 @@ describe('CoAgentEditor (TASK-026 split commission — TASK-169 Phase 4a)', () =
 
   it('CLEARS an existing split by sending BOTH fields as null', async () => {
     const wrapper = await openEditor(
-      mountEditor(referralFixture({ co_agent: { id: 7, name: 'ตัวแทน ก' }, split_percentage: 30 })),
+      mountEditor(referralFixture({ co_agent: { id: 7, name: 'สมาชิก ก' }, split_percentage: 30 })),
     )
 
     // The form opened prefilled with the existing split…
@@ -217,9 +217,9 @@ describe('CoAgentEditor (TASK-026 split commission — TASK-169 Phase 4a)', () =
 
   it('shows an EXISTING co-agent and offers "แก้ไข", offers "+ แบ่งคอมฯ" when there is none', () => {
     const shared = mountEditor(
-      referralFixture({ co_agent: { id: 8, name: 'ตัวแทน ข' }, split_percentage: 45 }),
+      referralFixture({ co_agent: { id: 8, name: 'สมาชิก ข' }, split_percentage: 45 }),
     )
-    expect(shared.text()).toContain('ตัวแทน ข')
+    expect(shared.text()).toContain('สมาชิก ข')
     expect(shared.text()).toContain('45%')
     expect(trigger(shared).text()).toBe('แก้ไขคอมฯ ร่วม')
 
@@ -231,7 +231,7 @@ describe('CoAgentEditor (TASK-026 split commission — TASK-169 Phase 4a)', () =
   it('renders NOTHING once the referral is at or past Complete Payment (BR-4 cutoff)', () => {
     for (const key of ['complete_payment', 'ongoing_next_meeting']) {
       const wrapper = mountEditor(
-        referralFixture({ current_stage: { key, label: key }, co_agent: { id: 7, name: 'ตัวแทน ก' }, split_percentage: 30 }),
+        referralFixture({ current_stage: { key, label: key }, co_agent: { id: 7, name: 'สมาชิก ก' }, split_percentage: 30 }),
       )
       expect(wrapper.find('button').exists()).toBe(false)
       expect(wrapper.text()).toBe('')

@@ -421,7 +421,7 @@ watch(() => activeCompany.companyId, () => { loadAbcGrades(); loadPromotions() }
       </div>
 
       <div class="mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-        ราคานี้แสดงผลเท่านั้น ยังไม่เชื่อมกับการคำนวณค่าคอมมิชชั่นจริง
+        ราคานี้แสดงผลเท่านั้น ยังไม่เชื่อมกับการคำนวณค่าแนะนำจริง
       </div>
 
       <div v-if="promoError" class="mb-3 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">{{ promoError }}</div>

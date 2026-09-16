@@ -35,7 +35,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/',
       name: 'home',
       component: () => import('../views/AgentManagementView.vue'),
-      meta: { navLabel: 'ภาพรวมตัวแทน' },
+      meta: { navLabel: 'ภาพรวมสมาชิก' },
     },
     {
       path: '/product-catalog',
@@ -98,7 +98,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/agents/roster',
       name: 'agent-roster',
       component: () => import('../views/AgentRosterView.vue'),
-      meta: { navLabel: 'รายชื่อตัวแทน' },
+      meta: { navLabel: 'รายชื่อสมาชิก' },
     },
     {
       path: '/agents/pending',
@@ -333,7 +333,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/commission-plans',
       name: 'commission-plan-settings',
       component: () => import('../views/CommissionPlansView.vue'),
-      meta: { navLabel: 'แผนคอมมิชชั่น' },
+      meta: { navLabel: 'แผนค่าแนะนำ' },
     },
     {
       path: '/profile',

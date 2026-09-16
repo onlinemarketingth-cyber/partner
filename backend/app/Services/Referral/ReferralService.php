@@ -59,7 +59,7 @@ class ReferralService
         // front of it tells them nothing and reads as a system error.
         if (! empty($data['co_agent_id']) && (int) $data['co_agent_id'] === (int) $data['agent_id']) {
             throw ValidationException::withMessages([
-                'co_agent_id' => 'ผู้ร่วมแบ่งคอมมิชชั่นต้องเป็นตัวแทนคนอื่น ไม่ใช่ตัวแทนเจ้าของรายการนี้',
+                'co_agent_id' => 'ผู้ร่วมแบ่งค่าแนะนำต้องเป็นสมาชิกคนอื่น ไม่ใช่สมาชิกเจ้าของรายการนี้',
             ]);
         }
 
@@ -151,13 +151,13 @@ class ReferralService
     {
         if (! $this->splitIsStillEditable($referral)) {
             throw ValidationException::withMessages([
-                'co_agent_id' => 'รายการนี้ผ่านขั้นตอนการชำระเงินไปแล้ว จึงไม่สามารถแก้ไขการแบ่งคอมมิชชั่นได้ (ค่าคอมมิชชั่นถูกบันทึกไว้แล้ว)',
+                'co_agent_id' => 'รายการนี้ผ่านขั้นตอนการชำระเงินไปแล้ว จึงไม่สามารถแก้ไขการแบ่งค่าแนะนำได้ (ค่าแนะนำถูกบันทึกไว้แล้ว)',
             ]);
         }
 
         if (! empty($data['co_agent_id']) && (int) $data['co_agent_id'] === (int) $referral->agent_id) {
             throw ValidationException::withMessages([
-                'co_agent_id' => 'ผู้ร่วมแบ่งคอมมิชชั่นต้องเป็นตัวแทนคนอื่น ไม่ใช่ตัวแทนเจ้าของรายการนี้',
+                'co_agent_id' => 'ผู้ร่วมแบ่งค่าแนะนำต้องเป็นสมาชิกคนอื่น ไม่ใช่สมาชิกเจ้าของรายการนี้',
             ]);
         }
 

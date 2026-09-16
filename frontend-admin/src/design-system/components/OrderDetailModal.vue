@@ -164,7 +164,7 @@ function print() {
               <dd class="text-slate-800 text-right break-all">{{ order.client_email ?? '—' }}</dd>
             </div>
             <div class="flex justify-between gap-4">
-              <dt class="text-slate-500">ตัวแทน</dt>
+              <dt class="text-slate-500">สมาชิก</dt>
               <dd class="text-slate-800 text-right">{{ order.agent?.name ?? '—' }}</dd>
             </div>
             <div class="flex justify-between gap-4">

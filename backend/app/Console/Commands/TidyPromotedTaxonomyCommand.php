@@ -216,7 +216,7 @@ class TidyPromotedTaxonomyCommand extends Command
             ->count();
 
         if ($rules > 0) {
-            $reasons[] = "ยังมีกฎค่าคอมผูกอยู่ {$rules} กฎ";
+            $reasons[] = "ยังมีกฎค่าแนะนำผูกอยู่ {$rules} กฎ";
         }
 
         return $reasons;

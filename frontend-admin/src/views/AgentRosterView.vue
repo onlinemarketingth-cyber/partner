@@ -468,8 +468,8 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="list"
-      title="รายชื่อตัวแทน"
-      subtitle="รายชื่อ, บทบาท, สถานะใบรับรองของตัวแทน"
+      title="รายชื่อสมาชิก"
+      subtitle="รายชื่อ, บทบาท, สถานะใบรับรองของสมาชิก"
       description="ไม่มีระบบส่งอีเมล — ตั้งรหัสผ่านชั่วคราวแล้วแจ้ง agent เอง (ยืนยันจากมนุษย์แล้ว)"
       accent-color="brand"
       storage-key="agent-roster"
@@ -479,7 +479,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
           class="btn-primary"
           @click="showCreateForm = !showCreateForm"
         >
-          + เพิ่มตัวแทน
+          + เพิ่มสมาชิก
         </button>
       </template>
       <template #tabs>
@@ -498,7 +498,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       </template>
     </HeroHeader>
 
-    <CompanyScopeNotice action="จัดการรายชื่อตัวแทน" />
+    <CompanyScopeNotice action="จัดการรายชื่อสมาชิก" />
 
     <div class="bg-white/95 border border-slate-200 rounded-xl p-4 mt-4">
       <div class="flex flex-col md:flex-row gap-3">
@@ -800,7 +800,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       confirm-label="ลบผู้สมัคร"
       :body="pendingRemoveApplicant
         ? `จะเกิดอะไรขึ้นกับ ${pendingRemoveApplicant.name}\n\n`
-          + `• ชื่อจะหายไปจากรายชื่อตัวแทนและจากคิวรออนุมัติ\n`
+          + `• ชื่อจะหายไปจากรายชื่อสมาชิกและจากคิวรออนุมัติ\n`
           + `• เขายังเข้าใช้งานไม่ได้เหมือนเดิม (ตอนนี้ก็ยังเข้าไม่ได้อยู่แล้ว เพราะยังไม่ยืนยัน)\n`
           + `• อีเมล ${pendingRemoveApplicant.email} จะยังถูกจองไว้กับบัญชีนี้ ถ้าเขาอยากกลับมา ต้องให้คุณกดกู้คืน สมัครใหม่ด้วยอีเมลเดิมไม่ได้\n`
           + `• ข้อมูลไม่ได้ถูกลบถาวร กดกู้คืนได้ตลอดที่หัวข้อ “ปิดใช้งาน” ด้านบน`

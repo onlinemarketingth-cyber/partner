@@ -182,7 +182,7 @@ describe('no seat yet', () => {
     expect(box).toContain('เฉพาะหัวหน้าทีมที่เป็นคนจริง')
     // The consequence, not the state: an agent with no upline earns the
     // company nothing, and that is the whole reason to press the button.
-    expect(box).toContain('ตัวแทนที่ไม่มีหัวหน้า')
+    expect(box).toContain('สมาชิกที่ไม่มีหัวหน้า')
   })
 
   it('does not write on the first click', async () => {
@@ -206,7 +206,7 @@ describe('no seat yet', () => {
     await wrapper.get('[data-test="house-account-enable"]').trigger('click')
 
     const confirm = wrapper.get('[data-test="house-account-confirm"]').text()
-    expect(confirm).toContain('ตัวแทนที่ยังไม่มีหัวหน้าทุกคนจะถูกผูกเข้าสายงาน')
+    expect(confirm).toContain('สมาชิกที่ยังไม่มีหัวหน้าทุกคนจะถูกผูกเข้าสายงาน')
     // The one the owner had to be shown three times before accepting it.
     expect(confirm).toContain('ทุกดีล')
     expect(confirm).toContain('เพดานอัตราหัวหน้าทีม')
@@ -289,7 +289,7 @@ describe('the seat exists', () => {
     const wrapper = await mountView({ commission_house_account: house(), deepest_manager_chain: 1 })
     await goToStep4(wrapper)
 
-    expect(wrapper.get('[data-test="step4-house-account"]').text()).toContain('ค่าคอมที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม')
+    expect(wrapper.get('[data-test="step4-house-account"]').text()).toContain('ค่าแนะนำที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม')
 
     await wrapper.get('[data-test="house-account-disable"]').trigger('click')
     await flushPromises()

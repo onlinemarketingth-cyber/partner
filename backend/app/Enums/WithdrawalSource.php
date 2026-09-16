@@ -50,7 +50,7 @@ enum WithdrawalSource: string
     public function label(): string
     {
         return match ($this) {
-            self::AgentRequest => 'ตัวแทนขอเบิก',
+            self::AgentRequest => 'สมาชิกขอเบิก',
             self::CompanyPayout => 'บริษัทตั้งจ่าย',
         };
     }

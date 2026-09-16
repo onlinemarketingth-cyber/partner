@@ -256,7 +256,7 @@ describe('CommissionPlansView — step 4.2 shows all three answers before the ch
     })
     await goToStep4(wrapper)
 
-    expect(wrapper.get('[data-test="override-mode-current"]').text()).toContain('หักจากตัวแทน')
+    expect(wrapper.get('[data-test="override-mode-current"]').text()).toContain('หักจากสมาชิก')
     expect(wrapper.get('[data-test="override-mode-row-deduct_from_commission"]').text()).toContain('ใช้อยู่')
   })
 })
@@ -306,7 +306,7 @@ describe('CommissionPlansView — step 4.2 writes through the commission door', 
       commission_override_mode: 'deduct_from_commission',
       company_id: AIA.id,
     })
-    expect(wrapper.get('[data-test="override-mode-current"]').text()).toContain('หักจากตัวแทน')
+    expect(wrapper.get('[data-test="override-mode-current"]').text()).toContain('หักจากสมาชิก')
   })
 
   it('shows the refusal instead of the new mode when the server says no', async () => {
@@ -411,7 +411,7 @@ describe('CommissionPlansView — a leader rate may differ from the company', ()
     expect((select.element as HTMLSelectElement).value).toBe('')
     // The default option NAMES what it follows. "ใช้ค่าเริ่มต้น" alone would
     // make the admin go and look up what that currently is.
-    expect(select.text()).toContain('หักจากตัวแทน (คิดจากยอดขาย)')
+    expect(select.text()).toContain('หักจากสมาชิก (คิดจากยอดขาย)')
   })
 
   it('sends null when the rate follows the company, not the resolved mode', async () => {

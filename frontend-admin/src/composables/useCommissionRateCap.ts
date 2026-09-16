@@ -112,7 +112,7 @@ export function checkCommissionRateCap(
 
   return {
     exceedsCap: true,
-    message: `อัตราคอมมิชชั่นที่กรอกไว้ (${enteredText}) เกิน ${formatCapPercentText(capBp)}% ของราคาขายสินค้านี้ (${formatBaht(priceSatang)} บาท) กรุณาแก้ไขก่อนบันทึก`,
+    message: `อัตราค่าแนะนำที่กรอกไว้ (${enteredText}) เกิน ${formatCapPercentText(capBp)}% ของราคาขายสินค้านี้ (${formatBaht(priceSatang)} บาท) กรุณาแก้ไขก่อนบันทึก`,
   }
 }
 

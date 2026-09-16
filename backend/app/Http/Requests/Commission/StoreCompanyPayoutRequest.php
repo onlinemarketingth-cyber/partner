@@ -53,7 +53,7 @@ class StoreCompanyPayoutRequest extends FormRequest
     public function attributes(): array
     {
         return [
-            'agent_id' => 'ตัวแทน',
+            'agent_id' => 'สมาชิก',
             'expected_total_satang' => 'ยอดที่แสดงบนหน้าจอ',
         ];
     }

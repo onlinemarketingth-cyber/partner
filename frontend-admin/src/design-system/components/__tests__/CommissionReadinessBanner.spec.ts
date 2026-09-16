@@ -78,7 +78,7 @@ const MISSING: Readiness = {
   blocking_step: 3,
   products_total: 7,
   products_covered: 0,
-  issues: [{ code: 'products_without_rate', label: 'สินค้า 7 จาก 7 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้', count: 7 }],
+  issues: [{ code: 'products_without_rate', label: 'สินค้า 7 จาก 7 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้', count: 7 }],
   can_fix: true,
 }
 
@@ -88,7 +88,7 @@ const INCOMPLETE: Readiness = {
   blocking_step: 3,
   products_total: 7,
   products_covered: 3,
-  issues: [{ code: 'products_without_rate', label: 'สินค้า 4 จาก 7 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้', count: 4 }],
+  issues: [{ code: 'products_without_rate', label: 'สินค้า 4 จาก 7 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้', count: 4 }],
   can_fix: true,
 }
 
@@ -144,7 +144,7 @@ describe('CommissionReadinessBanner — which state shows what', () => {
 
     expect(banner(wrapper).classes()).toContain('bg-rose-50')
     expect(wrapper.get('[data-test="commission-readiness-headline"]').text())
-      .toBe('ยังไม่ได้ตั้งค่าคอมมิชชั่น — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
+      .toBe('ยังไม่ได้ตั้งค่าแนะนำ — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
   })
 
   it('names what is incomplete and how many, in amber', async () => {
@@ -159,7 +159,7 @@ describe('CommissionReadinessBanner — which state shows what', () => {
 
     expect(banner(wrapper).classes()).toContain('bg-amber-50')
     expect(wrapper.get('[data-test="commission-readiness-headline"]').text())
-      .toBe('สินค้า 4 จาก 7 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้')
+      .toBe('สินค้า 4 จาก 7 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้')
   })
 
   it('names the blocking step in the settings screen\'s own vocabulary', async () => {
@@ -195,7 +195,7 @@ describe('CommissionReadinessBanner — who is offered the fix', () => {
 
     expect(banner(wrapper).exists()).toBe(true)
     expect(wrapper.get('[data-test="commission-readiness-headline"]').text())
-      .toBe('ยังไม่ได้ตั้งค่าคอมมิชชั่น — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
+      .toBe('ยังไม่ได้ตั้งค่าแนะนำ — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
     expect(wrapper.find('[data-test="commission-readiness-action"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="commission-readiness-contact-admin"]').text()).toBe('กรุณาติดต่อผู้ดูแลระบบ')
   })
@@ -293,7 +293,7 @@ describe('CommissionReadinessBanner — where it must never appear', () => {
      */
     get.mockRejectedValue(new ApiError(403, 'forbidden'))
     const auth = useAuthStore()
-    auth.user = { id: 9, name: 'ตัวแทน', role: 'agent', company: AIA } as never
+    auth.user = { id: 9, name: 'สมาชิก', role: 'agent', company: AIA } as never
     auth.status = 'ready'
 
     const wrapper = mountBanner()

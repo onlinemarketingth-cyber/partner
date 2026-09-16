@@ -110,7 +110,7 @@ import ShareLinkModal from '@/design-system/components/ShareLinkModal.vue'
 
 const HEALTH_NOTES = 'แพ้ยาเพนนิซิลิน'
 /** This company's other agents — `GET /referrals/co-agent-options`. */
-const CO_AGENTS = [{ id: 7, name: 'ตัวแทน ก' }]
+const CO_AGENTS = [{ id: 7, name: 'สมาชิก ก' }]
 /**
  * The logged-in agent. Certification rows carry a `user_id`, and the BR-1
  * gate compares it to THIS id (TASK-067) — so both sides must be real
@@ -123,7 +123,7 @@ const OTHER_AGENT_ID = 42
 
 /** Puts a real logged-in user in the store the view reads. */
 function signIn(id: number = SELF_ID) {
-  useAuthStore().user = { id, name: 'ตัวแทน ทดสอบ' } as AuthUser
+  useAuthStore().user = { id, name: 'สมาชิก ทดสอบ' } as AuthUser
 }
 
 function referralFixture(id: number, productName: string, overrides: Record<string, unknown> = {}) {
@@ -636,7 +636,7 @@ describe('ClientsView — TASK-026 co-agent editor in the drawer (TASK-169 Phase
     // arrived is a control that cannot be used.
     const editor = editorFor(wrapper)
     await editor.find('button').trigger('click')
-    expect(editor.findAll('option').map((o) => o.text())).toEqual(['ไม่แบ่งคอมมิชชั่น', 'ตัวแทน ก'])
+    expect(editor.findAll('option').map((o) => o.text())).toEqual(['ไม่แบ่งค่าแนะนำ', 'สมาชิก ก'])
   })
 
   it('sends the same PATCH ReferralsView sends, then re-reads the open client', async () => {
@@ -672,7 +672,7 @@ describe('ClientsView — TASK-026 co-agent editor in the drawer (TASK-169 Phase
     wire({
       referrals: [
         referralFixture(1, 'แพ็กเกจ A', {
-          co_agent: { id: 7, name: 'ตัวแทน ก' },
+          co_agent: { id: 7, name: 'สมาชิก ก' },
           split_percentage: 30,
         }),
       ],
@@ -680,7 +680,7 @@ describe('ClientsView — TASK-026 co-agent editor in the drawer (TASK-169 Phase
     const wrapper = await openDrawer(await mountList())
 
     // ReferralRow's own read-only line…
-    expect(wrapper.text()).toContain('แบ่งคอมฯ กับ ตัวแทน ก (30%)')
+    expect(wrapper.text()).toContain('แบ่งคอมฯ กับ สมาชิก ก (30%)')
     // …and the editor's, which is what tells the agent it is CHANGEABLE.
     expect(editorFor(wrapper).text()).toContain('แก้ไขคอมฯ ร่วม')
     expect(wrapper.text()).not.toContain('+ แบ่งคอมฯ')
@@ -690,7 +690,7 @@ describe('ClientsView — TASK-026 co-agent editor in the drawer (TASK-169 Phase
     wire({
       referrals: [
         referralFixture(1, 'แพ็กเกจ A', {
-          co_agent: { id: 7, name: 'ตัวแทน ก' },
+          co_agent: { id: 7, name: 'สมาชิก ก' },
           split_percentage: 30,
         }),
       ],
@@ -871,7 +871,7 @@ describe('ClientsView — TASK-174 co-agent split switched OFF', () => {
     expect(wrapper.findAllComponents(ReferralRow)).toHaveLength(2)
     expect(wrapper.findAllComponents(CoAgentEditor)).toHaveLength(0)
     expect(wrapper.text()).not.toContain('+ แบ่งคอมฯ')
-    expect(wrapper.text()).not.toContain('แบ่งคอมมิชชั่น')
+    expect(wrapper.text()).not.toContain('แบ่งค่าแนะนำ')
   })
 
   it('does NOT fetch the co-agent picker, and reports no load failure', async () => {

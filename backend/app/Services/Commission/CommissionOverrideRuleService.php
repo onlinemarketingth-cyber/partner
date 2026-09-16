@@ -131,7 +131,7 @@ class CommissionOverrideRuleService
                 // verbatim. Found in UAT-016 (2026-08-19): the modal put
                 // an English sentence in front of a Thai-only admin at the
                 // exact moment they needed to understand what went wrong.
-                'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าคอมหัวหน้าทีมครอบคลุมช่วงเวลานี้อยู่แล้ว',
+                'effective_from' => 'ขอบเขตนี้ (สินค้า/หมวดหมู่/ค่าเริ่มต้นทั้งบริษัท) มีอัตราค่าแนะนำหัวหน้าทีมครอบคลุมช่วงเวลานี้อยู่แล้ว',
             ]);
         }
     }

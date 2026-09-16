@@ -58,11 +58,11 @@ class NewAgentRegistrationNotification extends Notification
                 'brand' => $brand,
                 'brandUrl' => MailBrand::adminPortalUrl(),
             ])
-            ->subject('มีตัวแทนใหม่รออนุมัติ: '.$this->registrant->name)
+            ->subject('มีสมาชิกใหม่รออนุมัติ: '.$this->registrant->name)
             ->greeting('ถึงคุณ '.trim("{$notifiable->first_name} {$notifiable->last_name}"))
             ->line($this->registrant->name.' ('.$this->registrant->email.') ได้สมัครเข้าร่วมบริษัทของคุณผ่านระบบสมัครสมาชิกด้วยตนเอง')
-            ->line('กรุณาตรวจสอบและอนุมัติ/ปฏิเสธคำขอนี้ก่อนที่ตัวแทนจะสามารถเข้าใช้งานได้')
-            ->action('ไปที่หน้าอนุมัติตัวแทน', $adminUrl.'/agents')
+            ->line('กรุณาตรวจสอบและอนุมัติ/ปฏิเสธคำขอนี้ก่อนที่สมาชิกจะสามารถเข้าใช้งานได้')
+            ->action('ไปที่หน้าอนุมัติสมาชิก', $adminUrl.'/agents')
             ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.$brand)
             // 2026-09-02 — Laravel's default salutation is "Regards," + app name,
             // in English, at the bottom of a Thai email. Set explicitly.

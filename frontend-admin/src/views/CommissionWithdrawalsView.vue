@@ -197,7 +197,7 @@ function approve(r: WithdrawalRequest): void {
 function reject(r: WithdrawalRequest): void {
   // A reason is REQUIRED by the server, and it is shown to the agent
   // verbatim — so it is asked for here rather than sent blank and rejected.
-  const reason = window.prompt(`เหตุผลที่ไม่อนุมัติคำขอของ ${r.agent_name ?? 'ตัวแทน'}`)
+  const reason = window.prompt(`เหตุผลที่ไม่อนุมัติคำขอของ ${r.agent_name ?? 'สมาชิก'}`)
 
   if (reason === null) return
 
@@ -247,15 +247,15 @@ watch(() => activeCompany.companyId, () => {
   <main class="min-h-screen px-4 py-6 lg:px-8">
     <HeroHeader
       icon="money"
-      title="คำขอเบิกค่าคอมมิชชั่น"
-      subtitle="ตรวจสอบ อนุมัติ และบันทึกการโอนเงินให้ตัวแทน"
-      description="ตัวแทนกดขอเบิกเองจากพอร์ทัล → ที่นี่คืออนุมัติ แล้วบันทึกว่าโอนจริงแล้ว — ยอดที่เบิกได้มาจากค่าคอมที่ยัง “รอจ่าย” เท่านั้น"
+      title="คำขอเบิกค่าแนะนำ"
+      subtitle="ตรวจสอบ อนุมัติ และบันทึกการโอนเงินให้สมาชิก"
+      description="สมาชิกกดขอเบิกเองจากพอร์ทัล → ที่นี่คืออนุมัติ แล้วบันทึกว่าโอนจริงแล้ว — ยอดที่เบิกได้มาจากค่าแนะนำที่ยัง “รอจ่าย” เท่านั้น"
       :kpis="kpis"
       accent-color="brand"
       storage-key="commission-withdrawals"
     />
 
-    <CompanyScopeNotice action="ดูคำขอเบิกค่าคอม" />
+    <CompanyScopeNotice action="ดูคำขอเบิกค่าแนะนำ" />
 
     <div class="mt-4 flex flex-wrap gap-2">
       <button
@@ -281,13 +281,13 @@ watch(() => activeCompany.companyId, () => {
       <p class="text-xs text-slate-500">ยอดขั้นต่ำในการเบิกของบริษัทนี้</p>
       <p class="text-sm font-bold text-slate-900 mt-0.5">
         <span v-if="minWithdrawalUnknown" class="text-rose-600">อ่านค่าไม่สำเร็จ</span>
-        <span v-else-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — ตัวแทนเบิกเท่าไรก็ได้</span>
+        <span v-else-if="minWithdrawalSatang === null">ไม่มีขั้นต่ำ — สมาชิกเบิกเท่าไรก็ได้</span>
         <span v-else>{{ formatSatang(minWithdrawalSatang) }}</span>
       </p>
       <p class="text-xs text-slate-400 mt-1">
         แก้ไขที่
         <RouterLink :to="{ name: 'commission-plan-settings' }" class="font-bold text-brand-600 hover:underline" data-test="link-commission-step4">
-          แผนคอมมิชชั่น → ขั้นที่ 4 →
+          แผนค่าแนะนำ → ขั้นที่ 4 →
         </RouterLink>
       </p>
     </div>
@@ -300,7 +300,7 @@ watch(() => activeCompany.companyId, () => {
       <EmptyState
         icon="money"
         :title="`ไม่มีรายการ${heading}`"
-        message="เมื่อมีตัวแทนส่งคำขอเบิก รายการจะแสดงที่นี่"
+        message="เมื่อมีสมาชิกส่งคำขอเบิก รายการจะแสดงที่นี่"
         class="mt-4"
       />
 
@@ -323,23 +323,23 @@ watch(() => activeCompany.companyId, () => {
         <p class="text-[13px] font-extrabold text-slate-900">รายการมาจากไหน</p>
         <ul class="mt-1.5 space-y-1 text-[12.5px] text-slate-600 list-disc pl-4">
           <li>
-            ตัวแทนเป็นคนกดขอเบิกเองในพอร์ทัลตัวแทน (เมนู <b>เบิกค่าคอม</b>) — หน้านี้ไม่มีปุ่มสร้างคำขอแทนตัวแทน
+            สมาชิกเป็นคนกดขอเบิกเองในพอร์ทัลสมาชิก (เมนู <b>เบิกค่าแนะนำ</b>) — หน้านี้ไม่มีปุ่มสร้างคำขอแทนสมาชิก
           </li>
           <li>
-            ตัวแทนขอได้เฉพาะค่าคอมที่สถานะยัง <b>“รอจ่าย”</b> เท่านั้น
+            สมาชิกขอได้เฉพาะค่าแนะนำที่สถานะยัง <b>“รอจ่าย”</b> เท่านั้น
           </li>
           <li>
             ถ้าคุณกด <b>“จ่ายแล้ว”</b> หรือ <b>“จ่ายทั้งหมด”</b> ในหน้า
             <RouterLink :to="{ name: 'commission-management' }" class="font-bold text-brand-600 hover:underline" data-test="link-payouts">จ่ายเงิน</RouterLink>
-            ไปแล้ว ค่าคอมก้อนนั้นจะถูกปิดไปเลย ตัวแทนจะขอเบิกไม่ได้อีก และหน้านี้จะว่างตลอด — ไม่ใช่ระบบเสีย
+            ไปแล้ว ค่าแนะนำก้อนนั้นจะถูกปิดไปเลย สมาชิกจะขอเบิกไม่ได้อีก และหน้านี้จะว่างตลอด — ไม่ใช่ระบบเสีย
           </li>
           <li>
             ลองกดแท็บ <b>ทั้งหมด</b> ด้านบนดูก่อน เผื่อมีคำขอที่อนุมัติหรือโอนไปแล้ว
           </li>
         </ul>
         <p class="mt-2 text-[12px] text-slate-500">
-          พูดง่าย ๆ คือมีสองทางจ่ายเงินให้ตัวแทน และใช้ทางไหนทางหนึ่ง —
-          <b>คุณจ่ายเอง</b> ที่หน้าจ่ายเงิน หรือ <b>ให้ตัวแทนขอเบิก</b> แล้วมาอนุมัติที่หน้านี้
+          พูดง่าย ๆ คือมีสองทางจ่ายเงินให้สมาชิก และใช้ทางไหนทางหนึ่ง —
+          <b>คุณจ่ายเอง</b> ที่หน้าจ่ายเงิน หรือ <b>ให้สมาชิกขอเบิก</b> แล้วมาอนุมัติที่หน้านี้
         </p>
       </div>
     </template>
@@ -360,7 +360,7 @@ watch(() => activeCompany.companyId, () => {
           <p class="text-sm text-slate-700 mt-0.5">{{ r.agent_name ?? '—' }}</p>
           <p class="text-xs text-slate-500 mt-0.5">
             ขอเมื่อ {{ formatDate(r.created_at) }}
-            <span v-if="r.item_count"> · {{ r.item_count }} รายการค่าคอม</span>
+            <span v-if="r.item_count"> · {{ r.item_count }} รายการค่าแนะนำ</span>
           </p>
           <p v-if="r.bank_account_number_masked" class="text-xs text-slate-500 mt-1">
             <Icon name="money" :size="12" class="inline-block mr-1" />

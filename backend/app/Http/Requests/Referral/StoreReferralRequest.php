@@ -142,7 +142,7 @@ class StoreReferralRequest extends FormRequest
                 $validator->errors()->add('split_percentage', 'กรุณาระบุเปอร์เซ็นต์ที่จะแบ่งให้ผู้ร่วมทีม');
             }
             if ($hasSplit && ! $hasCoAgent) {
-                $validator->errors()->add('co_agent_id', 'กรุณาเลือกตัวแทนที่จะแบ่งคอมมิชชั่นด้วย');
+                $validator->errors()->add('co_agent_id', 'กรุณาเลือกสมาชิกที่จะแบ่งค่าแนะนำด้วย');
             }
         });
     }

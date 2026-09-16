@@ -55,7 +55,7 @@ enum UserRole: string
     public function labelTh(): string
     {
         return match ($this) {
-            self::Agent => 'ตัวแทน',
+            self::Agent => 'สมาชิก',
             self::CompanyAdmin => 'ผู้ดูแลบริษัท',
             self::SuperAdmin => 'ผู้ดูแลระบบ',
             self::VoucherStaff => 'พนักงานหน้าร้าน (ตัดสิทธิ์บัตรกำนัล)',

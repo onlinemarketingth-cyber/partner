@@ -253,7 +253,7 @@ describe('ThemeSettingsView — TASK-175 four tabs, one form', () => {
      * deleted, because "always visible" is the requirement and a card that
      * quietly drifted back onto a tab would still pass a weaker test.
      */
-    expect(shown(card(wrapper, 'ลิงก์ Login สำหรับตัวแทน'))).toBe(true)
+    expect(shown(card(wrapper, 'ลิงก์ Login สำหรับสมาชิก'))).toBe(true)
     // ชุดสีที่บันทึกไว้ rides along inside the สี card (TASK-162), as §4 pairs it.
     expect(card(wrapper, 'สี').text()).toContain('ชุดสีที่บันทึกไว้')
   })
@@ -271,7 +271,7 @@ describe('ThemeSettingsView — TASK-175 four tabs, one form', () => {
     expect(shown(card(wrapper, 'ฟอนต์'))).toBe(false)
 
     await tab(wrapper, TAB_OTHER).trigger('click')
-    expect(shown(card(wrapper, 'ลิงก์ Login สำหรับตัวแทน'))).toBe(true)
+    expect(shown(card(wrapper, 'ลิงก์ Login สำหรับสมาชิก'))).toBe(true)
     expect(shown(card(wrapper, 'หน้าร้าน (Storefront) — สินค้าแนะนำ'))).toBe(true)
     expect(shown(card(wrapper, 'ชื่อแอปและเมนู'))).toBe(false)
   })

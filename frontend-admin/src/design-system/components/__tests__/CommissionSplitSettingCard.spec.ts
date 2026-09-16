@@ -89,7 +89,7 @@ async function mountCard(
 function toggle(wrapper: Awaited<ReturnType<typeof mountCard>>) {
   const button = wrapper
     .findAll('button')
-    .find((b) => b.attributes('aria-label')?.includes('การแบ่งคอมมิชชั่น'))
+    .find((b) => b.attributes('aria-label')?.includes('การแบ่งค่าแนะนำ'))
   if (!button) throw new Error('no on/off toggle on the card')
   return button
 }
@@ -129,7 +129,7 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     expect(wrapper.text()).toContain(WARNING_HEADLINE)
     expect(wrapper.text()).toContain('12')
     // And it says what the number means, not just the number.
-    expect(wrapper.text()).toContain('จะกลับมาแบ่งค่าคอมทันที')
+    expect(wrapper.text()).toContain('จะกลับมาแบ่งค่าแนะนำทันที')
 
     // Flipping back cancels the intent, so the warning goes with it.
     await toggle(wrapper).trigger('click')
@@ -157,7 +157,7 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     expect(wrapper.text()).toContain(WARNING_HEADLINE)
     expect(wrapper.text()).toContain('ยังไม่ทราบว่ามีดีลค้างอยู่กี่รายการ')
     // A confident zero here would read as "nothing will change".
-    expect(wrapper.text()).not.toContain('จะกลับมาแบ่งค่าคอมทันที')
+    expect(wrapper.text()).not.toContain('จะกลับมาแบ่งค่าแนะนำทันที')
   })
 
   it('PUTs the new value and re-reads, so the count is never one save out of date', async () => {
@@ -218,7 +218,7 @@ describe('CommissionSplitSettingCard (TASK-174 §6)', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('โหลดค่าตั้งการแบ่งคอมมิชชั่นไม่สำเร็จ')
+    expect(wrapper.text()).toContain('โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ')
     // An unreadable money switch must not render as a confident "on".
     expect(toggle(wrapper).attributes('title')).toBe('ปิดใช้งาน')
   })

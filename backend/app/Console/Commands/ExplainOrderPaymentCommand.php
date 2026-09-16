@@ -83,10 +83,10 @@ class ExplainOrderPaymentCommand extends Command
              */
             ['ยืนยันโดย', $order->verifiedBy?->name
                 ? $order->verifiedBy->name.($order->hasGatewayPayment()
-                    ? ' — ระบบยืนยันอัตโนมัติจากเกตเวย์ (ไม่ใช่คนกดยืนยัน · ชื่อนี้คือตัวแทนเจ้าของการขาย)'
+                    ? ' — ระบบยืนยันอัตโนมัติจากเกตเวย์ (ไม่ใช่คนกดยืนยัน · ชื่อนี้คือสมาชิกเจ้าของการขาย)'
                     : ' — คนกดยืนยันในระบบหลังบ้าน')
                 : '—'],
-            ['ตัวแทน', $order->agent?->name ?? '—'],
+            ['สมาชิก', $order->agent?->name ?? '—'],
             ['ความผิดพลาดล่าสุด', $order->last_payment_error ?? '—'],
             ['เมื่อ', $order->last_payment_error_at?->toDateTimeString() ?? '—'],
             // Grouped as it is printed on the card, the pay page and the

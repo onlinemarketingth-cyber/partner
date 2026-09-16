@@ -366,7 +366,7 @@ class PayoutReportTest extends TestCase
         ?string $createdAt = null,
         ?string $transferredAt = null,
     ): CommissionWithdrawalRequest {
-        $parts = $agentName !== null ? explode(' ', $agentName, 2) : ['ตัวแทน', 'ทดสอบ'];
+        $parts = $agentName !== null ? explode(' ', $agentName, 2) : ['สมาชิก', 'ทดสอบ'];
 
         $agent = User::factory()->agent()->create([
             'company_id' => $company->id,
@@ -382,7 +382,7 @@ class PayoutReportTest extends TestCase
             'source' => $source,
             'bank_name' => 'กสิกรไทย',
             'bank_account_number' => '1234567890',
-            'bank_account_holder_name' => 'ตัวแทน ทดสอบ',
+            'bank_account_holder_name' => 'สมาชิก ทดสอบ',
             'transferred_at' => $status === WithdrawalStatus::Transferred
                 ? ($transferredAt ?? $createdAt ?? now())
                 : null,

@@ -413,7 +413,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
                designated"; a badge with no line is "designated, no team yet". -->
           <p class="text-xs text-slate-400 truncate">
             <template v-if="hasReports">ดูแลลูกทีม {{ node.children.length }} คน</template>
-            <template v-else>ตัวแทนขาย</template>
+            <template v-else>สมาชิกขาย</template>
           </p>
         </div>
 
@@ -437,7 +437,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
           <button
             type="button"
             class="w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 flex items-center justify-center"
-            title="ดูลูกค้าของตัวแทนนี้"
+            title="ดูลูกค้าของสมาชิกนี้"
             @click="viewClients"
           >
             <Icon name="user" :size="14" />
@@ -447,7 +447,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
           <button
             type="button"
             class="w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:text-brand-600 hover:border-brand-300 flex items-center justify-center"
-            title="แก้ไขข้อมูลตัวแทน"
+            title="แก้ไขข้อมูลสมาชิก"
             @click="editAgent"
           >
             <Icon name="edit" :size="14" />
@@ -489,7 +489,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
         </div>
         <div class="rounded-lg bg-slate-50 py-1.5">
           <p class="text-sm font-bold text-slate-900 leading-none">฿{{ formatBaht(node.total_commission_satang) }}</p>
-          <p class="text-[10px] text-slate-400 font-bold mt-1">ค่าคอม (จ่ายแล้ว)</p>
+          <p class="text-[10px] text-slate-400 font-bold mt-1">ค่าแนะนำ (จ่ายแล้ว)</p>
         </div>
       </div>
 
@@ -654,7 +654,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
         >
           <option value="">— ไม่มีหัวหน้า —</option>
           <option v-for="m in managerOptions" :key="m.agent_id" :value="m.agent_id">
-            {{ m.agent_name ?? `ตัวแทน #${m.agent_id}` }}
+            {{ m.agent_name ?? `สมาชิก #${m.agent_id}` }}
           </option>
         </select>
 

@@ -263,8 +263,8 @@ describe('CommissionPlansView — the four steps are named and in order', () => 
     expect(tabs).toHaveLength(4)
     expect(tabs.map((t) => t.text())).toEqual([
       expect.stringContaining('เลือกบริษัท'),
-      expect.stringContaining('เลือกแผนคอมมิชชั่น'),
-      expect.stringContaining('ตั้งอัตราตัวแทนผู้ขาย'),
+      expect.stringContaining('เลือกแผนค่าแนะนำ'),
+      expect.stringContaining('ตั้งอัตราสมาชิกผู้ขาย'),
       expect.stringContaining('ส่วนเพิ่มเติม'),
     ])
   })
@@ -288,7 +288,7 @@ describe('CommissionPlansView — the four steps are named and in order', () => 
 
     expect(wrapper.find('[data-test="step-panel-1"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="step-panel-3"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('ตัวแทนผู้ขายได้กี่เปอร์เซ็นต์')
+    expect(wrapper.text()).toContain('สมาชิกผู้ขายได้กี่เปอร์เซ็นต์')
   })
 
   it('opens every step once nothing is left incomplete', async () => {
@@ -427,8 +427,8 @@ describe('CommissionPlansView — a step opens only when the ones before it are 
 
     const tab = wrapper.get('[data-test="step-tab-4"]')
     expect(wrapper.get('[data-test="step-lock-hint-4"]').text())
-      .toContain('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
-    expect(tab.attributes('title')).toBe('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
+      .toContain('ทำขั้นที่ 3 ตั้งอัตราสมาชิกผู้ขาย ให้เสร็จก่อน')
+    expect(tab.attributes('title')).toBe('ทำขั้นที่ 3 ตั้งอัตราสมาชิกผู้ขาย ให้เสร็จก่อน')
     expect(wrapper.find('[data-test="step-lock-icon-4"]').exists()).toBe(true)
 
     // A reachable step carries neither, so the padlock keeps meaning something.
@@ -466,7 +466,7 @@ describe('CommissionPlansView — the next button will not walk into a locked st
     const next = wrapper.get('[data-test="step-next"]')
     expect(next.attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-test="step-next-blocked"]').text())
-      .toContain('ทำขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย ให้เสร็จก่อน')
+      .toContain('ทำขั้นที่ 3 ตั้งอัตราสมาชิกผู้ขาย ให้เสร็จก่อน')
     // It still NAMES step 4 — the refusal is printed beside the answer, not
     // instead of it, because the name is what TASK-034 added this footer for.
     expect(next.text()).toContain('ขั้นที่ 4 ส่วนเพิ่มเติม')
@@ -525,21 +525,21 @@ describe('CommissionPlansView — the status pills answer "am I done"', () => {
 })
 
 describe('CommissionPlansView — the next button names the next step', () => {
-  it('says "ขั้นที่ 2 เลือกแผนคอมมิชชั่น" while on step 1', async () => {
+  it('says "ขั้นที่ 2 เลือกแผนค่าแนะนำ" while on step 1', async () => {
     // The literal answer to "ผู้ใช้ไม่รู้ว่าต้องกรอกอะไรหลัง". A bare "ถัดไป"
     // here would pass any test about navigation working and still leave the
     // original complaint entirely unaddressed.
     const wrapper = await mountView()
 
-    expect(wrapper.get('[data-test="step-next"]').text()).toContain('ขั้นที่ 2 เลือกแผนคอมมิชชั่น')
+    expect(wrapper.get('[data-test="step-next"]').text()).toContain('ขั้นที่ 2 เลือกแผนค่าแนะนำ')
   })
 
-  it('says "ขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย" once you are on step 2', async () => {
+  it('says "ขั้นที่ 3 ตั้งอัตราสมาชิกผู้ขาย" once you are on step 2', async () => {
     const wrapper = await mountView()
 
     await goToStep(wrapper, 2)
 
-    expect(wrapper.get('[data-test="step-next"]').text()).toContain('ขั้นที่ 3 ตั้งอัตราตัวแทนผู้ขาย')
+    expect(wrapper.get('[data-test="step-next"]').text()).toContain('ขั้นที่ 3 ตั้งอัตราสมาชิกผู้ขาย')
   })
 
   it('names the step behind you too, so going back is not a guess', async () => {
@@ -598,13 +598,13 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
         blocking_step: 3,
         products_total: 1,
         products_covered: 0,
-        issues: [{ code: 'products_without_rate', label: 'สินค้า 1 จาก 1 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้', count: 1 }],
+        issues: [{ code: 'products_without_rate', label: 'สินค้า 1 จาก 1 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้', count: 1 }],
         can_fix: true,
       },
     })
 
     expect(wrapper.get('[data-test="readiness-headline"]').text())
-      .toBe('ยังไม่พร้อมจ่ายค่าคอม — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
+      .toBe('ยังไม่พร้อมจ่ายค่าแนะนำ — ดีลที่ปิดได้จะไม่มีใครได้เงิน')
   })
 
   it('names step 3 and counts the products with no usable rate', async () => {
@@ -616,7 +616,7 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
         blocking_step: 3,
         products_total: 2,
         products_covered: 0,
-        issues: [{ code: 'products_without_rate', label: 'สินค้า 2 จาก 2 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้', count: 2 }],
+        issues: [{ code: 'products_without_rate', label: 'สินค้า 2 จาก 2 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้', count: 2 }],
         can_fix: true,
       },
     })
@@ -626,7 +626,7 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
     // "อัตราค่าคอม", not "อัตรา": the count now arrives already worded by the
     // server, so the banner renders the sentence money's own service wrote
     // rather than a paraphrase of it composed here.
-    expect(detail).toContain('สินค้า 2 จาก 2 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้')
+    expect(detail).toContain('สินค้า 2 จาก 2 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้')
   })
 
   it('names step 2 when the rates are fine but the plan structure is missing', async () => {
@@ -648,7 +648,7 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
         blocking_step: 2,
         products_total: 1,
         products_covered: 1,
-        issues: [{ code: 'plan_structure_missing', label: 'ยังไม่ได้ตั้งค่าโครงสร้าง Binary — ตัวแทนผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร', count: 1 }],
+        issues: [{ code: 'plan_structure_missing', label: 'ยังไม่ได้ตั้งค่าโครงสร้าง Binary — สมาชิกผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร', count: 1 }],
         can_fix: true,
       },
     })
@@ -685,7 +685,7 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
       overrides: [leaderRule()],
     })
 
-    expect(wrapper.get('[data-test="readiness-headline"]').text()).toBe('พร้อมจ่ายค่าคอมแล้ว — ทุกสินค้ามีอัตราที่ใช้ได้')
+    expect(wrapper.get('[data-test="readiness-headline"]').text()).toBe('พร้อมจ่ายค่าแนะนำแล้ว — ทุกสินค้ามีอัตราที่ใช้ได้')
     expect(wrapper.get('[data-test="readiness-banner"]').classes()).toContain('bg-emerald-50')
     expect(wrapper.find('[data-test="readiness-jump"]').exists()).toBe(false)
   })
@@ -699,7 +699,7 @@ describe('CommissionPlansView — the readiness banner names the blocking step',
         blocking_step: 3,
         products_total: 1,
         products_covered: 0,
-        issues: [{ code: 'products_without_rate', label: 'สินค้า 1 จาก 1 รายการยังไม่มีอัตราค่าคอมที่ใช้ได้', count: 1 }],
+        issues: [{ code: 'products_without_rate', label: 'สินค้า 1 จาก 1 รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้', count: 1 }],
         can_fix: true,
       },
     })

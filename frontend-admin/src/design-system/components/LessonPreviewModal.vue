@@ -179,7 +179,7 @@ onBeforeUnmount(() => {
 
 /** Same words as the bar, kept reachable after it fades (header `title`). */
 const honestyText =
-  'นี่คือตัวอย่างคร่าว ๆ ไม่ใช่หน้าจอจริงของผู้เรียน — แอปตัวแทนออกแบบมาสำหรับมือถือ ' +
+  'นี่คือตัวอย่างคร่าว ๆ ไม่ใช่หน้าจอจริงของผู้เรียน — แอปสมาชิกออกแบบมาสำหรับมือถือ ' +
   'การจัดวางจริงอาจต่างจากนี้เล็กน้อย · การเปิดดูตรงนี้ไม่ถูกบันทึกเป็นความคืบหน้า ' +
   'และกดเรียนจบแทนผู้เรียนไม่ได้'
 
@@ -298,7 +298,7 @@ function onBackdropClick(event: MouseEvent) {
     style="font-family: Kanit, sans-serif"
     role="dialog"
     aria-modal="true"
-    aria-label="ตัวอย่างที่ตัวแทนจะเห็น"
+    aria-label="ตัวอย่างที่สมาชิกจะเห็น"
     @click="onBackdropClick"
   >
     <div class="relative w-full max-w-4xl max-h-[92vh] bg-white rounded-2xl shadow-xl flex flex-col overflow-hidden">
@@ -307,7 +307,7 @@ function onBackdropClick(event: MouseEvent) {
         <!-- Carries the honesty text after the bar fades — hover to recall it. -->
         <Icon name="eye" :size="16" class="text-slate-400 shrink-0 cursor-help" :title="honestyText" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-bold text-slate-900 truncate" :title="honestyText">ตัวอย่างที่ตัวแทนจะเห็น</p>
+          <p class="text-sm font-bold text-slate-900 truncate" :title="honestyText">ตัวอย่างที่สมาชิกจะเห็น</p>
           <p class="text-[11px] text-slate-400 truncate">{{ lesson.title }}</p>
         </div>
         <button
@@ -344,7 +344,7 @@ function onBackdropClick(event: MouseEvent) {
         <div v-if="showHonestyBar" class="px-4 py-2 bg-amber-50 border-b border-amber-100 shrink-0">
           <p class="text-[11px] text-amber-800 leading-relaxed">
             นี่คือ<strong class="font-bold">ตัวอย่างคร่าว ๆ</strong> ไม่ใช่หน้าจอจริงของผู้เรียน —
-            แอปตัวแทนออกแบบมาสำหรับมือถือ การจัดวางจริงอาจต่างจากนี้เล็กน้อย ·
+            แอปสมาชิกออกแบบมาสำหรับมือถือ การจัดวางจริงอาจต่างจากนี้เล็กน้อย ·
             การเปิดดูตรงนี้<strong class="font-bold">ไม่ถูกบันทึกเป็นความคืบหน้า</strong>และกดเรียนจบแทนผู้เรียนไม่ได้
           </p>
         </div>

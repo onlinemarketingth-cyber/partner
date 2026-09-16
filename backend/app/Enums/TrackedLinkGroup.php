@@ -180,8 +180,8 @@ enum TrackedLinkGroup: string
     public function label(): string
     {
         return match ($this) {
-            self::CompanySignup => 'สมัครตัวแทนบริษัท',
-            self::TeamSignup => 'สมัครตัวแทนลูกทีม',
+            self::CompanySignup => 'สมัครสมาชิกบริษัท',
+            self::TeamSignup => 'สมัครสมาชิกลูกทีม',
             self::ProductShare => 'แชร์สินค้า',
             self::Payment => 'แชร์ชำระเงิน',
             self::Affiliate => 'ลิงก์พันธมิตร',

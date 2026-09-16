@@ -77,7 +77,7 @@ const navItems: NavItem[] = [
     { name: 'academy', icon: 'book', label: { th: 'Academy', en: 'Academy' } },
     { name: 'commission', icon: 'money', label: { th: 'ค่าแนะนำ', en: 'Commission' } },
     // 2026-08-27 — sits right after the ledger it draws on.
-    { name: 'withdrawals', icon: 'invoice', label: { th: 'เบิกค่าคอม', en: 'Withdrawals' } },
+    { name: 'withdrawals', icon: 'invoice', label: { th: 'เบิกค่าแนะนำ', en: 'Withdrawals' } },
     { name: 'leaderboard', icon: 'trophy', label: { th: 'Leaderboard', en: 'Leaderboard' } },
     // ADR-011 Section 4 (TASK-033)
     { name: 'affiliate-links', icon: 'link', label: { th: 'ลิงก์พันธมิตร', en: 'Affiliate Links' } },

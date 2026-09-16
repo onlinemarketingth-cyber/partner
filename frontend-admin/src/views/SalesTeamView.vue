@@ -158,7 +158,7 @@ const pendingCount = computed(() => pendingNodes.value.length)
 
 const tabs = computed<{ key: TeamTab; label: string; icon: string; count: number }[]>(() => [
   { key: 'leaders', label: 'หัวหน้าทีม', icon: 'star', count: leaderCount.value },
-  { key: 'independent', label: 'ตัวแทนอิสระ', icon: 'user', count: independentCount.value },
+  { key: 'independent', label: 'สมาชิกอิสระ', icon: 'user', count: independentCount.value },
   { key: 'members', label: 'ลูกทีม', icon: 'users', count: memberCount.value },
   { key: 'pending', label: 'รออนุมัติเข้าทีม', icon: 'clock', count: pendingCount.value },
 ])
@@ -279,7 +279,7 @@ const kpis = computed(() => {
     // (soft-deleted ones are excluded server-side), so "ทั้งหมด" named a
     // set this number does not contain. Same wording as the dashboard KPI,
     // which now counts exactly the same thing.
-    { label: 'ตัวแทนที่ใช้งานอยู่', value: agents.value.length },
+    { label: 'สมาชิกที่ใช้งานอยู่', value: agents.value.length },
     // TASK-179 §3.6 (F-15) — the server's DISTINCT count, NOT a sum of the
     // cards: a client referred by two agents appears on both cards and is
     // one client.
@@ -687,8 +687,8 @@ watch(() => activeCompany.companyId, () => { loadAll() })
     <HeroHeader
       icon="trophy"
       title="ทีมขาย"
-      subtitle="ภาพรวมทีมขาย — จำนวนลูกค้าและดีลของแต่ละตัวแทน"
-      description="แท็บ ‘หัวหน้าทีม’ = หัวหน้าทีมพร้อมลูกทีมที่ซ้อนอยู่ข้างใน · แท็บ ‘ตัวแทนอิสระ’ = ตัวแทนที่ไม่มีสังกัดและไม่มีลูกทีม · แท็บ ‘ลูกทีม’ = รายชื่อลูกทีมแบบแบนราบ (คนเดียวกับที่ซ้อนอยู่ในหัวหน้าทีม) · แท็บ ‘รออนุมัติเข้าทีม’ = อนุมัติ/ปฏิเสธได้ทันทีจากที่นี่ — แถบ/avatar สีทอง = ได้รับสิทธิ์หัวหน้าทีมจากแอดมิน, บรรทัด ‘ดูแลลูกทีม N คน’ = มีลูกทีมจริง, ป้ายสีเหลือง ‘รออนุมัติ’ = สมัครแล้วรออนุมัติ"
+      subtitle="ภาพรวมทีมขาย — จำนวนลูกค้าและดีลของแต่ละสมาชิก"
+      description="แท็บ ‘หัวหน้าทีม’ = หัวหน้าทีมพร้อมลูกทีมที่ซ้อนอยู่ข้างใน · แท็บ ‘สมาชิกอิสระ’ = สมาชิกที่ไม่มีสังกัดและไม่มีลูกทีม · แท็บ ‘ลูกทีม’ = รายชื่อลูกทีมแบบแบนราบ (คนเดียวกับที่ซ้อนอยู่ในหัวหน้าทีม) · แท็บ ‘รออนุมัติเข้าทีม’ = อนุมัติ/ปฏิเสธได้ทันทีจากที่นี่ — แถบ/avatar สีทอง = ได้รับสิทธิ์หัวหน้าทีมจากแอดมิน, บรรทัด ‘ดูแลลูกทีม N คน’ = มีลูกทีมจริง, ป้ายสีเหลือง ‘รออนุมัติ’ = สมัครแล้วรออนุมัติ"
       :kpis="kpis"
       accent-color="brand"
       storage-key="admin-sales-team"
@@ -723,7 +723,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         <input
           v-model="q"
           type="text"
-          placeholder="ค้นหาตัวแทน — ชื่อ / เบอร์ / อีเมล"
+          placeholder="ค้นหาสมาชิก — ชื่อ / เบอร์ / อีเมล"
           class="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:border-brand-400"
         />
       </div>
@@ -736,7 +736,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             v-for="opt in [
               { field: 'team', label: 'ลูกทีม' },
               { field: 'sales', label: 'ยอดขาย' },
-              { field: 'commission', label: 'ค่าคอม' },
+              { field: 'commission', label: 'ค่าแนะนำ' },
             ]"
             :key="opt.field"
             type="button"
@@ -773,7 +773,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
 
     <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
     <template v-else>
-      <EmptyState v-if="!agents.length" icon="users" title="ยังไม่มีตัวแทนในทีม" class="mt-4" />
+      <EmptyState v-if="!agents.length" icon="users" title="ยังไม่มีสมาชิกในทีม" class="mt-4" />
       <template v-else>
         <!-- TASK-125 / TASK-203 — ONE grid, fed by whichever tab is active.
              In the "หัวหน้าทีม" tab the nodes are tree ROOTS, so each leader
@@ -786,11 +786,11 @@ watch(() => activeCompany.companyId, () => { loadAll() })
           icon="users"
           :title="
             isFlat
-              ? 'ไม่พบตัวแทนที่ค้นหา'
+              ? 'ไม่พบสมาชิกที่ค้นหา'
               : activeTab === 'leaders'
                 ? 'ยังไม่มีหัวหน้าทีม'
                 : activeTab === 'independent'
-                  ? 'ไม่มีตัวแทนอิสระ — ทุกคนอยู่ในทีมแล้ว'
+                  ? 'ไม่มีสมาชิกอิสระ — ทุกคนอยู่ในทีมแล้ว'
                   : activeTab === 'members'
                     ? 'ยังไม่มีลูกทีม'
                     : 'ไม่มีคำขอเข้าทีมที่รออนุมัติ'
@@ -855,7 +855,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             <h2 class="text-lg font-bold text-slate-900 truncate">ลูกค้าของ {{ drawerAgent?.agent_name ?? '—' }}</h2>
             <button class="text-slate-400 hover:text-slate-600" @click="closeDrawer"><Icon name="close" :size="20" /></button>
           </div>
-          <p class="text-xs text-slate-400 mb-4">รายชื่อลูกค้าที่ตัวแทนคนนี้ดูแล — กด ‘ดูรายละเอียด’ เพื่อเปิดแฟ้มลูกค้า</p>
+          <p class="text-xs text-slate-400 mb-4">รายชื่อลูกค้าที่สมาชิกคนนี้ดูแล — กด ‘ดูรายละเอียด’ เพื่อเปิดแฟ้มลูกค้า</p>
 
           <p v-if="drawerLoading" class="text-sm text-slate-400">กำลังโหลด...</p>
           <div v-else-if="drawerError" class="px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">{{ drawerError }}</div>
@@ -909,7 +909,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       :show="pendingGrant !== null"
       variant="primary"
       :title='pendingGrant ? `อนุมัติใบรับรอง "${pendingGrant.tier.name}"` : ""'
-      :body='pendingGrant ? `อนุมัติให้ ${pendingGrant.agentName ?? "ตัวแทน"} ผ่านใบรับรอง "${pendingGrant.tier.name}" โดยไม่ต้องสอบจริง ยืนยันหรือไม่?` : ""'
+      :body='pendingGrant ? `อนุมัติให้ ${pendingGrant.agentName ?? "สมาชิก"} ผ่านใบรับรอง "${pendingGrant.tier.name}" โดยไม่ต้องสอบจริง ยืนยันหรือไม่?` : ""'
       :busy="grantingTierKey !== null"
       @confirm="confirmGrantCertification"
       @update:show="(v) => { if (!v) pendingGrant = null }"
@@ -928,7 +928,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       variant="danger"
       title="ยกเลิกสิทธิ์หัวหน้าทีม"
       :body='pendingLeaderRevoke
-        ? `ยกเลิกสิทธิ์หัวหน้าทีมของ ${pendingLeaderRevoke.agentName ?? "ตัวแทน"} — ลิงก์ชวนทีมที่แจกไปแล้วทั้งหมดจะรับสมัครใครไม่ได้อีก และจะอนุมัติตัวแทนที่ตัวเองชวนมาเองไม่ได้ ยืนยันหรือไม่?`
+        ? `ยกเลิกสิทธิ์หัวหน้าทีมของ ${pendingLeaderRevoke.agentName ?? "สมาชิก"} — ลิงก์ชวนทีมที่แจกไปแล้วทั้งหมดจะรับสมัครใครไม่ได้อีก และจะอนุมัติสมาชิกที่ตัวเองชวนมาเองไม่ได้ ยืนยันหรือไม่?`
         : ""'
       :busy="structureSavingAgentId !== null"
       @confirm="confirmRevokeTeamLeader"

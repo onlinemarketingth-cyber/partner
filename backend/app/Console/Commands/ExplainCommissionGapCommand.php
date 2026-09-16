@@ -68,7 +68,7 @@ class ExplainCommissionGapCommand extends Command
                             {--order= : ตรวจเฉพาะคำสั่งซื้อนี้ เช่น ORD-8CDEHHGY}
                             {--company= : จำกัดเฉพาะบริษัทนี้ (id)}
                             {--limit=30 : ดูคำสั่งซื้อที่ชำระแล้วล่าสุดกี่รายการ}
-                            {--all : แสดงทุกรายการ รวมที่ได้ค่าคอมถูกต้องแล้ว}';
+                            {--all : แสดงทุกรายการ รวมที่ได้ค่าแนะนำถูกต้องแล้ว}';
 
     protected $description = 'Explain why paid orders did or did not produce a commission (read-only)';
 
@@ -108,7 +108,7 @@ class ExplainCommissionGapCommand extends Command
                     $order->paid_at?->format('d/m/Y'),
                     $referral?->agent?->name ?? '—',
                     number_format($ledger->amount_satang / 100, 2),
-                    'ได้ค่าคอมแล้ว',
+                    'ได้ค่าแนะนำแล้ว',
                 ];
 
                 continue;
@@ -132,20 +132,20 @@ class ExplainCommissionGapCommand extends Command
 
         if ($rows !== []) {
             $this->table(
-                ['เลขที่คำสั่งซื้อ', 'ชำระเมื่อ', 'ตัวแทน', 'ค่าคอม (บาท)', 'ผล / สาเหตุ'],
+                ['เลขที่คำสั่งซื้อ', 'ชำระเมื่อ', 'สมาชิก', 'ค่าแนะนำ (บาท)', 'ผล / สาเหตุ'],
                 $rows,
             );
         }
 
         $this->line('');
         $this->info('สรุป');
-        $this->line("  ได้ค่าคอมเรียบร้อย: {$withCommission} รายการ");
+        $this->line("  ได้ค่าแนะนำเรียบร้อย: {$withCommission} รายการ");
 
         if ($reasons === []) {
-            $this->line('  ไม่มีรายการที่ขาดค่าคอม');
+            $this->line('  ไม่มีรายการที่ขาดค่าแนะนำ');
         } else {
             foreach ($reasons as $reason => $count) {
-                $this->line("  ไม่ได้ค่าคอม — {$reason}: {$count} รายการ");
+                $this->line("  ไม่ได้ค่าแนะนำ — {$reason}: {$count} รายการ");
             }
         }
 
@@ -158,7 +158,7 @@ class ExplainCommissionGapCommand extends Command
              * gateway would be paid at a rate nobody at this company set,
              * into a ledger row that can never be edited.
              */
-            $this->warn("  ⚠ พบ {$crossCompany} รายการที่อัตราค่าคอมถูกหาเจอจาก 'บริษัทอื่น' เมื่อไม่มีผู้ใช้ล็อกอิน");
+            $this->warn("  ⚠ พบ {$crossCompany} รายการที่อัตราค่าแนะนำถูกหาเจอจาก 'บริษัทอื่น' เมื่อไม่มีผู้ใช้ล็อกอิน");
             $this->line('     (เกิดกับการชำระผ่านเกตเวย์ ซึ่งไม่มี user ให้ TenantScope ยึด) — แจ้ง ag-lead');
         }
 
@@ -192,12 +192,12 @@ class ExplainCommissionGapCommand extends Command
             ->exists();
 
         if (! $everEnteredPayment) {
-            return 'ไม่เคยมีการเปลี่ยนสถานะเข้า "ชำระเงินแล้ว" (ค่าคอมจึงไม่ถูกเรียกใช้เลย)';
+            return 'ไม่เคยมีการเปลี่ยนสถานะเข้า "ชำระเงินแล้ว" (ค่าแนะนำจึงไม่ถูกเรียกใช้เลย)';
         }
 
         // GATE 3 — BR-1.
         if (! $referral->agent?->highestPassedCertTier()) {
-            return 'ตัวแทนยังไม่ผ่าน cert tier ใดเลย';
+            return 'สมาชิกยังไม่ผ่าน cert tier ใดเลย';
         }
 
         // GATE 4 — BR-2, asked twice: as the Service asks it, and scoped to
@@ -212,7 +212,7 @@ class ExplainCommissionGapCommand extends Command
         $ownCompanyRule = $this->ruleForCompany($product, (int) $order->company_id);
 
         if ($ownCompanyRule === null) {
-            return 'ไม่มีอัตราค่าคอมของบริษัทนี้ (ทั้งระดับสินค้า หมวดหมู่ และค่าเริ่มต้นบริษัท)';
+            return 'ไม่มีอัตราค่าแนะนำของบริษัทนี้ (ทั้งระดับสินค้า หมวดหมู่ และค่าเริ่มต้นบริษัท)';
         }
 
         if ($asServiceSees !== null && (int) $asServiceSees->company_id !== (int) $order->company_id) {
@@ -221,7 +221,7 @@ class ExplainCommissionGapCommand extends Command
             return 'อัตราที่ระบบหาเจอเป็นของบริษัทอื่น (ดูคำเตือนท้ายรายงาน)';
         }
 
-        return 'ผ่านทุกเงื่อนไขแต่ไม่มีแถวค่าคอม — ต้องดู storage/logs';
+        return 'ผ่านทุกเงื่อนไขแต่ไม่มีแถวค่าแนะนำ — ต้องดู storage/logs';
     }
 
     /**

@@ -44,7 +44,7 @@ class ExplainCommissionGapTest extends TestCase
         $order = $this->paidOrder(withRule: false, withCert: true, enteredPaymentStage: true);
 
         $this->artisan('commissions:explain', ['--order' => $order->order_number])
-            ->expectsOutputToContain('ไม่มีอัตราค่าคอมของบริษัทนี้')
+            ->expectsOutputToContain('ไม่มีอัตราค่าแนะนำของบริษัทนี้')
             ->assertSuccessful();
     }
 
@@ -91,7 +91,7 @@ class ExplainCommissionGapTest extends TestCase
         $this->ledgerFor($order);
 
         $this->artisan('commissions:explain', ['--order' => $order->order_number])
-            ->expectsOutputToContain('ได้ค่าคอมเรียบร้อย: 1 รายการ')
+            ->expectsOutputToContain('ได้ค่าแนะนำเรียบร้อย: 1 รายการ')
             ->assertSuccessful();
     }
 
@@ -122,7 +122,7 @@ class ExplainCommissionGapTest extends TestCase
         ]);
 
         $this->artisan('commissions:explain', ['--order' => $order->order_number])
-            ->expectsOutputToContain('ไม่มีอัตราค่าคอมของบริษัทนี้')
+            ->expectsOutputToContain('ไม่มีอัตราค่าแนะนำของบริษัทนี้')
             ->assertSuccessful();
     }
 

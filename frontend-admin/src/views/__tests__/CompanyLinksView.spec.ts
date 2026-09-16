@@ -37,10 +37,10 @@ import CompanyLinksView from '../CompanyLinksView.vue'
 const LINK = {
   id: 41,
   group: 'company_signup',
-  group_label: 'สมัครตัวแทนบริษัท',
+  group_label: 'สมัครสมาชิกบริษัท',
   code: 'thailife',
   short_url: 'https://apps.liveto100club.com/c/thailife',
-  label: 'สมัครตัวแทนบริษัท',
+  label: 'สมัครสมาชิกบริษัท',
   created_by_user_id: 3,
   created_by_name: 'kreangyot Ohuyhanapa',
   expires_at: null,

@@ -257,7 +257,7 @@ class CommissionWithdrawalRequestController extends Controller
 
         if (count($ids) !== count(array_unique($ids))) {
             throw ValidationException::withMessages([
-                'payees' => 'มีตัวแทนซ้ำกันในรายการที่เลือก — กรุณารีเฟรชหน้าจอแล้วเลือกใหม่',
+                'payees' => 'มีสมาชิกซ้ำกันในรายการที่เลือก — กรุณารีเฟรชหน้าจอแล้วเลือกใหม่',
             ]);
         }
 
@@ -532,7 +532,7 @@ class CommissionWithdrawalRequestController extends Controller
                 'ผู้รับ',
                 'ที่มา',
                 'ยอด (บาท)',
-                'จำนวนรายการค่าคอม',
+                'จำนวนรายการค่าแนะนำ',
                 'ธนาคาร',
                 'บัญชีรับเงิน',
                 'ชื่อบัญชี',

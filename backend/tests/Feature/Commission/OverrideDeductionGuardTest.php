@@ -50,7 +50,7 @@ class OverrideDeductionGuardTest extends TestCase
             ->assertJsonValidationErrors('rate_value');
 
         $message = $response->json('errors.rate_value.0');
-        $this->assertStringContainsString('หักเกินค่าคอมของผู้ขาย', $message);
+        $this->assertStringContainsString('หักเกินค่าแนะนำของผู้ขาย', $message);
         $this->assertStringContainsString('2 ชั้น', $message);
         $this->assertStringContainsString('บริษัทจ่ายเพิ่ม', $message, 'the way out is named, not just the refusal');
     }

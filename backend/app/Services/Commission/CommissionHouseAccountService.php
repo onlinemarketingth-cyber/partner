@@ -220,7 +220,7 @@ class CommissionHouseAccountService
     {
         $house = $company->commissionHouseAccount;
 
-        abort_if($house === null, 404, 'บริษัทนี้ยังไม่ได้เปิดบัญชีบริษัทสำหรับรับค่าคอมหัวหน้าทีม');
+        abort_if($house === null, 404, 'บริษัทนี้ยังไม่ได้เปิดบัญชีบริษัทสำหรับรับค่าแนะนำหัวหน้าทีม');
 
         $changes = [
             'first_name' => trim($displayName),

@@ -366,7 +366,7 @@ const allTabs: { key: Tab; label: string; icon: string; superAdminOnly?: boolean
   { key: 'modules', label: 'โมดูล', icon: 'book' },
   { key: 'quizzes', label: 'แบบทดสอบท้ายบทเรียน', icon: 'layers' },
   { key: 'exams', label: 'แบบประเมินผล', icon: 'check_square' },
-  { key: 'progress', label: 'ความคืบหน้าตัวแทน', icon: 'users' },
+  { key: 'progress', label: 'ความคืบหน้าสมาชิก', icon: 'users' },
   { key: 'tiers', label: 'ระดับใบรับรอง', icon: 'shield_check', superAdminOnly: true },
 ]
 
@@ -2358,7 +2358,7 @@ async function loadProgressSummary() {
     progressRows.value = []
     progressOutline.value = []
     progressMeta.value = null
-    progressError.value = 'Super Admin: เลือกบริษัทด้านบนก่อน จึงจะแสดงความคืบหน้าของตัวแทนบริษัทนั้นได้'
+    progressError.value = 'Super Admin: เลือกบริษัทด้านบนก่อน จึงจะแสดงความคืบหน้าของสมาชิกบริษัทนั้นได้'
     progressLoadedOnce.value = true
     return
   }
@@ -2497,7 +2497,7 @@ async function confirmGrantCertification() {
     <HeroHeader
       icon="book"
       title="Academy"
-      subtitle="โมดูล / แบบทดสอบท้ายบทเรียน / แบบประเมินผล / ความคืบหน้าตัวแทน"
+      subtitle="โมดูล / แบบทดสอบท้ายบทเรียน / แบบประเมินผล / ความคืบหน้าสมาชิก"
       description="เนื้อหาซิลลาบัสและเกณฑ์การผ่านยังเป็นค่าตัวอย่างชั่วคราว รอการยืนยัน"
       accent-color="brand"
       storage-key="academy-management"
@@ -4283,7 +4283,7 @@ async function confirmGrantCertification() {
           @input="onProgressSearchInput"
         />
         <p v-if="progressMeta" class="text-[11px] text-slate-400">
-          ตัวแทนทั้งบริษัท {{ progressAgentCount }} คน · บทเรียนที่นับความคืบหน้า {{ progressRequiredTotal }} บท
+          สมาชิกทั้งบริษัท {{ progressAgentCount }} คน · บทเรียนที่นับความคืบหน้า {{ progressRequiredTotal }} บท
           <span v-if="progressMeta.total !== progressAgentCount"> · ตรงกับคำค้น {{ progressMeta.total }} คน</span>
         </p>
       </div>
@@ -4306,7 +4306,7 @@ async function confirmGrantCertification() {
           ลองใหม่
         </button>
       </div>
-      <EmptyState v-else-if="!progressRows.length" icon="users" title="ไม่พบตัวแทน" />
+      <EmptyState v-else-if="!progressRows.length" icon="users" title="ไม่พบสมาชิก" />
       <template v-else>
       <TransitionGroup tag="div" name="list-fade" class="space-y-2">
         <div v-for="a in progressRows" :key="a.user_id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
@@ -4418,7 +4418,7 @@ async function confirmGrantCertification() {
           <Icon name="alert" :size="18" class="text-amber-600 shrink-0" />
           <p class="text-sm font-bold text-slate-900">มีคำถามที่ยังไม่ได้เลือกคำตอบที่ถูกต้อง</p>
         </div>
-        <p class="text-xs text-slate-500 mb-2">ตัวแทนจะทำข้อสอบชุดนี้ไม่ได้ครบถ้วนจนกว่าจะเลือกคำตอบที่ถูกต้องให้ครบทุกข้อ:</p>
+        <p class="text-xs text-slate-500 mb-2">สมาชิกจะทำข้อสอบชุดนี้ไม่ได้ครบถ้วนจนกว่าจะเลือกคำตอบที่ถูกต้องให้ครบทุกข้อ:</p>
         <ul class="text-xs text-slate-700 space-y-1 mb-3 max-h-40 overflow-y-auto">
           <li v-for="q in incompleteWarningQuestions" :key="q.id" class="flex items-start gap-1.5">
             <Icon name="alert" :size="12" class="text-amber-500 mt-0.5 shrink-0" />
@@ -4516,7 +4516,7 @@ async function confirmGrantCertification() {
       :show="pendingGrant !== null"
       variant="primary"
       :title='pendingGrant ? `อนุมัติใบรับรอง "${pendingGrant.tier.name}"` : ""'
-      body="อนุมัติให้ตัวแทนผ่านใบรับรองนี้โดยไม่ต้องสอบจริง ยืนยันหรือไม่?"
+      body="อนุมัติให้สมาชิกผ่านใบรับรองนี้โดยไม่ต้องสอบจริง ยืนยันหรือไม่?"
       :busy="grantingTierKey !== null"
       @confirm="confirmGrantCertification"
       @update:show="(v) => { if (!v) pendingGrant = null }"

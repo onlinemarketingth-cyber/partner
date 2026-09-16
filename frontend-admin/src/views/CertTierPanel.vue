@@ -60,7 +60,7 @@ const isEditing = computed(() => editingId.value !== null)
  */
 const deleteBody = computed(() =>
   `ลบ "${pendingDelete.value?.name ?? ''}" ออกจากทุกบริษัทในระบบ — `
-  + 'ถ้ายังมีโมดูล แบบทดสอบ อัตราค่าคอมมิชชั่น หรือการรับรองตัวแทนผูกอยู่ '
+  + 'ถ้ายังมีโมดูล แบบทดสอบ อัตราค่าแนะนำ หรือการรับรองสมาชิกผูกอยู่ '
   + 'ระบบจะไม่ยอมให้ลบ และจะบอกว่าติดอะไรอยู่',
 )
 
@@ -207,7 +207,7 @@ onMounted(load)
       <p class="text-xs text-slate-400 mb-4 leading-relaxed">
         ระดับใบรับรอง<span class="font-bold text-slate-500">ใช้ร่วมกันทุกบริษัท</span>
         — แก้ไขที่นี่จะมีผลกับทุกบริษัทในระบบ · โมดูล, แบบทดสอบ,
-        อัตราค่าคอมมิชชั่น และการรับรองตัวแทน ล้วนอ้างอิงระดับเหล่านี้
+        อัตราค่าแนะนำ และการรับรองสมาชิก ล้วนอ้างอิงระดับเหล่านี้
       </p>
 
       <p v-if="errorMessage" class="mb-3 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs font-bold text-rose-700">
@@ -277,7 +277,7 @@ onMounted(load)
             />
             <span class="text-xs leading-relaxed">
               <span class="font-bold text-slate-700">เป็นระดับบังคับ</span>
-              <span class="block text-slate-400">ตัวแทนต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)</span>
+              <span class="block text-slate-400">สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)</span>
             </span>
           </label>
         </div>
@@ -306,7 +306,7 @@ onMounted(load)
         v-else-if="!tiers.length"
         icon="shield_check"
         title="ยังไม่มีระดับใบรับรอง"
-        message="ต้องมีอย่างน้อย 1 ระดับ ก่อนจึงจะสร้าง Section ใน Academy หรือตั้งอัตราค่าคอมมิชชั่นได้ — โครงที่ระบบออกแบบไว้คือ Basic (บังคับ) → Intermediate → High"
+        message="ต้องมีอย่างน้อย 1 ระดับ ก่อนจึงจะสร้าง Section ใน Academy หรือตั้งอัตราค่าแนะนำได้ — โครงที่ระบบออกแบบไว้คือ Basic (บังคับ) → Intermediate → High"
         cta-label="เพิ่มระดับแรก"
         :cta-disabled="false"
         @cta="startCreate"
@@ -327,7 +327,7 @@ onMounted(load)
               <p class="text-sm font-bold text-slate-900 truncate">{{ tier.name }}</p>
               <span
                 v-if="tier.is_mandatory"
-                title="ตัวแทนต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)"
+                title="สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)"
                 class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[11px] font-bold"
               >
                 <Icon name="shield_check" :size="11" />

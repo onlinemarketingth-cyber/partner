@@ -169,7 +169,7 @@ class AgentCommissionSummaryController extends Controller
             $out = fopen('php://output', 'w');
 
             fputcsv($out, [
-                'ชื่อตัวแทน',
+                'ชื่อสมาชิก',
                 'ธนาคาร',
                 'เลขที่บัญชี',
                 'ชื่อบัญชี',

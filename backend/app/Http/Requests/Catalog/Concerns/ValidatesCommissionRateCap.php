@@ -83,7 +83,7 @@ trait ValidatesCommissionRateCap
 
         $validator->errors()->add(
             'rate_value',
-            "อัตราคอมมิชชั่นที่กรอกไว้ ({$enteredText}) เกิน {$capPercentText}% ของราคาขายสินค้านี้ ({$priceBahtText} บาท) กรุณาแก้ไขก่อนบันทึก",
+            "อัตราค่าแนะนำที่กรอกไว้ ({$enteredText}) เกิน {$capPercentText}% ของราคาขายสินค้านี้ ({$priceBahtText} บาท) กรุณาแก้ไขก่อนบันทึก",
         );
     }
 }

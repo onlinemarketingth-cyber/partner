@@ -175,7 +175,7 @@ describe('a Company Admin on a สินค้ากลาง', () => {
     expect(notice.exists()).toBe(true)
     expect(notice.text()).toContain('แก้ไขได้เฉพาะ Super Admin')
     expect(notice.text()).toContain('ราคาของบริษัท')
-    expect(notice.text()).toContain('อัตราคอมมิชชั่น')
+    expect(notice.text()).toContain('อัตราค่าแนะนำ')
   })
 
   it('cannot type into the product fields', async () => {

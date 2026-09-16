@@ -195,7 +195,7 @@ class PayoutSummaryReservedBalanceTest extends TestCase
             'id_document_type' => IdDocumentType::ThaiNationalId,
             'bank_name' => 'กสิกรไทย',
             'bank_account_number' => '1234567890',
-            'bank_account_holder_name' => 'ตัวแทน ทดสอบ',
+            'bank_account_holder_name' => 'สมาชิก ทดสอบ',
         ]);
     }
 

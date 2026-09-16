@@ -483,7 +483,7 @@ class GatewayPaymentService
             $order,
             NotificationType::OrderRefundReported,
             'ผู้ให้บริการแจ้งการคืนเงิน',
-            "คำสั่งซื้อ {$order->order_number} ถูกแจ้งคืนเงิน — ค่าคอมมิชชั่นของคุณยังไม่ถูกกลับรายการ"
+            "คำสั่งซื้อ {$order->order_number} ถูกแจ้งคืนเงิน — ค่าแนะนำของคุณยังไม่ถูกกลับรายการ"
                 .' ผู้ดูแลกำลังตรวจสอบและจะเป็นผู้ตัดสินใจ',
             // Refunds are rare and each one matters to this agent's money, so
             // unlike a retried card this is NOT collapsed to one a day.

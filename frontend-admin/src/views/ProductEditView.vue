@@ -738,7 +738,7 @@ const isEffectivelyAffiliate = computed(
 
 const affiliateOverrideModeLabels: Record<AffiliateOverrideMode, string> = {
   additive: 'จ่ายเพิ่มแยกต่างหาก (Additive)',
-  deductive: 'หักจากค่าคอมตัวแทน (Deductive)',
+  deductive: 'หักจากค่าแนะนำสมาชิก (Deductive)',
 }
 
 // TASK-197 §3.1/§3.3 — same labels the per-rule rate_type selector used
@@ -1024,7 +1024,7 @@ async function saveBasics() {
     // Product::effectivePlanType() THROWS for a platform product with no plan
     // type rather than guess — the guess would land in a ledger that cannot be
     // corrected (BR-2/BR-4). Asked here, and again in StoreProductRequest.
-    errorMessage.value = 'สินค้ากลางต้องเลือกรูปแบบค่าคอมมิชชั่นก่อนบันทึก'
+    errorMessage.value = 'สินค้ากลางต้องเลือกรูปแบบค่าแนะนำก่อนบันทึก'
     return
   }
   savingBasics.value = true
@@ -1900,7 +1900,7 @@ async function loadCommissionRules() {
     // Company Admin/Super Admin only (CommissionRulePolicy) — a 403
     // here shouldn't blank the rest of the page.
     if (!(e instanceof ApiError && e.status === 403)) {
-      errorMessage.value = apiErrorMessage(e, 'โหลดอัตราคอมมิชชั่นไม่สำเร็จ')
+      errorMessage.value = apiErrorMessage(e, 'โหลดอัตราค่าแนะนำไม่สำเร็จ')
     }
   }
 }
@@ -2093,7 +2093,7 @@ async function submitRule() {
     resetRuleForm()
     await loadCommissionRules()
   } catch (e) {
-    ruleError.value = apiErrorMessage(e, 'บันทึกอัตราคอมมิชชั่นไม่สำเร็จ')
+    ruleError.value = apiErrorMessage(e, 'บันทึกอัตราค่าแนะนำไม่สำเร็จ')
   } finally {
     savingRule.value = false
   }
@@ -2181,7 +2181,7 @@ async function saveEditRule(rule: CommissionRule) {
     editingRuleId.value = null
     await loadCommissionRules()
   } catch (e) {
-    ruleError.value = apiErrorMessage(e, 'บันทึกอัตราคอมมิชชั่นไม่สำเร็จ')
+    ruleError.value = apiErrorMessage(e, 'บันทึกอัตราค่าแนะนำไม่สำเร็จ')
   }
 }
 async function deleteRule(ruleId: number) {
@@ -2190,7 +2190,7 @@ async function deleteRule(ruleId: number) {
     await api.delete(`/commission-rules/${ruleId}`)
     commissionRules.value = commissionRules.value.filter((r) => r.id !== ruleId)
   } catch (e) {
-    ruleError.value = apiErrorMessage(e, 'ลบอัตราคอมมิชชั่นไม่สำเร็จ')
+    ruleError.value = apiErrorMessage(e, 'ลบอัตราค่าแนะนำไม่สำเร็จ')
   }
 }
 
@@ -2296,7 +2296,7 @@ type ProductEditTab = 'general' | 'commission' | 'voucher' | 'media' | 'specs' |
 const activeTab = ref<ProductEditTab>('general')
 const tabDefs: { key: ProductEditTab; label: string; icon: string }[] = [
   { key: 'general', label: 'ทั่วไป', icon: 'cube' },
-  { key: 'commission', label: 'คอมมิชชั่น', icon: 'dollar' },
+  { key: 'commission', label: 'ค่าแนะนำ', icon: 'dollar' },
   { key: 'voucher', label: 'บัตรกำนัลและจัดส่ง', icon: 'tag' },
   { key: 'media', label: 'รูปภาพและสื่อ', icon: 'image' },
   { key: 'specs', label: 'สเปคสินค้า', icon: 'layout' },
@@ -2322,7 +2322,7 @@ function goToVideoSettings() {
     <HeroHeader
       icon="cube"
       :title="isCreateMode ? 'เพิ่มสินค้าใหม่' : product?.name || 'แก้ไขสินค้า'"
-      subtitle="รายละเอียดสินค้า / คอมมิชชั่น / สื่อการขาย"
+      subtitle="รายละเอียดสินค้า / ค่าแนะนำ / สื่อการขาย"
       accent-color="brand"
       :storage-key="isCreateMode ? 'product-create' : `product-edit-${productId}`"
     >
@@ -2392,7 +2392,7 @@ function goToVideoSettings() {
     <div v-if="isCatalogLinked" class="mt-4 px-4 py-3 rounded-xl bg-blue-50 border border-blue-200 text-sm text-blue-700 flex items-start gap-2">
       <Icon name="globe" :size="16" class="mt-0.5 shrink-0" />
       <span v-if="isSuperAdmin">
-        สินค้านี้เชื่อมกับ<span class="font-bold">แคตตาล็อกกลาง</span> — ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปค อ่านได้อย่างเดียวที่นี่ (แก้ไขได้จากแคตตาล็อกกลางเท่านั้น) ส่วนราคา/คอมมิชชั่น/สื่อ/สเปค ยังแก้ไขได้ตามปกติ
+        สินค้านี้เชื่อมกับ<span class="font-bold">แคตตาล็อกกลาง</span> — ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปค อ่านได้อย่างเดียวที่นี่ (แก้ไขได้จากแคตตาล็อกกลางเท่านั้น) ส่วนราคา/ค่าแนะนำ/สื่อ/สเปค ยังแก้ไขได้ตามปกติ
       </span>
       <span v-else>
         สินค้านี้เชื่อมกับ<span class="font-bold">แคตตาล็อกกลาง</span> — ข้อมูลทั้งหน้านี้เป็นแบบอ่านอย่างเดียวสำหรับบัญชีของคุณ (แก้ไขได้เฉพาะ Super Admin เท่านั้น)
@@ -2414,7 +2414,7 @@ function goToVideoSettings() {
         <span class="font-bold">สินค้ากลาง</span> — ทุกบริษัทใช้สินค้าตัวนี้ร่วมกัน ข้อมูลสินค้าจึงแก้ไขได้เฉพาะ Super Admin
         <span class="block mt-1">
           สิ่งที่บริษัทของคุณตั้งเองได้: <span class="font-bold">ราคาของบริษัท</span> และ <span class="font-bold">เปิด/ปิดขาย</span> (ที่หน้ารายการสินค้า) ·
-          <span class="font-bold">อัตราคอมมิชชั่น</span> · <span class="font-bold">การปักหมุดแนะนำ</span>
+          <span class="font-bold">อัตราค่าแนะนำ</span> · <span class="font-bold">การปักหมุดแนะนำ</span>
         </span>
       </span>
     </div>
@@ -2482,7 +2482,7 @@ function goToVideoSettings() {
                   เพราะถ้าหยิบรายการของบริษัทใดบริษัทหนึ่งมาใส่ บริษัทอื่นจะเห็นชื่อนั้นติดไปด้วย
                 </li>
                 <li>
-                  <span class="font-bold">รูปแบบค่าคอมมิชชั่น</span> —
+                  <span class="font-bold">รูปแบบค่าแนะนำ</span> —
                   ต้องเลือกเอง เพราะสินค้านี้ไม่ได้อยู่ใต้บริษัทไหน จึงไม่มีค่าของบริษัทมาเติมให้อัตโนมัติ
                 </li>
                 <li>
@@ -2518,7 +2518,7 @@ function goToVideoSettings() {
                     ชื่อ แบรนด์ หมวดหมู่ คำอธิบาย และคำอธิบายสเปคของสินค้านี้ถูกดึงมาจาก
                     "แคตตาล็อกกลาง" ที่ใช้ร่วมกันทุกบริษัท จึงแก้ไขจากหน้านี้ไม่ได้ —
                     ต้องแก้ไขจากรายการในแคตตาล็อกกลางเท่านั้น (Super Admin เท่านั้นที่แก้ไขได้)
-                    ส่วนราคาและค่าคอมมิชชั่นยังคงเป็นของสินค้านี้แยกต่างหาก
+                    ส่วนราคาและค่าแนะนำยังคงเป็นของสินค้านี้แยกต่างหาก
                   </p>
                 </InfoPopover>
               </p>
@@ -2631,7 +2631,7 @@ function goToVideoSettings() {
             </p>
           </div>
           <div v-if="isSuperAdmin">
-            <label class="text-sm font-bold text-slate-500">PV (มูลค่าที่ใช้คิดค่าคอม)</label>
+            <label class="text-sm font-bold text-slate-500">PV (มูลค่าที่ใช้คิดค่าแนะนำ)</label>
             <input
               v-model="basicsForm.pv_thb"
               type="number"
@@ -2642,7 +2642,7 @@ function goToVideoSettings() {
               class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
             />
             <p class="mt-1 text-xs text-slate-400">
-              ใช้เฉพาะบริษัทที่คิดค่าคอมจาก PV ตั้งเป็นบาทเหมือนราคา — เว้นว่าง = ระบบคิดจากราคาขายแทน
+              ใช้เฉพาะบริษัทที่คิดค่าแนะนำจาก PV ตั้งเป็นบาทเหมือนราคา — เว้นว่าง = ระบบคิดจากราคาขายแทน
             </p>
           </div>
           <!-- ADR-011/TASK-027/034 — per-product plan-type override.
@@ -2652,12 +2652,12 @@ function goToVideoSettings() {
                alongside so the admin always sees which one actually
                applies, never just the raw possibly-null override. -->
           <div class="sm:col-span-2">
-            <label class="text-sm font-bold text-slate-500">รูปแบบค่าคอมมิชชั่นของสินค้านี้</label>
+            <label class="text-sm font-bold text-slate-500">รูปแบบค่าแนะนำของสินค้านี้</label>
             <select v-model="basicsForm.commission_plan_type" :required="isPlatformProduct" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
               <!-- "สืบทอดจากบริษัท" is not on offer for a platform product:
                    there is no company to inherit from, and
                    Product::effectivePlanType() throws rather than guess. -->
-              <option v-if="isPlatformProduct" value="" disabled>— เลือกรูปแบบค่าคอมมิชชั่น —</option>
+              <option v-if="isPlatformProduct" value="" disabled>— เลือกรูปแบบค่าแนะนำ —</option>
               <option v-else value="">สืบทอดจากบริษัท (ค่าเริ่มต้น)</option>
               <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }}{{ isPlatformProduct ? '' : ' (กำหนดเฉพาะสินค้านี้)' }}</option>
             </select>
@@ -2738,7 +2738,7 @@ function goToVideoSettings() {
               </div>
               <!-- BR-4 is untouched by ADR-026: commission fires at
                    Complete Payment and nowhere else, on every template. -->
-              <p class="mt-2 text-[11px] text-slate-400">คอมมิชชั่น (BR-4) เกิดขึ้นที่ขั้น “ชำระเงินสำเร็จ” เท่านั้น</p>
+              <p class="mt-2 text-[11px] text-slate-400">ค่าแนะนำ (BR-4) เกิดขึ้นที่ขั้น “ชำระเงินสำเร็จ” เท่านั้น</p>
 
               <!-- 2026-09-09 — the consequence of this field that nobody
                    could see from this page, and therefore found out about
@@ -2825,7 +2825,7 @@ function goToVideoSettings() {
 
       <!-- Create-mode note — nested sections need a product id first -->
       <div v-if="isCreateMode" class="mt-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-700">
-        บันทึกข้อมูลสินค้าก่อน จึงจะเพิ่มรูปภาพ/สเปค/คอมมิชชั่นได้
+        บันทึกข้อมูลสินค้าก่อน จึงจะเพิ่มรูปภาพ/สเปค/ค่าแนะนำได้
       </div>
 
       <template v-else>
@@ -2874,11 +2874,11 @@ function goToVideoSettings() {
                data, not a setting. -->
           <div class="col-span-2 mb-2 p-4 rounded-xl bg-slate-50 border border-slate-200">
             <p class="text-sm font-bold text-slate-500 mb-3 flex items-center gap-1.5">
-              <Icon name="settings" :size="14" /> การตั้งค่าคอมมิชชั่นของสินค้านี้
+              <Icon name="settings" :size="14" /> การตั้งค่าแนะนำของสินค้านี้
             </p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label class="text-sm font-bold text-slate-500">รูปแบบอัตราคอมมิชชั่น</label>
+                <label class="text-sm font-bold text-slate-500">รูปแบบอัตราค่าแนะนำ</label>
                 <select v-model="basicsForm.commission_rate_type" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                   <option value="">ยังไม่กำหนด (ตั้งอัตโนมัติจากอัตราแรกที่เพิ่ม)</option>
                   <option v-for="(label, rt) in commissionRateTypeLabels" :key="rt" :value="rt">{{ label }}</option>
@@ -2900,7 +2900,7 @@ function goToVideoSettings() {
                    is computed once one exists. '' (default) = null on the
                    record = Additive (§3.1), never a "no override" state. -->
               <div v-if="isEffectivelyAffiliate">
-                <label class="text-sm font-bold text-slate-500">รูปแบบค่าคอมหัวหน้าทีม (Affiliate)</label>
+                <label class="text-sm font-bold text-slate-500">รูปแบบค่าแนะนำหัวหน้าทีม (Affiliate)</label>
                 <div class="mt-1 flex items-center gap-2">
                   <select v-model="basicsForm.affiliate_override_mode" class="flex-1 min-w-0 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                     <option value="">ค่าเริ่มต้น (Additive)</option>
@@ -2914,15 +2914,15 @@ function goToVideoSettings() {
                        into InfoPopover (TASK-188 precedent, ⓘ) per human
                        request 2026-08-17, so the row stays a single
                        compact control instead of a paragraph. -->
-                  <InfoPopover label="รูปแบบค่าคอมหัวหน้าทีม (Affiliate)">
+                  <InfoPopover label="รูปแบบค่าแนะนำหัวหน้าทีม (Affiliate)">
                     <p>
-                      <span class="font-bold">Additive:</span> หัวหน้าทีมได้ค่าคอมมิชชั่นเพิ่ม
-                      "ต่างหาก" นอกเหนือจากค่าคอมของตัวแทนที่ขาย — ตัวแทนได้เท่าเดิมไม่ถูกหัก
+                      <span class="font-bold">Additive:</span> หัวหน้าทีมได้ค่าแนะนำเพิ่ม
+                      "ต่างหาก" นอกเหนือจากค่าแนะนำของสมาชิกที่ขาย — สมาชิกได้เท่าเดิมไม่ถูกหัก
                       แต่ต้นทุนรวมที่บริษัทจ่ายออกไปสำหรับการขายครั้งนี้จะ<span class="font-bold">เพิ่มขึ้น</span>
                     </p>
                     <p class="mt-2">
-                      <span class="font-bold">Deductive:</span> ค่าคอมของหัวหน้าทีมจะถูก
-                      "หัก" ออกจากค่าคอมของตัวแทนที่ขายเอง (ตัวแทนได้รับน้อยลงเท่ากับส่วนที่หัวหน้าทีมได้ไป)
+                      <span class="font-bold">Deductive:</span> ค่าแนะนำของหัวหน้าทีมจะถูก
+                      "หัก" ออกจากค่าแนะนำของสมาชิกที่ขายเอง (สมาชิกได้รับน้อยลงเท่ากับส่วนที่หัวหน้าทีมได้ไป)
                       แต่ต้นทุนรวมที่บริษัทจ่ายออกไปสำหรับการขายครั้งนี้<span class="font-bold">ไม่เปลี่ยนแปลง</span>
                     </p>
                   </InfoPopover>
@@ -2936,7 +2936,7 @@ function goToVideoSettings() {
           </div>
 
           <p class="text-base font-bold text-slate-500 flex items-center gap-1.5 mb-2">
-            <Icon name="dollar" :size="14" /> อัตราคอมมิชชั่น
+            <Icon name="dollar" :size="14" /> อัตราค่าแนะนำ
           </p>
           <p v-if="ruleError" class="mb-2 text-xs font-bold text-rose-600">{{ ruleError }}</p>
 
@@ -2967,7 +2967,7 @@ function goToVideoSettings() {
                    (or the 'percentage' default, when this is the very
                    first rule the product will ever get). -->
               <p class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ commissionRateTypeLabels[resolvedRuleRateType] }}</p>
-              <p v-if="createRuleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+              <p v-if="createRuleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานค่าแนะนำที่กำหนด</p>
             </div>
             <div>
               <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่ (คีย์วันที่เป็น พ.ศ.)</label>
@@ -2987,7 +2987,7 @@ function goToVideoSettings() {
               </div>
             </div>
             <div class="col-span-2 pt-2 border-t border-slate-200">
-              <label class="text-sm font-bold text-slate-500">อัตราคอมมิชชั่นปีต่ออายุ (%) — ไม่บังคับ</label>
+              <label class="text-sm font-bold text-slate-500">อัตราค่าแนะนำปีต่ออายุ (%) — ไม่บังคับ</label>
               <input
                 v-model="ruleForm.renewal_rate_percent"
                 type="number"
@@ -3010,7 +3010,7 @@ function goToVideoSettings() {
           </div>
           </form>
 
-          <EmptyState v-if="!productRules.length" icon="dollar" title="ยังไม่มีอัตราคอมมิชชั่นสำหรับสินค้านี้" />
+          <EmptyState v-if="!productRules.length" icon="dollar" title="ยังไม่มีอัตราค่าแนะนำสำหรับสินค้านี้" />
           <div v-else class="space-y-2">
             <div v-for="r in productRules" :key="r.id" class="bg-white border border-slate-200 rounded-xl p-4">
               <template v-if="editingRuleId === r.id">
@@ -3031,7 +3031,7 @@ function goToVideoSettings() {
                          NEVER rewritten (§1), but re-saving it submits
                          the product's current resolved format. -->
                     <p class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ commissionRateTypeLabels[resolvedRuleRateType] }}</p>
-                    <p v-if="editRuleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+                    <p v-if="editRuleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานค่าแนะนำที่กำหนด</p>
                   </div>
                   <div>
                     <label class="text-sm font-bold text-slate-500">มีผลตั้งแต่</label>
@@ -3048,7 +3048,7 @@ function goToVideoSettings() {
                     </div>
                   </div>
                   <div class="col-span-2">
-                    <label class="text-sm font-bold text-slate-500">อัตราคอมมิชชั่นปีต่ออายุ (%) — ไม่บังคับ</label>
+                    <label class="text-sm font-bold text-slate-500">อัตราค่าแนะนำปีต่ออายุ (%) — ไม่บังคับ</label>
                     <input v-model="editRuleForm.renewal_rate_percent" type="number" min="0" step="0.01" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
                   </div>
                 </div>
@@ -3059,7 +3059,7 @@ function goToVideoSettings() {
               </template>
               <div v-else class="flex items-center justify-between gap-2">
                 <div>
-                  <p class="text-sm font-bold text-slate-900">อัตราคอมมิชชั่น</p>
+                  <p class="text-sm font-bold text-slate-900">อัตราค่าแนะนำ</p>
                   <p class="text-xs text-slate-400">มีผลตั้งแต่ {{ r.effective_from }}{{ r.effective_to ? ` ถึง ${r.effective_to}` : '' }}</p>
                   <p v-if="r.renewal_rate_type" class="text-xs text-slate-400">
                     คอมฯ ปีต่ออายุ: {{ (r.renewal_rate_value! / 100).toFixed(2) }}% · {{ r.renewal_recurs ? 'ต่อทุกปี' : 'ปีเดียว' }}
@@ -3892,7 +3892,7 @@ function goToVideoSettings() {
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
         <div class="flex items-center gap-2 mb-2">
           <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
-          <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+          <p class="text-sm font-bold text-slate-900">เกินเพดานค่าแนะนำที่กำหนด</p>
         </div>
         <p class="text-xs text-slate-500 mb-4">{{ createRuleCapGuard.violationMessage.value }}</p>
         <div class="flex justify-end">
@@ -3904,7 +3904,7 @@ function goToVideoSettings() {
       <div class="w-full max-w-sm bg-white rounded-2xl shadow-lg p-5">
         <div class="flex items-center gap-2 mb-2">
           <Icon name="alert" :size="18" class="text-rose-600 shrink-0" />
-          <p class="text-sm font-bold text-slate-900">เกินเพดานคอมมิชชั่นที่กำหนด</p>
+          <p class="text-sm font-bold text-slate-900">เกินเพดานค่าแนะนำที่กำหนด</p>
         </div>
         <p class="text-xs text-slate-500 mb-4">{{ editRuleCapGuard.violationMessage.value }}</p>
         <div class="flex justify-end">
@@ -4151,7 +4151,7 @@ function goToVideoSettings() {
         </div>
         <div class="px-5 pt-3 shrink-0">
           <p class="text-xs text-slate-400 mb-3">
-            เมื่อเชื่อมแล้ว ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปคของสินค้านี้จะถูกแทนที่ด้วยข้อมูลจากรายการที่เลือก — ราคาและค่าคอมมิชชั่นยังคงเป็นของสินค้านี้แยกต่างหาก
+            เมื่อเชื่อมแล้ว ชื่อ/แบรนด์/หมวดหมู่/คำอธิบาย/คำอธิบายสเปคของสินค้านี้จะถูกแทนที่ด้วยข้อมูลจากรายการที่เลือก — ราคาและค่าแนะนำยังคงเป็นของสินค้านี้แยกต่างหาก
           </p>
           <div class="relative">
             <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />

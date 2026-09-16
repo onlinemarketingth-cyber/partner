@@ -256,7 +256,7 @@ describe('CommissionPlansView — a Company Admin sees everything and may change
 
     expect(wrapper.find('[data-test="step3-resolution-add-product-rate-1"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="step3-resolution-add-product-rate-2"]').exists()).toBe(false)
-    expect(buttonTexts(wrapper)).not.toContain('แก้ไขอัตราคอมมิชชั่น')
+    expect(buttonTexts(wrapper)).not.toContain('แก้ไขอัตราค่าแนะนำ')
   })
 
   it('says who can set it instead of leaving a table of blank cells', async () => {

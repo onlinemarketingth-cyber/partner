@@ -258,7 +258,7 @@ class CommissionPayoutService
         $this->notifier->notify(
             $payee,
             NotificationType::CommissionPaid,
-            'ค่าคอมมิชชั่นจ่ายแล้ว',
+            'ค่าแนะนำจ่ายแล้ว',
             $body,
             '/commission',
             $meta,

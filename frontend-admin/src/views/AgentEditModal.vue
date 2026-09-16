@@ -312,7 +312,7 @@ async function resolveSubject(id: number): Promise<AgentItem | null> {
   } catch (e) {
     if (known) return known
     subjectError.value =
-      e instanceof ApiError ? `โหลดข้อมูลตัวแทนไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลตัวแทนไม่สำเร็จ'
+      e instanceof ApiError ? `โหลดข้อมูลสมาชิกไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลสมาชิกไม่สำเร็จ'
     return null
   } finally {
     subjectLoading.value = false
@@ -833,7 +833,7 @@ async function submitResetPassword(): Promise<void> {
     // The typed value stays on screen on purpose: there is no email system
     // anywhere in this codebase, so the admin has to read this password back
     // out to the agent themselves.
-    resetPasswordMessage.value = 'ตั้งรหัสผ่านใหม่สำเร็จ — แจ้งรหัสนี้ให้ตัวแทนด้วยตนเอง'
+    resetPasswordMessage.value = 'ตั้งรหัสผ่านใหม่สำเร็จ — แจ้งรหัสนี้ให้สมาชิกด้วยตนเอง'
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { errors?: Record<string, string[]> }
@@ -1111,7 +1111,7 @@ watch(
            mode if the agent cannot be resolved at all. -->
       <template v-if="!agent">
         <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
-          <p class="text-sm font-bold text-slate-900">แก้ไขข้อมูลตัวแทน</p>
+          <p class="text-sm font-bold text-slate-900">แก้ไขข้อมูลสมาชิก</p>
           <button type="button" class="text-slate-400 hover:text-slate-600 shrink-0" @click="closeModal">
             <Icon name="x" :size="18" />
           </button>
@@ -1119,7 +1119,7 @@ watch(
         <div class="px-5 py-10 text-center">
           <p v-if="subjectError" class="text-sm text-rose-600">{{ subjectError }}</p>
           <p v-else class="text-sm text-slate-400">
-            {{ subjectLoading ? 'กำลังโหลดข้อมูลตัวแทน...' : 'กำลังเตรียมข้อมูล...' }}
+            {{ subjectLoading ? 'กำลังโหลดข้อมูลสมาชิก...' : 'กำลังเตรียมข้อมูล...' }}
           </p>
         </div>
       </template>
@@ -1129,7 +1129,7 @@ watch(
         <div class="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-100 shrink-0">
           <div class="min-w-0">
             <p class="text-sm font-bold text-slate-900 truncate">
-              แก้ไขข้อมูลตัวแทน — {{ agent.name }}
+              แก้ไขข้อมูลสมาชิก — {{ agent.name }}
               <span v-if="isSuperAdmin && agent.company" class="text-xs font-normal text-slate-400">
                 · {{ agent.company.name }}
               </span>
@@ -1150,7 +1150,7 @@ watch(
             v-if="editIsReadOnly"
             class="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700"
           >
-            ตัวแทนรายนี้ถูกปิดใช้งานอยู่ — แก้ไขข้อมูลไม่ได้จนกว่าจะกด "เปิดใช้งาน" ในส่วนที่ 5 ด้านล่าง
+            สมาชิกรายนี้ถูกปิดใช้งานอยู่ — แก้ไขข้อมูลไม่ได้จนกว่าจะกด "เปิดใช้งาน" ในส่วนที่ 5 ด้านล่าง
           </div>
           <div v-if="editFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">
             {{ editFormError }}
@@ -1161,7 +1161,7 @@ watch(
           <section>
             <div class="flex items-center gap-2 mb-3">
               <Icon name="user" :size="14" class="text-slate-400" />
-              <h3 class="text-sm font-bold text-slate-900">1. ข้อมูลตัวแทน</h3>
+              <h3 class="text-sm font-bold text-slate-900">1. ข้อมูลสมาชิก</h3>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -1235,7 +1235,7 @@ watch(
                 </select>
                 <p v-if="editFieldErrors.role" class="text-[11px] text-rose-600 mt-1">{{ editFieldErrors.role }}</p>
                 <p v-else-if="!canBeCompanyAdmin" class="text-[11px] text-slate-400 mt-1">
-                  เปลี่ยนตัวแทนขายเป็น Company Admin จากหน้านี้ไม่ได้
+                  เปลี่ยนสมาชิกขายเป็น Company Admin จากหน้านี้ไม่ได้
                 </p>
               </div>
               <!-- TASK-130 §2b — hidden for a team leader: they sit at the top
@@ -1291,8 +1291,8 @@ watch(
                       เปิดแล้วจะสร้างลิงก์ชวนคนเข้าทีมได้เอง และ<strong class="font-bold"
                         >กดรับคนที่สมัครผ่านลิงก์ของเขาเข้าทำงานได้เลย</strong
                       >
-                      โดยไม่ต้องรอผู้ดูแลอนุมัติ — แต่ยังเห็นข้อมูลเท่าเดิม (ลูกค้า ยอดขาย ค่าคอมของคนอื่นยังดูไม่ได้)
-                      และยังเป็นตัวแทนขายเหมือนเดิม
+                      โดยไม่ต้องรอผู้ดูแลอนุมัติ — แต่ยังเห็นข้อมูลเท่าเดิม (ลูกค้า ยอดขาย ค่าแนะนำของคนอื่นยังดูไม่ได้)
+                      และยังเป็นสมาชิกขายเหมือนเดิม
                     </p>
                     <p class="text-[11px] text-slate-500 mt-1">
                       ถ้าปิดสิทธิ์ ลิงก์ที่เขาสร้างไว้จะใช้สมัครไม่ได้ทันที ส่วนลูกทีมที่รับเข้ามาแล้วยังอยู่ในทีมตามเดิม
@@ -1386,7 +1386,7 @@ watch(
               class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 flex items-center justify-between gap-3"
             >
               <p class="text-xs text-rose-700">
-                จะล้างข้อมูลเอกสารของตัวแทนรายนี้เมื่อกด "บันทึก" (ประเภทเอกสารจะถูกล้างตามไปด้วย)
+                จะล้างข้อมูลเอกสารของสมาชิกรายนี้เมื่อกด "บันทึก" (ประเภทเอกสารจะถูกล้างตามไปด้วย)
               </p>
               <button
                 type="button"
@@ -1453,7 +1453,7 @@ watch(
             <div class="flex items-center gap-2 mb-3">
               <Icon name="credit_card" :size="14" class="text-slate-400" />
               <h3 class="text-sm font-bold text-slate-900">3. บัญชีธนาคาร</h3>
-              <span class="text-[11px] text-slate-400">(ใช้จ่ายค่าคอมมิชชั่น)</span>
+              <span class="text-[11px] text-slate-400">(ใช้จ่ายค่าแนะนำ)</span>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -1519,7 +1519,7 @@ watch(
                   v-else-if="bankNumberMode === 'clear'"
                   class="mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 flex items-center justify-between gap-3"
                 >
-                  <p class="text-xs text-rose-700">จะล้างเลขที่บัญชีของตัวแทนรายนี้เมื่อกด "บันทึก"</p>
+                  <p class="text-xs text-rose-700">จะล้างเลขที่บัญชีของสมาชิกรายนี้เมื่อกด "บันทึก"</p>
                   <button
                     type="button"
                     class="text-xs font-bold text-slate-600 hover:text-slate-800 px-2 py-1 shrink-0"
@@ -1620,7 +1620,7 @@ watch(
                   />
                 </div>
               </div>
-              <p class="text-[11px] text-slate-400 mt-1.5">วงเป้าหมายในหน้า Home ของตัวแทนจะอ่านค่ารายเดือนนี้</p>
+              <p class="text-[11px] text-slate-400 mt-1.5">วงเป้าหมายในหน้า Home ของสมาชิกจะอ่านค่ารายเดือนนี้</p>
             </div>
 
             <!-- เป้าหมายรายปี — the current year -->
@@ -1740,7 +1740,7 @@ watch(
                  ManualCertificationService's docblock. -->
             <div v-if="agent.role === 'agent' && editCertTiersNotYetPassed.length" class="mt-3 pt-3 border-t border-slate-200">
               <p class="text-xs font-bold text-slate-700">มอบใบรับรองโดยไม่ต้องสอบ</p>
-              <p class="text-[11px] text-slate-500 mt-0.5">ตัวแทนจะไม่ได้รับ XP จากการอนุมัติแบบนี้ (TASK-058)</p>
+              <p class="text-[11px] text-slate-500 mt-0.5">สมาชิกจะไม่ได้รับ XP จากการอนุมัติแบบนี้ (TASK-058)</p>
               <div class="mt-1.5 flex flex-wrap gap-1.5">
                 <button
                   v-for="t in editCertTiersNotYetPassed"
@@ -1760,7 +1760,7 @@ watch(
             <div v-if="isSuperAdmin && agent.is_active" class="mt-3 pt-3 border-t border-slate-200">
               <p class="text-xs font-bold text-slate-700">ย้ายบริษัท (Super Admin)</p>
               <p class="text-[11px] text-slate-500 mt-0.5">
-                ประวัติคอมมิชชั่น/XP เดิมจะยังผูกกับบริษัทเดิม — การย้ายมีผลกับข้อมูลใหม่ตั้งแต่นี้ไปเท่านั้น
+                ประวัติค่าแนะนำ/XP เดิมจะยังผูกกับบริษัทเดิม — การย้ายมีผลกับข้อมูลใหม่ตั้งแต่นี้ไปเท่านั้น
               </p>
               <div class="mt-1.5 flex flex-col sm:flex-row gap-2">
                 <select v-model="moveCompanyTarget" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
@@ -1785,7 +1785,7 @@ watch(
               <template v-if="agent.is_active">
                 <p class="text-xs font-bold text-slate-700">ปิดใช้งานบัญชี</p>
                 <p class="text-[11px] text-slate-500 mt-0.5">
-                  ตัวแทนจะเข้าสู่ระบบไม่ได้ แต่ประวัติการขาย/ค่าคอม/XP ยังอยู่ครบ และเปิดใช้งานคืนได้ภายหลัง
+                  สมาชิกจะเข้าสู่ระบบไม่ได้ แต่ประวัติการขาย/ค่าแนะนำ/XP ยังอยู่ครบ และเปิดใช้งานคืนได้ภายหลัง
                 </p>
                 <button
                   type="button"
@@ -1793,7 +1793,7 @@ watch(
                   class="mt-1.5 px-3 py-2 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-50"
                   @click="askDeactivate"
                 >
-                  ปิดใช้งานตัวแทนรายนี้
+                  ปิดใช้งานสมาชิกรายนี้
                 </button>
               </template>
               <template v-else>
@@ -1855,10 +1855,10 @@ watch(
     <ConfirmDialog
       v-model:show="showDeactivateConfirm"
       variant="danger"
-      title="ปิดใช้งานตัวแทน"
+      title="ปิดใช้งานสมาชิก"
       :body="
         pendingDeactivate
-          ? `ปิดใช้งาน ${pendingDeactivate.name} — จะเข้าสู่ระบบไม่ได้ทันที แต่ประวัติการขาย ค่าคอมมิชชั่น และ XP ยังอยู่ครบ และเปิดใช้งานคืนได้ภายหลัง`
+          ? `ปิดใช้งาน ${pendingDeactivate.name} — จะเข้าสู่ระบบไม่ได้ทันที แต่ประวัติการขาย ค่าแนะนำ และ XP ยังอยู่ครบ และเปิดใช้งานคืนได้ภายหลัง`
           : ''
       "
       :busy="accountActionSaving"

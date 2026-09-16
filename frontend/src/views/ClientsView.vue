@@ -583,7 +583,7 @@ async function loadDrawerOptions() {
      * the safe state (off, no options), never a stale one from a previous
      * load.
      */
-    load('การแบ่งคอมมิชชั่น', async () => {
+    load('การแบ่งค่าแนะนำ', async () => {
       splitEnabled.value = false
       coAgentOptions.value = []
       splitEnabled.value = (

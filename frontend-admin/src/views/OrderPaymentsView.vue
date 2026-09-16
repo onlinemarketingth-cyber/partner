@@ -182,7 +182,7 @@ function rowNotice(order: OrderRow): { text: string; tone: 'rose' | 'amber' } | 
 
     return {
       tone: 'rose',
-      text: `ผู้ให้บริการแจ้งว่ามีการคืนเงิน${amount} เมื่อ ${formatDateTime(order.refund_reported_at)} — ระบบยังไม่ได้กลับรายการขายหรือค่าคอมมิชชั่นให้ กรุณาตรวจสอบและตัดสินใจด้วยตนเอง`,
+      text: `ผู้ให้บริการแจ้งว่ามีการคืนเงิน${amount} เมื่อ ${formatDateTime(order.refund_reported_at)} — ระบบยังไม่ได้กลับรายการขายหรือค่าแนะนำให้ กรุณาตรวจสอบและตัดสินใจด้วยตนเอง`,
     }
   }
 
@@ -520,7 +520,7 @@ function badgeClasses(tone: string): string {
             <th class="px-4 py-3">สินค้า</th>
             <th class="px-4 py-3 text-right whitespace-nowrap">ยอด</th>
             <th class="px-4 py-3 whitespace-nowrap">ผู้ซื้อ</th>
-            <th class="px-4 py-3 whitespace-nowrap">ตัวแทน</th>
+            <th class="px-4 py-3 whitespace-nowrap">สมาชิก</th>
             <th class="px-4 py-3 whitespace-nowrap">สถานะ</th>
             <th class="px-4 py-3 whitespace-nowrap">ช่องทางชำระเงิน</th>
             <th class="px-4 py-3"></th>

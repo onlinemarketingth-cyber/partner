@@ -150,7 +150,7 @@ function baht(satang: number | null): string {
  * So the copy now names the person and the occasion, and speaks about ONE
  * product when there is one.
  */
-const whoGetsIt = computed(() => (props.kind === 'agent' ? 'ตัวแทนที่ปิดการขาย' : 'หัวหน้าทีม'))
+const whoGetsIt = computed(() => (props.kind === 'agent' ? 'สมาชิกที่ปิดการขาย' : 'หัวหน้าทีม'))
 
 /** The single row in scope, when the scope really is one product. */
 const onlyRow = computed(() => {
@@ -258,7 +258,7 @@ const onlyBlocked = computed(() => {
            non-event — and noise beside the one sentence that matters is how a
            panel stops being read. -->
       <p v-if="impact.changed_count" class="mt-1.5 text-[11.5px] text-slate-400">
-        มีผลกับดีลที่ปิดหลังจากกดบันทึกเท่านั้น · ค่าคอมที่ลงบัญชีไปแล้วไม่เปลี่ยน
+        มีผลกับดีลที่ปิดหลังจากกดบันทึกเท่านั้น · ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยน
       </p>
     </template>
   </div>

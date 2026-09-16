@@ -331,7 +331,7 @@ describe('one screen, one errand', () => {
     payout_details_complete: false,
     bank_account_number: null,
   })
-  const ASKED = makeRequest({ id: 601, agent_name: 'ขอเอง', status: 'pending_review', source: 'agent_request', source_label: 'ตัวแทนขอเอง' })
+  const ASKED = makeRequest({ id: 601, agent_name: 'ขอเอง', status: 'pending_review', source: 'agent_request', source_label: 'สมาชิกขอเอง' })
   const WAITING = makeRequest({ id: 701, agent_name: 'รอโอน' })
 
   const WORLD: World = {
@@ -428,7 +428,7 @@ describe('one screen, one errand', () => {
     // carry is that this list fills itself only when an agent presses something.
     const wrapper = await mountView({ ...WORLD, review: [] }, 'review')
 
-    expect(wrapper.get('[data-test="payout-group-empty"]').text()).toContain('ตัวแทนกดขอเบิกเอง')
+    expect(wrapper.get('[data-test="payout-group-empty"]').text()).toContain('สมาชิกกดขอเบิกเอง')
   })
 
   it('keeps the withdrawal minimum where the refusal it explains happens', async () => {
@@ -455,7 +455,7 @@ describe('กลุ่มติดปัญหา — the amber bar', () => {
 
     const bar = wrapper.get('[data-test="payout-blocked-alert"]').text()
 
-    expect(bar).toContain('1 รายมีค่าคอม แต่ตั้งจ่ายไม่ได้')
+    expect(bar).toContain('1 รายมีค่าแนะนำ แต่ตั้งจ่ายไม่ได้')
     expect(bar).toContain('2,000 บาท')
     expect(bar).toContain('ไม่มีบัญชี')
   })
@@ -549,7 +549,7 @@ describe('step ① — raising payouts', () => {
     const confirm = wrapper.get('[data-test="payout-batch-confirm"]').text()
 
     expect(confirm).toContain('2,000 บาท')
-    expect(confirm).toContain('ยังไม่ปิดรายการค่าคอม')
+    expect(confirm).toContain('ยังไม่ปิดรายการค่าแนะนำ')
     expect(confirm).toContain('ขั้นที่ 3')
   })
 
@@ -675,7 +675,7 @@ describe('step ② — approving what agents asked for', () => {
     status: 'pending_review',
     status_label: 'รอตรวจสอบ',
     source: 'agent_request',
-    source_label: 'ตัวแทนขอเอง',
+    source_label: 'สมาชิกขอเอง',
   })
 
   it('says whose decision each row was', async () => {
@@ -686,7 +686,7 @@ describe('step ② — approving what agents asked for', () => {
      */
     const wrapper = await mountView({ review: [ASKED] }, 'review')
 
-    expect(wrapper.get('[data-test="payout-source-601"]').text()).toContain('ตัวแทนขอเอง')
+    expect(wrapper.get('[data-test="payout-source-601"]').text()).toContain('สมาชิกขอเอง')
   })
 
   it('approves in one press', async () => {
@@ -814,8 +814,8 @@ describe('step ③ — recording what accounting transferred', () => {
 
     const confirm = wrapper.get('[data-test="payout-batch-confirm"]').text()
 
-    expect(confirm).toContain('ปิดรายการค่าคอมจริง')
-    expect(confirm).toContain('ส่งอีเมลแจ้งตัวแทน')
+    expect(confirm).toContain('ปิดรายการค่าแนะนำจริง')
+    expect(confirm).toContain('ส่งอีเมลแจ้งสมาชิก')
   })
 
   it('does not write on the first press', async () => {

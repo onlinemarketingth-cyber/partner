@@ -48,7 +48,7 @@ watch(
     if (blocked === 'agent') {
       errorMessage.value = t(
         'login_blocked_agent',
-        'บัญชีตัวแทนขาย (Agent) ไม่สามารถเข้าใช้งานหน้าผู้ดูแลระบบนี้ได้ กรุณาใช้แอป Agent Portal แทน',
+        'บัญชีสมาชิกขาย (Agent) ไม่สามารถเข้าใช้งานหน้าผู้ดูแลระบบนี้ได้ กรุณาใช้แอป Agent Portal แทน',
         'Agent accounts cannot access this admin console. Please use the Agent Portal app instead.',
       )
     }

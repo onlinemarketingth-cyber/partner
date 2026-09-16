@@ -291,7 +291,7 @@ class CommissionWithdrawalService
                         $agent->isCommissionHouseAccount() => 'ตั้งจ่ายส่วนของบริษัทไม่ได้ — ยังไม่ได้กรอกบัญชีรับเงินของบริษัท (ตั้งค่าระบบ → ตั้งค่าค่าแนะนำ)',
                         $source === WithdrawalSource::CompanyPayout => $payeeLabel !== null
                             ? "ตั้งจ่ายไม่ได้ — {$payeeLabel} ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ"
-                            : 'ตั้งจ่ายไม่ได้ — ตัวแทนคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ',
+                            : 'ตั้งจ่ายไม่ได้ — สมาชิกคนนี้ยังกรอกเอกสารยืนยันตัวตนหรือบัญชีธนาคารไม่ครบ',
                         default => 'กรุณากรอกเอกสารยืนยันตัวตนและบัญชีธนาคารให้ครบก่อนขอเบิก',
                     },
                 ]);
@@ -457,7 +457,7 @@ class CommissionWithdrawalService
                     NotificationType::CommissionWithdrawalDecided,
                     $agent->isCommissionHouseAccount()
                         ? 'ตั้งจ่ายส่วนของบริษัทแล้ว'
-                        : 'บริษัทตั้งจ่ายค่าคอมให้คุณแล้ว',
+                        : 'บริษัทตั้งจ่ายค่าแนะนำให้คุณแล้ว',
                     $agent->isCommissionHouseAccount()
                         ? "ส่วนของบริษัท {$baht} บาท อยู่ระหว่างรอโอน"
                         : "จำนวน {$baht} บาท อยู่ระหว่างรอโอน จะแจ้งอีกครั้งเมื่อโอนเรียบร้อย",
@@ -473,8 +473,8 @@ class CommissionWithdrawalService
             $this->notifier->notify(
                 $admin,
                 NotificationType::CommissionWithdrawalRequested,
-                'มีคำขอเบิกค่าคอมใหม่',
-                ($agent->name ?? 'ตัวแทน')." ขอเบิก {$baht} บาท — รอตรวจสอบ",
+                'มีคำขอเบิกค่าแนะนำใหม่',
+                ($agent->name ?? 'สมาชิก')." ขอเบิก {$baht} บาท — รอตรวจสอบ",
                 '/commission?view=queue',
                 ['commission_withdrawal_request_id' => $request->id],
             );
@@ -828,7 +828,7 @@ class CommissionWithdrawalService
             $this->notifier->notify(
                 $recipient,
                 NotificationType::CommissionPaid,
-                $isHouse ? 'โอนส่วนของบริษัทเรียบร้อยแล้ว' : 'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
+                $isHouse ? 'โอนส่วนของบริษัทเรียบร้อยแล้ว' : 'ค่าแนะนำโอนเรียบร้อยแล้ว',
                 $isHouse
                     ? "ส่วนของบริษัท {$baht} บาท โอนเข้าบัญชีบริษัทแล้ว{$withReference}"
                     : "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",

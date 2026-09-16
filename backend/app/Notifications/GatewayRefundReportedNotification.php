@@ -75,7 +75,7 @@ class GatewayRefundReportedNotification extends Notification
             // Said plainly, because the opposite assumption is the dangerous
             // one: an admin who believes the system already reversed the sale
             // will not go and reverse it.
-            ->line('ระบบยังไม่ได้กลับรายการขายและยังไม่ได้กลับค่าคอมมิชชั่นของตัวแทน — ทั้งสองอย่างต้องให้คนตัดสินใจ')
+            ->line('ระบบยังไม่ได้กลับรายการขายและยังไม่ได้กลับค่าแนะนำของสมาชิก — ทั้งสองอย่างต้องให้คนตัดสินใจ')
             ->action('ไปที่หน้าคำสั่งซื้อ / การชำระเงิน', $adminUrl.'/order-payments')
             ->line('อีเมลนี้ส่งอัตโนมัติจากระบบ '.$brand)
             ->salutation('ขอแสดงความนับถือ '.$brand);

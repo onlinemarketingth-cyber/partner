@@ -200,7 +200,7 @@ class CommissionReadinessService
 
         return $this->payload($worst, 1, $productsTotal, $productsCovered, [[
             'code' => 'companies_not_ready',
-            'label' => "บริษัทที่ตั้งค่าคอมมิชชั่นยังไม่ครบ {$notReady} บริษัท — เลือกบริษัทก่อนจึงจะแก้ได้",
+            'label' => "บริษัทที่ตั้งค่าแนะนำยังไม่ครบ {$notReady} บริษัท — เลือกบริษัทก่อนจึงจะแก้ได้",
             'count' => $notReady,
         ]], $canFix);
     }
@@ -324,7 +324,7 @@ class CommissionReadinessService
         if ($uncovered > 0) {
             $issues[] = [
                 'code' => 'products_without_rate',
-                'label' => "สินค้า {$uncovered} จาก {$total} รายการยังไม่มีอัตราค่าคอมที่ใช้ได้",
+                'label' => "สินค้า {$uncovered} จาก {$total} รายการยังไม่มีอัตราค่าแนะนำที่ใช้ได้",
                 'count' => $uncovered,
             ];
         }
@@ -340,7 +340,7 @@ class CommissionReadinessService
         if ($overlapping > 0) {
             $issues[] = [
                 'code' => 'rules_overlapping',
-                'label' => "มีอัตราค่าคอมซ้อนทับกันในขอบเขตเดียวกัน {$overlapping} รายการ — ระบบจะหยิบอันไหนก็ได้ ทำนายไม่ได้",
+                'label' => "มีอัตราค่าแนะนำซ้อนทับกันในขอบเขตเดียวกัน {$overlapping} รายการ — ระบบจะหยิบอันไหนก็ได้ ทำนายไม่ได้",
                 'count' => $overlapping,
             ];
         }
@@ -348,7 +348,7 @@ class CommissionReadinessService
         if ($expired > 0) {
             $issues[] = [
                 'code' => 'rules_expired',
-                'label' => "อัตราค่าคอมที่หมดอายุแล้ว {$expired} รายการ",
+                'label' => "อัตราค่าแนะนำที่หมดอายุแล้ว {$expired} รายการ",
                 'count' => $expired,
             ];
         }
@@ -356,7 +356,7 @@ class CommissionReadinessService
         if ($future > 0) {
             $issues[] = [
                 'code' => 'rules_not_yet_effective',
-                'label' => "อัตราค่าคอมที่ยังไม่ถึงวันเริ่มใช้ {$future} รายการ",
+                'label' => "อัตราค่าแนะนำที่ยังไม่ถึงวันเริ่มใช้ {$future} รายการ",
                 'count' => $future,
             ];
         }
@@ -365,7 +365,7 @@ class CommissionReadinessService
             $names = implode(' · ', $unsetStructures);
             $issues[] = [
                 'code' => 'plan_structure_missing',
-                'label' => "ยังไม่ได้ตั้งค่าโครงสร้าง {$names} — ตัวแทนผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร",
+                'label' => "ยังไม่ได้ตั้งค่าโครงสร้าง {$names} — สมาชิกผู้ขายได้ แต่ชั้นบนจะไม่ได้อะไร",
                 'count' => count($unsetStructures),
             ];
         }
@@ -373,7 +373,7 @@ class CommissionReadinessService
         if ($pointValueGaps > 0) {
             $issues[] = [
                 'code' => 'point_value_missing',
-                'label' => "บริษัทนี้คิดค่าคอมจาก PV แต่สินค้า {$pointValueGaps} รายการยังไม่ได้กำหนด PV — ระบบจะคิดจากราคาขายไปก่อน",
+                'label' => "บริษัทนี้คิดค่าแนะนำจาก PV แต่สินค้า {$pointValueGaps} รายการยังไม่ได้กำหนด PV — ระบบจะคิดจากราคาขายไปก่อน",
                 'count' => $pointValueGaps,
             ];
         }

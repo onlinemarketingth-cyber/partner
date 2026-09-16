@@ -151,7 +151,7 @@ describe('an empty queue explains itself', () => {
     // There isn't one, and saying so is faster than letting them hunt.
     const wrapper = await mountQueue([])
 
-    expect(wrapper.get('[data-test="withdrawal-empty-help"]').text()).toContain('พอร์ทัลตัวแทน')
+    expect(wrapper.get('[data-test="withdrawal-empty-help"]').text()).toContain('พอร์ทัลสมาชิก')
   })
 
   it('names the reason the queue can be empty forever', async () => {

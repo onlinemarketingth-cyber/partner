@@ -44,7 +44,7 @@ describe('router — TASK-169 Phase 4b redirects', () => {
   beforeEach(async () => {
     setActivePinia(createPinia())
     get.mockImplementation((path: string) => {
-      if (path === '/me') return Promise.resolve({ data: { id: 9, name: 'ตัวแทน ทดสอบ' } })
+      if (path === '/me') return Promise.resolve({ data: { id: 9, name: 'สมาชิก ทดสอบ' } })
       // Everything a landed view fires on mount; the assertions are about the
       // URL, not about what the destination rendered.
       return Promise.resolve({ data: [] })

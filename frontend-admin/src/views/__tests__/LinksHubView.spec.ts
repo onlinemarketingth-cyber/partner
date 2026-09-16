@@ -98,7 +98,7 @@ describe('LinksHubView — only the tab you are looking at loads', () => {
 
   it('mounts a tab the first time it is opened', async () => {
     const wrapper = mountHub()
-    await tabButton(wrapper, 'ลิงก์สมัครตัวแทน').trigger('click')
+    await tabButton(wrapper, 'ลิงก์สมัครสมาชิก').trigger('click')
     await flushPromises()
 
     expect(mounts).toEqual(['overview', 'signup'])
@@ -108,9 +108,9 @@ describe('LinksHubView — only the tab you are looking at loads', () => {
     // The opposite mistake: v-if on the active tab alone throws away the
     // panel's data and whatever filters the user had set, every switch.
     const wrapper = mountHub()
-    await tabButton(wrapper, 'ลิงก์สมัครตัวแทน').trigger('click')
+    await tabButton(wrapper, 'ลิงก์สมัครสมาชิก').trigger('click')
     await tabButton(wrapper, 'ภาพรวม').trigger('click')
-    await tabButton(wrapper, 'ลิงก์สมัครตัวแทน').trigger('click')
+    await tabButton(wrapper, 'ลิงก์สมัครสมาชิก').trigger('click')
     await flushPromises()
 
     expect(mounts).toEqual(['overview', 'signup'])

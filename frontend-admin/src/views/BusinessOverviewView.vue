@@ -594,11 +594,11 @@ const kpis = computed(() => {
 
         <!-- ═══ 5. ตัวแทนที่ทำยอดสูงสุด — เรียงตามยอดขาย ═══ -->
         <div class="p-5 rounded-2xl bg-white/95 border border-slate-200">
-          <p class="text-[14.5px] font-extrabold text-slate-900">ตัวแทนที่ทำยอดสูงสุด</p>
+          <p class="text-[14.5px] font-extrabold text-slate-900">สมาชิกที่ทำยอดสูงสุด</p>
           <!-- The dashboard's own "top agents" ranks by commission already
                disbursed, which moves when payouts are run rather than when
                sales happen. Different question, different list. -->
-          <p class="mt-0.5 text-[11.5px] text-slate-400">เรียงตามยอดขาย ไม่ใช่ค่าคอมที่จ่ายไปแล้ว</p>
+          <p class="mt-0.5 text-[11.5px] text-slate-400">เรียงตามยอดขาย ไม่ใช่ค่าแนะนำที่จ่ายไปแล้ว</p>
 
           <div class="mt-3 space-y-1">
             <p v-if="!data.top_agents.length" class="text-[12.5px] text-slate-400">ยังไม่มียอดขายในช่วงนี้</p>

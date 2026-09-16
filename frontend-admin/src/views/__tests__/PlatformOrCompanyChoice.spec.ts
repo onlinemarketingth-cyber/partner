@@ -271,7 +271,7 @@ describe('ProductEditView — whose product is this?', () => {
     await submitProduct(w)
 
     expect(post).not.toHaveBeenCalled()
-    expect(w.text()).toContain('สินค้ากลางต้องเลือกรูปแบบค่าคอมมิชชั่นก่อนบันทึก')
+    expect(w.text()).toContain('สินค้ากลางต้องเลือกรูปแบบค่าแนะนำก่อนบันทึก')
   })
 
   it('drops the "inherit from the company" option that has nothing to inherit from', async () => {

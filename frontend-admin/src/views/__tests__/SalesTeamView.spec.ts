@@ -252,7 +252,7 @@ describe('the card money labels', () => {
     expect(text).not.toContain('ยอดขาย (จ่ายแล้ว)')
     // The COMMISSION figure beside it keeps its suffix: for that number
     // "จ่ายแล้ว" is true and load-bearing (pending commission is excluded).
-    expect(text).toContain('ค่าคอม (จ่ายแล้ว)')
+    expect(text).toContain('ค่าแนะนำ (จ่ายแล้ว)')
   })
 })
 
@@ -274,10 +274,10 @@ describe('per-agent closed_deals_without_order disclosure', () => {
 // §3.5 (F-8) — the roster label names the set it actually contains
 // ════════════════════════════════════════════════════════════════════════
 describe('agent-count label', () => {
-  it('says ตัวแทนที่ใช้งานอยู่ — the endpoint excludes deactivated agents', async () => {
+  it('says สมาชิกที่ใช้งานอยู่ — the endpoint excludes deactivated agents', async () => {
     const wrapper = await mountView([makeAgent()])
 
-    expect(wrapper.text()).toContain('ตัวแทนที่ใช้งานอยู่')
-    expect(wrapper.text()).not.toContain('ตัวแทนทั้งหมด')
+    expect(wrapper.text()).toContain('สมาชิกที่ใช้งานอยู่')
+    expect(wrapper.text()).not.toContain('สมาชิกทั้งหมด')
   })
 })
