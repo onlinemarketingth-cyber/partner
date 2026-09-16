@@ -3,43 +3,51 @@
  * ตั้งจ่าย — who is owed referral commission, and the one press that queues it.
  *
  * ══════════════════════════════════════════════════════════════════════════
- * 2026-09-15 — REBUILT AS แบบ C (the checkbox table).
+ * 2026-09-16 — THE THREE GROUPS (ร่าง 1: the money band IS the switcher).
  *
- * Owner: "หน้าตั้งจ่าย ก็ดูเจ้จ่ายยาก คือดูไม่ออกว่าจะทำอะไร ทำตอนไหน ต้องทำ
- * อะไรก่อน ปุ่มไหนใช้บ่อยๆ … คือตั้งจ่าย มันควรจะมีแต่ตั้งจ่าย ที่จ่ายไปแล้ว
- * ต้องไม่แสดง เลือกเป็นตัวกรองได้".
+ * Owner: "สถานะการแสดงผล กับการตั้งจ่าย กับการรอจ่าย มันควรแยกกัน ดูง่าย และ
+ * ตัวที่พบปัญหา มีค่าคอมแต่ตั้งจ่ายไม่ได้ เช่นยังไม่กรอกเลขที่บัญชี ควรแยกเป็น
+ * 3 กลุ่ม" — then, after two drafts: "ทำร่าง 1 เลย".
  *
- * Three things were wrong, and they were all about RANK:
+ * Until now one list held four different situations under one heading, and the
+ * only thing telling them apart was a line of small text on the row:
  *
- *   · The loudest control on the screen was "กรอง" — a blue button, above the
- *     fold, pressed once a month. The button that does the work was a small
- *     one at the end of a row.
- *   · The default view listed everybody, including agents who had been paid
- *     in full and had nothing to do. Work and history looked identical.
- *   · Six date selects and eight quick chips occupied the top third of the
- *     page before a single payee appeared.
+ *   · owed money, bank details complete → the actual work
+ *   · owed money, already raised, waiting at รอบจ่าย → nothing to do HERE
+ *   · owed money, no bank account → work, but a different kind of work
+ *   · paid → history
  *
- * So: the default view is ค้างจ่าย ONLY (จ่ายแล้ว is a tab, not a mode nobody
- * asked for), the filters are one demoted button, and the primary act is a
- * selection plus one press carrying its own running total.
+ * The ค้างจ่าย / จ่ายแล้ว / ทั้งหมด tab strip that used to sit at the top split
+ * that list on the WRONG axis: it separated history from work, and left the
+ * three kinds of work piled together. It is gone.
  *
- * ── WHY ONE REQUEST AND NOT A LOOP ──
+ * ── HOW ร่าง 1 IS PUT TOGETHER ──
  *
- * The press sends the whole selection to /commission-withdrawals/payout-batch,
- * which raises every payout in one transaction or none. Looping the
- * single-payee endpoint from here would fail on the third of five and leave
- * an admin with two payouts raised, three not, and no way to tell which
- * without reading the queue row by row.
+ * The 3-step money band does two jobs at once, deliberately: it says where the
+ * company's money is, AND pressing a step opens that group. The step in view
+ * carries a "กำลังดู" label and a heavy border, and the list underneath is that
+ * step — so the number and the names are never two separate ideas.
  *
- * ── THE COMPANY'S OWN SHARE IS A PAYEE NOW ──
+ * ── WHY "ติดปัญหา" IS NOT A FOURTH STEP ──
  *
- * It used to sit above the list in a green box that explained why it could
- * never be paid. The owner asked for the opposite — "ให้เพิ่มทำจ่ายบริษัทให้
- * เลือกได้ด้วย" — so it is a row in the table like anybody else, tickable on
- * the same terms. It keeps its colour and its label, because an admin
- * reconciling a transfer file needs to know which line is not a person, and
- * its bank details are edited on ตั้งค่าค่าแนะนำ rather than inline: that row
- * is not a person and PUT /users/{id} refuses it.
+ * Because it is not a step. Someone with no bank account has not entered the
+ * conveyor at all — that is WHY they are stuck — so putting them on it as step
+ * zero would describe a flow that does not exist. They get the amber bar ABOVE
+ * the band, which is also the only element on this screen that has to be seen
+ * without being looked for. Pressing ดูรายชื่อ opens them as a group like any
+ * other; the band then shows no "กำลังดู", which is honest — they are not at
+ * any step.
+ *
+ * ── TWO REQUESTS, CACHED, NOT ONE UNFILTERED ONE ──
+ *
+ * Steps 1 and 2 and the amber bar all come out of ONE payment_status=pending
+ * request, partitioned here. Step 3 is a second request, fired the first time
+ * somebody opens it and then kept. Dropping the filter entirely and slicing one
+ * unfiltered response would have been less code and would have pulled every
+ * agent ever settled into the payload of a screen whose job is "who do I pay
+ * today" — and, until that request landed, step 3 would have had to print a
+ * number nobody had measured. It prints "กดเพื่อดู" instead (§3.7/F-10: an
+ * unmeasured bucket is never rendered as a figure).
  * ══════════════════════════════════════════════════════════════════════════
  *
  * BR-3: amounts come back as integer satang; divided by 100 only here, at the
@@ -76,8 +84,8 @@ interface AgentSummaryItem {
    * by "จ่ายแล้ว" rendered "รอจ่ายรวม 0 บาท" — visually identical to "we owe
    * our agents nothing", which is a statement about money nobody computed.
    *
-   * A `?? 0` anywhere below re-creates that defect exactly. Render
-   * "ไม่ได้แสดง" instead — see formatSatangOrUnmeasured().
+   * A `?? 0` anywhere below re-creates that defect. Render "ไม่ได้แสดง"
+   * instead — see formatSatangOrUnmeasured().
    */
   total_paid_satang: number | null
   total_pending_satang: number | null
@@ -102,6 +110,9 @@ interface AgentSummaryItem {
    * identity document, the company seat deliberately does not, and a copy of
    * that rule in the browser would start disagreeing with the one that
    * refuses the press.
+   *
+   * This is also what sorts a payee into กลุ่มติดปัญหา rather than กลุ่ม
+   * ตั้งจ่ายได้เลย, so the grouping and the refusal can never disagree.
    */
   payout_details_complete?: boolean
   /*
@@ -121,6 +132,11 @@ interface AgentSummaryItem {
    * a NEW payout may be raised for, and is the figure the server checks the
    * press against. Both are the server's own arithmetic — deriving them here
    * would be the same two-numbers-one-name defect in a new place.
+   *
+   * The three groups are these two fields read as a question each:
+   *   available > 0 and payable   → ตั้งจ่ายได้เลย
+   *   reserved  > 0               → รอฝ่ายบัญชีโอน
+   *   available > 0 but not payable → ติดปัญหา
    */
   reserved_satang?: number
   available_satang?: number | null
@@ -222,43 +238,63 @@ function initial(name: string | null | undefined): string {
   return (name ?? '?').trim().charAt(0).toUpperCase() || '?'
 }
 
-const loading = ref(false)
-const hasLoadedOnce = ref(false)
-const errorMessage = ref('')
-const summaries = ref<AgentSummaryItem[]>([])
-
-/*
- * 2026-09-15 — ค้างจ่าย IS THE DEFAULT, AND THAT IS THE POINT.
- *
- * Owner: "ตั้งจ่าย มันควรจะมีแต่ตั้งจ่าย ที่จ่ายไปแล้ว ต้องไม่แสดง". The screen
- * used to open on "ทั้งหมด", so an agent settled in full six months ago sat in
- * the same list, in the same shape, as one owed money today.
- */
+// ── The three groups (plus history) ─────────────────────────────────────
 /**
- * 2026-09-16 — WHERE A LINK CAN ASK FOR A DIFFERENT VIEW.
+ * `blocked` is a group but NOT a step on the band — see the header comment.
+ */
+type Group = 'payable' | 'reserved' | 'blocked' | 'paid'
+
+/**
+ * 2026-09-16 — WHERE A LINK CAN ASK FOR A DIFFERENT GROUP.
  *
  * รายรายการ was folded into this screen, and two links in the wild named its
  * tab: the dashboard's "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card, and the old
  * /commission?tab= redirect. Both mean "show me what has been PAID", which is
- * a different set from this screen's default — so they are honoured rather
- * than silently landing somebody on the unpaid queue.
+ * a different set from where this screen opens — so they are honoured rather
+ * than silently landing somebody on the payout queue.
+ *
+ * `?view=all` predates the groups and no longer names one. It resolves to the
+ * work group rather than being ignored, because whoever wrote that link wanted
+ * a starting point, not a specific slice of history.
  *
  * Read ONCE at setup, never watched: this is a starting point somebody handed
- * over, and re-applying it would fight the next tab the reader clicks.
+ * over, and re-applying it would fight the next step the reader presses.
  */
-function viewFromQuery(): '' | 'pending' | 'paid' {
+function groupFromQuery(): Group {
   const asked = route.query.view ?? route.query.tab
 
-  if (asked === 'paid') return 'paid'
-  if (asked === 'all') return ''
-
-  return 'pending'
+  return asked === 'paid' ? 'paid' : 'payable'
 }
+
+const group = ref<Group>(groupFromQuery())
+
+const GROUP_LABELS: Record<Group, string> = {
+  payable: 'ตั้งจ่ายได้เลย',
+  reserved: 'รอฝ่ายบัญชีโอน',
+  blocked: 'ติดปัญหา — ตั้งจ่ายไม่ได้',
+  paid: 'โอนแล้ว',
+}
+
+const loading = ref(false)
+const hasLoadedOnce = ref(false)
+const errorMessage = ref('')
+
+/*
+ * Two result sets, each from its own request, each kept once fetched.
+ *
+ * They are NOT interchangeable and must never be concatenated: a row in
+ * `paidRows` came back from payment_status=paid, so its pending bucket is null
+ * by contract (F-10) — mixing the two would put unmeasured rows into sums that
+ * are supposed to be measured.
+ */
+const pendingRows = ref<AgentSummaryItem[]>([])
+const paidRows = ref<AgentSummaryItem[]>([])
+const pendingLoaded = ref(false)
+const paidLoaded = ref(false)
 
 const filters = ref({
   date_from: '',
   date_to: '',
-  payment_status: viewFromQuery(),
 })
 
 /** Free-text narrowing of what is already on screen — never a server query. */
@@ -274,23 +310,58 @@ const search = ref('')
  */
 const showDates = ref(false)
 
+/**
+ * Dates only.
+ *
+ * payment_status used to live in `filters` and be user-facing. It is now an
+ * implementation detail of which of the two result sets is being fetched, so
+ * it is passed explicitly at the call site rather than carried in shared state
+ * where the drill-down would silently inherit it.
+ */
 function buildQuery(): string {
   const params = new URLSearchParams()
   if (filters.value.date_from) params.set('date_from', filters.value.date_from)
   if (filters.value.date_to) params.set('date_to', filters.value.date_to)
-  if (filters.value.payment_status) params.set('payment_status', filters.value.payment_status)
   return params.toString()
 }
 
-async function loadAll() {
+async function fetchSummary(status: 'pending' | 'paid'): Promise<AgentSummaryItem[]> {
+  const params = new URLSearchParams(buildQuery())
+  params.set('payment_status', status)
+
+  const res = await api.get<{ data: AgentSummaryItem[]; computed_at: string }>(
+    activeCompany.scopedPath(`/agent-commission-summary?${params.toString()}`),
+  )
+
+  return res.data
+}
+
+/**
+ * Fetch whatever the screen currently needs, and nothing it already has.
+ *
+ * `pending` is ALWAYS needed, even while the reader is looking at history: the
+ * amber bar and the first two steps of the band are drawn from it, and they
+ * stay on screen in every group. `paid` is fetched the first time step 3 is
+ * opened and then kept — so stepping back and forth does not re-request, and
+ * step 3 never loses the figure it just showed.
+ */
+async function ensureLoaded(force = false): Promise<void> {
+  const needPending = force || !pendingLoaded.value
+  const needPaid = (force && paidLoaded.value) || (group.value === 'paid' && !paidLoaded.value)
+
+  if (!needPending && !needPaid) return
+
   loading.value = true
   errorMessage.value = ''
   try {
-    const query = buildQuery()
-    const res = await api.get<{ data: AgentSummaryItem[]; computed_at: string }>(
-      activeCompany.scopedPath(`/agent-commission-summary${query ? `?${query}` : ''}`),
-    )
-    summaries.value = res.data
+    if (needPending) {
+      pendingRows.value = await fetchSummary('pending')
+      pendingLoaded.value = true
+    }
+    if (needPaid) {
+      paidRows.value = await fetchSummary('paid')
+      paidLoaded.value = true
+    }
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
   } finally {
@@ -298,7 +369,13 @@ async function loadAll() {
     hasLoadedOnce.value = true
   }
 }
-onMounted(loadAll)
+
+/** A write happened, or the window changed: everything on screen is stale. */
+async function reloadAll(): Promise<void> {
+  await ensureLoaded(true)
+}
+
+onMounted(() => ensureLoaded())
 
 /**
  * Every filter change drops the selection.
@@ -309,14 +386,23 @@ onMounted(loadAll)
  */
 function applyFilters() {
   selected.value = new Set()
-  loadAll()
+  reloadAll()
 }
 
-function switchView(status: '' | 'pending' | 'paid'): void {
-  if (filters.value.payment_status === status) return
+/**
+ * Switching groups drops the selection for the same reason, even though the
+ * figures do not move: a tick made in กลุ่มตั้งจ่ายได้เลย and then left behind
+ * while the reader browses history would be agreed to at a confirmation opened
+ * from somewhere else entirely.
+ */
+function openGroup(next: Group): void {
+  if (group.value === next) return
 
-  filters.value.payment_status = status
-  applyFilters()
+  group.value = next
+  selected.value = new Set()
+  batchError.value = ''
+  confirming.value = false
+  ensureLoaded()
 }
 
 /** Puts the checkboxes back — see the note under the filter bar. */
@@ -334,50 +420,182 @@ function clearDateFilter(): void {
  */
 const dateFilterActive = computed(() => Boolean(filters.value.date_from || filters.value.date_to))
 
-/** ค้างจ่าย is not measured at all in the จ่ายแล้ว view, so nothing is payable there. */
-const canSelect = computed(() => !dateFilterActive.value && filters.value.payment_status !== 'paid')
-
-const visibleRows = computed(() => {
-  const needle = search.value.trim().toLowerCase()
-
-  if (needle === '') return summaries.value
-
-  return summaries.value.filter((s) => (s.agent_name ?? '').toLowerCase().includes(needle))
-})
+/**
+ * Ticking exists in ONE group.
+ *
+ * That is the point of the split: a tick always means "pay this person this
+ * amount", and there is nowhere on this screen where it could mean anything
+ * else. Nothing in กลุ่มรอฝ่ายบัญชีโอน can be raised (it already has been),
+ * nothing in กลุ่มติดปัญหา can be raised (the server would refuse), and
+ * โอนแล้ว is history.
+ */
+const canSelect = computed(() => !dateFilterActive.value && group.value === 'payable')
 
 /** The amount a NEW payout for this payee would be for. */
 function availableOf(s: AgentSummaryItem): number | null {
   /*
    * Falls back to the pending figure only when the server did not send the
    * field at all — an older API during a rolling deploy. `?? 0` would be
-   * wrong in the other direction (it would grey out every row); this keeps
+   * wrong in the other direction (it would empty the work group); this keeps
    * the screen working and merely un-improved.
    */
   return s.available_satang === undefined ? s.total_pending_satang : s.available_satang
 }
 
-/** Owed money, and the server would accept a NEW payout for them right now. */
-function selectable(s: AgentSummaryItem): boolean {
-  const available = availableOf(s)
-
-  return canSelect.value
-    && available !== null
-    && available > 0
-    && s.payout_details_complete === true
+/** The server would accept a NEW payout for this payee right now. */
+function isPayable(s: AgentSummaryItem): boolean {
+  return (availableOf(s) ?? 0) > 0 && s.payout_details_complete === true
 }
+
+/** Owed money that could be raised, if only the payee's details were complete. */
+function isBlocked(s: AgentSummaryItem): boolean {
+  return (availableOf(s) ?? 0) > 0 && s.payout_details_complete !== true
+}
+
+/** Something is already in flight for this payee, waiting at รอบจ่าย. */
+function isReserved(s: AgentSummaryItem): boolean {
+  return (s.reserved_satang ?? 0) > 0
+}
+
+/*
+ * ── THE GROUPS OVERLAP ON PURPOSE ──
+ *
+ * An agent with 1,500 raised and 500 still available belongs in BOTH
+ * ตั้งจ่ายได้เลย and รอฝ่ายบัญชีโอน, because both sentences are true of them and
+ * each group answers a different question ("who can I pay" / "what is accounting
+ * holding"). Forcing a partition would have to drop them out of one of the two,
+ * and either choice makes a true list incomplete. The row itself says which part
+ * of its balance is which.
+ */
+const payableRows = computed(() => pendingRows.value.filter(isPayable))
+const blockedRows = computed(() => pendingRows.value.filter(isBlocked))
+const reservedRows = computed(() => pendingRows.value.filter(isReserved))
+
+const groupRows = computed<AgentSummaryItem[]>(() => {
+  switch (group.value) {
+    case 'paid':
+      return paidRows.value
+    case 'blocked':
+      return blockedRows.value
+    case 'reserved':
+      return reservedRows.value
+    default:
+      return payableRows.value
+  }
+})
+
+const visibleRows = computed(() => {
+  const needle = search.value.trim().toLowerCase()
+
+  if (needle === '') return groupRows.value
+
+  return groupRows.value.filter((s) => (s.agent_name ?? '').toLowerCase().includes(needle))
+})
+
+/**
+ * TASK-179 §3.7 (F-10) — the wording for a bucket that was never measured.
+ *
+ * Deliberately NOT a number and NOT "0 บาท": the point of the backend
+ * returning null is that the UI must be unable to present an unmeasured
+ * bucket as a monetary fact.
+ */
+const UNMEASURED_LABEL = 'ไม่ได้แสดง (ถูกกรองออก)'
+function formatSatangOrUnmeasured(satang: number | null): string {
+  return satang === null ? UNMEASURED_LABEL : formatSatang(satang)
+}
+
+/**
+ * Sum a bucket across a set of rows — or report that it was not measured.
+ *
+ * Returns null the moment ANY row's bucket is null, rather than skipping
+ * those rows: the filter excludes the bucket for the whole request, so a
+ * partial sum would be a company-wide total assembled from a subset nobody
+ * defined. (`.reduce()` with `?? 0` here is precisely the F-10 shape.)
+ */
+function sumBucket(rows: AgentSummaryItem[], pick: (s: AgentSummaryItem) => number | null): number | null {
+  let total = 0
+  for (const s of rows) {
+    const value = pick(s)
+    if (value === null) return null
+    total += value
+  }
+  return total
+}
+
+/**
+ * Was the pending bucket measured at all?
+ *
+ * Checked on the WHOLE result set rather than on the filtered group, because a
+ * group filtered by `available > 0` is empty exactly when the bucket is null —
+ * and an empty group summed with `.reduce()` yields 0, which is the F-10 defect
+ * wearing a different hat: "nobody measured this" rendered as "0 บาท".
+ */
+const pendingMeasured = computed(() => pendingRows.value.every((s) => s.total_pending_satang !== null))
+
+// ── The band: three steps, each a sum of money ──────────────────────────
+const payableSatang = computed(() =>
+  pendingMeasured.value ? payableRows.value.reduce((t, s) => t + (availableOf(s) ?? 0), 0) : null,
+)
+const blockedSatang = computed(() =>
+  pendingMeasured.value ? blockedRows.value.reduce((t, s) => t + (availableOf(s) ?? 0), 0) : null,
+)
+/*
+ * reserved_satang is never null: it is counted off the withdrawal items, which
+ * the payment-status filter does not touch. It is the one figure on this screen
+ * that means the same thing in every group.
+ */
+const reservedSatang = computed(() => pendingRows.value.reduce((t, s) => t + (s.reserved_satang ?? 0), 0))
+/** null until step 3 has been opened once — see "TWO REQUESTS, CACHED". */
+const paidSatang = computed(() => (paidLoaded.value ? sumBucket(paidRows.value, (s) => s.total_paid_satang) : null))
+
+const steps = computed(() => [
+  {
+    key: 'payable' as const,
+    n: 1,
+    label: 'ตั้งจ่ายได้เลย',
+    satang: payableSatang.value,
+    count: payableRows.value.length,
+    note: 'พร้อมตั้งจ่ายรอบนี้',
+  },
+  {
+    key: 'reserved' as const,
+    n: 2,
+    label: 'รอฝ่ายบัญชีโอน',
+    satang: reservedSatang.value,
+    count: reservedRows.value.length,
+    note: 'ตั้งจ่ายแล้ว งานอยู่ที่หน้ารอบจ่าย',
+  },
+  {
+    key: 'paid' as const,
+    n: 3,
+    label: 'โอนแล้ว',
+    // Not a figure until the request that measures it has run.
+    satang: paidSatang.value,
+    count: paidLoaded.value ? paidRows.value.length : null,
+    note: paidLoaded.value ? 'บันทึกว่าโอนแล้วเรียบร้อย' : 'กดเพื่อดูประวัติการโอน',
+  },
+])
 
 /**
  * Why this row cannot be ticked — or '' when it can.
  *
- * Said on the row itself rather than after a failed press: the two reasons an
- * admin can act on (no bank account, nothing owed) are both fixable from this
- * screen, and finding them out from a 422 after ticking eight people is the
- * expensive way to learn either.
+ * Said on the row itself rather than after a failed press: the reasons an admin
+ * can act on are both fixable from this screen, and finding them out from a 422
+ * after ticking eight people is the expensive way to learn either.
+ *
+ * Deliberately NOT gated on `canSelect`: กลุ่มติดปัญหา and กลุ่มรอฝ่ายบัญชีโอน
+ * are lists where nothing is tickable, and they are precisely the two lists
+ * where the reader came to find out why.
  */
 function blockedReason(s: AgentSummaryItem): string {
-  if (!canSelect.value) return ''
+  if (group.value === 'paid') return ''
   if (s.total_pending_satang === null) return ''
-  if (s.total_pending_satang <= 0) return 'ไม่มียอดค้าง'
+
+  if (isBlocked(s)) {
+    return s.is_company_share === true
+      ? 'ยังไม่ได้กรอกบัญชีรับเงินของบริษัท'
+      : 'ยังกรอกบัญชีธนาคารหรือเอกสารยืนยันตัวตนไม่ครบ'
+  }
 
   /*
    * The case the owner hit. The row still shows money owed — correctly, the
@@ -385,12 +603,11 @@ function blockedReason(s: AgentSummaryItem): string {
    * already in a payout waiting at รอบจ่าย, so there is nothing left to raise.
    * Saying "ไม่มียอดค้าง" here would contradict the amount printed beside it.
    */
-  if ((availableOf(s) ?? 0) <= 0) return 'ตั้งจ่ายไปแล้ว รอโอนอยู่ที่ รอบจ่าย'
-  if (s.payout_details_complete === true) return ''
+  if ((availableOf(s) ?? 0) <= 0) {
+    return isReserved(s) ? 'ตั้งจ่ายไปแล้ว รอโอนอยู่ที่ รอบจ่าย' : 'ไม่มียอดค้าง'
+  }
 
-  return s.is_company_share === true
-    ? 'ยังไม่ได้กรอกบัญชีรับเงินของบริษัท'
-    : 'ยังกรอกบัญชีธนาคารหรือเอกสารยืนยันตัวตนไม่ครบ'
+  return ''
 }
 
 // ── The selection ───────────────────────────────────────────────────────
@@ -398,6 +615,11 @@ const selected = ref<Set<number>>(new Set())
 
 function isSelected(id: number): boolean {
   return selected.value.has(id)
+}
+
+/** Owed money, the server would accept a payout, and this screen is offering one. */
+function selectable(s: AgentSummaryItem): boolean {
+  return canSelect.value && isPayable(s)
 }
 
 function toggleRow(s: AgentSummaryItem): void {
@@ -428,7 +650,7 @@ const selectedRows = computed(() =>
   // Read back off the CURRENT rows rather than kept as objects when ticked:
   // a reload between the tick and the press must not pay a figure that is no
   // longer on screen.
-  summaries.value.filter((s) => selected.value.has(s.agent_id) && selectable(s)),
+  pendingRows.value.filter((s) => selected.value.has(s.agent_id) && selectable(s)),
 )
 
 const selectedTotalSatang = computed(() =>
@@ -504,7 +726,13 @@ async function paySelected(): Promise<void> {
     confirming.value = false
     selected.value = new Set()
     batchDone.value = { count: attempted, satang: attemptedSatang }
-    await loadAll()
+    /*
+     * Both result sets, not just the one on screen: what was just raised moves
+     * money from step 1 to step 2 of the band, and the band is visible from
+     * every group. A partial reload would leave the number the reader is
+     * looking at disagreeing with the list they just acted on.
+     */
+    await reloadAll()
   } catch (e) {
     // The server's own sentence: for a stale total it names both figures and
     // says what to do, which no generic copy here could replace.
@@ -513,19 +741,6 @@ async function paySelected(): Promise<void> {
     paying.value = false
   }
 }
-
-/*
- * 2026-09-15 — THE PER-ROW "ตั้งจ่าย" BUTTON IS GONE (แบบ C).
- *
- * It was the whole interaction for one iteration. Keeping it beside the
- * checkboxes would have left two ways to do the same thing on one row, one of
- * them writing immediately and one of them collecting a selection — which is
- * the duplication this screen has now been consolidated three times to
- * remove. A single payee is a selection of one.
- *
- * The endpoint it used (/commission-withdrawals/payout) is still there and
- * still tested; nothing in this app calls it any more.
- */
 
 // ── Bank account (TASK-045/047) ─────────────────────────────────────────
 // Prefills from the agent's REAL current number, and the panel stays open
@@ -557,7 +772,13 @@ async function submitBankAccount(agent: AgentSummaryItem) {
   try {
     await api.put(`/users/${agent.agent_id}`, payload)
     bankSavedMessage.value = `บันทึกสำเร็จ — เลขที่บัญชี ${payload.bank_account_number || '-'}`
-    await loadAll()
+    /*
+     * Completing a bank account moves this payee out of กลุ่มติดปัญหา and into
+     * กลุ่มตั้งจ่ายได้เลย — which is the whole reason somebody opened this form.
+     * The row will vanish from the list they are looking at; the amber bar
+     * above the band is what tells them it worked.
+     */
+    await reloadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกบัญชีธนาคารไม่สำเร็จ (${e.status})` : 'บันทึกบัญชีธนาคารไม่สำเร็จ'
   } finally {
@@ -608,19 +829,16 @@ function formatDate(iso: string): string {
 
 // ── Export CSV (TASK-044 §3) ────────────────────────────────────────────
 // The export endpoint ALWAYS forces payment_status=pending server-side (a
-// payout file only ever needs money still owed), so filters.payment_status is
-// deliberately NOT sent — sending it would be silently ignored and would
-// suggest the file respects the tab, which it never does. Only the date range
+// payout file only ever needs money still owed), so the group is deliberately
+// NOT sent — sending it would be silently ignored and would suggest the file
+// respects which step is open, which it never does. Only the date range
 // carries over.
 const exporting = ref(false)
 async function exportCsv() {
   exporting.value = true
   errorMessage.value = ''
   try {
-    const params = new URLSearchParams()
-    if (filters.value.date_from) params.set('date_from', filters.value.date_from)
-    if (filters.value.date_to) params.set('date_to', filters.value.date_to)
-    const query = params.toString()
+    const query = buildQuery()
     await api.download(`/agent-commission-summary/export${query ? `?${query}` : ''}`)
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ส่งออก CSV ไม่สำเร็จ (${e.status})` : 'ส่งออก CSV ไม่สำเร็จ'
@@ -630,67 +848,20 @@ async function exportCsv() {
 }
 
 /**
- * TASK-179 §3.7 (F-10) — the wording for a bucket that was never measured.
+ * 2026-09-16 — ONE KPI, BECAUSE THE BAND CARRIES THE REST.
  *
- * Deliberately NOT a number and NOT "0 บาท": the point of the backend
- * returning null is that the UI must be unable to present an unmeasured
- * bucket as a monetary fact.
- */
-const UNMEASURED_LABEL = 'ไม่ได้แสดง (ถูกกรองออก)'
-function formatSatangOrUnmeasured(satang: number | null): string {
-  return satang === null ? UNMEASURED_LABEL : formatSatang(satang)
-}
-
-/**
- * Sum a bucket across every agent — or report that it was not measured.
+ * The header used to hold ค้างจ่ายรวม / รอตั้งจ่าย / เลือกไว้. Two of those are
+ * now the first step of the band and the sticky bar, printed larger and next to
+ * the names they describe; leaving them here as well would put the same figure
+ * on the screen twice, which is how the two-numbers-one-name defect starts.
  *
- * Returns null the moment ANY row's bucket is null, rather than skipping
- * those rows: the filter excludes the bucket for the whole request, so a
- * partial sum would be a company-wide total assembled from a subset nobody
- * defined. (`.reduce()` with `?? 0` here is precisely the F-10 shape.)
+ * What survives is the one number nothing else on the screen says: the WHOLE
+ * outstanding liability, which is neither what can be raised today (step 1, net
+ * of what is in flight) nor what is waiting at รอบจ่าย (step 2).
  */
-function sumBucket(pick: (s: AgentSummaryItem) => number | null): number | null {
-  let total = 0
-  for (const s of summaries.value) {
-    const value = pick(s)
-    if (value === null) return null
-    total += value
-  }
-  return total
-}
-
-/**
- * 2026-09-15 — THE HEADER SAYS WHAT THE WORK IS, NOT WHAT THE HISTORY IS.
- *
- * It carried จ่ายแล้วรวม / รอจ่ายรวม / จำนวน Agent in every view. Two of the
- * three answered a question nobody opens this screen to ask, and in the
- * default ค้างจ่าย view the first of them is not even measured — so it printed
- * "ไม่ได้แสดง" in the largest type on the page.
- */
-const kpis = computed(() => {
-  if (filters.value.payment_status === 'paid') {
-    return [
-      { label: 'จ่ายแล้วรวม', value: formatSatangOrUnmeasured(sumBucket((s) => s.total_paid_satang)) },
-      { label: 'จำนวนผู้รับ', value: summaries.value.length },
-    ]
-  }
-
-  const owed = summaries.value.filter((s) => (s.total_pending_satang ?? 0) > 0).length
-  const stillOwed = { label: 'ค้างจ่ายรวม', value: formatSatangOrUnmeasured(sumBucket((s) => s.total_pending_satang)) }
-  const waiting = { label: 'รอตั้งจ่าย', value: `${owed} ราย` }
-
-  // ทั้งหมด is the one view where both buckets are measured, so it is the one
-  // view where showing both is telling the reader something.
-  if (filters.value.payment_status === '') {
-    return [
-      { label: 'จ่ายแล้วรวม', value: formatSatangOrUnmeasured(sumBucket((s) => s.total_paid_satang)) },
-      stillOwed,
-      waiting,
-    ]
-  }
-
-  return [stillOwed, waiting, { label: 'เลือกไว้', value: `${selectedRows.value.length} ราย` }]
-})
+const kpis = computed(() => [
+  { label: 'ค้างจ่ายรวมทั้งหมด', value: formatSatangOrUnmeasured(sumBucket(pendingRows.value, (s) => s.total_pending_satang)) },
+])
 
 // BR-3 — satang in, baht out. Divide by 100 only here, at the display layer.
 function formatSatang(satang: number): string {
@@ -701,7 +872,9 @@ function formatSatang(satang: number): string {
 // company has to refetch; nothing here can be re-derived locally.
 watch(() => activeCompany.companyId, () => {
   selected.value = new Set()
-  loadAll()
+  paidLoaded.value = false
+  pendingLoaded.value = false
+  ensureLoaded(true)
 })
 </script>
 
@@ -710,7 +883,7 @@ watch(() => activeCompany.companyId, () => {
     <HeroHeader
       icon="money"
       title="ตั้งจ่าย"
-      subtitle="ติ๊กเลือกคนที่จะจ่ายรอบนี้ แล้วกดตั้งจ่ายครั้งเดียว"
+      subtitle="กดที่ขั้นในแถบด้านล่างเพื่อสลับกลุ่ม แล้วคลิกที่แถวเพื่อเลือกคนที่จะจ่าย"
       description="ตั้งจ่ายแล้วรายการจะไปรอที่ รอบจ่าย ให้ฝ่ายบัญชีโอน แล้วกลับมากด “บันทึกว่าโอนแล้ว” — ยังไม่มีการปิดรายการค่าคอมและยังไม่แจ้งตัวแทนในขั้นนี้"
       :kpis="kpis"
       accent-color="brand"
@@ -720,33 +893,12 @@ watch(() => activeCompany.companyId, () => {
     <CompanyScopeNotice action="ดูสรุปคอมมิชชั่น" />
 
     <!--
-      ═══ ONE TOOLBAR, RANKED ═══
-      Left: the view, which is the only control most visits touch.
-      Right: the conveniences, as thin-bordered buttons — the blue "กรอง"
-      button that used to dominate this page is gone; switching a view or
-      picking a date range refetches by itself.
+      ═══ ONE TOOLBAR, AND IT NO LONGER SWITCHES ANYTHING ═══
+      The ค้างจ่าย / จ่ายแล้ว / ทั้งหมด strip that used to sit here split the
+      list on the wrong axis. Switching groups is the band's job now, so what
+      is left are the two conveniences: find a name, and narrow the window.
     -->
     <div class="mt-4 flex flex-wrap items-center gap-3">
-      <div class="inline-flex p-[3px] bg-slate-100 rounded-xl" role="tablist">
-        <button
-          v-for="view in ([
-            { key: 'pending', label: 'ค้างจ่าย' },
-            { key: 'paid', label: 'จ่ายแล้ว' },
-            { key: '', label: 'ทั้งหมด' },
-          ] as const)"
-          :key="view.key || 'all'"
-          type="button"
-          class="px-4 py-1.5 rounded-[0.6rem] text-sm font-bold transition"
-          :class="filters.payment_status === view.key
-            ? 'bg-white text-brand-700 shadow-sm'
-            : 'text-slate-500 hover:text-slate-700'"
-          :data-test="`payout-view-${view.key || 'all'}`"
-          @click="switchView(view.key)"
-        >
-          {{ view.label }}
-        </button>
-      </div>
-
       <label class="relative">
         <span class="sr-only">ค้นหาชื่อตัวแทน</span>
         <Icon name="search" :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -803,6 +955,113 @@ watch(() => activeCompany.companyId, () => {
     </div>
 
     <!--
+      ═══ กลุ่มติดปัญหา — ABOVE THE BAND, NOT ON IT ═══
+
+      These people have not entered the conveyor at all; that is WHY they are
+      stuck. Putting them on the band as a step would draw a flow that does not
+      exist. This is also the only thing on the screen that has to be noticed
+      without being looked for, which is the other reason it is first.
+
+      It disappears entirely when the group is empty — a permanent warning bar
+      on a day with no problems teaches people to stop reading warning bars.
+    -->
+    <div
+      v-if="blockedRows.length"
+      class="mt-4 px-4 py-3 rounded-2xl bg-amber-50 border border-amber-200 flex flex-wrap items-center gap-3"
+      :class="group === 'blocked' ? 'ring-2 ring-amber-400' : ''"
+      data-test="payout-blocked-alert"
+    >
+      <span class="w-7 h-7 rounded-lg bg-amber-700 text-white inline-flex items-center justify-center text-sm font-extrabold shrink-0">!</span>
+      <div class="min-w-0">
+        <p class="text-[13.5px] font-extrabold text-amber-900">
+          {{ blockedRows.length }} รายมีค่าคอม แต่ตั้งจ่ายไม่ได้
+          <span v-if="blockedSatang !== null" class="tabular-nums">· {{ formatSatang(blockedSatang) }}</span>
+        </p>
+        <p class="text-[12px] text-amber-800 truncate">
+          {{ blockedRows.map((s) => s.agent_name ?? '—').join(' · ') }}
+        </p>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <button
+          type="button"
+          class="h-9 px-4 rounded-xl border-[1.5px] border-amber-700 text-amber-900 text-[12.5px] font-extrabold hover:bg-amber-100"
+          data-test="payout-blocked-open"
+          @click="openGroup('blocked')"
+        >
+          {{ group === 'blocked' ? 'กำลังดูรายชื่อ' : 'ดูรายชื่อ' }}
+        </button>
+        <!--
+          The one repair that cannot be made from this screen: the seat is not
+          a person, and PUT /users/{id} refuses it. Offered here only when the
+          company's own share is actually one of the blocked payees.
+        -->
+        <RouterLink
+          v-if="blockedRows.some((s) => s.is_company_share)"
+          :to="{ name: 'commission-plan-settings' }"
+          class="h-9 px-4 rounded-xl bg-amber-700 text-white text-[12.5px] font-extrabold hover:bg-amber-800 inline-flex items-center"
+          data-test="payout-blocked-company-link"
+        >
+          กรอกบัญชีบริษัท →
+        </RouterLink>
+      </div>
+    </div>
+
+    <!--
+      ═══ THE BAND: A SUMMARY AND THE SWITCHER, ONE OBJECT ═══
+
+      Each step carries MONEY rather than a count, because the question this
+      screen is opened to answer is about money. The step in view has a heavy
+      border and says "กำลังดู", and the list underneath it is that step — so
+      nobody has to hold in their head which number the list belongs to.
+
+      Step 3 has no figure until it has been opened once: its bucket is
+      measured by a request that has not been made, and §3.7/F-10 forbids
+      printing a number for a bucket nobody measured. It says "กดเพื่อดู".
+    -->
+    <div class="mt-4 flex flex-col sm:flex-row items-stretch gap-2" role="tablist" data-test="payout-step-band">
+      <template v-for="(step, i) in steps" :key="step.key">
+        <div v-if="i > 0" class="hidden sm:flex items-center px-1 text-slate-300 shrink-0">
+          <Icon name="chevron-right" :size="18" />
+        </div>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="group === step.key"
+          class="flex-1 text-left px-4 py-3 rounded-2xl transition"
+          :class="group === step.key
+            ? 'border-2 border-brand-700 bg-brand-50'
+            : 'border border-slate-200 bg-white hover:border-brand-300 hover:bg-brand-50/40'"
+          :data-test="`payout-step-${step.key}`"
+          @click="openGroup(step.key)"
+        >
+          <div class="flex items-center gap-2">
+            <span
+              class="w-5 h-5 rounded-md inline-flex items-center justify-center text-[11px] font-extrabold"
+              :class="group === step.key ? 'bg-brand-700 text-white' : 'bg-slate-200 text-slate-600'"
+            >{{ step.n }}</span>
+            <span class="text-[13.5px] font-bold" :class="group === step.key ? 'text-brand-700' : 'text-slate-700'">
+              {{ step.label }}
+            </span>
+            <span v-if="group === step.key" class="ml-auto text-[11px] font-extrabold text-brand-700">กำลังดู</span>
+          </div>
+          <p
+            class="mt-1.5 text-[21px] font-extrabold tabular-nums leading-tight"
+            :class="step.key === 'paid' ? 'text-emerald-600' : 'text-slate-900'"
+            :data-test="`payout-step-amount-${step.key}`"
+          >
+            <template v-if="step.satang !== null">{{ formatSatang(step.satang) }}</template>
+            <span v-else class="text-[15px] font-bold text-slate-400">
+              {{ step.key === 'paid' && !paidLoaded ? 'กดเพื่อดู' : UNMEASURED_LABEL }}
+            </span>
+          </p>
+          <p class="mt-0.5 text-[11.5px] text-slate-500">
+            <template v-if="step.count !== null">{{ step.count }} ราย · </template>{{ step.note }}
+          </p>
+        </button>
+      </template>
+    </div>
+
+    <!--
       Why the checkboxes vanished. A payout is raised for an agent's WHOLE
       outstanding balance, and under a date filter the figure on each row is a
       slice of it.
@@ -814,16 +1073,6 @@ watch(() => activeCompany.companyId, () => {
     >
       กรองตามวันที่อยู่ — ตั้งจ่ายไม่ได้ เพราะการตั้งจ่ายคิดจากยอดค้างทั้งหมดของตัวแทน ไม่ใช่เฉพาะช่วงที่กรอง
       <button type="button" class="ml-1 font-bold text-brand-600 hover:underline" @click="clearDateFilter">ล้างวันที่</button>
-    </p>
-
-    <p
-      v-else-if="filters.payment_status === 'paid'"
-      class="mt-3 text-[12.5px] text-slate-500"
-      data-test="payout-paid-view-note"
-    >
-      มุมมองประวัติ — ตั้งจ่ายจากหน้านี้ไม่ได้ กลับไปที่แท็บ
-      <button type="button" class="font-bold text-brand-600 hover:underline" @click="switchView('pending')">ค้างจ่าย</button>
-      เพื่อตั้งจ่าย
     </p>
 
     <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
@@ -839,21 +1088,49 @@ watch(() => activeCompany.companyId, () => {
       <RouterLink :to="{ name: 'commission-runs' }" class="underline">ดูต่อที่ รอบจ่าย</RouterLink>
     </p>
 
-    <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
+    <!--
+      The list says which group it is, in words, right above itself. The band
+      says it too, but the band is a row of numbers and this is a heading — and
+      กลุ่มติดปัญหา has no step on the band at all, so without this line that
+      group would be the only one whose list is unlabelled.
+    -->
+    <div class="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1">
+      <h2 class="text-[13.5px] font-extrabold text-slate-800" data-test="payout-group-heading">
+        {{ GROUP_LABELS[group] }}
+        <span class="font-bold text-slate-400">· {{ visibleRows.length }} ราย</span>
+      </h2>
+      <span v-if="canSelect && selectableRows.length" class="text-[12px] text-slate-400">คลิกที่แถวเพื่อเลือก</span>
+      <button
+        v-if="group !== 'payable'"
+        type="button"
+        class="text-[12px] font-bold text-brand-600 hover:underline"
+        data-test="payout-back-to-work"
+        @click="openGroup('payable')"
+      >
+        ← กลับไปที่ ตั้งจ่ายได้เลย
+      </button>
+    </div>
+
+    <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-3" />
     <template v-else>
       <EmptyState
-        v-if="!summaries.length"
-        icon="money"
-        :title="filters.payment_status === 'pending' ? 'ไม่มีใครค้างรับค่าแนะนำ' : 'ยังไม่มีข้อมูลคอมมิชชั่น'"
-        class="mt-4"
+        v-if="!groupRows.length"
+        :icon="group === 'blocked' ? 'shield' : 'money'"
+        :title="group === 'payable' ? 'ไม่มีใครที่ตั้งจ่ายได้ตอนนี้'
+          : group === 'reserved' ? 'ไม่มีรายการที่รอฝ่ายบัญชีโอน'
+          : group === 'blocked' ? 'ไม่มีใครติดปัญหา'
+          : 'ยังไม่มีประวัติการโอน'"
+        class="mt-3"
+        data-test="payout-group-empty"
       />
       <EmptyState
         v-else-if="!visibleRows.length"
         icon="search"
         title="ไม่พบชื่อที่ค้นหา"
-        class="mt-4"
+        class="mt-3"
       />
 
+      <template v-else>
       <!--
         2026-09-16 — ONE LINE THAT SAYS HOW THE SCREEN WORKS.
 
@@ -865,10 +1142,9 @@ watch(() => activeCompany.companyId, () => {
         instruction is a permanent admission that the screen did not explain
         itself.
       -->
-      <template v-else>
       <p
         v-if="canSelect && selectableRows.length && !selectedRows.length"
-        class="mt-4 mb-1 text-[12.5px] text-slate-500"
+        class="mt-3 mb-1 text-[12.5px] text-slate-500"
         data-test="payout-select-hint"
       >
         <b class="text-slate-700">วิธีใช้:</b> คลิกที่แถวของคนที่จะจ่ายรอบนี้เพื่อเลือก (เลือกได้หลายคน) แล้วกดปุ่มตั้งจ่ายที่แถบด้านล่าง
@@ -879,7 +1155,7 @@ watch(() => activeCompany.companyId, () => {
            Denser than the card list it replaces: forty payees fit on one
            screen, and the bank column is in view while the admin is ticking
            rather than discovered when the transfer file is opened. -->
-      <div class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-hidden">
+      <div class="mt-3 bg-white/95 border border-slate-200 rounded-xl overflow-hidden">
         <table class="w-full text-sm">
           <thead>
             <tr class="bg-slate-50 text-left text-[11.5px] font-bold text-slate-500 border-b border-slate-200">
@@ -902,8 +1178,8 @@ watch(() => activeCompany.companyId, () => {
               <th class="py-2.5 px-3">ผู้รับ</th>
               <th class="py-2.5 px-3 w-24">รายการ</th>
               <th class="py-2.5 px-3 w-64">บัญชีธนาคาร</th>
-              <th v-if="filters.payment_status !== 'pending'" class="py-2.5 px-3 w-36 text-right">จ่ายแล้ว</th>
-              <th class="py-2.5 px-3 w-40 text-right">ยอดค้างจ่าย</th>
+              <th v-if="group === 'paid'" class="py-2.5 px-3 w-36 text-right">จ่ายแล้ว</th>
+              <th v-else class="py-2.5 px-3 w-40 text-right">ยอดค้างจ่าย</th>
               <th class="py-2.5 pr-4 w-28"></th>
             </tr>
           </thead>
@@ -969,13 +1245,12 @@ watch(() => activeCompany.companyId, () => {
                       </p>
                       <!--
                         Part of the balance is in flight, part is still
-                        raisable. Said on the row because the amount in the
-                        ยอดค้างจ่าย column is the whole of it, and without this
-                        line the difference between that figure and what the
-                        press actually raises has no explanation on screen.
+                        raisable — so this payee is in BOTH group 1 and group 2
+                        and the two lists show two different figures for them.
+                        This line is what reconciles them.
                       -->
                       <p
-                        v-else-if="(s.reserved_satang ?? 0) > 0"
+                        v-if="!blockedReason(s) && isReserved(s)"
                         class="text-[11.5px] text-slate-500 mt-0.5"
                         :data-test="`payout-reserved-${s.agent_id}`"
                       >
@@ -1025,14 +1300,14 @@ watch(() => activeCompany.companyId, () => {
                 </td>
 
                 <td
-                  v-if="filters.payment_status !== 'pending'"
+                  v-if="group === 'paid'"
                   class="py-3 px-3 text-right tabular-nums align-top"
                   :class="s.total_paid_satang === null ? 'text-slate-400' : 'text-emerald-600 font-bold'"
                 >
                   {{ formatSatangOrUnmeasured(s.total_paid_satang) }}
                 </td>
-
                 <td
+                  v-else
                   class="py-3 px-3 text-right tabular-nums align-top"
                   :class="s.total_pending_satang === null ? 'text-slate-400' : 'text-amber-600 font-bold'"
                 >
@@ -1055,6 +1330,29 @@ watch(() => activeCompany.companyId, () => {
                     <Icon name="money" :size="13" />
                     ตั้งจ่ายคนนี้
                   </button>
+                  <!--
+                    กลุ่มติดปัญหา is a list of repairs, so the row carries the
+                    way to make one. An agent's bank account is edited inline
+                    (the แก้ไข link in the column beside it); the company seat
+                    is not a person and is repaired on ตั้งค่าค่าแนะนำ.
+                  -->
+                  <RouterLink
+                    v-else-if="group === 'blocked' && s.is_company_share"
+                    :to="{ name: 'commission-plan-settings' }"
+                    class="inline-flex items-center h-8 px-3 rounded-lg bg-amber-700 text-white text-[12px] font-extrabold hover:bg-amber-800 whitespace-nowrap"
+                    :data-test="`payout-fix-company-${s.agent_id}`"
+                  >
+                    ไปกรอกบัญชี →
+                  </RouterLink>
+                  <button
+                    v-else-if="group === 'blocked'"
+                    type="button"
+                    class="inline-flex items-center h-8 px-3 rounded-lg bg-amber-700 text-white text-[12px] font-extrabold hover:bg-amber-800 whitespace-nowrap"
+                    :data-test="`payout-fix-bank-${s.agent_id}`"
+                    @click="openBankEdit(s)"
+                  >
+                    กรอกบัญชี
+                  </button>
                   <button
                     type="button"
                     class="block ml-auto mt-1 text-[12px] font-bold text-slate-500 hover:text-brand-600 hover:underline whitespace-nowrap"
@@ -1068,7 +1366,7 @@ watch(() => activeCompany.companyId, () => {
 
               <!-- Bank editor, in the row it belongs to. -->
               <tr v-if="bankEditId === s.agent_id" :key="`bank-${s.agent_id}`" class="border-b border-slate-100 bg-slate-50/60">
-                <td :colspan="canSelect ? 7 : 6" class="px-4 py-3">
+                <td :colspan="canSelect ? 6 : 5" class="px-4 py-3">
                   <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
                   <p v-else class="text-xs text-slate-400 mb-2">
                     ปัจจุบัน: ธนาคาร {{ s.bank_name || '-' }} · เลขบัญชี {{ s.bank_account_number || '-' }} · ชื่อบัญชี {{ s.bank_account_holder_name || '-' }}
@@ -1087,7 +1385,7 @@ watch(() => activeCompany.companyId, () => {
 
               <!-- Drill-down: products sold, clients bought, stored snapshot. -->
               <tr v-if="detailAgentId === s.agent_id" :key="`detail-${s.agent_id}`" class="border-b border-slate-100 bg-slate-50/60">
-                <td :colspan="canSelect ? 7 : 6" class="px-4 py-3">
+                <td :colspan="canSelect ? 6 : 5" class="px-4 py-3">
                   <div v-if="agentDetailLoading" class="text-xs text-slate-400 mb-3">กำลังโหลดข้อมูลตัวแทน...</div>
                   <div v-else-if="agentDetail" class="flex items-center gap-2 mb-3 pb-3 border-b border-slate-200 text-xs text-slate-500">
                     <span>{{ agentDetail.email || '—' }}</span>
@@ -1176,14 +1474,11 @@ watch(() => activeCompany.companyId, () => {
 
     <!--
       ═══ THE SELECTION BAR ═══
-      Appears only once something is ticked. It carries the running total
-      because that figure — not the number of people — is what an admin checks
-      against the transfer they are about to ask accounting for.
-    -->
-    <!--
-      2026-09-16 — THE BAR IS THERE BEFORE ANYTHING IS TICKED.
+      It carries the running total because that figure — not the number of
+      people — is what an admin checks against the transfer they are about to
+      ask accounting for.
 
-      Owner: "ผู้ใช้ไม่รู้ Action ในการติ๊กเครื่องหมายถูก". It used to appear
+      2026-09-16 — IT IS THERE BEFORE ANYTHING IS TICKED. It used to appear
       only once something was selected, which meant the one control that would
       have explained the screen was invisible to exactly the person who had not
       worked it out. It now renders whenever selecting is possible, and says
