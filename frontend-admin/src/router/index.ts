@@ -219,11 +219,22 @@ export const routes: RouteRecordRaw[] = [
        */
       path: '/commission',
       name: 'commission-management',
+      /*
+       * 2026-09-16 — ?view=queue NOW LANDS ON THE WORK, NOT ON THE RECORD.
+       *
+       * It used to mean "the รอบจ่าย page", which was a working queue. That
+       * page is a read-only report now, so a link written to take somebody TO
+       * the queue has to arrive at the step of จ่ายค่าแนะนำ that holds it —
+       * otherwise the notification that says "มีคำขอเบิกรออนุมัติ" opens a
+       * screen with no approve button on it.
+       */
       redirect: (to) => {
-        if (to.query.view === 'queue') return { name: 'commission-runs' }
+        if (to.query.view === 'queue') {
+          return { name: 'commission-payouts', query: { view: 'queue' } }
+        }
         // `?tab=` is the ORIGINAL /commission ledger link (the dashboard's
-        // "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still wrote it), and the ledger
-        // panel still reads it — so the query travels with the redirect.
+        // "ค่าคอมที่จ่ายให้ตัวแทนแล้ว" card still wrote it), and the payout
+        // screen still reads it — so the query travels with the redirect.
         if (to.query.view === 'entries' || typeof to.query.tab === 'string') {
           return { name: 'commission-payouts', query: to.query }
         }
@@ -235,13 +246,32 @@ export const routes: RouteRecordRaw[] = [
       path: '/commission/payouts',
       name: 'commission-payouts',
       component: () => import('../views/CommissionPayoutsView.vue'),
-      meta: { navLabel: 'ตั้งจ่าย' },
+      meta: { navLabel: 'จ่ายค่าแนะนำ' },
     },
     {
+      /*
+       * 2026-09-16 — THE PATH IS KEPT, THE PAGE BEHIND IT CHANGED JOBS.
+       *
+       * This was รอบจ่าย, the second working screen; its buttons are now on
+       * /commission/payouts and what lives here is รายงานการจ่าย, the read-only
+       * record. The URL and the route NAME are deliberately unchanged: four
+       * places in this app link to `commission-runs`, one of them from an email
+       * already in agents' inboxes, and a bookmark landing on a report is a far
+       * better outcome than one landing on a 404.
+       *
+       * `payout-report` is an alias name for links written after the change, so
+       * new code can say what it means without pretending the old name is gone.
+       */
       path: '/commission/runs',
       name: 'commission-runs',
-      component: () => import('../views/CommissionRunsView.vue'),
-      meta: { navLabel: 'รอบจ่าย' },
+      alias: ['/commission/report'],
+      component: () => import('../views/PayoutReportView.vue'),
+      meta: { navLabel: 'รายงานการจ่าย' },
+    },
+    {
+      path: '/commission/payout-report',
+      name: 'payout-report',
+      redirect: { name: 'commission-runs' },
     },
     /*
      * 2026-09-16 — รายรายการ WAS FOLDED INTO ตั้งจ่าย.

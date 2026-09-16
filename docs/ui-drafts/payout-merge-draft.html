@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>รวมตั้งจ่าย + รอบจ่าย</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700;800&display=swap">
+<style>
+
+    body { margin:0; font-family: Kanit, "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif; background:#F8FAFC; color:#0F172A }
+    .tnum { font-variant-numeric: tabular-nums }
+    .row { display:flex; align-items:center; gap:14px; padding:12px 16px; background:#FFF; border:1px solid #E2E8F0; border-radius:12px }
+    .av { width:34px; height:34px; border-radius:999px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800; color:#FFF; flex-shrink:0 }
+    .box { width:17px; height:17px; border:2px solid #CBD5E1; border-radius:5px; display:inline-block; flex-shrink:0 }
+    .box.on { background:#1E2A54; border-color:#1E2A54; display:inline-flex; align-items:center; justify-content:center }
+    .ghost { font-size:12px; font-weight:600; color:#64748B; text-decoration:none }
+    .pill { display:inline-flex; align-items:center; height:32px; padding:0 14px; border-radius:9px; background:#1E2A54; color:#FFF; font-size:12px; font-weight:800 }
+    .tagsm { display:inline-flex; align-items:center; padding:1px 8px; border-radius:999px; font-size:10.5px; font-weight:800 }
+  
+
+    body { margin:0; font-family: Kanit, "Noto Sans Thai", ui-sans-serif, system-ui, sans-serif; background:#F8FAFC; color:#0F172A }
+    .tnum { font-variant-numeric: tabular-nums }
+    .ghost { font-size:12px; font-weight:600; color:#64748B }
+    .tagsm { display:inline-flex; align-items:center; padding:1px 8px; border-radius:999px; font-size:10.5px; font-weight:800 }
+    th { font-size:11px; font-weight:800; color:#64748B; text-align:left; padding:9px 12px; border-bottom:1px solid #E2E8F0; background:#F8FAFC }
+    td { font-size:12.5px; padding:11px 12px; border-bottom:1px solid #F1F5F9; color:#334155 }
+    .chip { display:inline-flex; align-items:center; height:30px; padding:0 12px; border-radius:9px; border:1px solid #E2E8F0; background:#FFF; font-size:12px; font-weight:700; color:#475569 }
+    .chip.on { background:#1E2A54; border-color:#1E2A54; color:#FFF }
+  
+body { background:#EEF2F7; padding:0 0 60px 0 }
+.wrap { max-width:1460px; margin:0 auto; padding:0 20px }
+.note { background:#FFFDF2; border:1px solid #FDE68A; border-left:5px solid #B45309; border-radius:12px;
+        padding:16px 18px; font-size:13px; line-height:1.85; color:#4A3410; margin:0 0 14px 0; white-space:normal }
+.note b { color:#7C2D12 }
+h2.sec { font-size:17px; font-weight:800; color:#0F172A; margin:34px 0 12px 0;
+         padding-left:12px; border-left:5px solid #1E2A54 }
+.board { border:1px solid #CBD5E1; border-radius:16px; overflow:auto; background:#F8FAFC;
+         box-shadow:0 6px 24px rgba(15,23,42,.08); margin-bottom:8px }
+.board > div { min-width:1400px }
+.hdr { background:#1E2A54; color:#fff; padding:22px 26px; border-radius:0 0 16px 16px; margin-bottom:22px }
+.hdr h1 { margin:0; font-size:22px; font-weight:800 }
+.hdr p { margin:6px 0 0 0; font-size:13.5px; color:#C5CDEA }
+.cols { display:flex; gap:14px; flex-wrap:wrap }
+.cols .note { flex:1; min-width:320px }
+</style></head><body>
+<div class="hdr"><div class="wrap">
+<h1>รวม ตั้งจ่าย + รอบจ่าย เป็นหน้าเดียว — ร่าง Layout</h1>
+<p>16 ก.ย. 2569 · เลื่อนลงเพื่อดูทั้ง 2 หน้า · กล่องสีเหลืองคือหมายเหตุของผม ไม่ใช่ส่วนหนึ่งของหน้าจอ</p>
+</div></div>
+<div class="wrap">
+<div class="note">รวม ตั้งจ่าย + รอบจ่าย เป็นหน้าเดียว (16 ก.ย. 2569)<br><br>เจ้าของระบบ: &quot;การตั้งจ่าย กับรอบจ่าย มันแทบจะแทนกันได้แล้ว&quot; → เลือก<br>&quot;รวมเป็นหน้าเดียวจริงๆ&quot; + &quot;หน้าเดิมเป็นสรุปรายการ เป็น Log ที่โอนแล้ว<br>รอโอนโดยบัญชี Filter ได้ Export เป็น CSV ได้ตามที่ Filter&quot;<br><br>ข้อสรุปของโครงสร้างใหม่ — สองหน้า แต่คนละอาชีพ ไม่ทับกันอีก:<br><br>  หน้าที่ 1 &quot;จ่ายค่าแนะนำ&quot; = ที่ทำงาน มีปุ่มที่เขียนข้อมูล ทุกปุ่ม<br>  หน้าที่ 2 &quot;รายงานการจ่าย&quot; = ที่บันทึก อ่านอย่างเดียว ไม่มีปุ่มที่เขียนเลย<br><br>เดิมสองหน้าต่างทำงานทั้งคู่ และมีขั้นที่ซ้อนกัน (ขั้น 2 ของตั้งจ่าย =<br>ขั้น 1+2 ของรอบจ่าย) — นั่นคือสาเหตุที่รู้สึกว่าแทนกันได้<br><br>สิ่งที่หายไปจากระบบ: เมนู &quot;รอบจ่าย&quot; แบบเดิม, แถบ 3 ขั้นชุดที่สอง,<br>และทางตัน &quot;เห็นเลขแต่กดทำอะไรไม่ได้&quot; ตรงกลาง</div>
+
+<h2 class="sec">หน้าที่ 1 · จ่ายค่าแนะนำ (หน้าทำงาน)</h2>
+<div class="board"><div style="width:1400px; background:#F8FAFC; padding-bottom:40px">
+
+  <!-- ไม่มีแถบ sub-menu "ตั้งจ่าย | รอบจ่าย" แล้ว เพราะงานทั้งหมดอยู่หน้าเดียว
+       เหลือลิงก์ไป "รายงานการจ่าย" ซึ่งเป็นคนละเรื่อง (อ่านอย่างเดียว) -->
+  <div style="display:flex; align-items:center; gap:4px; padding:7px 28px; border-bottom:1px solid #E2E8F0; background:#FFF">
+    <div style="padding:6px 10px; border-radius:8px; background:rgba(244,245,251,.9); color:#1E2A54; font-size:12px; font-weight:700">จ่ายค่าแนะนำ</div>
+    <div style="padding:6px 10px; border-radius:8px; color:#64748B; font-size:12px; font-weight:600">รายงานการจ่าย</div>
+  </div>
+
+  <div style="padding:20px 28px">
+
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:20px">
+      <div>
+        <h1 style="margin:0; font-size:21px; font-weight:800">จ่ายค่าแนะนำ</h1>
+        <p style="margin:4px 0 0 0; font-size:13.5px; color:#64748B">งานทั้งเส้นอยู่หน้านี้ — กดที่ขั้นเพื่อสลับกอง แล้วทำให้จบทีละขั้น</p>
+      </div>
+      <div style="display:flex; gap:8px">
+        <div style="display:inline-flex; align-items:center; height:34px; padding:0 13px; border:1px solid #E2E8F0; border-radius:10px; background:#FFF"><span class="ghost">ค้นหาชื่อ</span></div>
+        <div style="display:inline-flex; align-items:center; height:34px; padding:0 13px; border:1px solid #E2E8F0; border-radius:10px; background:#FFF"><span class="ghost">ช่วงวันที่</span></div>
+      </div>
+    </div>
+
+    <!-- ═══ แถบเตือน: ติดปัญหา ═══ เหมือนเดิม อยู่เหนือแถบเสมอ -->
+    <div style="margin-top:16px; padding:13px 18px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:14px; display:flex; align-items:center; gap:14px">
+      <span style="width:28px; height:28px; border-radius:9px; background:#B45309; color:#FFF; display:inline-flex; align-items:center; justify-content:center; font-size:15px; font-weight:800">!</span>
+      <div>
+        <p style="margin:0; font-size:13.5px; font-weight:800; color:#92400E">1 รายมีค่าคอม แต่ตั้งจ่ายไม่ได้ · 448.50 บาท</p>
+        <p style="margin:2px 0 0 0; font-size:12px; color:#92400E">Thai Life insurance (ส่วนของบริษัท) — ยังไม่ได้กรอกบัญชีรับเงินของบริษัท</p>
+      </div>
+      <div style="margin-left:auto; display:flex; gap:8px">
+        <div style="display:inline-flex; align-items:center; height:34px; padding:0 14px; border-radius:10px; border:1.5px solid #B45309; color:#92400E; font-size:12.5px; font-weight:800">ดูรายชื่อ</div>
+        <div style="display:inline-flex; align-items:center; height:34px; padding:0 16px; border-radius:10px; background:#B45309; color:#FFF; font-size:12.5px; font-weight:800">กรอกบัญชีบริษัท →</div>
+      </div>
+    </div>
+
+    <!-- ═══ แถบ 3 ขั้นของ "งาน" + ไทล์ที่ 4 ที่ไม่ใช่ขั้น แต่เป็นประตูออก ═══
+         ขั้น 1 หน่วยคือ "คน"  ขั้น 2-3 หน่วยคือ "ใบคำขอ"
+         จุดเปลี่ยนหน่วยคือตอนกดตั้งจ่าย — คนกลายเป็นใบ
+         "โอนแล้ว" ไม่ใช่ขั้นที่ต้องทำอะไร จึงเป็นลิงก์ไปรายงาน ไม่ใช่ลิสต์ซ้ำ -->
+    <div style="display:flex; align-items:stretch; gap:0; margin-top:16px">
+
+      <div style="flex:1; padding:13px 16px; border:2px solid #1E2A54; border-radius:14px; background:#F4F5FB; cursor:pointer">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:#1E2A54; color:#FFF; font-size:11px; font-weight:800">1</span>
+          <p style="margin:0; font-size:13px; font-weight:800; color:#1E2A54">ตั้งจ่ายได้เลย</p>
+          <span style="margin-left:auto; font-size:11px; font-weight:800; color:#1E2A54">กำลังดู</span>
+        </div>
+        <p class="tnum" style="margin:7px 0 0 0; font-size:21px; font-weight:800">9,300.00 <span style="font-size:12.5px; font-weight:600; color:#64748B">บาท</span></p>
+        <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">3 คน · คุณเป็นคนกด</p>
+      </div>
+
+      <div style="display:flex; align-items:center; padding:0 9px">
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="#CBD5E1" stroke-width="2"><path d="M6 4l6 6-6 6"/></svg>
+      </div>
+
+      <div style="flex:1; padding:13px 16px; border:1px solid #E2E8F0; border-radius:14px; background:#FFF; cursor:pointer">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:#E2E8F0; color:#475569; font-size:11px; font-weight:800">2</span>
+          <p style="margin:0; font-size:13px; font-weight:700; color:#334155">รอคุณตรวจสอบ</p>
+        </div>
+        <p class="tnum" style="margin:7px 0 0 0; font-size:21px; font-weight:800; color:#B45309">2,400.00 <span style="font-size:12.5px; font-weight:600; color:#94A3B8">บาท</span></p>
+        <p style="margin:2px 0 0 0; font-size:11.5px; color:#94A3B8">2 ใบ · ตัวแทนกดขอเบิกเอง</p>
+      </div>
+
+      <div style="display:flex; align-items:center; padding:0 9px">
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="#CBD5E1" stroke-width="2"><path d="M6 4l6 6-6 6"/></svg>
+      </div>
+
+      <div style="flex:1; padding:13px 16px; border:1px solid #E2E8F0; border-radius:14px; background:#FFF; cursor:pointer">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span style="display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:6px; background:#E2E8F0; color:#475569; font-size:11px; font-weight:800">3</span>
+          <p style="margin:0; font-size:13px; font-weight:700; color:#334155">รอฝ่ายบัญชีโอน</p>
+        </div>
+        <p class="tnum" style="margin:7px 0 0 0; font-size:21px; font-weight:800; color:#475569">1,046.50 <span style="font-size:12.5px; font-weight:600; color:#94A3B8">บาท</span></p>
+        <p style="margin:2px 0 0 0; font-size:11.5px; color:#94A3B8">1 ใบ · รอบัญชีแจ้งกลับ</p>
+      </div>
+
+      <!-- ประตูออก ไม่ใช่ขั้น: พื้นหลังต่าง ไม่มีเลขขั้น ไม่มี "กำลังดู" -->
+      <div style="display:flex; align-items:center; padding:0 9px">
+        <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="#CBD5E1" stroke-width="2"><path d="M6 4l6 6-6 6"/></svg>
+      </div>
+      <div style="width:250px; padding:13px 16px; border:1px dashed #A7F3D0; border-radius:14px; background:#ECFDF5; cursor:pointer">
+        <div style="display:flex; align-items:center; gap:7px">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="#047857" stroke-width="2.4"><path d="M4 10l4 4 8-9"/></svg>
+          <p style="margin:0; font-size:13px; font-weight:700; color:#047857">โอนแล้ว · เดือนนี้</p>
+        </div>
+        <p class="tnum" style="margin:7px 0 0 0; font-size:21px; font-weight:800; color:#047857">14,850.00</p>
+        <p style="margin:2px 0 0 0; font-size:11.5px; font-weight:800; color:#047857">ดูรายงานการจ่าย →</p>
+      </div>
+    </div>
+
+    <!-- ── หัวลิสต์: บอกว่ากำลังดูกองไหน และ "หน่วย" ของกองนี้คืออะไร ── -->
+    <div style="display:flex; align-items:center; gap:10px; margin-top:18px">
+      <span style="font-size:13.5px; font-weight:800; color:#1E293B">ขั้นที่ 1 · ตั้งจ่ายได้เลย</span>
+      <span class="tagsm" style="background:#E2E8F0; color:#475569">หน่วย: คน</span>
+      <span style="font-size:12px; color:#94A3B8">คลิกที่แถวเพื่อเลือกคนที่จะจ่ายรอบนี้</span>
+      <div style="margin-left:auto; display:inline-flex; align-items:center; height:30px; padding:0 12px; border:1px solid #E2E8F0; border-radius:9px; background:#FFF"><span class="ghost">เลือกทั้งหมด 3 คน</span></div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px">
+      <div class="row" style="background:#F4F5FB; border-color:#C5CDEA">
+        <span class="box on"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="#FFF" stroke-width="3"><path d="M4 10l4 4 8-9"/></svg></span>
+        <div class="av" style="background:#A8875A">ส</div>
+        <div><p style="margin:0; font-size:13.5px; font-weight:800">สุภาพร ตัวอย่าง</p>
+          <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">5 รายการค่าคอม · ไทยพาณิชย์ ••9037 <span style="color:#94A3B8">แก้ไข</span></p></div>
+        <p class="tnum" style="margin:0 0 0 auto; font-size:16px; font-weight:800; color:#B45309">6,325.00</p>
+        <div class="pill">ตั้งจ่ายคนนี้</div>
+      </div>
+      <div class="row">
+        <span class="box"></span>
+        <div class="av" style="background:#2F4183">ป</div>
+        <div><p style="margin:0; font-size:13.5px; font-weight:800">ปิยะวรรณ ตัวอย่าง</p>
+          <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">1 รายการค่าคอม · กรุงเทพ ••1190 <span style="color:#94A3B8">แก้ไข</span></p></div>
+        <p class="tnum" style="margin:0 0 0 auto; font-size:16px; font-weight:800; color:#B45309">1,928.50</p>
+        <div class="pill">ตั้งจ่ายคนนี้</div>
+      </div>
+      <div class="row">
+        <span class="box"></span>
+        <div class="av" style="background:#2F4183">ว</div>
+        <div><p style="margin:0; font-size:13.5px; font-weight:800">วิชัย ตัวอย่าง</p>
+          <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">2 รายการค่าคอม · กสิกรไทย ••2280 <span style="color:#94A3B8">แก้ไข</span></p></div>
+        <p class="tnum" style="margin:0 0 0 auto; font-size:16px; font-weight:800; color:#B45309">1,046.50</p>
+        <div class="pill">ตั้งจ่ายคนนี้</div>
+      </div>
+    </div>
+
+    <!-- แถบดำ: ปุ่มเปลี่ยนคำตามขั้นที่เปิดอยู่ ขั้น 1 = "ตั้งจ่าย N คน" -->
+    <div style="margin-top:16px; display:flex; align-items:center; gap:16px; padding:13px 20px; background:#1E2A54; border-radius:14px; box-shadow:0 10px 24px rgba(30,42,84,.25)">
+      <span style="font-size:13.5px; font-weight:700; color:#C5CDEA">เลือกไว้ 1 คน</span>
+      <span class="tnum" style="font-size:20px; font-weight:800; color:#FFF">6,325.00 บาท</span>
+      <div style="margin-left:auto; display:inline-flex; align-items:center; height:40px; padding:0 24px; border-radius:10px; background:#FFF; color:#1E2A54; font-size:14px; font-weight:800">ตั้งจ่าย 1 คน</div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════════
+         ด้านล่างนี้ไม่ใช่ส่วนหนึ่งของหน้าจอ — เป็นภาพว่า "ขั้น 2" กับ "ขั้น 3"
+         หน้าตาเป็นอย่างไรเมื่อกดเข้าไป เพื่อให้เห็นว่าแถวคนละชนิดกับขั้น 1
+         ══════════════════════════════════════════════════════════════════ -->
+    <div style="margin-top:34px; padding-top:20px; border-top:2px dashed #CBD5E1">
+      <p style="margin:0 0 14px 0; font-size:12px; font-weight:800; color:#94A3B8; letter-spacing:.04em">ภาพประกอบ — หน้าตาของขั้น 2 และ 3 เมื่อกดเข้าไป (ไม่ได้อยู่บนจอพร้อมกัน)</p>
+
+      <div style="display:flex; align-items:center; gap:10px">
+        <span style="font-size:13.5px; font-weight:800; color:#1E293B">ขั้นที่ 2 · รอคุณตรวจสอบ</span>
+        <span class="tagsm" style="background:#FDE68A; color:#92400E">หน่วย: ใบคำขอ</span>
+        <span style="font-size:12px; color:#94A3B8">ตัวแทนเป็นคนกดขอเอง — ตรวจแล้วอนุมัติ หรือไม่อนุมัติพร้อมเหตุผล</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px">
+        <div class="row" style="align-items:flex-start">
+          <div style="min-width:0">
+            <div style="display:flex; align-items:center; gap:8px">
+              <p class="tnum" style="margin:0; font-size:17px; font-weight:800">1,400.00 บาท</p>
+              <span class="tagsm" style="background:#FEF3C7; color:#92400E">รอตรวจสอบ</span>
+              <span class="tagsm" style="background:#E2E8F0; color:#475569">ตัวแทนขอเอง</span>
+            </div>
+            <p style="margin:3px 0 0 0; font-size:12.5px; color:#334155; font-weight:700">ปิยะวรรณ ตัวอย่าง</p>
+            <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">ขอเมื่อ 14 ก.ย. 2569 · 3 รายการค่าคอม · กรุงเทพ ••1190 (บันทึกไว้ตอนยื่น)</p>
+          </div>
+          <div style="margin-left:auto; display:flex; gap:8px">
+            <div style="display:inline-flex; align-items:center; height:34px; padding:0 16px; border-radius:10px; background:#0F172A; color:#FFF; font-size:12.5px; font-weight:800">อนุมัติ</div>
+            <div style="display:inline-flex; align-items:center; height:34px; padding:0 16px; border-radius:10px; border:1px solid #FECDD3; color:#BE123C; font-size:12.5px; font-weight:800">ไม่อนุมัติ</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:10px; margin-top:24px">
+        <span style="font-size:13.5px; font-weight:800; color:#1E293B">ขั้นที่ 3 · รอฝ่ายบัญชีโอน</span>
+        <span class="tagsm" style="background:#FDE68A; color:#92400E">หน่วย: ใบคำขอ</span>
+        <span style="font-size:12px; color:#94A3B8">ติ๊กใบที่บัญชีแจ้งว่าโอนแล้ว — กรอกเลขอ้างอิงครั้งเดียวได้ทั้งชุด</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px">
+        <div class="row" style="background:#F0FDF4; border-color:#A7F3D0">
+          <span class="box on" style="background:#047857; border-color:#047857"><svg width="11" height="11" viewBox="0 0 20 20" fill="none" stroke="#FFF" stroke-width="3"><path d="M4 10l4 4 8-9"/></svg></span>
+          <div style="min-width:0">
+            <div style="display:flex; align-items:center; gap:8px">
+              <p class="tnum" style="margin:0; font-size:17px; font-weight:800">1,046.50 บาท</p>
+              <span class="tagsm" style="background:#E2E8F0; color:#475569">อนุมัติแล้ว</span>
+              <span class="tagsm" style="background:#F4F5FB; color:#1E2A54">บริษัทตั้งจ่าย</span>
+            </div>
+            <p style="margin:3px 0 0 0; font-size:12.5px; color:#334155; font-weight:700">เกรียงยศ1 อุยเหินนภา1</p>
+            <p style="margin:2px 0 0 0; font-size:11.5px; color:#64748B">ตั้งจ่ายเมื่อ 15 ก.ย. 2569 · 1 รายการค่าคอม · Kbank ••5644</p>
+          </div>
+          <div style="margin-left:auto; display:inline-flex; align-items:center; height:34px; padding:0 16px; border-radius:10px; background:#047857; color:#FFF; font-size:12.5px; font-weight:800">บันทึกว่าโอนแล้ว</div>
+        </div>
+      </div>
+
+      <!-- แถบดำของขั้น 3 มีช่องเลขอ้างอิง เพราะการโอนจริงมาเป็นชุดจากบัญชี -->
+      <div style="margin-top:14px; display:flex; align-items:center; gap:14px; padding:13px 20px; background:#065F46; border-radius:14px">
+        <span style="font-size:13.5px; font-weight:700; color:#A7F3D0">เลือกไว้ 1 ใบ</span>
+        <span class="tnum" style="font-size:20px; font-weight:800; color:#FFF">1,046.50 บาท</span>
+        <div style="display:inline-flex; align-items:center; height:36px; width:230px; padding:0 12px; border-radius:9px; background:rgba(255,255,255,.14); color:#D1FAE5; font-size:12px; font-weight:600">เลขอ้างอิงการโอน (ไม่บังคับ)</div>
+        <div style="margin-left:auto; display:inline-flex; align-items:center; height:40px; padding:0 24px; border-radius:10px; background:#FFF; color:#065F46; font-size:14px; font-weight:800">บันทึกว่าโอนแล้ว 1 ใบ</div>
+      </div>
+      <p style="margin:8px 0 0 0; font-size:11.5px; color:#94A3B8">ปุ่มนี้คือปุ่มเดียวที่ปิดรายการค่าคอมจริงและส่งอีเมลแจ้งตัวแทน</p>
+    </div>
+
+    <p style="margin:18px 0 0 0; font-size:11.5px; color:#94A3B8">ชื่อและตัวเลขบางส่วนเป็นตัวอย่าง — แถว เกรียงยศ1 และ Thai Life insurance ใช้ข้อมูลจริงจากหน้าจอที่ส่งมา</p>
+  </div>
+</div></div>
+<div class="cols"><div class="note">หน้าที่ 1 · จ่ายค่าแนะนำ<br><br>แถบเดียว เส้นเดียว: ตั้งจ่ายได้เลย → รอคุณตรวจสอบ → รอฝ่ายบัญชีโอน<br>แล้วจบที่ไทล์สีเขียว &quot;โอนแล้ว&quot; ซึ่ง **ไม่ใช่ขั้น** แต่เป็นประตูออกไปหน้ารายงาน<br>(เส้นประ ไม่มีเลขขั้น ไม่มีป้าย &quot;กำลังดู&quot;) — เพราะโอนแล้วคือไม่มีอะไรให้ทำต่อ<br><br>จุดที่ต้องระวังที่สุด: **หน่วยของแถวเปลี่ยนกลางทาง**<br>· ขั้น 1 แถว = คน (รวมค่าคอมทุกรายการของเขา ยอดคิดสดจาก ledger)<br>· ขั้น 2-3 แถว = ใบคำขอ (ยอดแช่แข็งตอนสร้างใบ บัญชีเป็น snapshot)<br>จุดเปลี่ยนคือตอนกดตั้งจ่าย — คนกลายเป็นใบ<br>จึงมีป้าย &quot;หน่วย: คน / หน่วย: ใบคำขอ&quot; กำกับหัวลิสต์ทุกขั้น ไม่ปล่อยให้เดา<br><br>ขั้น 2 มีเฉพาะใบที่ &quot;ตัวแทนกดขอเอง&quot; — ใบที่คุณตั้งจ่ายเองข้ามขั้นนี้ไปเลย<br>(ถือว่าอนุมัติแล้วตั้งแต่ตอนกด) นี่คือเหตุผลที่รอบจ่ายเคยต้องมีอยู่:<br>มันมีกล่องขาเข้าที่หน้าตั้งจ่ายมองไม่เห็น</div><div class="note">ของใหม่ที่ขอตัดสินใจ: ติ๊กหลายใบแล้วบันทึกโอนทีเดียว (ขั้น 3)<br><br>ตอนนี้ปุ่ม &quot;บันทึกการโอนเงิน&quot; กดได้ทีละใบ และเด้ง prompt ถามเลขอ้างอิงทีละใบ<br>แต่ฝ่ายบัญชีโอนมาเป็นรอบ แล้วแจ้งกลับเป็นชุด — UI จึงควรรับเป็นชุดได้<br><br>แถบดำของขั้น 3 จึงมีช่องเลขอ้างอิงในตัว ไม่ใช่ popup<br>(ใส่ครั้งเดียวติดทุกใบที่ติ๊ก หรือเว้นว่างก็ได้)<br><br>ข้อควรรู้: ต้องเพิ่ม endpoint ฝั่ง backend (ตอนนี้มีแค่ทีละใบ)<br>ถ้าไม่อยากเพิ่ม บอกได้ ผมทำทีละใบเหมือนเดิมแต่ย้าย prompt มาเป็นช่องกรอกในแถว<br><br>ความหมายของการติ๊กต่างกันตามขั้น — ขั้น 1 ติ๊ก = &quot;จะจ่ายคนนี้&quot;<br>ขั้น 3 ติ๊ก = &quot;คนนี้โอนแล้ว&quot; — ปุ่มบนแถบดำจึงเปลี่ยนคำตามขั้นเสมอ<br>และสีก็เปลี่ยน (น้ำเงิน = ตั้งจ่าย, เขียว = ปิดรายการจริง)</div></div>
+
+<h2 class="sec">หน้าที่ 2 · รายงานการจ่าย (Log — อ่านอย่างเดียว)</h2>
+<div class="board"><div style="width:1400px; background:#F8FAFC; padding-bottom:40px">
+
+  <div style="display:flex; align-items:center; gap:4px; padding:7px 28px; border-bottom:1px solid #E2E8F0; background:#FFF">
+    <div style="padding:6px 10px; border-radius:8px; color:#64748B; font-size:12px; font-weight:600">จ่ายค่าแนะนำ</div>
+    <div style="padding:6px 10px; border-radius:8px; background:rgba(244,245,251,.9); color:#1E2A54; font-size:12px; font-weight:700">รายงานการจ่าย</div>
+  </div>
+
+  <div style="padding:20px 28px">
+
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:20px">
+      <div>
+        <h1 style="margin:0; font-size:21px; font-weight:800">รายงานการจ่าย</h1>
+        <p style="margin:4px 0 0 0; font-size:13.5px; color:#64748B">อ่านอย่างเดียว — ทุกใบที่เคยตั้งจ่ายหรือตัวแทนขอเบิก พร้อมสถานะและเลขอ้างอิงการโอน</p>
+      </div>
+      <div style="display:inline-flex; align-items:center; height:38px; padding:0 18px; border-radius:11px; background:#1E2A54; color:#FFF; font-size:13px; font-weight:800; gap:8px">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="#FFF" stroke-width="2"><path d="M10 3v10m0 0l-4-4m4 4l4-4M3 17h14"/></svg>
+        ส่งออก CSV ตามที่กรองอยู่
+      </div>
+    </div>
+
+    <!-- ═══ ตัวกรอง — เป็นแถวเดียว เพราะหน้านี้คือการกรองล้วนๆ ═══
+         ไม่มีแถบ 3 ขั้นแบบหน้าทำงาน: ที่นี่สถานะเป็น "ตัวกรอง" ไม่ใช่ "ขั้นที่ต้องทำ"
+         จึงเป็นชิป ไม่ใช่การ์ดใหญ่ — ป้องกันไม่ให้สองหน้าดูเหมือนกันอีก -->
+    <div style="margin-top:16px; padding:14px 16px; background:#FFF; border:1px solid #E2E8F0; border-radius:14px">
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+        <span style="font-size:11.5px; font-weight:800; color:#94A3B8; width:54px">สถานะ</span>
+        <div class="chip on">ทั้งหมด</div>
+        <div class="chip">รอตรวจสอบ</div>
+        <div class="chip">รอโอน</div>
+        <div class="chip">โอนแล้ว</div>
+        <div class="chip">ไม่อนุมัติ</div>
+        <div class="chip">ตัวแทนยกเลิก</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:9px">
+        <span style="font-size:11.5px; font-weight:800; color:#94A3B8; width:54px">ที่มา</span>
+        <div class="chip on">ทั้งหมด</div>
+        <div class="chip">บริษัทตั้งจ่าย</div>
+        <div class="chip">ตัวแทนขอเอง</div>
+        <span style="width:16px"></span>
+        <span style="font-size:11.5px; font-weight:800; color:#94A3B8">ช่วงวันที่</span>
+        <div class="chip">1 ก.ย. 2569</div>
+        <span style="font-size:12px; color:#94A3B8">ถึง</span>
+        <div class="chip">30 ก.ย. 2569</div>
+        <span style="font-size:11.5px; font-weight:800; color:#94A3B8; margin-left:10px">นับจาก</span>
+        <div class="chip on">วันที่โอน</div>
+        <div class="chip">วันที่ขอ</div>
+        <span style="width:16px"></span>
+        <div class="chip" style="width:150px; color:#94A3B8">ค้นหาชื่อผู้รับ</div>
+      </div>
+    </div>
+
+    <!-- ── สรุปของ "ที่กรองอยู่" ไม่ใช่ของทั้งระบบ — และ CSV จะได้ชุดเดียวกันนี้ ── -->
+    <div style="margin-top:14px; display:flex; align-items:center; gap:0; background:#0F172A; border-radius:14px; padding:14px 20px">
+      <div style="padding-right:26px; border-right:1px solid rgba(255,255,255,.14)">
+        <p style="margin:0; font-size:11px; font-weight:700; color:#94A3B8">ตามตัวกรองนี้</p>
+        <p class="tnum" style="margin:3px 0 0 0; font-size:22px; font-weight:800; color:#FFF">17,296.50 บาท</p>
+      </div>
+      <div style="padding:0 26px; border-right:1px solid rgba(255,255,255,.14)">
+        <p style="margin:0; font-size:11px; font-weight:700; color:#94A3B8">โอนแล้ว</p>
+        <p class="tnum" style="margin:3px 0 0 0; font-size:16px; font-weight:800; color:#6EE7B7">14,850.00 · 4 ใบ</p>
+      </div>
+      <div style="padding:0 26px; border-right:1px solid rgba(255,255,255,.14)">
+        <p style="margin:0; font-size:11px; font-weight:700; color:#94A3B8">ยังไม่โอน</p>
+        <p class="tnum" style="margin:3px 0 0 0; font-size:16px; font-weight:800; color:#FCD34D">2,446.50 · 3 ใบ</p>
+      </div>
+      <div style="padding-left:26px">
+        <p style="margin:0; font-size:11px; font-weight:700; color:#94A3B8">ผู้รับ</p>
+        <p class="tnum" style="margin:3px 0 0 0; font-size:16px; font-weight:800; color:#FFF">5 ราย</p>
+      </div>
+      <p style="margin:0 0 0 auto; font-size:11.5px; color:#64748B; max-width:230px; text-align:right">ไฟล์ CSV จะได้ 7 แถวนี้ พร้อมทุกคอลัมน์ในตาราง</p>
+    </div>
+
+    <div style="margin-top:14px; background:#FFF; border:1px solid #E2E8F0; border-radius:14px; overflow:hidden">
+      <table style="width:100%; border-collapse:collapse">
+        <thead>
+          <tr>
+            <th>วันที่ขอ / ตั้งจ่าย</th>
+            <th>วันที่โอน</th>
+            <th>ผู้รับ</th>
+            <th>ที่มา</th>
+            <th style="text-align:right">ยอด</th>
+            <th>รายการ</th>
+            <th>บัญชีรับเงิน</th>
+            <th>สถานะ</th>
+            <th>เลขอ้างอิงการโอน</th>
+            <th>ผู้อนุมัติ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="tnum">15 ก.ย. 2569</td>
+            <td style="color:#CBD5E1">—</td>
+            <td style="font-weight:700; color:#0F172A">เกรียงยศ1 อุยเหินนภา1</td>
+            <td><span class="tagsm" style="background:#F4F5FB; color:#1E2A54">บริษัทตั้งจ่าย</span></td>
+            <td class="tnum" style="text-align:right; font-weight:800">1,046.50</td>
+            <td>1</td>
+            <td>Kbank ••5644</td>
+            <td><span class="tagsm" style="background:#E2E8F0; color:#475569">รอโอน</span></td>
+            <td style="color:#CBD5E1">—</td>
+            <td>ระบบ (ตั้งจ่าย)</td>
+          </tr>
+          <tr>
+            <td class="tnum">14 ก.ย. 2569</td>
+            <td class="tnum" style="color:#047857; font-weight:700">14 ก.ย. 2569</td>
+            <td style="font-weight:700; color:#0F172A">เกรียงยศ1 อุยเหินนภา1</td>
+            <td><span class="tagsm" style="background:#F4F5FB; color:#1E2A54">บริษัทตั้งจ่าย</span></td>
+            <td class="tnum" style="text-align:right; font-weight:800">1,495.00</td>
+            <td>1</td>
+            <td>Kbank ••5644</td>
+            <td><span class="tagsm" style="background:#D1FAE5; color:#065F46">โอนแล้ว</span></td>
+            <td class="tnum">TRF-690914-02</td>
+            <td>KreangYot</td>
+          </tr>
+          <tr>
+            <td class="tnum">12 ก.ย. 2569</td>
+            <td style="color:#CBD5E1">—</td>
+            <td style="font-weight:700; color:#0F172A">ปิยะวรรณ ตัวอย่าง</td>
+            <td><span class="tagsm" style="background:#E2E8F0; color:#475569">ตัวแทนขอเอง</span></td>
+            <td class="tnum" style="text-align:right; font-weight:800">1,400.00</td>
+            <td>3</td>
+            <td>กรุงเทพ ••1190</td>
+            <td><span class="tagsm" style="background:#FEF3C7; color:#92400E">รอตรวจสอบ</span></td>
+            <td style="color:#CBD5E1">—</td>
+            <td style="color:#CBD5E1">—</td>
+          </tr>
+          <tr>
+            <td class="tnum">8 ก.ย. 2569</td>
+            <td class="tnum" style="color:#047857; font-weight:700">9 ก.ย. 2569</td>
+            <td style="font-weight:700; color:#0F172A">สุภาพร ตัวอย่าง</td>
+            <td><span class="tagsm" style="background:#E2E8F0; color:#475569">ตัวแทนขอเอง</span></td>
+            <td class="tnum" style="text-align:right; font-weight:800">6,325.00</td>
+            <td>5</td>
+            <td>ไทยพาณิชย์ ••9037</td>
+            <td><span class="tagsm" style="background:#D1FAE5; color:#065F46">โอนแล้ว</span></td>
+            <td class="tnum">TRF-690909-01</td>
+            <td>KreangYot</td>
+          </tr>
+          <tr>
+            <td class="tnum">4 ก.ย. 2569</td>
+            <td style="color:#CBD5E1">—</td>
+            <td style="font-weight:700; color:#0F172A">วิชัย ตัวอย่าง</td>
+            <td><span class="tagsm" style="background:#E2E8F0; color:#475569">ตัวแทนขอเอง</span></td>
+            <td class="tnum" style="text-align:right; font-weight:800">900.00</td>
+            <td>2</td>
+            <td>กสิกรไทย ••2280</td>
+            <td><span class="tagsm" style="background:#FFE4E6; color:#9F1239">ไม่อนุมัติ</span></td>
+            <td style="color:#CBD5E1">—</td>
+            <td>KreangYot</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="padding:11px 14px; display:flex; align-items:center; gap:10px; background:#F8FAFC">
+        <span style="font-size:11.5px; color:#94A3B8">แสดง 5 จาก 7 ใบ</span>
+        <div style="margin-left:auto; display:flex; gap:6px">
+          <div class="chip">ก่อนหน้า</div>
+          <div class="chip on">1</div>
+          <div class="chip">ถัดไป</div>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin:14px 0 0 0; font-size:11.5px; color:#94A3B8">
+      บัญชีรับเงินที่แสดงคือบัญชีที่ <b style="color:#64748B">บันทึกไว้ตอนยื่นใบนั้น</b> ไม่ใช่บัญชีปัจจุบันของตัวแทน — และแสดงเลขท้าย 4 ตัวเท่านั้น
+    </p>
+    <p style="margin:4px 0 0 0; font-size:11.5px; color:#94A3B8">ชื่อและตัวเลขบางส่วนเป็นตัวอย่าง — 2 แถวแรกใช้ข้อมูลจริงจากหน้าจอที่ส่งมา</p>
+  </div>
+</div></div>
+<div class="cols"><div class="note">หน้าที่ 2 · รายงานการจ่าย<br><br>กฎข้อเดียวของหน้านี้: **ไม่มีปุ่มที่เขียนข้อมูล** ไม่มีอนุมัติ ไม่มีบันทึกโอน<br>ถ้าเห็นอะไรที่อยากแก้ ให้กลับไปหน้าที่ 1 — ถ้าวันหนึ่งมีปุ่มโผล่มาที่นี่<br>แปลว่าเรากำลังสร้างสองหน้าที่แทนกันได้อีกรอบ<br><br>สถานะที่นี่เป็น **ชิปตัวกรอง** ไม่ใช่การ์ดใหญ่แบบหน้าที่ 1 โดยตั้งใจ<br>สองหน้าจะได้ไม่หน้าตาเหมือนกันอีก — และเพราะที่นี่สถานะคือ &quot;เงื่อนไขการค้นหา&quot;<br>ไม่ใช่ &quot;ขั้นที่ต้องทำ&quot;<br><br>กรองได้: สถานะ (รวม ไม่อนุมัติ / ตัวแทนยกเลิก ซึ่งหน้าทำงานไม่แสดง) ·<br>ที่มา · ช่วงวันที่ · เลือกได้ว่าจะนับจากวันที่โอน หรือวันที่ขอ · ชื่อผู้รับ<br><br>แถบดำสรุป = ยอดของ &quot;ที่กรองอยู่&quot; เท่านั้น ไม่ใช่ของทั้งระบบ<br>และ CSV ได้ชุดเดียวกับที่เห็น — ตัวเลขบนจอกับตัวเลขในไฟล์ต้องตรงกันเสมอ<br><br>ต้องทำเพิ่มฝั่ง backend: endpoint export ของหน้านี้ (ของเดิมส่งออกเป็น<br>&quot;สรุปต่อคน เฉพาะยอดค้าง&quot; คนละชุดข้อมูลกับ &quot;รายใบ ทุกสถานะ&quot;)</div><div class="note">ราคาที่ต้องจ่าย — เขียนไว้ให้ครบก่อนตัดสินใจ<br><br>· เมนูหาย 1 อัน และ path /commission/runs ต้อง redirect ไม่งั้นลิงก์เก่าพัง<br>  (มีลิงก์ชี้ไปหน้ารอบจ่ายอยู่ 4 จุดในระบบ รวมอีเมลแจ้งตัวแทน)<br>· ไฟล์เทสต์ 2 ไฟล์ต้องเขียนใหม่ (CommissionPayoutsView, CommissionPayoutQueue)<br>· backend เพิ่ม 2 endpoint: บันทึกโอนเป็นชุด + export รายงาน<br>· ยอดขั้นต่ำในการเบิก กับ กล่องอธิบายตอนลิสต์ว่าง ต้องหาที่อยู่ใหม่<br>· คิวนี้ย้ายบ้านมา 3 ครั้งแล้วใน 3 วัน นี่คือครั้งที่ 4 — ครั้งนี้ควรเป็นครั้งสุดท้าย<br>  เพราะหลังรวมแล้วไม่เหลืออะไรให้ย้ายอีก<br><br>ประเมิน: 1.5-2 วันเต็ม ไม่รวมเวลา deploy และทดลองใช้จริง<br><br>สิ่งที่ผมพบตอนตรวจ code เพื่อร่างนี้ และเป็นบั๊กจริงตอนนี้:<br>ขั้นที่ 2 ของหน้าตั้งจ่ายปัจจุบันเขียนว่า &quot;รอฝ่ายบัญชีโอน&quot; แต่ตัวเลขข้างใน<br>นับใบที่ยัง &quot;รอคุณตรวจสอบ&quot; รวมอยู่ด้วย (reserved นับทั้ง pending_review<br>และ approved) — พอแยกเป็น 2 ขั้นตามร่างนี้ บั๊กนี้หายไปเอง</div></div>
+</div>
+</body></html>

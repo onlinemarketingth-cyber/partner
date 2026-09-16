@@ -1382,6 +1382,41 @@ Route::prefix('v1')->group(function () {
          */
         Route::post('/commission-withdrawals/payout-batch', [CommissionWithdrawalRequestController::class, 'payOutBatch'])
             ->middleware('throttle:10,1');
+
+        /*
+         * 2026-09-16 — a whole round of transfers recorded in one press.
+         *
+         * Accounting transfers in rounds and reports back in batches, so
+         * recording it was ten presses and ten browser prompts. Same shape and
+         * same throttle as payout-batch above, and for the same reason: fifty
+         * rows a call, ten calls a minute, settled all-or-nothing.
+         *
+         * This is the press that closes commission_ledger rows and emails
+         * agents, so it is registered above the {commissionWithdrawalRequest}
+         * routes like its siblings — "mark-transferred-batch" read as an id
+         * would 404 on the one endpoint that must never be ambiguous.
+         */
+        Route::post('/commission-withdrawals/mark-transferred-batch', [CommissionWithdrawalRequestController::class, 'markTransferredBatch'])
+            ->middleware('throttle:10,1');
+
+        /*
+         * 2026-09-16 — รายงานการจ่าย, the read-only record.
+         *
+         * Owner: "หน้าเดิมเป็นสรุปรายการ เป็น Log ที่โอนแล้ว รอโอนโดยบัญชี
+         * Filter ได้ Export เป็น CSV ได้ตามที่ Filter".
+         *
+         * Three routes, ONE query behind them (reportQuery in the Controller):
+         * the totals, the rows and the file must always describe the same set,
+         * and that promise only holds while there is one place the filters are
+         * written down.
+         *
+         * Registered above /commission-withdrawals/{id} so "report" is never
+         * parsed as a request id.
+         */
+        Route::get('/commission-withdrawals/report', [CommissionWithdrawalRequestController::class, 'report']);
+        Route::get('/commission-withdrawals/report/summary', [CommissionWithdrawalRequestController::class, 'reportSummary']);
+        Route::get('/commission-withdrawals/report/export', [CommissionWithdrawalRequestController::class, 'reportExport']);
+
         Route::get('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'index']);
         Route::post('/commission-withdrawals', [CommissionWithdrawalRequestController::class, 'store'])
             // A payout request is a money action; the throttle is the same

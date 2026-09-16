@@ -245,8 +245,16 @@ const navItems: NavItem[] = [
       // alone showed (payout type, and whose sale produced an override) moved
       // into ตั้งจ่าย's per-agent drill-down, which was already fetching both
       // fields and discarding them. The route survives as a redirect.
-      { name: 'commission-payouts', icon: 'money', label: { th: 'ตั้งจ่าย', en: 'Raise payouts' } },
-      { name: 'commission-runs', icon: 'invoice', label: { th: 'รอบจ่าย', en: 'Payout runs' } },
+      //
+      // 2026-09-16 (ครั้งที่สอง) — ตั้งจ่าย AND รอบจ่าย BECAME ONE ERRAND.
+      //
+      // Owner: "มันแทบจะแทนกันได้แล้ว". They were two working screens with two
+      // money bands and overlapping steps, and the middle of the job was a dead
+      // end on each of them. The whole lifecycle is จ่ายค่าแนะนำ now; the second
+      // entry is the read-only record it hands off to, which is a different
+      // kind of page and says so in its name.
+      { name: 'commission-payouts', icon: 'money', label: { th: 'จ่ายค่าแนะนำ', en: 'Pay commission' } },
+      { name: 'commission-runs', icon: 'invoice', label: { th: 'รายงานการจ่าย', en: 'Payout report' } },
     ],
   },
   /*

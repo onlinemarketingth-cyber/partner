@@ -132,12 +132,25 @@ describe('/commission keeps every link that was already written down', () => {
     expect(to.name).toBe('commission-payouts')
   })
 
-  it('sends the old queue link to รอบจ่าย', () => {
-    // /commission-withdrawals redirected here during the one release when the
-    // queue was a tab; the notification links added then use it too.
-    const to = (redirect() as (t: unknown) => { name: string })({ query: { view: 'queue' } })
+  it('sends the old queue link to the step that still has the buttons', () => {
+    /*
+     * 2026-09-16 — THE DESTINATION MOVED, AND THAT IS THE POINT.
+     *
+     * ?view=queue meant "the รอบจ่าย page", which was a working queue with
+     * approve and reject on it. รอบจ่าย is a read-only report now, so a link
+     * written to take somebody TO the queue has to land on the step of
+     * จ่ายค่าแนะนำ that holds it — otherwise the notification that says
+     * "มีคำขอเบิกรออนุมัติ" opens a screen with no approve button.
+     *
+     * /commission-withdrawals redirected here during the one release when the
+     * queue was a tab; the notification links added then use it too.
+     */
+    const to = (redirect() as (t: unknown) => { name: string; query: Record<string, unknown> })({
+      query: { view: 'queue' },
+    })
 
-    expect(to.name).toBe('commission-runs')
+    expect(to.name).toBe('commission-payouts')
+    expect(to.query).toEqual({ view: 'queue' })
   })
 
   it('sends ?tab= to ตั้งจ่าย AND carries the tab with it', () => {
@@ -180,12 +193,18 @@ describe('the pillar', () => {
     const subs = wrapper.findAll('[data-test^="nav-sub-"]').map((el) => el.text())
 
     /*
-     * 2026-09-16 — two, not three. รายรายการ repeated these two screens'
-     * status tabs and their company totals (computed a second time, in the
-     * browser, over one page of a paginated endpoint), and the one thing it
-     * alone showed moved into ตั้งจ่าย's drill-down.
+     * 2026-09-16 — two, not three. รายรายการ repeated these screens' status
+     * tabs and their company totals (computed a second time, in the browser,
+     * over one page of a paginated endpoint), and the one thing it alone
+     * showed moved into the payout screen's drill-down.
+     *
+     * 2026-09-16 (ครั้งที่สอง) — and the two that are left are no longer two
+     * working screens. Owner: "ตั้งจ่าย กับรอบจ่าย มันแทบจะแทนกันได้แล้ว". The
+     * whole lifecycle is จ่ายค่าแนะนำ; รายงานการจ่าย is the read-only record it
+     * hands off to. The names say which is which, deliberately — two entries
+     * that both sound like work is how the duplication started.
      */
-    expect(subs).toEqual(['ตั้งจ่าย', 'รอบจ่าย'])
+    expect(subs).toEqual(['จ่ายค่าแนะนำ', 'รายงานการจ่าย'])
   })
 })
 

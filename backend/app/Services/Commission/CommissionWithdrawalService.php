@@ -712,64 +712,130 @@ class CommissionWithdrawalService
         User $actor,
         ?string $reference = null,
     ): CommissionWithdrawalRequest {
+        $updated = DB::transaction(fn () => $this->settleOne($request, $actor, $reference));
+
+        $this->announceTransferred($updated);
+
+        return $updated;
+    }
+
+    /**
+     * 2026-09-16 — A WHOLE ROUND OF TRANSFERS, RECORDED IN ONE PRESS.
+     *
+     * Owner: "เราโอนเองผ่านระบบการทำงาน Bank … ต้องได้รับข้อมูลจากฝ่ายบัญชีก่อน
+     * ว่าโอนแล้วจึงมากดยืนยัน" — accounting works in rounds and reports back in
+     * batches, so ten transfers used to mean ten presses and ten browser
+     * prompts asking for the reference the admin had just typed.
+     *
+     * ── ALL OR NOTHING, FOR THE SAME REASON AS payOutMany ──
+     *
+     * This is the press that settles commission_ledger rows and emails agents
+     * that their money has arrived. Half of it succeeding is the worst outcome
+     * available: some agents told, some not, some ledger rows closed, and
+     * nothing on any screen saying which. One transaction; a refusal anywhere
+     * rolls the whole round back and the admin ticks again.
+     *
+     * ── WHY THE EMAILS ARE OUTSIDE THE TRANSACTION ──
+     *
+     * Identical to payOutMany: a notification written inside would be rolled
+     * back with everything else, but one already HANDED to the mailer cannot
+     * be. Announcing after the commit means the only thing a late failure can
+     * cost is an email, never a settled ledger row that nobody was told about.
+     *
+     * @param  array<int, CommissionWithdrawalRequest>  $requests
+     * @return \Illuminate\Support\Collection<int, CommissionWithdrawalRequest>
+     */
+    public function markManyTransferred(array $requests, User $actor, ?string $reference = null): \Illuminate\Support\Collection
+    {
+        $settled = DB::transaction(function () use ($requests, $actor, $reference) {
+            $done = collect();
+
+            foreach ($requests as $request) {
+                $done->push($this->settleOne($request, $actor, $reference));
+            }
+
+            return $done;
+        });
+
+        foreach ($settled as $request) {
+            $this->announceTransferred($request);
+        }
+
+        return $settled;
+    }
+
+    /**
+     * One request settled — the state change and the ledger, no transaction of
+     * its own and no notification.
+     *
+     * Extracted 2026-09-16 so the single press and the batch press do THE SAME
+     * THING. A second copy of "flip to Transferred and settle what it fully
+     * covers" is a second place for money to be closed differently, and this
+     * particular step is the only one in the system that agents are emailed
+     * about.
+     */
+    private function settleOne(
+        CommissionWithdrawalRequest $request,
+        User $actor,
+        ?string $reference,
+    ): CommissionWithdrawalRequest {
         if ($request->status !== WithdrawalStatus::Approved) {
             throw ValidationException::withMessages([
                 'status' => 'บันทึกการโอนได้เฉพาะคำขอที่อนุมัติแล้วเท่านั้น',
             ]);
         }
 
-        $updated = DB::transaction(function () use ($request, $actor, $reference) {
-            $settled = $this->transition($request, $actor, WithdrawalStatus::Transferred, 'commission_withdrawal.transferred', [
-                'transferred_at' => now(),
-                'transfer_reference' => $reference,
-            ]);
+        $settled = $this->transition($request, $actor, WithdrawalStatus::Transferred, 'commission_withdrawal.transferred', [
+            'transferred_at' => now(),
+            'transfer_reference' => $reference,
+        ]);
 
-            $this->settleFullyAllocatedLedgerRows($settled);
+        $this->settleFullyAllocatedLedgerRows($settled);
 
-            return $settled;
-        });
+        return $settled;
+    }
 
-        /*
-         * 2026-09-15 — THIS is where the money email belongs, and where it
-         * now lives.
-         *
-         * CommissionPaid is the one notification type in this file with email
-         * enabled (config/notifications.php), and it used to fire the instant
-         * an admin pressed "จ่ายแล้ว" on the payout screen — which was the
-         * moment they DECIDED to pay, not the moment the money moved. Agents
-         * were emailed "เงินเข้าแล้ว" while accounting had not yet opened the
-         * bank.
-         *
-         * Here it fires after the transfer has been confirmed by the person
-         * who saw it happen, which is the only point at which the sentence is
-         * true.
-         */
-        $baht = number_format((int) $updated->amount_satang / 100, 2);
-        $withReference = $updated->transfer_reference
-            ? " (อ้างอิง {$updated->transfer_reference})"
-            : '';
-
-        if ($updated->agent) {
-            // "โอนเข้าบัญชีของคุณแล้ว" is addressed to the payee, and for a
-            // company-seat payout the readers are the admins who authorised
-            // it — the sentence has to name whose account the money went to.
-            $isHouse = $updated->agent->isCommissionHouseAccount();
-
-            foreach ($this->audienceFor($updated->agent) as $recipient) {
-                $this->notifier->notify(
-                    $recipient,
-                    NotificationType::CommissionPaid,
-                    $isHouse ? 'โอนส่วนของบริษัทเรียบร้อยแล้ว' : 'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
-                    $isHouse
-                        ? "ส่วนของบริษัท {$baht} บาท โอนเข้าบัญชีบริษัทแล้ว{$withReference}"
-                        : "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",
-                    '/withdrawals',
-                    ['commission_withdrawal_request_id' => $updated->id],
-                );
-            }
+    /**
+     * 2026-09-15 — THIS is where the money email belongs, and where it now
+     * lives.
+     *
+     * CommissionPaid is the one notification type in this file with email
+     * enabled (config/notifications.php), and it used to fire the instant an
+     * admin pressed "จ่ายแล้ว" on the payout screen — which was the moment they
+     * DECIDED to pay, not the moment the money moved. Agents were emailed
+     * "เงินเข้าแล้ว" while accounting had not yet opened the bank.
+     *
+     * Here it fires after the transfer has been confirmed by the person who saw
+     * it happen, which is the only point at which the sentence is true.
+     */
+    private function announceTransferred(CommissionWithdrawalRequest $request): void
+    {
+        if (! $request->agent) {
+            return;
         }
 
-        return $updated;
+        $baht = number_format((int) $request->amount_satang / 100, 2);
+        $withReference = $request->transfer_reference
+            ? " (อ้างอิง {$request->transfer_reference})"
+            : '';
+
+        // "โอนเข้าบัญชีของคุณแล้ว" is addressed to the payee, and for a
+        // company-seat payout the readers are the admins who authorised it —
+        // the sentence has to name whose account the money went to.
+        $isHouse = $request->agent->isCommissionHouseAccount();
+
+        foreach ($this->audienceFor($request->agent) as $recipient) {
+            $this->notifier->notify(
+                $recipient,
+                NotificationType::CommissionPaid,
+                $isHouse ? 'โอนส่วนของบริษัทเรียบร้อยแล้ว' : 'ค่าคอมมิชชั่นโอนเรียบร้อยแล้ว',
+                $isHouse
+                    ? "ส่วนของบริษัท {$baht} บาท โอนเข้าบัญชีบริษัทแล้ว{$withReference}"
+                    : "จำนวน {$baht} บาท โอนเข้าบัญชีของคุณแล้ว{$withReference}",
+                '/withdrawals',
+                ['commission_withdrawal_request_id' => $request->id],
+            );
+        }
     }
 
     /**

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Commission\MarkWithdrawalsTransferredRequest;
 use App\Http\Requests\Commission\MarkWithdrawalTransferredRequest;
 use App\Http\Requests\Commission\RejectWithdrawalRequestRequest;
 use App\Http\Requests\Commission\StoreCompanyPayoutBatchRequest;
@@ -14,10 +16,12 @@ use App\Models\CommissionWithdrawalRequest;
 use App\Models\User;
 use App\Services\Commission\CommissionWithdrawalService;
 use App\Support\CompanyScopeFilter;
+use App\Support\CsvCell;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Commission withdrawal — agent side (ask, watch, cancel) and admin side
@@ -354,5 +358,292 @@ class CommissionWithdrawalRequestController extends Controller
             $request->user(),
             $request->validated('transfer_reference'),
         ));
+    }
+
+    /**
+     * 2026-09-16 — a whole round of transfers recorded in one press.
+     *
+     * Accounting transfers in rounds and reports back in batches, so the screen
+     * takes a batch: tick the rows the bank confirmed, type the reference once,
+     * press once. See MarkWithdrawalsTransferredRequest for why one reference
+     * covers the batch, and markManyTransferred() for why it is all or nothing.
+     *
+     * Duplicate ids are refused rather than deduplicated, exactly as
+     * payOutBatch() refuses duplicate payees: a list naming the same request
+     * twice is a screen that lost track of its own selection, and quietly
+     * settling it once hides that.
+     */
+    public function markTransferredBatch(
+        MarkWithdrawalsTransferredRequest $request,
+        CommissionWithdrawalService $service,
+    ): AnonymousResourceCollection {
+        $ids = array_map('intval', $request->validated('withdrawal_request_ids'));
+
+        if (count($ids) !== count(array_unique($ids))) {
+            throw ValidationException::withMessages([
+                'withdrawal_request_ids' => 'มีรายการซ้ำกันในสิ่งที่เลือก — กรุณารีเฟรชหน้าจอแล้วเลือกใหม่',
+            ]);
+        }
+
+        /*
+         * Resolved through visibleTo() rather than by id alone. `exists:` in
+         * the form request only proves the row is in the table — it says
+         * nothing about whose company it belongs to, and this endpoint takes a
+         * list of ids straight from a request body. A Company Admin naming
+         * another tenant's request id must get "not found", not a 403 that
+         * confirms it exists.
+         */
+        $requests = $this->visibleTo($request)
+            ->whereIn('id', $ids)
+            ->with(['agent', 'items'])
+            ->get();
+
+        if ($requests->count() !== count($ids)) {
+            throw ValidationException::withMessages([
+                'withdrawal_request_ids' => 'มีบางรายการที่ไม่พบหรือไม่มีสิทธิ์ — กรุณารีเฟรชหน้าจอแล้วเลือกใหม่',
+            ]);
+        }
+
+        // Every row's policy asked BEFORE the transaction opens, for the same
+        // reason as payOutBatch(): a 403 is not a ValidationException and does
+        // not roll back cleanly from inside one.
+        foreach ($requests as $withdrawal) {
+            $this->authorize('decide', $withdrawal);
+        }
+
+        $settled = $service->markManyTransferred(
+            $requests->all(),
+            $request->user(),
+            $request->validated('transfer_reference'),
+        );
+
+        $settled->each->load(['agent', 'decidedBy', 'items']);
+
+        return CommissionWithdrawalRequestResource::collection($settled);
+    }
+
+    /**
+     * ═══ 2026-09-16 — รายงานการจ่าย: THE RECORD, NOT THE WORK ═══
+     *
+     * Owner: "หน้าเดิมเป็นสรุปรายการ เป็น Log ที่โอนแล้ว รอโอนโดยบัญชี Filter ได้
+     * Export เป็น CSV ได้ตามที่ Filter".
+     *
+     * index() answers "what is waiting for me" — one status, twenty rows, newest
+     * first, for a screen with buttons on it. This answers a different question:
+     * "show me every payout that matches these conditions, including the ones
+     * nothing will ever happen to again". Hence the filters index() does not
+     * have — several statuses at once, source, a date window, a payee name —
+     * and hence the totals, which index() has no use for.
+     *
+     * ── WHY THE DATE WINDOW HAS TO SAY WHICH DATE ──
+     *
+     * A payout has two of them and they answer different questions. "How much
+     * did we pay out in September" means transferred_at; "how much was asked for
+     * in September" means created_at, and a request raised in August and
+     * transferred in September belongs to both answers, once each. Picking one
+     * silently would make the report right for one reader and quietly wrong for
+     * the other, so `date_basis` is explicit and defaults to the transfer date —
+     * the question this page is usually opened to answer.
+     *
+     * A row with no transferred_at simply falls outside a transferred_at window.
+     * That is correct, not a gap: money that has not moved was not paid out in
+     * any month.
+     */
+    public function report(Request $request): AnonymousResourceCollection
+    {
+        $this->authorize('viewAny', CommissionWithdrawalRequest::class);
+
+        $query = $this->reportQuery($request)
+            ->with(['agent', 'decidedBy', 'items']);
+
+        return CommissionWithdrawalRequestResource::collection(
+            $query->paginate($request->integer('per_page') ?: 50)->withQueryString()
+        );
+    }
+
+    /**
+     * The same filtered set the report page is looking at, summed.
+     *
+     * Served beside the list rather than derived from the loaded page: the list
+     * is paginated, and a total computed from fifty visible rows would be
+     * labelled "ตามตัวกรองนี้" while describing only the first page of it. The
+     * CSV export reads the same query, so the figure on screen, the rows on
+     * screen and the rows in the file are always the same set.
+     *
+     * @return array{data: array{total_satang: int, count: int, transferred_satang: int, transferred_count: int, outstanding_satang: int, outstanding_count: int, payee_count: int}}
+     */
+    public function reportSummary(Request $request): array
+    {
+        $this->authorize('viewAny', CommissionWithdrawalRequest::class);
+
+        $rows = (clone $this->reportQuery($request))->get(['status', 'amount_satang', 'agent_id']);
+
+        $transferred = $rows->where('status', WithdrawalStatus::Transferred);
+        /*
+         * "ยังไม่โอน" is the two OPEN states only. Rejected and cancelled rows
+         * are in the list — somebody filtering for them wants to see them — but
+         * they are not money waiting to go anywhere, and adding them to a figure
+         * labelled "not transferred yet" would state a liability the company
+         * does not have.
+         */
+        $outstanding = $rows->filter(fn ($row) => $row->status->isOpen());
+
+        return ['data' => [
+            'total_satang' => (int) $rows->sum('amount_satang'),
+            'count' => $rows->count(),
+            'transferred_satang' => (int) $transferred->sum('amount_satang'),
+            'transferred_count' => $transferred->count(),
+            'outstanding_satang' => (int) $outstanding->sum('amount_satang'),
+            'outstanding_count' => $outstanding->count(),
+            'payee_count' => $rows->pluck('agent_id')->unique()->count(),
+        ]];
+    }
+
+    /**
+     * The report as a CSV — exactly the rows the filters select, no more.
+     *
+     * Deliberately NOT the payout file that AgentCommissionSummaryController
+     * exports. That one is a bank instruction: one row per PERSON, pending
+     * money only, full account numbers, made to be acted on. This one is a
+     * record: one row per REQUEST, every status, masked accounts, made to be
+     * filed and reconciled. Two exports because they are two documents; giving
+     * either one the other's shape would produce a file that is dangerous in
+     * one direction and useless in the other.
+     */
+    public function reportExport(Request $request): StreamedResponse
+    {
+        $this->authorize('viewAny', CommissionWithdrawalRequest::class);
+
+        $rows = $this->reportQuery($request)->with(['agent', 'decidedBy', 'items'])->get();
+
+        $filename = 'payout-report-'.now()->format('Y-m-d').'.csv';
+
+        return response()->streamDownload(function () use ($rows) {
+            // UTF-8 BOM — without it Excel renders the Thai headers and agent
+            // names below as mojibake, which defeats the point of a file made
+            // to be opened and read.
+            echo "\xEF\xBB\xBF";
+
+            $out = fopen('php://output', 'w');
+
+            fputcsv($out, [
+                'วันที่ขอ/ตั้งจ่าย',
+                'วันที่โอน',
+                'ผู้รับ',
+                'ที่มา',
+                'ยอด (บาท)',
+                'จำนวนรายการค่าคอม',
+                'ธนาคาร',
+                'บัญชีรับเงิน',
+                'ชื่อบัญชี',
+                'สถานะ',
+                'เลขอ้างอิงการโอน',
+                'ผู้อนุมัติ',
+                'เหตุผลที่ไม่อนุมัติ',
+            ]);
+
+            foreach ($rows as $row) {
+                fputcsv($out, [
+                    $row->created_at?->format('Y-m-d') ?? '',
+                    $row->transferred_at?->format('Y-m-d') ?? '',
+                    CsvCell::safe($row->agent?->name ?? ''),
+                    CsvCell::safe(($row->source ?? WithdrawalSource::AgentRequest)->label()),
+                    // BR-3 — integer satang everywhere upstream; divided by 100
+                    // only here, at the file's display layer.
+                    number_format((int) $row->amount_satang / 100, 2, '.', ''),
+                    $row->items->count(),
+                    CsvCell::safe($row->bank_name ?? ''),
+                    // Masked here exactly as it is on screen. A record that is
+                    // filed, mailed and forwarded is the last place a full
+                    // account number should travel — and nothing this file is
+                    // used for needs the digits back.
+                    CsvCell::safe($row->maskedBankAccountNumber() ?? ''),
+                    CsvCell::safe($row->bank_account_holder_name ?? ''),
+                    CsvCell::safe($row->status->label()),
+                    CsvCell::safe($row->transfer_reference ?? ''),
+                    CsvCell::safe($row->decidedBy?->name ?? ''),
+                    CsvCell::safe($row->rejection_reason ?? ''),
+                ]);
+            }
+
+            fclose($out);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
+        ]);
+    }
+
+    /**
+     * ONE definition of "the rows this report is about", read by the list, the
+     * totals and the CSV alike.
+     *
+     * Three callers, one query, on purpose: the whole promise of this page is
+     * that the number at the top, the rows underneath it and the file that comes
+     * out of it describe the same set. Three separately-written filter blocks is
+     * how that promise is broken by a later edit to two of them.
+     *
+     * @return \Illuminate\Database\Eloquent\Builder<CommissionWithdrawalRequest>
+     */
+    private function reportQuery(Request $request): \Illuminate\Database\Eloquent\Builder
+    {
+        $validated = $request->validate([
+            'statuses' => ['sometimes', 'array'],
+            'statuses.*' => ['string'],
+            'sources' => ['sometimes', 'array'],
+            'sources.*' => ['string'],
+            'date_from' => ['sometimes', 'nullable', 'date'],
+            'date_to' => ['sometimes', 'nullable', 'date'],
+            'date_basis' => ['sometimes', 'nullable', 'in:transferred_at,created_at'],
+            'q' => ['sometimes', 'nullable', 'string', 'max:255'],
+        ]);
+
+        $query = $this->visibleTo($request)->latest('id');
+
+        /*
+         * Parsed against the enum and dropped if unknown, like index() does —
+         * an unrecognised status must narrow to nothing the reader can see,
+         * never widen to everything. An EMPTY list after parsing means the
+         * caller asked only for statuses that do not exist, which is not the
+         * same as asking for none.
+         */
+        if ($asked = $validated['statuses'] ?? null) {
+            $statuses = array_values(array_filter(array_map(
+                static fn ($value) => WithdrawalStatus::tryFrom((string) $value)?->value,
+                $asked,
+            )));
+
+            $query->whereIn('status', $statuses ?: ['__none__']);
+        }
+
+        if ($asked = $validated['sources'] ?? null) {
+            $sources = array_values(array_filter(array_map(
+                static fn ($value) => WithdrawalSource::tryFrom((string) $value)?->value,
+                $asked,
+            )));
+
+            $query->whereIn('source', $sources ?: ['__none__']);
+        }
+
+        $basis = $validated['date_basis'] ?? 'transferred_at';
+
+        if ($from = $validated['date_from'] ?? null) {
+            $query->whereDate($basis, '>=', $from);
+        }
+
+        if ($to = $validated['date_to'] ?? null) {
+            $query->whereDate($basis, '<=', $to);
+        }
+
+        if ($needle = trim((string) ($validated['q'] ?? ''))) {
+            /*
+             * Matched against the agent's CURRENT name rather than anything
+             * stored on the request: a payout has no name column, and the point
+             * of typing a name here is to find the person you are thinking of
+             * today. whereHas rather than a join so TenantScope on users still
+             * applies to the subquery.
+             */
+            $query->whereHas('agent', fn ($q) => $q->where('name', 'like', '%'.$needle.'%'));
+        }
+
+        return $query;
     }
 }
