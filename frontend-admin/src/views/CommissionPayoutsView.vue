@@ -104,6 +104,26 @@ interface AgentSummaryItem {
    * refuses the press.
    */
   payout_details_complete?: boolean
+  /*
+   * ═══ 2026-09-16 — WHAT IS OWED vs WHAT CAN STILL BE RAISED ═══
+   *
+   * Owner: "ผมกดยืนยันการจ่ายไปแล้ว แต่ปัญหาคือหน้าจอ Ui ยังขึ้นค้างจ่ายอยู่".
+   *
+   * แนวทาง C does not settle the ledger when a payout is raised — the money
+   * has not moved — so total_pending_satang above is UNCHANGED after a
+   * successful ตั้งจ่าย, and this screen showed the row exactly as before:
+   * same amount, still ticked, still selectable. Pressing again was then
+   * refused forever, because the server compares against a different number
+   * (availableSatang, which subtracts what an open payout reserved). The
+   * screen was offering an action that could only fail.
+   *
+   * `reserved_satang` is what is already in flight; `available_satang` is what
+   * a NEW payout may be raised for, and is the figure the server checks the
+   * press against. Both are the server's own arithmetic — deriving them here
+   * would be the same two-numbers-one-name defect in a new place.
+   */
+  reserved_satang?: number
+  available_satang?: number | null
   avatar_url: string | null
   cert_tier: { id: number; key: string; name: string } | null
 }
@@ -325,11 +345,24 @@ const visibleRows = computed(() => {
   return summaries.value.filter((s) => (s.agent_name ?? '').toLowerCase().includes(needle))
 })
 
-/** Owed money, and the server would accept a payout for them right now. */
+/** The amount a NEW payout for this payee would be for. */
+function availableOf(s: AgentSummaryItem): number | null {
+  /*
+   * Falls back to the pending figure only when the server did not send the
+   * field at all — an older API during a rolling deploy. `?? 0` would be
+   * wrong in the other direction (it would grey out every row); this keeps
+   * the screen working and merely un-improved.
+   */
+  return s.available_satang === undefined ? s.total_pending_satang : s.available_satang
+}
+
+/** Owed money, and the server would accept a NEW payout for them right now. */
 function selectable(s: AgentSummaryItem): boolean {
+  const available = availableOf(s)
+
   return canSelect.value
-    && s.total_pending_satang !== null
-    && s.total_pending_satang > 0
+    && available !== null
+    && available > 0
     && s.payout_details_complete === true
 }
 
@@ -345,6 +378,14 @@ function blockedReason(s: AgentSummaryItem): string {
   if (!canSelect.value) return ''
   if (s.total_pending_satang === null) return ''
   if (s.total_pending_satang <= 0) return 'ไม่มียอดค้าง'
+
+  /*
+   * The case the owner hit. The row still shows money owed — correctly, the
+   * ledger is untouched until the transfer is recorded — but all of it is
+   * already in a payout waiting at รอบจ่าย, so there is nothing left to raise.
+   * Saying "ไม่มียอดค้าง" here would contradict the amount printed beside it.
+   */
+  if ((availableOf(s) ?? 0) <= 0) return 'ตั้งจ่ายไปแล้ว รอโอนอยู่ที่ รอบจ่าย'
   if (s.payout_details_complete === true) return ''
 
   return s.is_company_share === true
@@ -391,7 +432,9 @@ const selectedRows = computed(() =>
 )
 
 const selectedTotalSatang = computed(() =>
-  selectedRows.value.reduce((sum, s) => sum + (s.total_pending_satang ?? 0), 0),
+  // The AVAILABLE figure, not what is owed: it is what the press will actually
+  // raise, and what the server will check it against.
+  selectedRows.value.reduce((sum, s) => sum + (availableOf(s) ?? 0), 0),
 )
 
 // ── The press ───────────────────────────────────────────────────────────
@@ -406,6 +449,33 @@ function askToPay(): void {
   confirming.value = true
 }
 
+/**
+ * 2026-09-16 — "ตั้งจ่ายคนนี้", the per-row shortcut (owner: ข้อ 3).
+ *
+ * ── WHY THIS IS NOT THE SECOND WAY TO DO ONE THING ──
+ *
+ * A per-row payout button existed before แบบ C and was deliberately removed:
+ * two controls on one row, one collecting a selection and one writing
+ * immediately, is the duplication this screen has been consolidated three
+ * times to get rid of.
+ *
+ * This is not that button. It WRITES NOTHING. It replaces the selection with
+ * this one person and opens the same confirmation the batch press opens —
+ * same endpoint, same payload shape, same audit trail. There is still exactly
+ * one way to raise a payout; this is a shortcut into it for the case that is
+ * actually common here, which is paying one person.
+ *
+ * Replaces rather than adds, on purpose: pressing "ตั้งจ่ายคนนี้" on a row
+ * while three others are ticked has to mean what it says, not "and also those
+ * three" — the confirmation would name a total the presser never chose.
+ */
+function askToPayOne(s: AgentSummaryItem): void {
+  if (!selectable(s)) return
+
+  selected.value = new Set([s.agent_id])
+  askToPay()
+}
+
 async function paySelected(): Promise<void> {
   if (paying.value || selectedRows.value.length === 0) return
 
@@ -418,10 +488,16 @@ async function paySelected(): Promise<void> {
     await api.post('/commission-withdrawals/payout-batch', {
       payees: selectedRows.value.map((s) => ({
         agent_id: s.agent_id,
-        // What was SHOWN, so the server can refuse a press made against a
-        // figure that has since moved. It is checked there, never used as
-        // the amount — the amount paid is the server's own.
-        expected_total_satang: s.total_pending_satang,
+        /*
+         * The AVAILABLE balance, which is what
+         * CommissionWithdrawalService::availableSatang() compares it against.
+         *
+         * This sent total_pending_satang until 2026-09-16, and the two are the
+         * same number only until the first payout is raised. After that every
+         * press was refused with "0.00 ไม่ตรงกับ 1,046.50" — the screen and the
+         * server calling two different figures by the same name.
+         */
+        expected_total_satang: availableOf(s),
       })),
     })
 
@@ -778,15 +854,40 @@ watch(() => activeCompany.companyId, () => {
         class="mt-4"
       />
 
+      <!--
+        2026-09-16 — ONE LINE THAT SAYS HOW THE SCREEN WORKS.
+
+        Owner: "ผู้ใช้ไม่รู้ Action ในการติ๊กเครื่องหมายถูกหน้ารายชื่อที่ต้องการ
+        โอนค่าคอม ทำไห้ผู้ใช้ไม่เข้าใจในการใช้งาน".
+
+        Shown only while nothing is ticked, and only where ticking is possible:
+        once somebody has selected a row they have understood, and a permanent
+        instruction is a permanent admission that the screen did not explain
+        itself.
+      -->
+      <template v-else>
+      <p
+        v-if="canSelect && selectableRows.length && !selectedRows.length"
+        class="mt-4 mb-1 text-[12.5px] text-slate-500"
+        data-test="payout-select-hint"
+      >
+        <b class="text-slate-700">วิธีใช้:</b> คลิกที่แถวของคนที่จะจ่ายรอบนี้เพื่อเลือก (เลือกได้หลายคน) แล้วกดปุ่มตั้งจ่ายที่แถบด้านล่าง
+        — หรือกด “ตั้งจ่ายคนนี้” ที่ท้ายแถวถ้าจะจ่ายทีละคน
+      </p>
+
       <!-- ═══ THE TABLE ═══
            Denser than the card list it replaces: forty payees fit on one
            screen, and the bank column is in view while the admin is ticking
            rather than discovered when the transfer file is opened. -->
-      <div v-else class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-hidden">
+      <div class="mt-4 bg-white/95 border border-slate-200 rounded-xl overflow-hidden">
         <table class="w-full text-sm">
           <thead>
             <tr class="bg-slate-50 text-left text-[11.5px] font-bold text-slate-500 border-b border-slate-200">
-              <th v-if="canSelect" class="w-12 py-2.5 pl-4">
+              <!-- 2026-09-16 — the column has a NAME now. An unlabelled
+                   checkbox column is only obvious to somebody who already
+                   knows the screen works by selection, which is exactly the
+                   person it did not need to tell. -->
+              <th v-if="canSelect" class="w-16 py-2.5 pl-4 font-bold">
                 <input
                   type="checkbox"
                   class="w-4 h-4 rounded accent-brand-600"
@@ -796,6 +897,7 @@ watch(() => activeCompany.companyId, () => {
                   data-test="payout-select-all"
                   @change="toggleAll"
                 />
+                <span class="ml-1.5 align-middle">เลือก</span>
               </th>
               <th class="py-2.5 px-3">ผู้รับ</th>
               <th class="py-2.5 px-3 w-24">รายการ</th>
@@ -807,15 +909,29 @@ watch(() => activeCompany.companyId, () => {
           </thead>
           <tbody>
             <template v-for="s in visibleRows" :key="s.agent_id">
+              <!--
+                2026-09-16 — THE WHOLE ROW IS THE TARGET.
+
+                Owner: "ผู้ใช้ไม่รู้ Action ในการติ๊กเครื่องหมายถูกหน้ารายชื่อ".
+                A 16px checkbox at the far left of a full-width row is a small
+                target and a quiet one; the row is what people aim at.
+
+                The checkbox stays and stays the accessible control — this only
+                widens where a pointer may land. Every interactive child
+                (ดูรายละเอียด, แก้ไข, the links) stops the event, or clicking
+                one would also tick the row underneath it.
+              -->
               <tr
-                class="border-b border-slate-100 last:border-0"
+                class="border-b border-slate-100 last:border-0 transition-colors"
                 :class="[
                   s.is_company_share ? 'bg-emerald-50/40' : '',
                   isSelected(s.agent_id) ? 'bg-brand-50' : '',
+                  selectable(s) ? 'cursor-pointer hover:bg-brand-50/60' : '',
                 ]"
                 :data-test="s.is_company_share ? `company-share-row-${s.agent_id}` : `payout-row-${s.agent_id}`"
+                @click="toggleRow(s)"
               >
-                <td v-if="canSelect" class="py-3 pl-4 align-top">
+                <td v-if="canSelect" class="py-3 pl-4 align-top" @click.stop>
                   <input
                     type="checkbox"
                     class="w-4 h-4 mt-1 rounded accent-brand-600 disabled:opacity-40"
@@ -851,6 +967,22 @@ watch(() => activeCompany.companyId, () => {
                       <p v-if="blockedReason(s)" class="text-[11.5px] text-amber-700 font-bold mt-0.5" :data-test="`payout-blocked-${s.agent_id}`">
                         {{ blockedReason(s) }}
                       </p>
+                      <!--
+                        Part of the balance is in flight, part is still
+                        raisable. Said on the row because the amount in the
+                        ยอดค้างจ่าย column is the whole of it, and without this
+                        line the difference between that figure and what the
+                        press actually raises has no explanation on screen.
+                      -->
+                      <p
+                        v-else-if="(s.reserved_satang ?? 0) > 0"
+                        class="text-[11.5px] text-slate-500 mt-0.5"
+                        :data-test="`payout-reserved-${s.agent_id}`"
+                      >
+                        ตั้งจ่ายแล้วรอโอน {{ formatSatang(s.reserved_satang ?? 0) }} ·
+                        ตั้งจ่ายเพิ่มได้ {{ formatSatang(availableOf(s) ?? 0) }}
+                        <RouterLink :to="{ name: 'commission-runs' }" class="font-bold text-brand-600 hover:underline" @click.stop>ดูรอบจ่าย</RouterLink>
+                      </p>
                     </div>
                   </div>
                 </td>
@@ -871,6 +1003,7 @@ watch(() => activeCompany.companyId, () => {
                       :to="{ name: 'commission-plan-settings' }"
                       class="text-[12.5px] font-bold text-amber-700 hover:underline"
                       data-test="payout-company-bank-link"
+                      @click.stop
                     >
                       กรอกบัญชีบริษัท →
                     </RouterLink>
@@ -884,7 +1017,7 @@ watch(() => activeCompany.companyId, () => {
                       type="button"
                       class="ml-2 text-[12px] font-bold text-slate-500 hover:text-brand-600 hover:underline"
                       :data-test="`payout-bank-edit-${s.agent_id}`"
-                      @click="openBankEdit(s)"
+                      @click.stop="openBankEdit(s)"
                     >
                       แก้ไข
                     </button>
@@ -906,10 +1039,25 @@ watch(() => activeCompany.companyId, () => {
                   {{ formatSatangOrUnmeasured(s.total_pending_satang) }}
                 </td>
 
-                <td class="py-3 pr-4 text-right align-top">
+                <td class="py-3 pr-4 text-right align-top" @click.stop>
+                  <!--
+                    ข้อ 3 — the shortcut for the case that is actually common
+                    here: paying one person. It writes nothing; it selects this
+                    row and opens the SAME confirmation the batch press opens.
+                  -->
+                  <button
+                    v-if="selectable(s)"
+                    type="button"
+                    class="inline-flex items-center gap-1 h-8 px-3 rounded-lg bg-brand-600 text-white text-[12px] font-extrabold hover:bg-brand-700 whitespace-nowrap"
+                    :data-test="`payout-pay-one-${s.agent_id}`"
+                    @click="askToPayOne(s)"
+                  >
+                    <Icon name="money" :size="13" />
+                    ตั้งจ่ายคนนี้
+                  </button>
                   <button
                     type="button"
-                    class="text-[12px] font-bold text-slate-500 hover:text-brand-600 hover:underline whitespace-nowrap"
+                    class="block ml-auto mt-1 text-[12px] font-bold text-slate-500 hover:text-brand-600 hover:underline whitespace-nowrap"
                     :data-test="`payout-detail-${s.agent_id}`"
                     @click="toggleDetail(s)"
                   >
@@ -1023,6 +1171,7 @@ watch(() => activeCompany.companyId, () => {
           </tbody>
         </table>
       </div>
+      </template>
     </template>
 
     <!--
@@ -1031,12 +1180,37 @@ watch(() => activeCompany.companyId, () => {
       because that figure — not the number of people — is what an admin checks
       against the transfer they are about to ask accounting for.
     -->
+    <!--
+      2026-09-16 — THE BAR IS THERE BEFORE ANYTHING IS TICKED.
+
+      Owner: "ผู้ใช้ไม่รู้ Action ในการติ๊กเครื่องหมายถูก". It used to appear
+      only once something was selected, which meant the one control that would
+      have explained the screen was invisible to exactly the person who had not
+      worked it out. It now renders whenever selecting is possible, and says
+      what to do while the selection is empty.
+    -->
     <div
-      v-if="selectedRows.length"
-      class="sticky bottom-4 mt-5 z-20 rounded-2xl bg-brand-700 text-white shadow-xl px-5 py-4"
+      v-if="canSelect && selectableRows.length"
+      class="sticky bottom-4 mt-5 z-20 rounded-2xl shadow-xl px-5 py-4"
+      :class="selectedRows.length ? 'bg-brand-700 text-white' : 'bg-white border border-slate-200'"
       data-test="payout-selection-bar"
     >
-      <div class="flex flex-wrap items-center gap-x-5 gap-y-3">
+      <!-- Empty state: an instruction, not a disabled button with no total. -->
+      <div v-if="!selectedRows.length" class="flex flex-wrap items-center gap-x-4 gap-y-2" data-test="payout-selection-empty">
+        <Icon name="money" :size="18" class="text-slate-300" />
+        <span class="text-[13.5px] font-bold text-slate-600">ยังไม่ได้เลือกใคร</span>
+        <span class="text-[12.5px] text-slate-400">คลิกที่แถวของคนที่จะจ่ายรอบนี้ — เลือกได้หลายคน ยอดรวมจะขึ้นตรงนี้</span>
+        <button
+          type="button"
+          class="ml-auto h-9 px-4 rounded-xl border border-slate-200 text-slate-600 text-[12.5px] font-bold hover:bg-slate-50"
+          data-test="payout-select-all-shortcut"
+          @click="toggleAll"
+        >
+          เลือกทั้งหมด {{ selectableRows.length }} ราย
+        </button>
+      </div>
+
+      <div v-else class="flex flex-wrap items-center gap-x-5 gap-y-3">
         <span class="text-sm font-bold text-brand-100">เลือกไว้ {{ selectedRows.length }} ราย</span>
         <span class="text-xl font-extrabold tabular-nums" data-test="payout-selection-total">
           {{ formatSatang(selectedTotalSatang) }}

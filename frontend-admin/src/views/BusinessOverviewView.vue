@@ -70,6 +70,21 @@ interface Overview {
     orders_with_reported_refund: number
     closed_deals_without_paid_order: number
     orders_without_cost: number
+    /**
+     * 2026-09-16 — how many uncosted orders the backfill could fix RIGHT NOW,
+     * i.e. their product already has a cost.
+     *
+     * Owner: "ผมใส่ต้นทุนสินค้าย้อนหลังแล้ว กำไรขึ้นต้นไม่ขึ้นหรือไงครับ". The
+     * cost is stamped when an order is CREATED, so typing it into the product
+     * reaches nothing that has already been sold — and without this count the
+     * screen could only repeat "ยังไม่ได้ตั้งต้นทุน", which is advice they had
+     * already followed.
+     *
+     * NOT scoped to the window: the button acts on the whole company.
+     */
+    orders_costable_by_backfill: number
+    /** Margins in this window that rest on a backfilled (estimated) cost. */
+    orders_with_estimated_cost: number
   }
 }
 
@@ -197,11 +212,66 @@ const disclosures = computed(() => {
     out.push(`${d.orders_with_reported_refund} รายการที่ธนาคาร/ผู้ให้บริการแจ้งว่าคืนเงินแล้ว แต่สถานะในระบบยังเป็นชำระแล้ว — ยังถูกนับเป็นยอดขายอยู่`)
   }
   if (d.orders_without_cost > 0) {
-    out.push(`${d.orders_without_cost} รายการที่สินค้ายังไม่ได้ตั้งต้นทุน — ไม่ถูกนำไปคิดกำไรขั้นต้น (ไม่ได้คิดเป็นกำไรเต็ม)`)
+    /*
+     * 2026-09-16 — the wording changed, because the old one was WRONG in the
+     * case the owner hit.
+     *
+     * It said "สินค้ายังไม่ได้ตั้งต้นทุน", which reads as "go and fill in the
+     * product". They had. The order is what has no cost — it was placed before
+     * the cost existed, and the cost is stamped at order creation — so the
+     * sentence now says which of the two it is, and the button below says what
+     * to do about it.
+     */
+    out.push(
+      d.orders_costable_by_backfill > 0
+        ? `${d.orders_without_cost} รายการที่ขายไปก่อนจะมีการตั้งต้นทุน — ยังไม่ถูกนำไปคิดกำไรขั้นต้น (ไม่ได้คิดเป็นกำไรเต็ม)`
+        : `${d.orders_without_cost} รายการที่สินค้ายังไม่ได้ตั้งต้นทุน — ไม่ถูกนำไปคิดกำไรขั้นต้น (ไม่ได้คิดเป็นกำไรเต็ม)`,
+    )
+  }
+  if (d.orders_with_estimated_cost > 0) {
+    // Said even when everything is costed: a margin built on today's cost
+    // applied to a past sale is the best answer available, and it is not the
+    // same kind of fact as what was actually paid.
+    out.push(`${d.orders_with_estimated_cost} รายการใช้ต้นทุนปัจจุบันย้อนหลัง (ไม่ใช่ต้นทุน ณ วันที่ขายจริง)`)
   }
 
   return out
 })
+
+// ── The one-time backfill ────────────────────────────────────────────────
+/*
+ * Giving past sales a cost.
+ *
+ * This WRITES to historical orders, applying today's cost to a sale that
+ * already happened — the exact thing the snapshot column exists to prevent.
+ * It is defensible once, because no cost was recorded at the time and the
+ * current one is the only estimate available, and it is offered as a
+ * deliberate press with the number named rather than as something the report
+ * quietly does while being read.
+ */
+const backfilling = ref(false)
+const confirmingBackfill = ref(false)
+const backfillDone = ref<number | null>(null)
+
+async function runBackfill(): Promise<void> {
+  if (backfilling.value) return
+
+  backfilling.value = true
+  errorMessage.value = ''
+  try {
+    const res = await api.post<{ data: { orders_updated: number } }>(
+      activeCompany.scopedPath('/business-overview/backfill-cost'),
+      {},
+    )
+    backfillDone.value = res.data.orders_updated
+    confirmingBackfill.value = false
+    await load()
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `ใส่ต้นทุนย้อนหลังไม่สำเร็จ (${e.status})` : 'ใส่ต้นทุนย้อนหลังไม่สำเร็จ'
+  } finally {
+    backfilling.value = false
+  }
+}
 
 const kpis = computed(() => {
   const m = data.value?.money
@@ -349,7 +419,69 @@ const kpis = computed(() => {
             <span class="text-amber-500">·</span><span>{{ line }}</span>
           </li>
         </ul>
+
+        <!--
+          ═══ THE WAY OUT, ON THE SCREEN THAT SHOWS THE PROBLEM ═══
+
+          Only when there is something it can actually do: every one of these
+          orders has a product that already carries a cost. A button that said
+          "ใส่ต้นทุนย้อนหลัง" and then reported 0 would be worse than no button.
+        -->
+        <div v-if="data.disclosures.orders_costable_by_backfill > 0" class="mt-3 pt-3 border-t border-amber-200">
+          <button
+            v-if="!confirmingBackfill"
+            type="button"
+            class="h-9 px-4 rounded-xl bg-amber-600 text-white text-[12.5px] font-extrabold hover:bg-amber-700"
+            data-test="overview-backfill"
+            @click="confirmingBackfill = true"
+          >
+            ใส่ต้นทุนปัจจุบันให้ยอดขายย้อนหลัง {{ data.disclosures.orders_costable_by_backfill }} รายการ
+          </button>
+
+          <!--
+            The second press names what is actually about to happen. "ต้นทุน
+            ปัจจุบัน" applied to a past sale is an estimate, and this is the
+            last moment anybody can decide that is not what they want.
+          -->
+          <div v-else data-test="overview-backfill-confirm">
+            <p class="text-[12.5px] text-amber-900">
+              จะใช้ <b>ต้นทุนปัจจุบันของแต่ละสินค้า</b> กับคำสั่งซื้อ
+              <b>{{ data.disclosures.orders_costable_by_backfill }} รายการ</b> ที่ขายไปก่อนหน้านี้
+            </p>
+            <p class="mt-1 text-[11.5px] text-amber-800">
+              เป็นการประมาณการ ไม่ใช่ต้นทุน ณ วันที่ขายจริง — ระบบจะทำเครื่องหมายไว้และแจ้งไว้ในกล่องนี้ทุกครั้งที่อ่านรายงาน
+              · ทำได้ครั้งเดียวต่อรายการ รายการที่มีต้นทุนอยู่แล้วจะไม่ถูกแตะ
+            </p>
+            <div class="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                class="h-9 px-4 rounded-xl bg-amber-600 text-white text-[12.5px] font-extrabold hover:bg-amber-700 disabled:opacity-60"
+                :disabled="backfilling"
+                data-test="overview-backfill-submit"
+                @click="runBackfill"
+              >
+                {{ backfilling ? 'กำลังบันทึก…' : 'ยืนยัน' }}
+              </button>
+              <button
+                type="button"
+                class="h-9 px-4 rounded-xl border border-amber-300 text-amber-800 text-[12.5px] font-bold hover:bg-amber-100 disabled:opacity-60"
+                :disabled="backfilling"
+                @click="confirmingBackfill = false"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <p
+        v-if="backfillDone !== null"
+        class="mt-3 px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-[13px] font-bold text-emerald-700"
+        data-test="overview-backfill-done"
+      >
+        ใส่ต้นทุนย้อนหลังให้ {{ backfillDone }} รายการเรียบร้อย — กำไรขั้นต้นด้านบนคำนวณใหม่แล้ว
+      </p>
 
       <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <!-- ═══ 2. ยอดขายรายเดือน ═══ -->

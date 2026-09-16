@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\Ability;
 use App\Http\Controllers\Controller;
 use App\Services\Sales\BusinessOverviewService;
+use App\Services\Sales\OrderCostBackfillService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -56,5 +57,32 @@ class BusinessOverviewController extends Controller
             : $request->user()->company_id;
 
         return response()->json(['data' => $service->build($companyId, $from, $to)]);
+    }
+
+    /**
+     * POST /business-overview/backfill-cost — give past sales a cost, once.
+     *
+     * Owner: "ผมใส่ต้นทุนสินค้าย้อนหลังแล้ว กำไรขึ้นต้นไม่ขึ้นหรือไงครับ".
+     *
+     * It did not, by design: the cost is stamped onto an order when the order
+     * is created, so a cost typed in today reaches no sale that already
+     * happened. Right as an ongoing rule, useless as a starting position — see
+     * OrderCostBackfillService.
+     *
+     * A POST and not part of the GET above: this WRITES to historical orders,
+     * applying today's cost to a past sale, and that is a decision somebody
+     * makes on purpose rather than something a report does while being read.
+     * The same ability as reading the overview — it is the same person, acting
+     * on what they were just shown.
+     */
+    public function backfillCost(Request $request, OrderCostBackfillService $backfill): JsonResponse
+    {
+        abort_unless($request->user()->can(Ability::SalesAgentDashboardMetricsView), 403);
+
+        $companyId = $request->user()->isSuperAdmin()
+            ? ($request->integer('company_id') ?: null)
+            : $request->user()->company_id;
+
+        return response()->json(['data' => ['orders_updated' => $backfill->run($companyId, $request->user())]]);
     }
 }

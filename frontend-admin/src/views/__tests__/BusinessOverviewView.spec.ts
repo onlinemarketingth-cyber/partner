@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
+const post = vi.fn()
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {} }),
@@ -27,7 +28,8 @@ vi.mock('vue-router', () => ({
 vi.mock('@/api/client', () => ({
   api: {
     get: (...args: unknown[]) => get(...args),
-    post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn(), postForm: vi.fn(), download: vi.fn(),
+    post: (...args: unknown[]) => post(...args),
+    put: vi.fn(), patch: vi.fn(), delete: vi.fn(), postForm: vi.fn(), download: vi.fn(),
   },
   ApiError: class extends Error {
     constructor(public status: number) { super(`API error ${status}`) }
@@ -63,7 +65,13 @@ function overview(over: Record<string, unknown> = {}) {
       { agent_id: 42, agent_name: 'เกรียงยศ อุยเหินนภา', orders: 20, revenue_satang: 61240000 },
     ],
     clients: { new_clients: 41, deals_closed: 63 },
-    disclosures: { orders_with_reported_refund: 0, closed_deals_without_paid_order: 0, orders_without_cost: 0 },
+    disclosures: {
+      orders_with_reported_refund: 0,
+      closed_deals_without_paid_order: 0,
+      orders_without_cost: 0,
+      orders_costable_by_backfill: 0,
+      orders_with_estimated_cost: 0,
+    },
     ...over,
   }
 }
@@ -92,6 +100,8 @@ const STANDALONE_ZERO = /(^|[^\d,.])0([^\d,.%]|$)/
 
 beforeEach(() => {
   get.mockReset()
+  post.mockReset()
+  post.mockResolvedValue({ data: { orders_updated: 4 } })
 })
 
 describe('the subtraction the screen is built around', () => {
@@ -172,7 +182,13 @@ describe('what it refuses to invent', () => {
 describe('what it says it could not measure', () => {
   it('names every disclosure the server returned', async () => {
     const wrapper = await mountView(overview({
-      disclosures: { orders_with_reported_refund: 1, closed_deals_without_paid_order: 4, orders_without_cost: 2 },
+      disclosures: {
+        orders_with_reported_refund: 1,
+        closed_deals_without_paid_order: 4,
+        orders_without_cost: 2,
+        orders_costable_by_backfill: 0,
+        orders_with_estimated_cost: 0,
+      },
     }))
 
     const box = wrapper.get('[data-test="overview-disclosures"]').text()
@@ -229,5 +245,105 @@ describe('the window', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="overview-chart"]').findAll('div.flex-1')).toHaveLength(3)
+  })
+})
+
+
+/**
+ * ═══ THE BACKFILL ═══
+ *
+ * Owner, hours after the cost field shipped: "ผมใส่ต้นทุนสินค้าย้อนหลังแล้ว
+ * กำไรขึ้นต้นไม่ขึ้นหรือไงครับ".
+ *
+ * The cost is stamped when an ORDER is created, so typing it into the product
+ * reaches nothing already sold. This screen is where that dead end is both
+ * explained and escaped — and the escape applies today's cost to a past sale,
+ * so it has to say so before and after.
+ */
+describe('giving past sales a cost', () => {
+  function withBackfillable(n: number, over: Record<string, number> = {}) {
+    return overview({
+      disclosures: {
+        orders_with_reported_refund: 0,
+        closed_deals_without_paid_order: 0,
+        orders_without_cost: n,
+        orders_costable_by_backfill: n,
+        orders_with_estimated_cost: 0,
+        ...over,
+      },
+    })
+  }
+
+  it('says the sale predates the cost, not that the product is missing one', async () => {
+    /*
+     * THE ONE THAT MATTERS. The first wording said "สินค้ายังไม่ได้ตั้งต้นทุน",
+     * which reads as "go and fill in the product" — exactly what the owner had
+     * already done before asking why nothing happened.
+     */
+    const wrapper = await mountView(withBackfillable(4))
+    const box = wrapper.get('[data-test="overview-disclosures"]').text()
+
+    expect(box).toContain('ขายไปก่อนจะมีการตั้งต้นทุน')
+    expect(box).not.toContain('สินค้ายังไม่ได้ตั้งต้นทุน')
+  })
+
+  it('keeps the old wording when the product really has no cost', async () => {
+    // The control: nothing a backfill could do, so the advice IS to go and set
+    // the product's cost.
+    const wrapper = await mountView(withBackfillable(4, { orders_costable_by_backfill: 0 }))
+
+    expect(wrapper.get('[data-test="overview-disclosures"]').text()).toContain('สินค้ายังไม่ได้ตั้งต้นทุน')
+    expect(wrapper.find('[data-test="overview-backfill"]').exists()).toBe(false)
+  })
+
+  it('does not write on the first press', async () => {
+    const wrapper = await mountView(withBackfillable(4))
+
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+
+    expect(post).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="overview-backfill-confirm"]').exists()).toBe(true)
+  })
+
+  it('warns that the figure it is about to produce is an estimate', async () => {
+    const wrapper = await mountView(withBackfillable(4))
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+
+    const confirm = wrapper.get('[data-test="overview-backfill-confirm"]').text()
+
+    expect(confirm).toContain('4 รายการ')
+    expect(confirm).toContain('ไม่ใช่ต้นทุน ณ วันที่ขายจริง')
+  })
+
+  it('runs it and reloads, so the margin above is the new one', async () => {
+    const wrapper = await mountView(withBackfillable(4))
+    get.mockClear()
+
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+    await wrapper.get('[data-test="overview-backfill-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/business-overview/backfill-cost', {})
+    expect(get).toHaveBeenCalled()
+    expect(wrapper.get('[data-test="overview-backfill-done"]').text()).toContain('4 รายการ')
+  })
+
+  it('keeps saying which margins rest on an estimate, every time the page is read', async () => {
+    /*
+     * Not a one-off confirmation. A backfilled cost is today's cost on a past
+     * sale for as long as that order exists, and somebody reading the margin
+     * six months from now never saw the dialog.
+     */
+    const wrapper = await mountView(overview({
+      disclosures: {
+        orders_with_reported_refund: 0,
+        closed_deals_without_paid_order: 0,
+        orders_without_cost: 0,
+        orders_costable_by_backfill: 0,
+        orders_with_estimated_cost: 6,
+      },
+    }))
+
+    expect(wrapper.get('[data-test="overview-disclosures"]').text()).toContain('ใช้ต้นทุนปัจจุบันย้อนหลัง')
   })
 })

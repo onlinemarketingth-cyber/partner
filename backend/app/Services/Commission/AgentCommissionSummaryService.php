@@ -3,6 +3,7 @@
 namespace App\Services\Commission;
 
 use App\Enums\PaymentStatus;
+use App\Enums\WithdrawalStatus;
 use App\Models\CommissionLedger;
 use App\Models\Company;
 use App\Models\User;
@@ -187,6 +188,46 @@ class AgentCommissionSummaryService
             ->map(fn ($id) => (int) $id)
             ->all();
 
+        /*
+         * ═══ 2026-09-16 — HOW MUCH OF EACH BALANCE IS ALREADY SPOKEN FOR ═══
+         *
+         * Owner: "ผมกดยืนยันการจ่ายไปแล้ว แต่ปัญหาคือหน้าจอ Ui ยังขึ้นค้างจ่ายอยู่".
+         *
+         * They were looking at a real defect, and it was a dead end rather than
+         * a cosmetic one. Two different numbers were both being called "ยอด
+         * ค้างจ่าย":
+         *
+         *   · THIS service summed pending ledger rows — 1,046.50
+         *   · CommissionWithdrawalService::availableSatang() subtracts whatever
+         *     an open payout has already reserved — 0.00 once one is raised
+         *
+         * แนวทาง C does not settle the ledger when a payout is raised (the
+         * money has not moved yet), so after a successful ตั้งจ่าย this screen
+         * showed the row completely unchanged, still ticked and still
+         * selectable — and every further press was refused forever with "ยอด
+         * ค้างจ่ายของคนนี้เปลี่ยนไปแล้ว (0.00 ไม่ตรงกับ 1,046.50)". The screen
+         * was inviting an action that could only fail.
+         *
+         * One query for the page, keyed by agent. The screen now shows what is
+         * owed AND what is already in flight, and sends the difference as the
+         * figure it is agreeing to.
+         */
+        $reservedByAgentId = DB::table('commission_withdrawal_items')
+            ->join(
+                'commission_withdrawal_requests',
+                'commission_withdrawal_requests.id',
+                '=',
+                'commission_withdrawal_items.commission_withdrawal_request_id',
+            )
+            ->whereIn('commission_withdrawal_requests.agent_id', $rows->pluck('agent_id'))
+            ->whereIn(
+                'commission_withdrawal_requests.status',
+                array_column(WithdrawalStatus::open(), 'value'),
+            )
+            ->groupBy('commission_withdrawal_requests.agent_id')
+            ->selectRaw('commission_withdrawal_requests.agent_id AS agent_id, SUM(commission_withdrawal_items.allocated_satang) AS reserved_satang')
+            ->pluck('reserved_satang', 'agent_id');
+
         $certTiersByAgentId = DB::table('user_certifications')
             ->join('cert_tiers', 'cert_tiers.id', '=', 'user_certifications.cert_tier_id')
             ->whereIn('user_certifications.user_id', $rows->pluck('agent_id'))
@@ -196,7 +237,7 @@ class AgentCommissionSummaryService
             ->keyBy('user_id');
 
         return $rows
-            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId, $houseUserIds) {
+            ->map(function (CommissionLedger $row) use ($paymentStatus, $certTiersByAgentId, $houseUserIds, $reservedByAgentId) {
                 // BR-3 — SUM() over an already-integer satang column is
                 // still integer arithmetic; cast defensively since raw
                 // SQL aggregates come back as strings from the PDO
@@ -278,6 +319,28 @@ class AgentCommissionSummaryService
                      * document and never will).
                      */
                     'payout_details_complete' => (bool) $row->agent?->hasCompletePayoutDetails(),
+                    /*
+                     * Already reserved by a payout that has been raised and not
+                     * yet transferred. The ledger rows are still Pending — the
+                     * money has not moved — so this is NOT subtracted from
+                     * total_pending_satang above, which remains the honest
+                     * answer to "what is this person owed".
+                     */
+                    'reserved_satang' => (int) ($reservedByAgentId[$row->agent_id] ?? 0),
+                    /*
+                     * What a NEW payout may be raised for — the figure the
+                     * server compares the press against
+                     * (CommissionWithdrawalService::availableSatang), so the
+                     * screen sends this one and the two can never disagree.
+                     *
+                     * NULL when the pending bucket was filtered out: an
+                     * available balance derived from an unmeasured one is
+                     * itself unmeasured, and a 0 here would grey out a row for
+                     * a reason that is not true (§3.7 / F-10).
+                     */
+                    'available_satang' => $totalPending === null
+                        ? null
+                        : max(0, $totalPending - (int) ($reservedByAgentId[$row->agent_id] ?? 0)),
                 ];
             })
             // ?? 0 here is an ORDERING fallback only — it never reaches the

@@ -352,6 +352,142 @@ class BusinessOverviewTest extends TestCase
         $this->getJson('/api/v1/business-overview')->assertUnauthorized();
     }
 
+    /*
+     * ═══ THE BACKFILL ═══
+     *
+     * Owner, hours after the cost field shipped: "ผมใส่ต้นทุนสินค้าย้อนหลังแล้ว
+     * กำไรขึ้นต้นไม่ขึ้นหรือไงครับ".
+     *
+     * The cost is stamped when an ORDER is created, so a cost typed in today
+     * reaches no sale that already happened — correct as an ongoing rule, and
+     * a dead end for a company whose entire history predates the column. These
+     * pin the way out, and the two things that make it safe.
+     */
+
+    public function test_setting_a_products_cost_does_not_by_itself_reach_past_sales(): void
+    {
+        // The behaviour that surprised the owner, stated outright so nobody
+        // "fixes" it later and silently reintroduces retroactive margins.
+        [$company, $admin] = $this->world();
+        $product = Product::factory()->create(['company_id' => $company->id, 'cost_satang' => null]);
+        $this->sale($company, revenue: 400000, paidAt: '2026-09-05', costSatang: null, product: $product);
+
+        $product->forceFill(['cost_satang' => 250000])->save();
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/business-overview?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('data.money.cost_satang', 0)
+            ->assertJsonPath('data.disclosures.orders_without_cost', 1)
+            // ...but the screen is told the remedy is a backfill, not "go and
+            // fill in the product" — which they had already done.
+            ->assertJsonPath('data.disclosures.orders_costable_by_backfill', 1);
+    }
+
+    public function test_the_backfill_gives_past_sales_the_products_current_cost(): void
+    {
+        [$company, $admin] = $this->world();
+        $product = Product::factory()->create(['company_id' => $company->id, 'cost_satang' => 250000]);
+        $this->sale($company, revenue: 400000, paidAt: '2026-09-05', costSatang: null, product: $product);
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/business-overview/backfill-cost')
+            ->assertOk()
+            ->assertJsonPath('data.orders_updated', 1);
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/business-overview?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('data.money.cost_satang', 250000)
+            ->assertJsonPath('data.disclosures.orders_without_cost', 0);
+    }
+
+    public function test_a_backfilled_margin_is_marked_as_an_estimate(): void
+    {
+        /*
+         * THE ONE THAT MATTERS about the backfill. It applies TODAY's cost to
+         * a PAST sale — the exact thing the snapshot column exists to prevent.
+         * Defensible once, because no cost was recorded at the time and this
+         * is the only estimate available; never to be mistaken afterwards for
+         * what was actually paid.
+         */
+        [$company, $admin] = $this->world();
+        $product = Product::factory()->create(['company_id' => $company->id, 'cost_satang' => 250000]);
+        $this->sale($company, revenue: 400000, paidAt: '2026-09-05', costSatang: null, product: $product);
+
+        $this->actingAs($admin)->postJson('/api/v1/business-overview/backfill-cost')->assertOk();
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/business-overview?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('data.disclosures.orders_with_estimated_cost', 1);
+    }
+
+    public function test_it_never_overwrites_a_cost_that_is_already_there(): void
+    {
+        /*
+         * A real snapshot is what the sale actually cost. Running the backfill
+         * again after a supplier price change must not reach back and move a
+         * margin that has already been read and acted on — including one this
+         * same backfill estimated on an earlier run.
+         */
+        [$company, $admin] = $this->world();
+        $product = Product::factory()->create(['company_id' => $company->id, 'cost_satang' => 999900]);
+        $this->sale($company, revenue: 400000, paidAt: '2026-09-05', costSatang: 250000, product: $product);
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/business-overview/backfill-cost')
+            ->assertOk()
+            ->assertJsonPath('data.orders_updated', 0);
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/business-overview?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('data.money.cost_satang', 250000);
+    }
+
+    public function test_it_leaves_alone_a_product_that_still_has_no_cost(): void
+    {
+        // It gives history a cost it can justify; it does not invent one.
+        [$company, $admin] = $this->world();
+        $product = Product::factory()->create(['company_id' => $company->id, 'cost_satang' => null]);
+        $this->sale($company, revenue: 400000, paidAt: '2026-09-05', costSatang: null, product: $product);
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/business-overview/backfill-cost')
+            ->assertOk()
+            ->assertJsonPath('data.orders_updated', 0);
+
+        $this->actingAs($admin)
+            ->getJson('/api/v1/business-overview?date_from=2026-09-01&date_to=2026-09-30')
+            ->assertOk()
+            ->assertJsonPath('data.disclosures.orders_costable_by_backfill', 0);
+    }
+
+    public function test_the_backfill_never_crosses_a_company_boundary(): void
+    {
+        // BR-6, on a write that touches every historical order it can find.
+        [$company, $admin] = $this->world();
+        [$other] = $this->world();
+        $theirs = Product::factory()->create(['company_id' => $other->id, 'cost_satang' => 250000]);
+        $theirOrder = $this->sale($other, revenue: 400000, paidAt: '2026-09-05', costSatang: null, product: $theirs);
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/business-overview/backfill-cost')
+            ->assertOk()
+            ->assertJsonPath('data.orders_updated', 0);
+
+        $this->assertNull($theirOrder->fresh()->cost_satang_at_time);
+    }
+
+    public function test_an_agent_cannot_run_it(): void
+    {
+        [$company] = $this->world();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+
+        $this->actingAs($agent)->postJson('/api/v1/business-overview/backfill-cost')->assertForbidden();
+    }
+
     // ── World ────────────────────────────────────────────────────────────
 
     /** @return array{0: Company, 1: User} */

@@ -867,6 +867,15 @@ Route::prefix('v1')->group(function () {
          */
         Route::get('/business-overview', [BusinessOverviewController::class, 'index']);
 
+        /*
+         * 2026-09-16 — the one-time bridge for a company whose whole order
+         * history predates the cost column. Throttled because it writes to
+         * every uncosted order in the company and there is no workflow in
+         * which anybody presses it twice in a minute.
+         */
+        Route::post('/business-overview/backfill-cost', [BusinessOverviewController::class, 'backfillCost'])
+            ->middleware('throttle:5,1');
+
         // Academy — ERD-001 §Academy, BR-1. cert-tiers is read-only
         // global config; module-completions/exam-attempts are
         // append-only logs (index+store only, no update/destroy route);

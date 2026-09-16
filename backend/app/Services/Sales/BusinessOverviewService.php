@@ -58,6 +58,8 @@ use Illuminate\Support\Facades\DB;
  */
 class BusinessOverviewService
 {
+    public function __construct(private readonly OrderCostBackfillService $backfill) {}
+
     /**
      * @return array<string, mixed>
      */
@@ -410,10 +412,39 @@ class BusinessOverviewService
                 ->where('orders.status', OrderStatus::Paid->value))
             ->count();
 
+        /*
+         * 2026-09-16 — HOW MANY OF THE UNCOSTED ORDERS COULD BE FIXED NOW.
+         *
+         * Owner, on the day the cost field shipped: "ผมใส่ต้นทุนสินค้าย้อนหลัง
+         * แล้ว กำไรขึ้นต้นไม่ขึ้นหรือไงครับ". It did not, because the cost is
+         * stamped at ORDER CREATION and their whole history predates it.
+         *
+         * Without this count the screen can only say "N รายการไม่มีต้นทุน",
+         * which reads as "go and fill in the product" — advice they had
+         * already followed. This is the count that says the remedy is a
+         * different one, and it is what puts the backfill button on screen.
+         *
+         * NOT windowed: the button acts on the whole company, so a number
+         * scoped to September would under-report what pressing it would do.
+         */
+        $backfillable = $this->backfill->pendingCount($companyId);
+
+        /*
+         * And how many margins in THIS window rest on an estimate rather than
+         * on what was actually paid. A backfilled cost is today's cost applied
+         * to a past sale; it is the best available answer and it is not the
+         * same kind of fact as a real snapshot, so the screen says which.
+         */
+        $estimated = (int) $this->paidOrders($companyId, $from, $to)
+            ->whereNotNull('cost_backfilled_at')
+            ->count();
+
         return [
             'orders_with_reported_refund' => $reportedRefunds,
             'closed_deals_without_paid_order' => $closedWithoutOrder,
             'orders_without_cost' => $cost['uncosted_orders'],
+            'orders_costable_by_backfill' => $backfillable,
+            'orders_with_estimated_cost' => $estimated,
         ];
     }
 

@@ -101,6 +101,8 @@ interface RowOverrides {
   is_company_share?: boolean
   payout_details_complete?: boolean
   bank_account_number?: string | null
+  reserved_satang?: number
+  available_satang?: number | null
 }
 
 function makeRow(overrides: RowOverrides = {}) {
@@ -122,6 +124,16 @@ function makeRow(overrides: RowOverrides = {}) {
      * make every selection test here fail for a reason none of them is about.
      */
     payout_details_complete: true,
+    /*
+     * 2026-09-16 — what a NEW payout may be raised for. Equal to the pending
+     * balance until something is already in flight; the tests about the bug
+     * the owner hit set them apart on purpose.
+     */
+    reserved_satang: 0,
+    available_satang:
+      overrides.available_satang === undefined
+        ? (overrides.total_pending_satang === undefined ? TWO_THOUSAND_BAHT : overrides.total_pending_satang)
+        : overrides.available_satang,
     avatar_url: null,
     cert_tier: null,
     ...overrides,
@@ -297,8 +309,25 @@ describe('the selection', () => {
     expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('3,500 บาท')
   })
 
-  it('hides the bar entirely when nothing is ticked', async () => {
+  it('shows the bar with an instruction, not a total, before anything is ticked', async () => {
+    /*
+     * 2026-09-16 — REVERSED ON PURPOSE. This asserted the bar was HIDDEN until
+     * something was selected, which hid the one control that would have
+     * explained the screen from exactly the person who had not worked it out
+     * (owner: "ผู้ใช้ไม่รู้ Action ในการติ๊กเครื่องหมายถูก").
+     */
     const wrapper = await mountView([makeRow()], 'pending')
+
+    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="payout-selection-empty"]').text()).toContain('คลิกที่แถว')
+    // ...and no money figure, because nothing has been chosen to total.
+    expect(wrapper.find('[data-test="payout-selection-total"]').exists()).toBe(false)
+  })
+
+  it('hides the bar when there is nobody who could be selected at all', async () => {
+    // The control for the change above: an instruction to tick somebody, on a
+    // list where nobody is tickable, is noise.
+    const wrapper = await mountView([makeRow({ agent_id: 1, total_pending_satang: 0, available_satang: 0 })], 'pending')
 
     expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(false)
   })
@@ -339,12 +368,15 @@ describe('the selection', () => {
   it('is dropped when the view changes, because the amounts under it change too', async () => {
     const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
     await wrapper.get('[data-test="payout-select-1"]').trigger('change')
-    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="payout-selection-total"]').exists()).toBe(true)
 
     await wrapper.get('[data-test="payout-view-all"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="payout-selection-bar"]').exists()).toBe(false)
+    // The bar itself survives (ทั้งหมด is still a selectable view) — what must
+    // be gone is the SELECTION, and with it the total it was agreeing to.
+    expect(wrapper.find('[data-test="payout-selection-total"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="payout-selection-empty"]').exists()).toBe(true)
   })
 })
 
@@ -521,5 +553,216 @@ describe("the company's own share", () => {
 
     expect(wrapper.find('[data-test="company-share-row-1"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('ส่วนของบริษัท')
+  })
+})
+
+
+/**
+ * ═══ 2026-09-16 — THE PRESS THAT LOOKED LIKE IT DID NOTHING ═══
+ *
+ * Owner: "ผมกดยืนยันการจ่ายไปแล้ว แต่ปัญหาคือหน้าจอ Ui ยังขึ้นค้างจ่ายอยู่".
+ *
+ * แนวทาง C leaves the ledger alone when a payout is raised — the money has not
+ * moved — so the pending balance is UNCHANGED afterwards. This screen reloaded,
+ * drew the identical row, and left it selectable; the server meanwhile compares
+ * a press against availableSatang, which DOES subtract what the open payout
+ * reserved. Every further press was refused forever with "0.00 ไม่ตรงกับ
+ * 1,046.50": two numbers, one name, and a loop with no way out.
+ */
+describe('after a payout has been raised', () => {
+  const RAISED = {
+    agent_id: 42,
+    total_pending_satang: TWO_THOUSAND_BAHT,
+    reserved_satang: TWO_THOUSAND_BAHT,
+    available_satang: 0,
+  }
+
+  it('still shows what the agent is OWED — the ledger is untouched until the transfer', async () => {
+    const wrapper = await mountView([makeRow(RAISED)], 'pending')
+
+    expect(wrapper.get('[data-test="payout-row-42"]').text()).toContain('2,000 บาท')
+  })
+
+  it('cannot be ticked again, and says where the money actually is', async () => {
+    // THE ONE THAT MATTERS. A tickable row whose press can only be refused is
+    // worse than a disabled one: the refusal arrives after the confirmation.
+    const wrapper = await mountView([makeRow(RAISED)], 'pending')
+
+    expect(wrapper.get('[data-test="payout-select-42"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="payout-blocked-42"]').text()).toContain('รอโอนอยู่ที่ รอบจ่าย')
+  })
+
+  it('explains the gap when only PART of the balance is in flight', async () => {
+    // Otherwise the ยอดค้างจ่าย column and the amount the press raises differ
+    // with nothing on screen accounting for the difference.
+    const wrapper = await mountView([
+      makeRow({ agent_id: 42, total_pending_satang: TWO_THOUSAND_BAHT, reserved_satang: FIFTEEN_HUNDRED_BAHT, available_satang: 50_000 }),
+    ], 'pending')
+
+    const note = wrapper.get('[data-test="payout-reserved-42"]').text()
+
+    expect(note).toContain('ตั้งจ่ายแล้วรอโอน')
+    expect(note).toContain('1,500')
+    expect(note).toContain('500')
+  })
+
+  it('sends the AVAILABLE figure, which is the one the server checks', async () => {
+    /*
+     * The root of the loop. This sent total_pending_satang, and the server
+     * compares against availableSatang — identical only until the first payout
+     * exists, and permanently different afterwards.
+     */
+    const wrapper = await mountView([
+      makeRow({ agent_id: 42, total_pending_satang: TWO_THOUSAND_BAHT, reserved_satang: FIFTEEN_HUNDRED_BAHT, available_satang: 50_000 }),
+    ], 'pending')
+
+    await wrapper.get('[data-test="payout-select-42"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout-batch', {
+      payees: [{ agent_id: 42, expected_total_satang: 50_000 }],
+    })
+  })
+
+  it('totals the selection by what will be raised, not by what is owed', async () => {
+    const wrapper = await mountView([
+      makeRow({ agent_id: 42, total_pending_satang: TWO_THOUSAND_BAHT, reserved_satang: FIFTEEN_HUNDRED_BAHT, available_satang: 50_000 }),
+    ], 'pending')
+
+    await wrapper.get('[data-test="payout-select-42"]').trigger('change')
+
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('500 บาท')
+  })
+})
+
+
+/**
+ * ═══ 2026-09-16 — MAKING THE SELECTION DISCOVERABLE (owner: ข้อ 2 + ข้อ 3) ═══
+ *
+ * Owner: "แบบที่เราเลือกพบปัญหาการใช้งานอย่างหนึ่ง ผู้ใช้ไม่รู้ Action ในการติ๊ก
+ * เครื่องหมายถูกหน้ารายชื่อที่ต้องการโอนค่าคอม ทำไห้ผู้ใช้ไม่เข้าใจในการใช้งาน".
+ *
+ * Two answers at different layers: the screen now teaches (a labelled column,
+ * a one-line hint, a whole-row target, a bar that is present before anything
+ * is ticked), and it offers a shortcut for the case that is actually common
+ * here — paying one person.
+ */
+describe('finding out that you have to select', () => {
+  it('labels the column instead of leaving a bare checkbox', async () => {
+    const wrapper = await mountView([makeRow()], 'pending')
+
+    expect(wrapper.get('thead').text()).toContain('เลือก')
+  })
+
+  it('says how the screen works while nothing is ticked', async () => {
+    const wrapper = await mountView([makeRow()], 'pending')
+
+    expect(wrapper.get('[data-test="payout-select-hint"]').text()).toContain('คลิกที่แถว')
+  })
+
+  it('stops saying it once somebody has selected a row', async () => {
+    // A permanent instruction is a permanent admission that the screen did
+    // not explain itself.
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
+
+    await wrapper.get('[data-test="payout-select-1"]').trigger('change')
+
+    expect(wrapper.find('[data-test="payout-select-hint"]').exists()).toBe(false)
+  })
+
+  it('selects when the ROW is clicked, not only the 16px checkbox', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
+
+    await wrapper.get('[data-test="payout-row-1"]').trigger('click')
+
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('2,000 บาท')
+  })
+
+  it('does not select when a control INSIDE the row is clicked', async () => {
+    /*
+     * THE ONE THAT MATTERS about widening the target. Without the stopped
+     * bubble, opening a drill-down or editing a bank account would silently
+     * tick that person for payment — a selection nobody made, agreed to at the
+     * confirmation by somebody reading the total rather than the names.
+     */
+    const wrapper = await mountView([makeRow({ agent_id: 1 })], 'pending')
+
+    await wrapper.get('[data-test="payout-detail-1"]').trigger('click')
+
+    expect(wrapper.find('[data-test="payout-selection-total"]').exists()).toBe(false)
+  })
+
+  it('offers a whole-list shortcut from the bar', async () => {
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1 }),
+      makeRow({ agent_id: 2, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT, available_satang: FIFTEEN_HUNDRED_BAHT }),
+    ], 'pending')
+
+    await wrapper.get('[data-test="payout-select-all-shortcut"]').trigger('click')
+
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('3,500 บาท')
+  })
+})
+
+describe('ตั้งจ่ายคนนี้ — the per-row shortcut', () => {
+  it('writes nothing; it opens the SAME confirmation', async () => {
+    /*
+     * A per-row button existed before แบบ C and was removed on purpose: two
+     * controls on one row, one collecting a selection and one writing
+     * immediately, is the duplication this screen was consolidated to remove.
+     *
+     * This is a shortcut INTO the one flow, not a second flow — so what is
+     * pinned is that it still goes through the confirmation and still writes
+     * nothing on the first press.
+     */
+    const wrapper = await mountView([makeRow({ agent_id: 42 })], 'pending')
+
+    await wrapper.get('[data-test="payout-pay-one-42"]').trigger('click')
+
+    expect(post).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="payout-batch-confirm"]').exists()).toBe(true)
+  })
+
+  it('REPLACES the selection rather than adding to it', async () => {
+    /*
+     * Pressing "ตั้งจ่ายคนนี้" on one row while others are ticked has to mean
+     * what it says. Adding would open a confirmation naming a total the
+     * presser never chose — and the confirmation is the last line of defence
+     * before rows that BR-4 makes permanent.
+     */
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1 }),
+      makeRow({ agent_id: 2, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT, available_satang: FIFTEEN_HUNDRED_BAHT }),
+    ], 'pending')
+
+    await wrapper.get('[data-test="payout-select-1"]').trigger('change')
+    await wrapper.get('[data-test="payout-pay-one-2"]').trigger('click')
+
+    expect(wrapper.get('[data-test="payout-batch-confirm"]').text()).toContain('1 ราย')
+    expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('1,500 บาท')
+  })
+
+  it('goes through the same endpoint and payload as the batch press', async () => {
+    const wrapper = await mountView([makeRow({ agent_id: 42 })], 'pending')
+
+    await wrapper.get('[data-test="payout-pay-one-42"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/payout-batch', {
+      payees: [{ agent_id: 42, expected_total_satang: TWO_THOUSAND_BAHT }],
+    })
+  })
+
+  it('is not offered on a row that cannot be paid', async () => {
+    // Same rule as the checkbox. A button that opens a confirmation the server
+    // will refuse is worse than no button.
+    const wrapper = await mountView([
+      makeRow({ agent_id: 1, payout_details_complete: false, bank_account_number: null }),
+    ], 'pending')
+
+    expect(wrapper.find('[data-test="payout-pay-one-1"]').exists()).toBe(false)
   })
 })
