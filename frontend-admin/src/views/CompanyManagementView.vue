@@ -5,12 +5,24 @@
  * auth.user.role, and the backend's CompanyPolicy is the real
  * enforcement either way (Section 5).
  *
- * A Company is the tenant boundary itself (CLAUDE.md §2) — this screen
- * is deliberately minimal (name/slug/active), no cascading actions on
- * deactivate/delete are implemented here since none are defined
+ * A Company is the tenant boundary itself (CLAUDE.md §2). No cascading
+ * actions on deactivate/delete are implemented here since none are defined
  * anywhere in CLAUDE.md yet (see CompanyService's own flagged note).
+ *
+ * ── 2026-09-17: IT CAN NOW BE EDITED ──
+ *
+ * Owner: "การจัดการบริษัท เพิ่ม edit". Until now a company could be created
+ * and switched off and nothing in between — a name typed wrong stayed wrong,
+ * and the only fix was the database.
+ *
+ * The panel covers the two identity fields and the payout account, on the
+ * owner's choice of scope. What it deliberately does NOT cover is
+ * `commission_plan_type`: that already has its own control on the row and
+ * goes through a different endpoint behind a different Ability (see
+ * changePlanType). Putting it in the form too would be two doors onto one
+ * column on one screen.
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -41,6 +53,19 @@ interface CompanyItem {
   commission_plan_type: CommissionPlanType
   user_count: number
   created_at: string
+  /*
+   * ADR-017 — where this company RECEIVES customer payments: the details
+   * printed on the public /pay/{token} page for a manual transfer.
+   *
+   * Not to be confused with the supplier payout account, which points the
+   * other way (we transfer OUT to a คู่ค้า) and lives on its own table and
+   * its own screen. They were briefly the same four columns; see this file's
+   * note about the panel that was removed.
+   */
+  payment_promptpay_id: string | null
+  payment_bank_name: string | null
+  payment_bank_account_number: string | null
+  payment_bank_account_name: string | null
 }
 
 /*
@@ -133,6 +158,102 @@ async function submitCreate() {
     errorMessage.value = e instanceof ApiError ? `สร้างไม่สำเร็จ (${e.status})` : 'สร้างไม่สำเร็จ'
   } finally {
     creating.value = false
+  }
+}
+
+// ── Edit one company ──
+/**
+ * 2026-09-17 — the row can be edited in place.
+ *
+ * Inline rather than a modal, matching the create form above it: an admin
+ * comparing three tenants should not lose sight of the list to rename one.
+ * One row open at a time, because two half-edited forms is a way to save the
+ * wrong one.
+ */
+const editingId = ref<number | null>(null)
+const editForm = ref<{
+  name: string
+  slug: string
+  payment_promptpay_id: string
+  payment_bank_name: string
+  payment_bank_account_number: string
+  payment_bank_account_name: string
+} | null>(null)
+const savingEdit = ref(false)
+/** The slug as it was when the panel opened — what the warning compares to. */
+const originalSlug = ref('')
+
+function startEdit(company: CompanyItem) {
+  if (editingId.value === company.id) {
+    editingId.value = null
+    editForm.value = null
+
+    return
+  }
+
+  editingId.value = company.id
+  originalSlug.value = company.slug
+  // Nulls become empty strings for the inputs and are turned back on save —
+  // an <input> bound to null renders the string "null".
+  editForm.value = {
+    name: company.name,
+    slug: company.slug,
+    payment_promptpay_id: company.payment_promptpay_id ?? '',
+    payment_bank_name: company.payment_bank_name ?? '',
+    payment_bank_account_number: company.payment_bank_account_number ?? '',
+    payment_bank_account_name: company.payment_bank_account_name ?? '',
+  }
+}
+
+/**
+ * Has the slug actually changed? Drives the warning, and the confirm.
+ *
+ * `slug` is not a label. It is the company's recruit and login link
+ * (`/login?company=<slug>`) and the default invite code, so changing it
+ * invalidates every link already handed out — a QR on a printed card, a
+ * message in a LINE group, a bookmark. Nothing errors; people simply cannot
+ * sign up any more and nobody finds out until somebody complains.
+ *
+ * The server allows it, which is right: a company genuinely does get renamed.
+ * What is not right is doing it without being told.
+ */
+const slugChanged = computed(
+  () => editForm.value !== null && editForm.value.slug.trim() !== originalSlug.value,
+)
+
+async function submitEdit(company: CompanyItem) {
+  const form = editForm.value
+  if (!form) return
+
+  if (slugChanged.value && !window.confirm(
+    `เปลี่ยนลิงก์บริษัทจาก /${originalSlug.value} เป็น /${form.slug.trim()}\n\n`
+    + 'ลิงก์สมัคร ลิงก์เข้าสู่ระบบ และ QR ที่แจกไปแล้วทั้งหมดจะใช้ไม่ได้ทันที '
+    + 'และรหัสเชิญเริ่มต้นของบริษัทจะเปลี่ยนตามไปด้วย\n\nยืนยันหรือไม่',
+  )) return
+
+  savingEdit.value = true
+  errorMessage.value = ''
+  try {
+    await api.put(`/companies/${company.id}`, {
+      name: form.name.trim(),
+      slug: form.slug.trim(),
+      // Empty means "not recorded", which is a real answer on the public
+      // payment page — it simply omits that line. Sending '' would store a
+      // blank string that reads as configured and prints as nothing.
+      payment_promptpay_id: form.payment_promptpay_id.trim() || null,
+      payment_bank_name: form.payment_bank_name.trim() || null,
+      payment_bank_account_number: form.payment_bank_account_number.trim() || null,
+      payment_bank_account_name: form.payment_bank_account_name.trim() || null,
+    })
+    editingId.value = null
+    editForm.value = null
+    await loadCompanies()
+  } catch (e) {
+    // In full: the server refuses a duplicate slug by name, and "แก้ไขไม่
+    // สำเร็จ (422)" would leave somebody guessing which field it meant.
+    errorMessage.value = e instanceof ApiError ? `แก้ไขไม่สำเร็จ: ${e.message}` : 'แก้ไขไม่สำเร็จ'
+  } finally {
+    savingEdit.value = false
   }
 }
 
@@ -260,12 +381,125 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
           </div>
           <div class="flex items-center gap-2 shrink-0">
             <button
+              type="button"
+              data-test="edit-company"
+              class="text-xs font-bold px-2 py-1 rounded-lg inline-flex items-center gap-1 text-slate-600 bg-slate-100 hover:bg-slate-200"
+              @click="startEdit(c)"
+            >
+              <Icon name="edit" :size="13" />
+              {{ editingId === c.id ? 'ปิด' : 'แก้ไข' }}
+            </button>
+            <button
               class="text-xs font-bold px-2 py-1 rounded-lg"
               :class="c.is_active ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'text-slate-400 bg-slate-100 hover:bg-slate-200'"
               @click="toggleActive(c)"
             >
               {{ c.is_active ? 'ใช้งานอยู่' : 'ปิดใช้งาน' }}
             </button>
+          </div>
+        </div>
+
+        <!-- ── EDIT ─────────────────────────────────────────────────────── -->
+        <div
+          v-if="editingId === c.id && editForm"
+          data-test="edit-panel"
+          class="mt-4 pt-4 border-t border-slate-200"
+        >
+          <div class="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label class="text-xs font-bold text-slate-500">ชื่อบริษัท</label>
+              <input
+                v-model="editForm.name"
+                data-test="edit-name"
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+            </div>
+
+            <div>
+              <label class="text-xs font-bold text-slate-500">ลิงก์บริษัท (slug)</label>
+              <input
+                v-model="editForm.slug"
+                data-test="edit-slug"
+                class="mt-1 w-full px-3 py-2 rounded-lg border text-sm"
+                :class="slugChanged ? 'border-amber-300 bg-amber-50' : 'border-slate-200'"
+              />
+              <!--
+                Shown the MOMENT the field changes, not after saving. `slug` is
+                the recruit/login link and the default invite code, so every
+                link already handed out stops working — and nothing errors, so
+                the first sign of trouble is somebody who cannot sign up.
+              -->
+              <p
+                v-if="slugChanged"
+                data-test="slug-warning"
+                class="mt-1 text-xs text-amber-700 font-bold"
+              >
+                ลิงก์สมัคร / เข้าสู่ระบบ / QR ที่แจกไปแล้วจะใช้ไม่ได้ทันที และรหัสเชิญเริ่มต้นจะเปลี่ยนตาม
+              </p>
+              <p v-else class="mt-1 text-xs text-slate-400">
+                ใช้เป็นลิงก์สมัครและเข้าสู่ระบบของบริษัทนี้
+              </p>
+            </div>
+
+            <div class="sm:col-span-2 p-3 rounded-lg bg-slate-50 border border-slate-200">
+              <p class="text-xs font-bold text-slate-600">บัญชีที่บริษัทนี้ใช้รับเงินจากลูกค้า</p>
+              <!--
+                RECEIVES, stated on the label. The mirror-image account — the
+                one WE transfer out to a คู่ค้า — lives on the suppliers table
+                and its own screen. Two "bank account" fields pointing in
+                opposite directions is how a transfer lands in the wrong place.
+              -->
+              <p class="text-xs text-slate-400 mt-0.5">
+                แสดงบนหน้าชำระเงินของลูกค้า · คนละบัญชีกับบัญชีที่เราโอนคืนให้คู่ค้า
+              </p>
+
+              <div class="grid gap-3 sm:grid-cols-2 mt-2">
+                <input
+                  v-model="editForm.payment_promptpay_id"
+                  data-test="edit-promptpay"
+                  placeholder="พร้อมเพย์ (เบอร์โทร / เลขผู้เสียภาษี)"
+                  class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+                <input
+                  v-model="editForm.payment_bank_name"
+                  data-test="edit-bank-name"
+                  placeholder="ธนาคาร"
+                  class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+                <input
+                  v-model="editForm.payment_bank_account_number"
+                  data-test="edit-bank-number"
+                  placeholder="เลขที่บัญชี"
+                  class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+                <input
+                  v-model="editForm.payment_bank_account_name"
+                  data-test="edit-bank-holder"
+                  placeholder="ชื่อบัญชี"
+                  class="px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+              </div>
+
+              <!-- The same four columns are editable on ช่องทางรับชำระเงิน,
+                   which edits the ACTIVE company only. Saying so beats letting
+                   somebody find two forms and wonder which one counts. -->
+              <p class="mt-2 text-xs text-slate-400">
+                แก้ได้จากหน้า <RouterLink :to="{ name: 'payment-gateways' }" class="font-bold text-brand-600 hover:underline">ช่องทางรับชำระเงิน</RouterLink> เช่นกัน — ที่นั่นแก้ได้เฉพาะบริษัทที่เลือกอยู่
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-4 flex items-center gap-2">
+            <button
+              type="button"
+              data-test="save-edit"
+              :disabled="savingEdit || !editForm.name.trim() || !editForm.slug.trim()"
+              class="btn-primary"
+              @click="submitEdit(c)"
+            >
+              {{ savingEdit ? 'กำลังบันทึก...' : 'บันทึก' }}
+            </button>
+            <button type="button" class="btn-secondary" @click="startEdit(c)">ยกเลิก</button>
           </div>
         </div>
 
