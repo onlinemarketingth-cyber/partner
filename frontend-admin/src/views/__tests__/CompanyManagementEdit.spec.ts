@@ -16,6 +16,15 @@
  * So the warning and the confirm are asserted here rather than trusted to
  * survive the next tidy-up of this screen. A silent slug edit is the kind of
  * damage that is expensive precisely because it is quiet.
+ *
+ * ── THE DIALOG IS THE REAL ONE ──
+ *
+ * These tests mount ConfirmDialog rather than stubbing it, and click its
+ * actual buttons. That is deliberate: the first cut of this screen used
+ * `window.confirm` and the owner sent back a screenshot of an unstyled OS box
+ * titled "admin.partner.syncvision.io says". Stubbing the dialog would let
+ * exactly that regression back in while every test here still passed — the
+ * assertions would be about a component that is not on the screen.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -48,6 +57,7 @@ const STUBS = {
   LoadingSkeleton: true,
   PlatformScopeBadge: true,
   RouterLink: { template: '<a><slot /></a>' },
+  // ConfirmDialog is NOT stubbed — see the file docblock.
 }
 
 const COMPANY = {
@@ -81,8 +91,14 @@ async function openEditor() {
 beforeEach(() => {
   get.mockReset()
   put.mockReset()
-  vi.restoreAllMocks()
 })
+
+/** The dialog's own buttons, in the order it renders them: cancel, confirm. */
+function dialogButtons(wrapper: ReturnType<typeof mountView>) {
+  const dialog = wrapper.find('.fixed.inset-0')
+
+  return dialog.exists() ? dialog.findAll('button') : []
+}
 
 describe('CompanyManagementView — แก้ไขบริษัท', () => {
   it('opens prefilled with what the company already is', async () => {
@@ -98,10 +114,9 @@ describe('CompanyManagementView — แก้ไขบริษัท', () => {
       .toBe('0812345678')
   })
 
-  it('saves a rename without asking anything', async () => {
-    // Renaming is safe and ordinary. A confirm on every save teaches people
-    // to dismiss confirms, which is what makes the slug one worthless.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  it('saves a rename with no dialog at all', async () => {
+    // Renaming is safe and ordinary. A confirm on every save teaches people to
+    // dismiss confirms, which is what would make the slug one worthless.
     const wrapper = await openEditor()
     put.mockResolvedValue({ data: COMPANY })
 
@@ -109,63 +124,102 @@ describe('CompanyManagementView — แก้ไขบริษัท', () => {
     await wrapper.find('[data-test="save-edit"]').trigger('click')
     await flushPromises()
 
-    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(dialogButtons(wrapper)).toHaveLength(0)
     expect(put).toHaveBeenCalledWith('/companies/3', expect.objectContaining({
       name: 'Thai Life Insurance PCL',
       slug: 'thai-life-insurance',
     }))
   })
 
-  it('warns the moment the slug is touched, before anything is saved', async () => {
+  it('warns inline the moment the slug is touched, before anything is saved', async () => {
     /*
-     * Not after saving, and not in the confirm alone: somebody who reads the
+     * Not after saving, and not in the dialog alone: somebody who reads the
      * warning while typing can still change their mind for free.
      */
     const wrapper = await openEditor()
 
     expect(wrapper.find('[data-test="slug-warning"]').exists()).toBe(false)
 
-    await wrapper.find('[data-test="edit-slug"]').setValue('thailife')
+    await wrapper.find('[data-test="edit-slug"]').setValue('sws')
 
-    expect(wrapper.find('[data-test="slug-warning"]').text())
-      .toContain('ใช้ไม่ได้ทันที')
+    expect(wrapper.find('[data-test="slug-warning"]').text()).toContain('ใช้ไม่ได้ทันที')
   })
 
-  it('asks before changing the slug, and does not save when refused', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('opens the in-app dialog rather than a browser alert', async () => {
+    /*
+     * THE REGRESSION THIS FILE EXISTS FOR, after the native one shipped.
+     * `window.confirm` also BLOCKS the page and cannot show a busy state, so
+     * a slow save leaves the screen looking frozen.
+     */
+    const confirmSpy = vi.spyOn(window, 'confirm')
     const wrapper = await openEditor()
 
-    await wrapper.find('[data-test="edit-slug"]').setValue('thailife')
+    await wrapper.find('[data-test="edit-slug"]').setValue('sws')
     await wrapper.find('[data-test="save-edit"]').trigger('click')
     await flushPromises()
 
-    expect(confirmSpy).toHaveBeenCalled()
-    // The refusal has to actually stop the write. A confirm whose answer is
-    // ignored is worse than no confirm: it reads as a safety net.
-    expect(put).not.toHaveBeenCalled()
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(dialogButtons(wrapper)).toHaveLength(2)
+
+    confirmSpy.mockRestore()
   })
 
-  it('names both slugs in the question so the choice is legible', async () => {
-    // "Are you sure?" is not a question anybody can answer. The old link and
-    // the new one, spelled out, is.
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  it('does not save until the dialog is confirmed', async () => {
+    const wrapper = await openEditor()
+    put.mockResolvedValue({ data: COMPANY })
+
+    await wrapper.find('[data-test="edit-slug"]').setValue('sws')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    // Dialog up, nothing written yet.
+    expect(put).not.toHaveBeenCalled()
+
+    await dialogButtons(wrapper)[1]?.trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/companies/3', expect.objectContaining({ slug: 'sws' }))
+  })
+
+  it('writes nothing when the dialog is dismissed, and keeps the edit open', async () => {
+    // "แก้ไขต่อ" has to mean what it says: the typed slug is still there to
+    // correct, not thrown away along with the rest of the form.
     const wrapper = await openEditor()
 
-    await wrapper.find('[data-test="edit-slug"]').setValue('thailife')
+    await wrapper.find('[data-test="edit-slug"]').setValue('sws')
     await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
 
-    const question = confirmSpy.mock.calls[0]?.[0] as string
-    expect(question).toContain('thai-life-insurance')
-    expect(question).toContain('thailife')
+    await dialogButtons(wrapper)[0]?.trigger('click')
+    await flushPromises()
+
+    expect(put).not.toHaveBeenCalled()
+    expect(dialogButtons(wrapper)).toHaveLength(0)
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(true)
+    expect((wrapper.find('[data-test="edit-slug"]').element as HTMLInputElement).value).toBe('sws')
+  })
+
+  it('names both slugs and the consequences in the dialog', async () => {
+    // "Are you sure?" is not a question anybody can answer. The old link, the
+    // new one, and what breaks, is.
+    const wrapper = await openEditor()
+
+    await wrapper.find('[data-test="edit-slug"]').setValue('sws')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    const body = wrapper.find('.fixed.inset-0').text()
+    expect(body).toContain('thai-life-insurance')
+    expect(body).toContain('sws')
+    expect(body).toContain('รหัสเชิญ')
   })
 
   it('sends a cleared bank field as null rather than an empty string', async () => {
     /*
      * '' would be STORED, and the public payment page would then treat the
-     * company as having a bank account configured and print a blank line
-     * under it. Null means "not recorded" and the page omits the line.
+     * company as having a bank account configured and print a blank line under
+     * it. Null means "not recorded" and the page omits the line.
      */
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const wrapper = await openEditor()
     put.mockResolvedValue({ data: COMPANY })
 
@@ -186,7 +240,6 @@ describe('CompanyManagementView — แก้ไขบริษัท', () => {
      * doors onto one column on one screen — exactly what moving the write in
      * 2026-09-12 was meant to end.
      */
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const wrapper = await openEditor()
     put.mockResolvedValue({ data: COMPANY })
 
@@ -200,14 +253,18 @@ describe('CompanyManagementView — แก้ไขบริษัท', () => {
   it('shows the server refusal in full rather than a bare status code', async () => {
     // A duplicate slug is the failure that will actually happen here, and the
     // server's sentence names the field. "แก้ไขไม่สำเร็จ (422)" does not.
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const wrapper = await openEditor()
     put.mockRejectedValue(new ApiErrorStub('ลิงก์บริษัทนี้ถูกใช้ไปแล้ว'))
 
     await wrapper.find('[data-test="edit-slug"]').setValue('aia')
     await wrapper.find('[data-test="save-edit"]').trigger('click')
     await flushPromises()
+    await dialogButtons(wrapper)[1]?.trigger('click')
+    await flushPromises()
 
+    // And the dialog is out of the way, rather than covering the message it
+    // caused.
+    expect(dialogButtons(wrapper)).toHaveLength(0)
     expect(wrapper.text()).toContain('ลิงก์บริษัทนี้ถูกใช้ไปแล้ว')
   })
 
@@ -235,9 +292,9 @@ describe('CompanyManagementView — แก้ไขบริษัท', () => {
     /*
      * Guarded again here because this change ADDS a form to the screen the
      * owner rejected a supplier panel from, and "while we are editing the
-     * company anyway" is exactly the thought that would put it back. A
-     * company is a tenant we pay commission to; a supplier is a counterparty
-     * we buy goods from. They are not two halves of one form.
+     * company anyway" is exactly the thought that would put it back. A company
+     * is a tenant we pay commission to; a supplier is a counterparty we buy
+     * goods from. They are not two halves of one form.
      */
     const wrapper = await openEditor()
 

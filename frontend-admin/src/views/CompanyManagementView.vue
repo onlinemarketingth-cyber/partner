@@ -28,6 +28,7 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 // TASK-209 P4 — this screen ignores the header company scope on purpose.
 import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
@@ -221,15 +222,61 @@ const slugChanged = computed(
   () => editForm.value !== null && editForm.value.slug.trim() !== originalSlug.value,
 )
 
-async function submitEdit(company: CompanyItem) {
+/**
+ * The confirm is a ConfirmDialog, NOT window.confirm.
+ *
+ * 2026-09-17 — shipped with the native one and the owner sent back a
+ * screenshot of it: an unstyled OS box titled "admin.partner.syncvision.io
+ * says", sitting on top of the app it is supposedly part of. ConfirmDialog
+ * exists precisely for this ("Replace native window.confirm() ทั่วระบบ",
+ * TASK-066, after the same complaint about the cert-grant action) and I did
+ * not reach for it.
+ *
+ * It is not only cosmetic. `window.confirm` blocks the whole page — nothing
+ * else renders or responds while it is up — and it cannot show a busy state,
+ * so a slow save after OK leaves the screen looking frozen with no
+ * explanation.
+ *
+ * Holding the COMPANY rather than a boolean: the dialog needs to know which
+ * row it is about in order to save it, and a separate `showDialog` flag next
+ * to a separate `target` is two things that can disagree.
+ */
+const pendingSlugChange = ref<CompanyItem | null>(null)
+
+/** What the dialog says. Built here so the wording lives beside the rule. */
+const slugChangeBody = computed(() => {
+  const form = editForm.value
+  if (!form) return ''
+
+  return `ลิงก์บริษัทจะเปลี่ยนจาก /${originalSlug.value} เป็น /${form.slug.trim()}\n\n`
+    + 'สิ่งที่จะใช้ไม่ได้ทันที:\n'
+    + '· ลิงก์สมัครที่แจกให้ตัวแทนไปแล้ว\n'
+    + '· ลิงก์เข้าสู่ระบบและ QR ที่พิมพ์ไปแล้ว\n'
+    + '· รหัสเชิญเริ่มต้นของบริษัท (จะเปลี่ยนตามลิงก์ใหม่)\n\n'
+    + 'ระบบจะไม่แจ้งเตือนอะไรเลยเมื่อมีคนกดลิงก์เก่า — เขาจะสมัครไม่ได้เฉย ๆ'
+})
+
+/**
+ * Pressing บันทึก. Asks first only when there is something to ask about.
+ *
+ * A confirm on every save teaches people to dismiss confirms, which is what
+ * would make the slug one worthless on the day it matters.
+ */
+function submitEdit(company: CompanyItem) {
+  if (!editForm.value) return
+
+  if (slugChanged.value) {
+    pendingSlugChange.value = company
+
+    return
+  }
+
+  void saveEdit(company)
+}
+
+async function saveEdit(company: CompanyItem) {
   const form = editForm.value
   if (!form) return
-
-  if (slugChanged.value && !window.confirm(
-    `เปลี่ยนลิงก์บริษัทจาก /${originalSlug.value} เป็น /${form.slug.trim()}\n\n`
-    + 'ลิงก์สมัคร ลิงก์เข้าสู่ระบบ และ QR ที่แจกไปแล้วทั้งหมดจะใช้ไม่ได้ทันที '
-    + 'และรหัสเชิญเริ่มต้นของบริษัทจะเปลี่ยนตามไปด้วย\n\nยืนยันหรือไม่',
-  )) return
 
   savingEdit.value = true
   errorMessage.value = ''
@@ -254,6 +301,9 @@ async function submitEdit(company: CompanyItem) {
     errorMessage.value = e instanceof ApiError ? `แก้ไขไม่สำเร็จ: ${e.message}` : 'แก้ไขไม่สำเร็จ'
   } finally {
     savingEdit.value = false
+    // Closed whichever way it went. Left open on a failure, the dialog would
+    // cover the error message it caused.
+    pendingSlugChange.value = null
   }
 }
 
@@ -506,5 +556,27 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
         </div>
       </TransitionGroup>
     </template>
+    <!--
+      The slug confirm. `warning` rather than `danger`: nothing is destroyed,
+      a working link stops working — which is amber, not red, and the
+      difference is what keeps red meaningful elsewhere.
+
+      The buttons say what they DO rather than ยืนยัน/ยกเลิก, following the
+      precedent ConfirmDialog's own docblock sets: "ยืนยัน" leaves somebody
+      guessing which thing they are confirming, the change or the staying.
+    -->
+    <ConfirmDialog
+      :show="pendingSlugChange !== null"
+      variant="warning"
+      size="md"
+      title="เปลี่ยนลิงก์บริษัท"
+      :body="slugChangeBody"
+      :busy="savingEdit"
+      confirm-label="เปลี่ยนลิงก์และบันทึก"
+      cancel-label="แก้ไขต่อ"
+      @confirm="pendingSlugChange && saveEdit(pendingSlugChange)"
+      @cancel="pendingSlugChange = null"
+      @update:show="(v: boolean) => { if (!v) pendingSlugChange = null }"
+    />
   </main>
 </template>
