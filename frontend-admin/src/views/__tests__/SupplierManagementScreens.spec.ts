@@ -274,6 +274,125 @@ describe('SupplierManagementView — จัดการคู่ค้า', () =
     }))
   })
 
+  // ── Editing from the list ────────────────────────────────────────
+
+  it('offers แก้ไข on every row', async () => {
+    /*
+     * 2026-09-17 — owner: "ทำส่วน edit ให้ครบทุกรายการ".
+     *
+     * Editing was already possible on the detail page, and the only way in
+     * was to notice that the supplier's NAME is a link. On a screen whose job
+     * is "what is not set up yet", the fix belongs on the row that complains.
+     */
+    mockList([SUPPLIER, { ...SUPPLIER, id: 8, name: 'ร้าน ข.' }])
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-test="edit-supplier"]')).toHaveLength(2)
+  })
+
+  it('opens the editor prefilled, in stored units rendered as human ones', async () => {
+    mockList()
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(true)
+    expect((wrapper.find('[data-test="supplier-name"]').element as HTMLInputElement).value)
+      .toBe('คลินิกความงาม ก.')
+    // 3000 basis points stored, 30 shown — the conversion running backwards.
+    expect((wrapper.find('[data-test="gp-value"]').element as HTMLInputElement).value).toBe('30')
+  })
+
+  it('saves an edit through PUT and keeps the units right', async () => {
+    mockList()
+    put.mockResolvedValue({ data: SUPPLIER })
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="gp-value"]').setValue('25')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/suppliers/7', expect.objectContaining({
+      name: 'คลินิกความงาม ก.',
+      gp_value: 2500,
+    }))
+  })
+
+  it('never sends the read-only figures back', async () => {
+    /*
+     * The row carries balances and counts alongside the deal terms. The
+     * server rejects them field by field, and dropping them silently in the
+     * component is how a form ends up saving a shape nobody meant — so the
+     * payload is built field by field and asserted here.
+     */
+    mockList()
+    put.mockResolvedValue({ data: SUPPLIER })
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    const payload = put.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('payable_satang')
+    expect(payload).not.toHaveProperty('products_count')
+    expect(payload).not.toHaveProperty('terms_complete')
+    expect(payload).not.toHaveProperty('id')
+  })
+
+  it('puts an edit error under its own field too', async () => {
+    // Same reasoning as the create panel: the GP pairing message names WHICH
+    // half is missing, and a banner throws that away.
+    mockList()
+    const err = new ApiErrorStub('failed')
+    err.body = { errors: { gp_value: ['ต้องระบุทั้งรูปแบบ GP และค่า GP คู่กัน'] } }
+    put.mockRejectedValue(err)
+
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="gp-value-error"]').text()).toContain('คู่กัน')
+  })
+
+  it('closes the create panel when an edit opens, and the reverse', async () => {
+    // Two open forms on one screen is a way to fill in the wrong one and
+    // wonder why the row did not change.
+    mockList()
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="add-supplier"]').trigger('click')
+    expect(wrapper.find('[data-test="create-panel"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    expect(wrapper.find('[data-test="create-panel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="add-supplier"]').trigger('click')
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(false)
+  })
+
+  it('still points at the detail page for what the list cannot show', async () => {
+    // Products, settlements and logins are tabs, not fields. The editor says
+    // so rather than letting somebody hunt for them in the form.
+    mockList()
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+
+    expect(wrapper.find('[data-test="open-detail"]').exists()).toBe(true)
+  })
+
   it('puts a field error under its own field rather than in a banner', async () => {
     // "ต้องระบุทั้งรูปแบบ GP และค่า GP คู่กัน" is useless at the top of a
     // four-panel form and exact underneath the box it is about.

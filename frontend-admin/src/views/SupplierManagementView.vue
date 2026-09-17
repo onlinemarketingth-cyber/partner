@@ -89,7 +89,95 @@ async function load(): Promise<void> {
   }
 }
 
+// ── Edit one supplier, from the list ──
+/**
+ * 2026-09-17 — owner: "การจัดการคู่ค้า ทำส่วน edit ให้ครบทุกรายการ".
+ *
+ * Every row got a แก้ไข button. Editing WAS possible — the detail page's
+ * ภาพรวม tab has had the form since day one — but the only way in was to
+ * notice that the supplier's name is a link. On a screen whose whole job is
+ * "who are we behind with and what is not set up yet", the fix for what the
+ * ยังไม่ได้ตั้ง column is complaining about should be on the row that
+ * complains.
+ *
+ * The SAME SupplierForm renders here, on the detail page and in the create
+ * panel above. Three copies of a form carrying the GP unit conversion is
+ * three chances for one of them to send 30 where 3000 was meant.
+ */
+const editingId = ref<number | null>(null)
+const editDraft = ref<SupplierFormValue | null>(null)
+const savingEdit = ref(false)
+const editErrors = ref<Record<string, string[]>>({})
+
+function startEdit(row: SupplierRow): void {
+  if (editingId.value === row.id) {
+    editingId.value = null
+    editDraft.value = null
+
+    return
+  }
+
+  // Closing the create panel: two open forms on one screen is a way to fill
+  // in the wrong one and wonder why the row did not change.
+  creating.value = false
+  editingId.value = row.id
+  editErrors.value = {}
+
+  /*
+   * Copied field by field rather than spread from the row, because the row
+   * carries read-only figures too (payable_satang, products_count,
+   * terms_complete…). Sending those back would be rejected field by field,
+   * and dropping them silently in the component is how a form ends up saving
+   * a shape nobody meant.
+   */
+  editDraft.value = {
+    name: row.name,
+    legal_name: row.legal_name,
+    tax_id: row.tax_id,
+    contact_name: row.contact_name,
+    contact_phone: row.contact_phone,
+    contact_email: row.contact_email,
+    address: row.address,
+    is_active: row.is_active,
+    gp_mode: row.gp_mode,
+    gp_value: row.gp_value,
+    release_trigger: row.release_trigger,
+    min_withdrawal_satang: row.min_withdrawal_satang,
+    wht_rate: row.wht_rate,
+    payout_bank_name: row.payout_bank_name,
+    payout_bank_account_number: row.payout_bank_account_number,
+    payout_bank_account_name: row.payout_bank_account_name,
+  }
+}
+
+async function saveEdit(row: SupplierRow): Promise<void> {
+  if (!editDraft.value) return
+
+  savingEdit.value = true
+  editErrors.value = {}
+  errorMessage.value = ''
+  try {
+    await api.put(`/suppliers/${row.id}`, editDraft.value)
+    editingId.value = null
+    editDraft.value = null
+    await load()
+  } catch (e) {
+    const fields = fieldErrors(e)
+    if (fields) {
+      editErrors.value = fields
+    } else {
+      errorMessage.value = e instanceof ApiError ? e.message : 'บันทึกไม่สำเร็จ'
+    }
+  } finally {
+    savingEdit.value = false
+  }
+}
+
 function startCreate(): void {
+  // …and the same in reverse.
+  editingId.value = null
+  editDraft.value = null
+
   draft.value = emptySupplier()
   formErrors.value = {}
   creating.value = true
@@ -248,13 +336,14 @@ onMounted(load)
               <th class="px-4 py-3 text-right">สินค้า</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">ยอดค้างจ่าย</th>
               <th class="px-4 py-3">สถานะการตั้งค่า</th>
+              <th class="px-4 py-3"></th>
             </tr>
           </thead>
           <tbody>
+            <template v-for="row in suppliers" :key="row.id">
             <tr
-              v-for="row in suppliers"
-              :key="row.id"
               class="border-b border-slate-100 last:border-0 hover:bg-slate-50/70 align-top"
+              :class="editingId === row.id ? 'bg-slate-50/70' : ''"
             >
               <td class="px-4 py-3">
                 <RouterLink
@@ -289,7 +378,53 @@ onMounted(load)
                 </span>
                 <span v-else class="text-emerald-700">พร้อมจ่าย</span>
               </td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">
+                <button
+                  type="button"
+                  data-test="edit-supplier"
+                  class="text-xs font-bold px-2 py-1 rounded-lg inline-flex items-center gap-1 text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
+                  @click="startEdit(row)"
+                >
+                  <Icon name="edit" :size="13" />
+                  {{ editingId === row.id ? 'ปิด' : 'แก้ไข' }}
+                </button>
+              </td>
             </tr>
+
+            <!--
+              The form, in a row of its own spanning the table.
+
+              Full width rather than a popover because it is four panels of
+              deal terms, and the thing somebody opens it to fix is usually
+              the ยังไม่ได้ตั้ง that the row two lines up is complaining about
+              — which should stay on screen while they fix it.
+            -->
+            <tr v-if="editingId === row.id && editDraft" :key="`edit-${row.id}`" class="border-b border-slate-100">
+              <td colspan="7" class="px-4 py-5 bg-slate-50/60" data-test="edit-panel">
+                <SupplierForm v-model="editDraft" :errors="editErrors" />
+
+                <div class="mt-5 flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-test="save-edit"
+                    :disabled="savingEdit || !editDraft.name.trim()"
+                    class="min-h-[40px] px-4 rounded-lg bg-brand-600 text-white text-sm font-bold hover:bg-brand-700 disabled:opacity-60 transition"
+                    @click="saveEdit(row)"
+                  >{{ savingEdit ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข' }}</button>
+                  <button
+                    type="button"
+                    class="min-h-[40px] px-4 rounded-lg border border-slate-300 text-slate-600 text-sm font-bold hover:bg-slate-50 transition"
+                    @click="startEdit(row)"
+                  >ยกเลิก</button>
+                  <RouterLink
+                    :to="{ name: 'supplier-detail', params: { id: row.id } }"
+                    class="text-xs font-bold text-brand-700 hover:underline ml-2"
+                    data-test="open-detail"
+                  >เปิดหน้ารายละเอียด — สินค้า · รายการตั้งหนี้ · บัญชีผู้ใช้</RouterLink>
+                </div>
+              </td>
+            </tr>
+            </template>
           </tbody>
         </table>
       </div>
