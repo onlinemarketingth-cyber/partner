@@ -9,6 +9,7 @@ use App\Enums\WithdrawalStatus;
 use App\Models\Company;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
 use App\Models\User;
@@ -38,7 +39,7 @@ class SupplierPayoutTest extends TestCase
 {
     use RefreshDatabase;
 
-    private Company $supplier;
+    private Supplier $supplier;
 
     private Company $seller;
 
@@ -46,17 +47,16 @@ class SupplierPayoutTest extends TestCase
     {
         parent::setUp();
 
-        $this->supplier = Company::factory()->create([
-            'is_supplier' => true,
-            'supplier_gp_mode' => SupplierGpMode::PercentOfSale->value,
-            'supplier_gp_value' => 3000,
-            'supplier_release_trigger' => 'on_payment',
-            // 2026-09-17 — the PAYOUT account, not the one this company takes
-            // customer money in through. See the migration for why they are two
-            // columns rather than one.
-            'supplier_payout_bank_name' => 'ธนาคารกสิกรไทย',
-            'supplier_payout_bank_account_number' => '123-4-56789-0',
-            'supplier_payout_bank_account_name' => 'บริษัท ซัพพลายเออร์ จำกัด',
+        $this->supplier = Supplier::factory()->create([
+            'gp_mode' => SupplierGpMode::PercentOfSale->value,
+            'gp_value' => 3000,
+            'release_trigger' => 'on_payment',
+            // The account we TRANSFER INTO. Named payout_* precisely because
+            // companies.payment_bank_* points the other way — see the
+            // suppliers migration.
+            'payout_bank_name' => 'ธนาคารกสิกรไทย',
+            'payout_bank_account_number' => '123-4-56789-0',
+            'payout_bank_account_name' => 'บริษัท ซัพพลายเออร์ จำกัด',
         ]);
 
         $this->seller = Company::factory()->create();
@@ -71,7 +71,7 @@ class SupplierPayoutTest extends TestCase
     {
         $product = Product::factory()->create([
             'company_id' => null,
-            'supplier_company_id' => $this->supplier->id,
+            'supplier_id' => $this->supplier->id,
         ]);
 
         $order = Order::factory()->create([
@@ -81,7 +81,7 @@ class SupplierPayoutTest extends TestCase
         ]);
 
         return SupplierSettlementLedger::create([
-            'supplier_company_id' => $this->supplier->id,
+            'supplier_id' => $this->supplier->id,
             'company_id' => $this->seller->id,
             'order_id' => $order->id,
             'product_id' => $product->id,
@@ -297,7 +297,7 @@ class SupplierPayoutTest extends TestCase
         $this->ledgerRow(60000);
         $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
 
-        $this->supplier->forceFill(['supplier_payout_bank_account_number' => '999-9-99999-9'])->save();
+        $this->supplier->forceFill(['payout_bank_account_number' => '999-9-99999-9'])->save();
 
         $this->assertSame('123-4-56789-0', $request->fresh()->bank_account_number);
     }
@@ -319,7 +319,7 @@ class SupplierPayoutTest extends TestCase
          * let ourselves pay a debt we have decided to pay is not. Same
          * asymmetry the agent flow has.
          */
-        $this->supplier->forceFill(['supplier_min_withdrawal_satang' => 100000])->save();
+        $this->supplier->forceFill(['min_withdrawal_satang' => 100000])->save();
         $this->ledgerRow(50000);
 
         $paidAnyway = $this->service()->open($this->supplier->fresh(), $this->admin(), WithdrawalSource::CompanyPayout);
@@ -359,10 +359,10 @@ class SupplierPayoutTest extends TestCase
 
     public function test_one_suppliers_rows_never_reach_another_suppliers_payout(): void
     {
-        $other = Company::factory()->create(['is_supplier' => true]);
+        $other = Supplier::factory()->withTerms()->create();
         $this->ledgerRow(60000);
 
         $this->assertSame(0, $this->service()->balanceFor($other)['payable_satang']);
-        $this->assertSame(0, SupplierWithdrawalRequest::where('supplier_company_id', $other->id)->count());
+        $this->assertSame(0, SupplierWithdrawalRequest::where('supplier_id', $other->id)->count());
     }
 }

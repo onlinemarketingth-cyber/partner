@@ -51,11 +51,23 @@ enum UserRole: string
      *
      * A supplier looks the other way. The orders they care about belong to the
      * companies that SOLD their product — other tenants — and the only thing
-     * tying those orders to them is `products.supplier_company_id`. Every
+     * tying those orders to them is `products.supplier_id`. Every
      * supplier-facing query therefore crosses TenantScope deliberately and
      * filters on that column instead. TenantScope is not a safety net here;
      * getting the filter right by hand IS the safety, the same way
      * VoucherRedemptionService already has to do it.
+     *
+     * ── 2026-09-17: AND IT HAS NO company_id AT ALL ──
+     *
+     * This role carries `supplier_id` and a NULL `company_id`, because a
+     * supplier is not one of our tenants — it is a counterparty with its own
+     * table (App\Models\Supplier). The first cut pointed `company_id` at a
+     * `companies` row flagged `is_supplier`, which made that one column mean
+     * "my tenant" for four roles and "the supplier I work for" for this one.
+     *
+     * TenantScope was changed at the same time to FAIL CLOSED on a NULL
+     * company_id: it used to skip filtering entirely, which for this role
+     * would have meant seeing every tenant's rows rather than none.
      *
      * That also means a mistake fails in an unusually bad direction: a missing
      * filter does not show a supplier too little, it shows them another

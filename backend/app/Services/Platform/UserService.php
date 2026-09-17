@@ -3,6 +3,7 @@
 namespace App\Services\Platform;
 
 use App\Enums\CommissionPlanType;
+use App\Enums\UserRole;
 use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\Commission\MatrixCommissionService;
@@ -53,7 +54,23 @@ class UserService
      */
     public function create(array $data, User $actor): User
     {
-        $data['company_id'] = $actor->isSuperAdmin() ? $data['company_id'] : $actor->company_id;
+        /*
+         * 2026-09-17 — a supplier's login belongs to a supplier, not a tenant.
+         *
+         * Without this branch the line below would have forced `company_id` on
+         * a Company Partner, which is the exact conflation the whole supplier
+         * rework exists to undo: one column meaning "the tenant this person
+         * works for" in fifty places and "the supplier this person works for"
+         * in one. StoreUserRequest prohibits `company_id` on this path and
+         * requires `supplier_id`; this keeps the service honest about it
+         * rather than trusting every future caller to pass the right shape.
+         */
+        if (($data['role'] ?? null) === UserRole::CompanyPartner->value) {
+            $data['company_id'] = null;
+        } else {
+            $data['company_id'] = $actor->isSuperAdmin() ? $data['company_id'] : $actor->company_id;
+            $data['supplier_id'] = null;
+        }
 
         return DB::transaction(function () use ($data, $actor) {
             $user = User::create($data);

@@ -41,11 +41,27 @@ class SharedOrTenantScope extends TenantScope
             return;
         }
 
+        $column = $model->getTable().'.company_id';
+
+        /*
+         * 2026-09-17 — FAIL CLOSED, the same hole TenantScope had.
+         *
+         * This used to `return` — no filter — for an authenticated
+         * non-super-admin with no company_id, which handed them every
+         * tenant's OWNED rows as well as the shared ones. Company Partner is
+         * exactly that shape by design (supplier_id, no company_id).
+         *
+         * The narrowing here is one step gentler than TenantScope's `1 = 0`,
+         * and deliberately so: rows with a NULL company_id are platform-wide
+         * by definition, so somebody with no tenant should see those and
+         * nothing else. "Belongs to nobody" is a real answer to "does this
+         * belong to me"; "belongs to company 5" is not.
+         */
         if (! isset($user->company_id)) {
+            $builder->whereNull($column);
+
             return;
         }
-
-        $column = $model->getTable().'.company_id';
 
         $builder->where(function (Builder $query) use ($column, $user) {
             $query->where($column, $user->company_id)

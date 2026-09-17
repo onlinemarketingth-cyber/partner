@@ -9,6 +9,7 @@ use App\Http\Requests\Academy\UpdateModuleLessonRequest;
 use App\Http\Resources\ModuleLessonResource;
 use App\Models\Module;
 use App\Models\ModuleLesson;
+use App\Models\User;
 use App\Services\Academy\LessonAccessGate;
 use App\Services\Academy\ModuleLessonService;
 use App\Services\Academy\ModuleOrderService;
@@ -16,6 +17,7 @@ use App\Support\Media\RangeFileResponder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 
 // ADR-009 — no dedicated Policy: reuses ModulePolicy exactly like
@@ -161,6 +163,93 @@ class ModuleLessonController extends Controller
      * publicly reachable to make seeking easy would be a §5 rule 6
      * violation — see RangeFileResponder's class docblock.
      */
+    /**
+     * GET /module-lessons/{moduleLesson}/inline-stream?u=…&expires=…&signature=…
+     *
+     * The same bytes as stream() above, reachable by a `<video>` element.
+     *
+     * ── WHY A SECOND ROUTE AND NOT A FLAG ON THE FIRST ──
+     *
+     * stream() is protected by a header. A media element cannot send one —
+     * not a cookie either, since the agent portal moved to bearer tokens
+     * (ADR-039) — so an authenticated stream is unreachable from `<video
+     * src>` no matter what the client does. Images and PDFs are fetched by
+     * JS and were fixed on 2026-09-04 by sending the header by hand; video
+     * cannot be, because the whole point is that the BROWSER issues the
+     * ranged GETs (ADR-028 §2.5: seeking after downloading 200 MB is not
+     * seeking).
+     *
+     * So the proof of identity moves into the URL. `signed` middleware
+     * verifies our HMAC over every parameter — including `u` — before this
+     * method runs. Two routes rather than one switch, so that "this one is
+     * authenticated, that one is signed" is legible at the routes file
+     * instead of being a branch somebody has to read this method to find.
+     *
+     * ── THE MOST DANGEROUS LINE IN THIS FILE ──
+     *
+     * `Auth::setUser()` below sets the acting user FROM A URL PARAMETER.
+     * That is only safe because `signed` has already proved the URL — `u`
+     * included — was minted by us and has not been edited; change one digit
+     * and the signature fails before anything here executes. Remove the
+     * `signed` middleware and this line becomes "log in as whoever asks".
+     *
+     * It is done this way ON PURPOSE rather than passing $learner down by
+     * hand: setting the actor makes every downstream check — TenantScope,
+     * the Module policy, LessonAccessGate — behave EXACTLY as it does on the
+     * authenticated route. One authorization implementation, not two that
+     * can drift. The alternative was re-deriving each check for a caller
+     * with no actor, which is how a signed path quietly ends up more
+     * permissive than the one it mirrors.
+     */
+    public function inlineStream(
+        Request $request,
+        ModuleLesson $moduleLesson,
+        ModuleLessonService $service,
+        LessonAccessGate $access,
+    ): mixed {
+        /*
+         * A learner we cannot resolve is a refusal, never a fallback.
+         *
+         * LessonAccessGate::reasonFor() returns NULL — "not locked" — when
+         * handed a null learner, which is correct for its own callers and
+         * would be a hole here: an unresolvable `u` would sail past the lock
+         * check. So the absence is caught at the door.
+         *
+         * withoutGlobalScopes because there is no actor yet for TenantScope
+         * to scope by; the tenant check is the Module policy two lines down,
+         * which is where it belongs.
+         */
+        $learner = User::withoutGlobalScopes()->find($request->integer('u'));
+
+        abort_if($learner === null, 403);
+
+        Auth::setUser($learner);
+
+        abort_unless($moduleLesson->isUploadedFile(), 404);
+
+        // The same two gates stream() runs, in the same order, now that the
+        // actor is set: who may see this module at all, then whether this
+        // particular lesson is open to them yet (ADR-031 §2.2).
+        $this->authorize('view', $moduleLesson->module);
+
+        $lockReason = $access->reasonFor($moduleLesson, $learner);
+
+        abort_if($lockReason !== null, 403, $lockReason?->message() ?? '');
+
+        /*
+         * INLINE, always — unlike stream(), which serves an attachment for a
+         * downloadable file and only honours `?inline=1` as an override. This
+         * route exists solely to feed a player, and a Content-Disposition of
+         * attachment is what stops one playing.
+         */
+        return RangeFileResponder::respond(
+            Storage::disk($service->disk()),
+            $moduleLesson->content_ref,
+            $request,
+            RangeFileResponder::DISPOSITION_INLINE,
+        );
+    }
+
     public function stream(
         Request $request,
         ModuleLesson $moduleLesson,

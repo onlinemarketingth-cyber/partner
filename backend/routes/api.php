@@ -9,7 +9,6 @@ use App\Http\Controllers\Api\V1\AffiliateLinkRedirectController;
 use App\Http\Controllers\Api\V1\AgentApprovalController;
 use App\Http\Controllers\Api\V1\AgentCommissionSummaryController;
 use App\Http\Controllers\Api\V1\AgentDashboardMetricsController;
-use App\Http\Controllers\Api\V1\BusinessOverviewController;
 use App\Http\Controllers\Api\V1\AgentInviteLinkController;
 use App\Http\Controllers\Api\V1\AgentPromotionController;
 use App\Http\Controllers\Api\V1\AgentRankController;
@@ -22,6 +21,7 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BadgeController;
 use App\Http\Controllers\Api\V1\BinaryMatchingCycleController;
 use App\Http\Controllers\Api\V1\BrandController;
+use App\Http\Controllers\Api\V1\BusinessOverviewController;
 use App\Http\Controllers\Api\V1\CatalogBrandController;
 use App\Http\Controllers\Api\V1\CatalogCategoryController;
 use App\Http\Controllers\Api\V1\CatalogTrashController;
@@ -33,8 +33,8 @@ use App\Http\Controllers\Api\V1\ClientController;
 use App\Http\Controllers\Api\V1\ClientDocumentController;
 use App\Http\Controllers\Api\V1\CommissionBinarySettingController;
 use App\Http\Controllers\Api\V1\CommissionGenerationRuleController;
-use App\Http\Controllers\Api\V1\CommissionHouseAccountController;
 use App\Http\Controllers\Api\V1\CommissionGenerationSettingController;
+use App\Http\Controllers\Api\V1\CommissionHouseAccountController;
 use App\Http\Controllers\Api\V1\CommissionLedgerController;
 use App\Http\Controllers\Api\V1\CommissionMatrixLevelRateController;
 use App\Http\Controllers\Api\V1\CommissionMatrixSettingController;
@@ -101,6 +101,9 @@ use App\Http\Controllers\Api\V1\SalesMaterialShareLinkController;
 use App\Http\Controllers\Api\V1\SalesTeamOverviewController;
 use App\Http\Controllers\Api\V1\ShareLinkEmailController;
 use App\Http\Controllers\Api\V1\StorefrontBannerController;
+use App\Http\Controllers\Api\V1\SupplierController;
+use App\Http\Controllers\Api\V1\SupplierPayoutController;
+use App\Http\Controllers\Api\V1\SupplierPortalController;
 use App\Http\Controllers\Api\V1\TeamVisibilitySettingController;
 use App\Http\Controllers\Api\V1\ThemePresetController;
 use App\Http\Controllers\Api\V1\TrackedLinkController;
@@ -110,8 +113,6 @@ use App\Http\Controllers\Api\V1\UserCertificationController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserProfileController;
 use App\Http\Controllers\Api\V1\VideoProcessingSettingController;
-use App\Http\Controllers\Api\V1\SupplierPayoutController;
-use App\Http\Controllers\Api\V1\SupplierPortalController;
 use App\Http\Controllers\Api\V1\VoucherController;
 use App\Http\Controllers\Api\V1\XpLedgerController;
 use Illuminate\Support\Facades\Route;
@@ -354,6 +355,54 @@ Route::prefix('v1')->group(function () {
     Route::post('/public/product-shares/{token}/checkout', [PublicProductShareController::class, 'checkout'])
         ->middleware('throttle:10,1')
         ->name('public-product-shares.checkout');
+
+    /*
+     * 2026-09-17 — THE ONE STREAM A <video> ELEMENT CAN ACTUALLY FETCH.
+     *
+     * ── THE BUG THIS EXISTS FOR ──
+     *
+     * The agent portal authenticates with a BEARER TOKEN (ADR-039 — its hosts
+     * are no longer stateful domains, and api/client.ts's ensureCsrfCookie()
+     * is a documented no-op). A `<video src>` element cannot carry an
+     * Authorization header — that is a property of the element, not a bug we
+     * can fix — and there is no session cookie for `crossorigin=
+     * "use-credentials"` to send either. So every uploaded video lesson asked
+     * /module-lessons/{id}/stream anonymously and got 401, and the player's
+     * "ลองใหม่" button could never succeed, because a 401 is an answer rather
+     * than a blip.
+     *
+     * Images and PDFs survived the same migration because they are fetched by
+     * JS (useAuthenticatedMedia / PdfViewerModal, both fixed 2026-09-04 when
+     * `authHeaders` was exported). Video cannot take that route: it needs the
+     * BROWSER to issue ranged GETs, or seeking to 18:42 means downloading 200
+     * MB first (ADR-028 §2.5).
+     *
+     * ── WHY signed AND NOT auth:sanctum ──
+     *
+     * The authorization moves from a header the element cannot send into the
+     * URL itself: URL::temporarySignedRoute mints a 2-hour HMAC over the
+     * lesson id AND the learner id, and `signed` verifies it before the
+     * controller runs. The controller then re-runs the ordinary checks — the
+     * Module policy and LessonAccessGate — against that learner, so a locked
+     * lesson still answers 403 and one company's learner still cannot read
+     * another's module.
+     *
+     * ── WHAT THIS TRADES AWAY, STATED PLAINLY ──
+     *
+     * A signed URL is a bearer capability: for its lifetime, whoever holds the
+     * string can watch, including somebody it was forwarded to. Two hours was
+     * the owner's choice — long enough for the longest lesson plus a pause,
+     * short enough that a pasted link goes stale the same afternoon. It is the
+     * same trade every video platform makes, and the reason the TTL is short
+     * rather than a day.
+     *
+     * Registered OUTSIDE auth:sanctum deliberately, and flagged here the way
+     * ADR-011 flagged the first such endpoint, so it is never mistaken for an
+     * accident (§3, §6).
+     */
+    Route::get('/module-lessons/{moduleLesson}/inline-stream', [ModuleLessonController::class, 'inlineStream'])
+        ->middleware(['signed', 'throttle:120,1'])
+        ->name('module-lessons.inline-stream');
 
     /*
      * TASK-183 §3.3 — `company.operational` is stacked on the WHOLE
@@ -1259,9 +1308,10 @@ Route::prefix('v1')->group(function () {
          * endpoint has to live here and an endpoint here is visible to every
          * supplier. Adding a route to this block is a security decision.
          *
-         * Every one of them filters by `products.supplier_company_id` rather
-         * than by TenantScope — a supplier is never the company that sold the
-         * order they are looking at. See SupplierPortalController.
+         * Every one of them filters by `products.supplier_id` rather than by
+         * TenantScope — a supplier is never the company that sold the order
+         * they are looking at, and is not a tenant at all. See
+         * SupplierPortalController.
          */
         Route::get('/supplier/orders', [SupplierPortalController::class, 'orders']);
         Route::post('/supplier/orders/{orderId}/ship', [SupplierPortalController::class, 'ship']);
@@ -1281,21 +1331,32 @@ Route::prefix('v1')->group(function () {
         Route::get('/supplier-payouts', [SupplierPayoutController::class, 'index']);
         Route::post('/supplier-payouts', [SupplierPayoutController::class, 'store']);
         Route::get('/supplier-payouts/requests', [SupplierPayoutController::class, 'requests']);
-        Route::get('/supplier-payouts/{company}/settlements', [SupplierPayoutController::class, 'settlements']);
-        /*
-         * 2026-09-17 — the deal terms for one supplier company.
-         *
-         * Under /supplier-payouts rather than /companies/{company} because it
-         * is the same subject as the rest of this prefix — what we owe a
-         * supplier and on what terms — and because that prefix is already the
-         * one a partner account cannot reach.
-         */
-        Route::get('/supplier-payouts/{company}/terms', [SupplierPayoutController::class, 'terms']);
-        Route::put('/supplier-payouts/{company}/terms', [SupplierPayoutController::class, 'updateTerms']);
+        Route::get('/supplier-payouts/{supplier}/settlements', [SupplierPayoutController::class, 'settlements']);
         Route::post(
             '/supplier-payouts/{supplierWithdrawalRequest}/mark-transferred',
             [SupplierPayoutController::class, 'markTransferred'],
         );
+
+        /*
+         * 2026-09-17 — MANAGING SUPPLIERS THEMSELVES. Super Admin only.
+         *
+         * `/suppliers`, PLURAL. RestrictScopedRole opens the singular
+         * `supplier` to the partner role and matches whole segments, so
+         * `suppliers` is refused to them — which is the point, because this is
+         * the prefix that edits every supplier's deal terms and bank account.
+         *
+         * Separate from `/companies` on the owner's instruction: a tenant we
+         * pay commission to and a counterparty we buy goods from are different
+         * relationships, and the first cut of this feature put the second on
+         * the first's screen.
+         */
+        Route::get('/suppliers', [SupplierController::class, 'index']);
+        Route::post('/suppliers', [SupplierController::class, 'store']);
+        Route::get('/suppliers/{supplier}', [SupplierController::class, 'show']);
+        Route::put('/suppliers/{supplier}', [SupplierController::class, 'update']);
+        Route::delete('/suppliers/{supplier}', [SupplierController::class, 'destroy']);
+        Route::get('/suppliers/{supplier}/products', [SupplierController::class, 'products']);
+        Route::get('/suppliers/{supplier}/users', [SupplierController::class, 'users']);
 
         // TASK-190 §3.4 — platform-wide SMTP settings (one global row, no
         // company_id — see PlatformMailSetting's own docblock). Gated by

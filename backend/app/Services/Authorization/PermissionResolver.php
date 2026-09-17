@@ -208,7 +208,7 @@ class PermissionResolver
          *
          * Everything else a partner does — reading their orders, recording a
          * shipment, seeing what they are owed — lives under /supplier and is
-         * gated by the role itself plus the supplier_company_id filter, not by
+         * gated by the role itself plus the supplier_id filter, not by
          * an ability. They are not doing a smaller version of an admin's job;
          * they are doing a different job on rows an admin cannot see either.
          */

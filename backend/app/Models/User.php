@@ -126,6 +126,27 @@ class User extends Authenticatable implements MustVerifyEmail
         'phone',
         'password',
         'company_id',
+        /*
+         * 2026-09-17 — WHICH SUPPLIER THIS LOGIN BELONGS TO.
+         *
+         * Exclusive with `company_id`, and that exclusivity is the point:
+         *
+         *   role = company_partner  ->  supplier_id set,  company_id NULL
+         *   every other role        ->  company_id set,   supplier_id NULL
+         *
+         * The first cut gave a partner `company_id = <the supplier company>`,
+         * which made one property mean two different things depending on who
+         * was reading it. Every tenant filter in this codebase reads
+         * `company_id`; one that quietly means "supplier" for one role is a
+         * cross-tenant leak waiting for the first person who forgets.
+         *
+         * Enforced in StoreUserRequest / UpdateUserRequest rather than by a
+         * CHECK constraint, because the failure has to arrive as a message on
+         * a form field and not as a driver exception. TenantScope backs it up
+         * from the other side: a non-super-admin with no company_id now sees
+         * NOTHING rather than everything.
+         */
+        'supplier_id',
         'role',
         // TASK-112 / ADR-025 §1 — admin-granted "may recruit" capability.
         // A FLAG, not a fourth role: `role` above stays `agent`, so no
@@ -296,6 +317,17 @@ class User extends Authenticatable implements MustVerifyEmail
     public function company(): BelongsTo
     {
         return $this->belongsTo(Company::class);
+    }
+
+    /**
+     * The supplier this login works for. Null for every role but
+     * company_partner.
+     *
+     * @return BelongsTo<Supplier, $this>
+     */
+    public function supplier(): BelongsTo
+    {
+        return $this->belongsTo(Supplier::class);
     }
 
     /** @return BelongsTo<User, $this> TASK-025 — this agent's upline (Unilevel or Binary, both share manager_id). */
@@ -504,11 +536,35 @@ class User extends Authenticatable implements MustVerifyEmail
      * whole control. A non-Super-Admin with a null company_id therefore falls
      * through to isOperationalById(null), which is false. Fail closed: an agent
      * who belongs to no company cannot act on behalf of one.
+     *
+     * ── 2026-09-17: A COMPANY PARTNER'S TENANT IS A SUPPLIER ──
+     *
+     * A partner login carries `company_id = null` by design — a supplier is a
+     * counterparty, not one of our tenants — so it fell straight through to
+     * `isOperationalById(null)` and every partner request was refused with
+     * "your company has been suspended", naming a company they do not have.
+     *
+     * The right answer is not to exempt them; it is to ask the same question
+     * about the thing they DO belong to. An ended deal should lock a partner
+     * out exactly the way a deactivated company locks out its staff, and for
+     * the same reason: somebody switched it off and expects that to mean
+     * something immediately, not at the next login.
+     *
+     * Still keyed on the ROLE rather than on `supplier_id !== null`, for the
+     * reason the Super Admin branch gives: "has a supplier" would exempt any
+     * future row that happened to carry one, while `company_partner` is a
+     * claim about what this account IS.
      */
     public function belongsToOperationalCompany(): bool
     {
         if ($this->isSuperAdmin()) {
             return true;
+        }
+
+        if ($this->isCompanyPartner()) {
+            // `find` applies the soft-delete scope, so a deleted supplier is
+            // refused on the same terms as a deleted company.
+            return (bool) Supplier::find($this->supplier_id)?->is_active;
         }
 
         return Company::isOperationalById($this->company_id);
@@ -567,6 +623,22 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isVoucherStaff(): bool
     {
         return $this->role === UserRole::VoucherStaff;
+    }
+
+    /**
+     * 2026-09-17 — a supplier's own login: they see the orders for products
+     * THEY supply, across every tenant that sold one, and nothing else.
+     *
+     * Note what this does NOT assert: that `supplier_id` is set. A role and a
+     * link are two facts and they can disagree — a partner row whose supplier
+     * was deleted still has the role. Callers that need the supplier ask for
+     * it and handle its absence (SupplierPortalController::assertPartner),
+     * rather than this method quietly answering "not a partner" and sending
+     * them somewhere a partner must never reach.
+     */
+    public function isCompanyPartner(): bool
+    {
+        return $this->role === UserRole::CompanyPartner;
     }
 
     /** @return HasMany<UserAbility, $this> Abilities granted to this person by name (ADR-032 Phase 3). */

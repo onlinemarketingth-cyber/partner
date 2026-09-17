@@ -223,7 +223,15 @@ describe('the settings page moved to ตั้งค่าระบบ', () => {
     const subs = mountNav().findAll('[data-test^="nav-sub-"]').map((el) => el.text())
 
     expect(subs[0]).toBe('จัดการบริษัท')
-    expect(subs[1]).toBe('ตั้งค่าค่าแนะนำ')
+    /*
+     * 2026-09-17 — จัดการคู่ค้า landed between them, and that is deliberate
+     * rather than incidental: the two counterparty registers sit together
+     * because somebody looking for one looks where the other is. What they
+     * must NOT be is nested — a supplier is not a setting on a company. See
+     * CompanyManagementView's note for the mistake this ordering replaced.
+     */
+    expect(subs[1]).toBe('จัดการคู่ค้า')
+    expect(subs[2]).toBe('ตั้งค่าค่าแนะนำ')
   })
 
   it('stays visible to a Company Admin', () => {
@@ -305,7 +313,7 @@ describe('the รายงาน pillar', () => {
  * Partner filter is written as "keep only these pillars WHEN the viewer is a
  * partner", which hides everything else from them and does nothing in the
  * other direction — so every Super Admin had "สินค้าของฉัน" in their menu,
- * pointing at screens that filter by `products.supplier_company_id = my
+ * pointing at screens that filter by `products.supplier_id = my
  * company` and therefore show an admin an empty page with no explanation.
  *
  * Not a leak. Worse than useless, though: a menu item that cannot work is the

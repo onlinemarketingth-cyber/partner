@@ -7,9 +7,9 @@ use App\Enums\ShippingStatus;
 use App\Enums\SupplierGpMode;
 use App\Enums\SupplierReleaseTrigger;
 use App\Models\CommissionLedger;
-use App\Models\Company;
 use App\Models\Order;
 use App\Models\Product;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -74,10 +74,10 @@ class SupplierSettlementService
         $supplier = $product->supplier;
 
         if (! $supplier) {
-            // The supplier company was deleted after the product was listed
-            // (the FK nulls rather than cascades — see the migration). There
-            // is no one to owe, and inventing a row pointing nowhere is worse
-            // than recording nothing.
+            // The supplier was deleted after the product was listed (the FK
+            // nulls rather than cascades — see the migration). There is no one
+            // to owe, and inventing a row pointing nowhere is worse than
+            // recording nothing.
             return null;
         }
 
@@ -95,7 +95,7 @@ class SupplierSettlementService
 
         return DB::transaction(function () use ($order, $product, $supplier, $terms, $sale, $commission, $gp, $amount) {
             $row = SupplierSettlementLedger::create([
-                'supplier_company_id' => $supplier->id,
+                'supplier_id' => $supplier->id,
                 'company_id' => $order->company_id,
                 'order_id' => $order->id,
                 'product_id' => $product->id,
@@ -151,9 +151,14 @@ class SupplierSettlementService
     {
         return SupplierSettlementLedger::where('order_id', $order->id)
             ->whereNull('released_at')
-            ->whereHas('supplier', fn ($q) => $q
-                ->withoutGlobalScopes()
-                ->where('supplier_release_trigger', $trigger->value))
+            /*
+             * `suppliers` carries no global scope of its own (a supplier is
+             * not a tenant), so this needs no withoutGlobalScopes — but the
+             * column name changed with the table, and reading the OLD name
+             * here would have matched nothing and silently released nothing,
+             * forever, on every OnRedeemed and OnDelivered deal.
+             */
+            ->whereHas('supplier', fn ($q) => $q->where('release_trigger', $trigger->value))
             ->update(['released_at' => now()]);
     }
 
@@ -173,31 +178,31 @@ class SupplierSettlementService
      *
      * @return array{gp_mode: SupplierGpMode, gp_value: int, wht_rate: ?int, trigger: SupplierReleaseTrigger}
      */
-    private function resolveTerms(Product $product, Company $supplier): array
+    private function resolveTerms(Product $product, Supplier $supplier): array
     {
         /*
          * Mode and value travel TOGETHER. A product that names a mode but no
-         * value, falling back to the company's value, would apply the
-         * company's 30% as 30 satang — a number 1000x wrong that still looks
+         * value, falling back to the supplier's value, would apply the
+         * supplier's 30% as 30 satang — a number 1000x wrong that still looks
          * like a number. So the override is all-or-nothing.
          */
         $hasProductOverride = $product->supplier_gp_mode !== null && $product->supplier_gp_value !== null;
 
-        $mode = $hasProductOverride ? $product->supplier_gp_mode : $supplier->supplier_gp_mode;
-        $value = $hasProductOverride ? $product->supplier_gp_value : $supplier->supplier_gp_value;
+        $mode = $hasProductOverride ? $product->supplier_gp_mode : $supplier->gp_mode;
+        $value = $hasProductOverride ? $product->supplier_gp_value : $supplier->gp_value;
 
         if (! $mode instanceof SupplierGpMode || $value === null) {
             throw new RuntimeException(
-                "Product {$product->id} is supplied by company {$supplier->id} but no GP terms are set "
+                "Product {$product->id} is supplied by supplier {$supplier->id} but no GP terms are set "
                 .'on either the product or the supplier deal. Refusing to invent one (BR-7).'
             );
         }
 
-        $trigger = $supplier->supplier_release_trigger;
+        $trigger = $supplier->release_trigger;
 
         if (! $trigger instanceof SupplierReleaseTrigger) {
             throw new RuntimeException(
-                "Supplier company {$supplier->id} has no supplier_release_trigger set. "
+                "Supplier {$supplier->id} has no release_trigger set. "
                 .'Refusing to guess when their money becomes payable (BR-7).'
             );
         }
@@ -208,7 +213,7 @@ class SupplierSettlementService
             // NULL is a real answer here, unlike the two above: withholding
             // nothing is correct for a sale of goods, and is the state every
             // deal starts in until accounting says otherwise.
-            'wht_rate' => $product->supplier_wht_rate ?? $supplier->supplier_wht_rate,
+            'wht_rate' => $product->supplier_wht_rate ?? $supplier->wht_rate,
             'trigger' => $trigger,
         ];
     }

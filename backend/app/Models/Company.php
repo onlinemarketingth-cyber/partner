@@ -5,8 +5,6 @@ namespace App\Models;
 use App\Enums\CommissionBasis;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
-use App\Enums\SupplierGpMode;
-use App\Enums\SupplierReleaseTrigger;
 use App\Models\Concerns\HasTrackedLink;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -38,41 +36,29 @@ class Company extends Model
         'slug',
         'is_active',
         /*
-         * 2026-09-16 — THE SUPPLIER SIDE OF THIS COMPANY.
+         * 2026-09-17 — THE SUPPLIER COLUMNS ARE GONE FROM THIS MODEL.
          *
-         * A company can be a tenant that sells, a supplier that provides
-         * products for other tenants to sell, or both. These six columns
-         * describe only the second face; a company that is not a supplier
-         * carries them all as null and nothing reads them.
+         * There were nine of them here for one day: is_supplier, a GP mode and
+         * value, a release trigger, a withdrawal floor, a withholding rate and
+         * three payout bank fields. They said that a company could ALSO be a
+         * supplier, which the owner rejected as the wrong shape entirely:
          *
-         * Every one is nullable with NO default, and that is BR-7 rather than
-         * laziness: a GP of 0 says "we take no margin" and a withholding rate
-         * of 3% deducts tax from a supplier selling goods, where the standard
-         * is to deduct nothing. Both are confident wrong numbers. Null means
-         * nobody has agreed a figure yet, and SupplierSettlementService is
-         * required to refuse rather than assume one.
+         *   "Company Partner = Supplier ต้องแยกจาก Company เดิม แต่คุณเอา UI
+         *    ไปใส่ที่ company เดิมที่เป็นค่าคอม ผิดทั้งหมดเลย"
+         *
+         * A Company is a TENANT — it sells through us and we pay COMMISSION to
+         * its agents. A Supplier is a COUNTERPARTY — it supplies goods and we
+         * pay it the sale price less commission less GP. Not one of those nine
+         * fields means anything in the first sentence. They now live on
+         * App\Models\Supplier, in their own table, edited on their own
+         * screen.
+         *
+         * The columns themselves are still on `companies` until the follow-up
+         * migration drops them (see the repoint migration for why that is a
+         * separate deploy). Nothing reads them — they are deliberately absent
+         * from $fillable and casts() so that a stray write cannot resurrect
+         * the confusion while they wait to be dropped.
          */
-        'is_supplier',
-        'supplier_gp_mode',
-        'supplier_gp_value',
-        'supplier_release_trigger',
-        // Binds the SUPPLIER asking to withdraw, never us deciding to settle
-        // what we owe — the same asymmetry min_withdrawal_satang has for
-        // agents, and for the same reason (see WithdrawalSource).
-        'supplier_min_withdrawal_satang',
-        'supplier_wht_rate',
-        /*
-         * 2026-09-17 — where we TRANSFER TO when settling with this supplier.
-         *
-         * Distinct from `payment_bank_*` above, which is where this company
-         * RECEIVES customer payments. Two accounts because in practice they
-         * are two accounts, and because setting a supplier's payout details is
-         * a Super Admin job — reusing the other columns would have made that
-         * an edit on the account another tenant collects customer money into.
-         */
-        'supplier_payout_bank_name',
-        'supplier_payout_bank_account_number',
-        'supplier_payout_bank_account_name',
         'commission_plan_type',
         // 2026-09-12 — the second half of "how does this company pay":
         // commission_plan_type says WHO is paid, this says what a
@@ -138,15 +124,6 @@ class Company extends Model
             'commission_plan_type' => CommissionPlanType::class,
             'commission_basis' => CommissionBasis::class,
             'commission_override_mode' => CommissionOverrideMode::class,
-            'is_supplier' => 'boolean',
-            'supplier_gp_mode' => SupplierGpMode::class,
-            // BR-3 — basis points or satang depending on the mode above, but an
-            // integer either way. Never a float: percentages are multiplied
-            // before anything is divided (SupplierSettlementService).
-            'supplier_gp_value' => 'integer',
-            'supplier_release_trigger' => SupplierReleaseTrigger::class,
-            'supplier_min_withdrawal_satang' => 'integer',
-            'supplier_wht_rate' => 'integer',
             // TASK-056 P2 bugfix — deliberately NOT in $fillable: only
             // ClientCategoryService::ensureDefaults() ever writes this, a
             // client request must never be able to set/clear it directly.

@@ -89,6 +89,37 @@ class TenantScope implements Scope
 
         if (isset($user->company_id)) {
             $builder->where($model->getTable().'.company_id', $user->company_id);
+
+            return;
         }
+
+        /*
+         * 2026-09-17 — FAIL CLOSED. This branch used to do nothing.
+         *
+         * Read the old code carefully and it says: an authenticated user who
+         * is not a Super Admin and has no company_id is not filtered at all —
+         * which is not "sees their own tenant", it is "sees EVERY tenant".
+         * BR-6 inverted, by the one shape nobody writes a test for.
+         *
+         * It was unreachable-ish while every non-super-admin row carried a
+         * company_id, and RestrictScopedRole covered the one role that might
+         * not. Neither is a guarantee: the first is a data invariant with no
+         * constraint behind it, and the second is a path allowlist that has
+         * nothing to say about a query. Then Company Partner arrived — a role
+         * that by design has company_id NULL and supplier_id instead — and
+         * the shape stopped being hypothetical.
+         *
+         * So: no tenant, no rows. A partner reaching a tenant-scoped model
+         * gets an empty result rather than the whole platform, and if that is
+         * ever wrong the symptom is a screen that shows nothing, which
+         * somebody reports, rather than a screen that shows another company's
+         * customers, which nobody does.
+         *
+         * Supplier-side queries are unaffected: every one of them runs
+         * `withoutGlobalScopes()` and filters on `supplier_id` explicitly,
+         * precisely because their rows belong to two companies at once and no
+         * global scope could ever have been right for them.
+         */
+        $builder->whereRaw('1 = 0');
     }
 }

@@ -33,6 +33,7 @@
  * only one of them cannot be reconciled against a bank statement.
  */
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -41,8 +42,9 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
 
 interface SupplierRow {
-  supplier_company_id: number
+  supplier_id: number
   supplier_name: string
+  is_active: boolean
   bank_name: string | null
   bank_account_number: string | null
   bank_account_holder_name: string | null
@@ -55,6 +57,8 @@ interface SupplierRow {
    * ticket.
    */
   terms_complete: boolean
+  /** Which parts are blank: 'gp' | 'release_trigger' | 'bank'. */
+  missing_terms: string[]
   payable_satang: number
   reserved_satang: number
   unreleased_satang: number
@@ -62,7 +66,7 @@ interface SupplierRow {
 
 interface PayoutRequest {
   id: number
-  supplier_company_id: number
+  supplier_id: number
   supplier_name: string | null
   status: string
   source: string
@@ -120,21 +124,29 @@ onMounted(loadAll)
  * a 422 and no explanation.
  */
 function canRaise(row: SupplierRow): boolean {
-  return row.terms_complete && row.payable_satang > 0
+  return row.terms_complete && !row.missing_terms.includes('bank') && row.payable_satang > 0
 }
 
+/**
+ * Why this supplier cannot be paid today, in words somebody can act on.
+ *
+ * Ordered most-actionable first, and the bank line is separate from the terms
+ * line on purpose: a balance is correct and worth showing without a bank
+ * account, but accounting cannot transfer without one, and finding that out
+ * after raising the payout is finding out too late.
+ */
 function blockedReason(row: SupplierRow): string | null {
-  if (!row.terms_complete) return 'ยังไม่ได้ตั้งเงื่อนไข GP หรือจังหวะการเบิกให้คู่ค้ารายนี้'
+  if (!row.terms_complete) return 'ยังไม่ได้ตั้งเงื่อนไข GP หรือจังหวะการเบิก — ตั้งค่าที่หน้าจัดการคู่ค้า'
+  if (row.missing_terms.includes('bank')) return 'ยังไม่ได้กรอกบัญชีรับเงิน — กรอกที่หน้าจัดการคู่ค้า'
   if (row.payable_satang < 0) return 'ยอดคงเหลือติดลบ — จะหักกลบกับยอดขายรอบถัดไป'
-  if (row.payable_satang === 0) return null
   return null
 }
 
 async function raisePayout(row: SupplierRow): Promise<void> {
-  raisingId.value = row.supplier_company_id
+  raisingId.value = row.supplier_id
   errorMessage.value = ''
   try {
-    await api.post('/supplier-payouts', { supplier_company_id: row.supplier_company_id })
+    await api.post('/supplier-payouts', { supplier_id: row.supplier_id })
     await loadAll()
   } catch (e) {
     // Shown in full: the server's refusal names the actual problem (terms
@@ -204,7 +216,7 @@ function statusLabel(status: string): string {
     <HeroHeader
       icon="money"
       title="จ่ายคืนคู่ค้า"
-      subtitle="ยอดค่าสินค้าหลังหักค่าแนะนำและ GP ที่ต้องคืนให้บริษัทคู่ค้า"
+      subtitle="ยอดค่าสินค้าหลังหักค่าแนะนำและ GP ที่ต้องคืนให้คู่ค้า"
       :kpis="kpis"
       accent-color="brand"
       storage-key="admin-supplier-payouts"
@@ -222,13 +234,13 @@ function statusLabel(status: string): string {
     <section v-else class="mt-6">
       <h2 class="text-sm font-bold text-slate-700 mb-2">ยอดคงเหลือของคู่ค้า</h2>
 
-      <EmptyState v-if="suppliers.length === 0" icon="money" title="ยังไม่มีบริษัทคู่ค้าในระบบ" message="ตั้งค่าบริษัทให้เป็นคู่ค้าก่อน จึงจะมียอดให้จ่ายคืน" />
+      <EmptyState v-if="suppliers.length === 0" icon="money" title="ยังไม่มีคู่ค้าในระบบ" message="เพิ่มคู่ค้าที่หน้า ตั้งค่าระบบ → จัดการคู่ค้า ก่อน จึงจะมียอดให้จ่ายคืน" />
 
       <div v-else class="bg-white/95 border border-slate-200 rounded-xl overflow-x-auto">
         <table class="w-full text-sm border-collapse" data-test="suppliers-table">
           <thead>
             <tr class="text-left text-xs font-bold text-slate-500 border-b border-slate-200">
-              <th class="px-4 py-3">บริษัทคู่ค้า</th>
+              <th class="px-4 py-3">คู่ค้า</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">ตั้งจ่ายได้</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">รอฝ่ายบัญชีโอน</th>
               <!-- The figure that answers "you owe me more than that" before
@@ -241,10 +253,25 @@ function statusLabel(status: string): string {
           <tbody>
             <tr
               v-for="row in suppliers"
-              :key="row.supplier_company_id"
+              :key="row.supplier_id"
               class="border-b border-slate-100 last:border-0 hover:bg-slate-50/70 align-top"
             >
-              <td class="px-4 py-3 font-bold text-slate-900">{{ row.supplier_name }}</td>
+              <td class="px-4 py-3 font-bold text-slate-900">
+                <!-- Into the supplier's own page: this screen says WHAT we owe,
+                     that one says who they are and on what terms. -->
+                <RouterLink
+                  :to="{ name: 'supplier-detail', params: { id: row.supplier_id } }"
+                  class="text-brand-700 hover:underline"
+                  data-test="supplier-link"
+                >{{ row.supplier_name }}</RouterLink>
+                <!-- A deal that has ENDED still has a balance, and this screen
+                     deliberately keeps listing it — the marker is so nobody
+                     reads an inactive supplier as a current one. -->
+                <span
+                  v-if="!row.is_active"
+                  class="ml-2 align-middle rounded px-1.5 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-bold"
+                >ปิดใช้งาน</span>
+              </td>
               <td
                 class="px-4 py-3 text-right font-bold whitespace-nowrap"
                 :class="row.payable_satang < 0 ? 'text-rose-600' : 'text-slate-900'"
@@ -267,7 +294,7 @@ function statusLabel(status: string): string {
                   @click="raisePayout(row)"
                 >
                   <Icon name="check" :size="14" />
-                  {{ raisingId === row.supplier_company_id ? 'กำลังตั้งจ่าย...' : 'ตั้งจ่าย' }}
+                  {{ raisingId === row.supplier_id ? 'กำลังตั้งจ่าย...' : 'ตั้งจ่าย' }}
                 </button>
                 <!-- Says WHY rather than showing a dead button. -->
                 <span v-else-if="blockedReason(row)" class="text-xs text-amber-700">{{ blockedReason(row) }}</span>
@@ -286,7 +313,7 @@ function statusLabel(status: string): string {
         <table class="w-full text-sm border-collapse" data-test="awaiting-table">
           <thead>
             <tr class="text-left text-xs font-bold text-slate-500 border-b border-slate-200">
-              <th class="px-4 py-3">บริษัทคู่ค้า</th>
+              <th class="px-4 py-3">คู่ค้า</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">ยอดก่อนหักภาษี</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">หัก ณ ที่จ่าย</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">ยอดโอนจริง</th>
@@ -400,7 +427,7 @@ function statusLabel(status: string): string {
           <thead>
             <tr class="text-left text-xs font-bold text-slate-500 border-b border-slate-200">
               <th class="px-4 py-3">วันที่โอน</th>
-              <th class="px-4 py-3">บริษัทคู่ค้า</th>
+              <th class="px-4 py-3">คู่ค้า</th>
               <th class="px-4 py-3">สถานะ</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">ก่อนหักภาษี</th>
               <th class="px-4 py-3 text-right whitespace-nowrap">หัก ณ ที่จ่าย</th>

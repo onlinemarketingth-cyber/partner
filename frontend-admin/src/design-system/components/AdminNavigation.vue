@@ -109,7 +109,7 @@ interface NavItem {
    * which correctly hides everything else from them — and does nothing at all
    * in the other direction. So a Super Admin saw "สินค้าของฉัน" in their menu:
    * a pillar built for suppliers, pointing at screens that filter by
-   * `products.supplier_company_id = my company` and therefore show an admin
+   * `products.supplier_id = my supplier` and therefore show an admin
    * an empty page with no explanation.
    *
    * Not a data leak (the filter still holds), but a menu item that cannot
@@ -346,6 +346,21 @@ const navItems: NavItem[] = [
       // as "ตั้งค่า Email SMTP" below) — the pillar itself must remain
       // open to Company Admin, who still needs "ธีม / แบรนด์".
       { name: 'company-management', icon: 'building', label: { th: 'จัดการบริษัท', en: 'Companies' }, superAdminOnly: true },
+      /*
+       * 2026-09-17 — "จัดการคู่ค้า", directly under จัดการบริษัท.
+       *
+       * Next to it because they are the two counterparty registers and
+       * somebody looking for one will look where the other is. SEPARATE from
+       * it because they are not the same kind of counterparty: a บริษัท is a
+       * tenant that sells through us and receives commission, a คู่ค้า is a
+       * supplier that gives us goods and receives the sale price less our GP.
+       *
+       * The first cut of this feature put the supplier's settings INSIDE
+       * จัดการบริษัท as a panel, and the owner rejected it: "Company Partner =
+       * Supplier ต้องแยกจาก Company เดิม … ผิดทั้งหมดเลย". Adjacent, not
+       * nested, is the distinction that reads correctly.
+       */
+      { name: 'supplier-management', icon: 'handshake', label: { th: 'จัดการคู่ค้า', en: 'Suppliers' }, superAdminOnly: true },
       /*
        * 2026-09-15 (owner: "ย้าย sub menu ตั้งค่าไปอยู่ที่ ตั้งค่าระบบ ต่อจาก
        * จัดการบริษัท") — the four-step commission setup used to sit in the

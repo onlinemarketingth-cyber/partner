@@ -78,15 +78,18 @@ const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
 const activeCompany = useActiveCompanyStore()
 
 /**
- * 2026-09-16 — the companies that may be named as a supplier.
+ * 2026-09-16 — who may be named as this product's supplier.
+ * 2026-09-17 — read from /suppliers, which is now a table of its own.
  *
- * Read from /supplier-payouts rather than the company picker's own list,
- * because that list is every company and this field must offer only the ones
- * flagged `is_supplier`. The endpoint is already Super-Admin-only, which is
- * the same gate these fields sit behind — so a Company Admin never calls it
- * and never sees a 403 for a screen they opened legitimately.
+ * Filtered to ACTIVE suppliers: an ended deal is not somebody to list new
+ * products against, and the server refuses it anyway (HandlesSupplierTerms).
+ * Offering a name the save will reject is worse than not offering it.
+ *
+ * /suppliers is Super-Admin-only, the same gate these fields sit behind, so a
+ * Company Admin never calls it and never sees a 403 for a screen they opened
+ * legitimately.
  */
-const supplierOptions = ref<{ supplier_company_id: number; supplier_name: string }[]>([])
+const supplierOptions = ref<{ id: number; name: string }[]>([])
 
 /**
  * Once this product has paid a supplier, the supplier cannot be changed.
@@ -94,19 +97,19 @@ const supplierOptions = ref<{ supplier_company_id: number; supplier_name: string
  * Mirrors the server's rule rather than duplicating its reasoning: settled
  * rows keep their own snapshots, so history is safe — what is not safe is the
  * NEXT sale silently going to a different company. Derived from
- * `supplier_company_id` being already set on a SAVED product: the server has
+ * `supplier_id` being already set on a SAVED product: the server has
  * the authoritative test (does a settlement row exist) and answers 422, so
  * this is the cheap client-side half that stops somebody typing into a field
  * that is going to refuse them.
  */
 const supplierChangeLocked = computed(
-  () => !isCreateMode.value && (product.value?.supplier_company_id ?? null) !== null,
+  () => !isCreateMode.value && (product.value?.supplier_id ?? null) !== null,
 )
 
 async function loadSupplierOptions(): Promise<void> {
   if (!isSuperAdmin.value) return
   try {
-    const res = await api.get<{ data: { supplier_company_id: number; supplier_name: string }[] }>('/supplier-payouts')
+    const res = await api.get<{ data: { id: number; name: string }[] }>('/suppliers?is_active=1')
     supplierOptions.value = res.data
   } catch {
     // A missing list is a missing dropdown, not a broken page: the rest of
@@ -235,7 +238,7 @@ interface Product {
   cost_satang: number | null
   // 2026-09-16 — who supplies this product and on what terms. Null on every
   // product we supply ourselves, which is almost all of them.
-  supplier_company_id: number | null
+  supplier_id: number | null
   supplier_name?: string | null
   supplier_gp_mode: string | null
   supplier_gp_value: number | null
@@ -669,7 +672,7 @@ interface BasicsForm {
   requires_shipping: boolean
   // 2026-09-16 — the supplier arrangement. Super Admin only, platform
   // products only; '' means "not set / use the deal's own terms".
-  supplier_company_id: number | ''
+  supplier_id: number | ''
   supplier_gp_mode: string
   supplier_gp_value: string | number
   supplier_wht_rate: string | number
@@ -694,7 +697,7 @@ const basicsForm = ref<BasicsForm>({
   voucher_usage_quota: 1,
   voucher_validity_days: '',
   requires_shipping: false,
-  supplier_company_id: '',
+  supplier_id: '',
   supplier_gp_mode: '',
   supplier_gp_value: '',
   supplier_wht_rate: '',
@@ -1055,7 +1058,7 @@ function syncBasicsFormFromProduct(p: Product) {
     voucher_usage_quota: p.voucher_usage_quota ?? '',
     voucher_validity_days: p.voucher_validity_days ?? '',
     requires_shipping: p.requires_shipping,
-    supplier_company_id: p.supplier_company_id ?? '',
+    supplier_id: p.supplier_id ?? '',
     supplier_gp_mode: p.supplier_gp_mode ?? '',
     // Basis points on the wire, percent in the box — 3000 shows as 30.
     supplier_gp_value: p.supplier_gp_value === null || p.supplier_gp_value === undefined
@@ -1124,9 +1127,9 @@ async function saveBasics() {
        */
       ...(isSuperAdmin.value
         ? {
-            supplier_company_id: basicsForm.value.supplier_company_id === ''
+            supplier_id: basicsForm.value.supplier_id === ''
               ? null
-              : Number(basicsForm.value.supplier_company_id),
+              : Number(basicsForm.value.supplier_id),
             supplier_gp_mode: basicsForm.value.supplier_gp_mode || null,
             supplier_gp_value: basicsForm.value.supplier_gp_value === ''
               ? null
@@ -2711,12 +2714,12 @@ function goToVideoSettings() {
               step="0.01"
               placeholder="ยังไม่กำหนด"
               data-test="cost-input"
-              :disabled="basicsForm.supplier_company_id !== ''"
+              :disabled="basicsForm.supplier_id !== ''"
               class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm disabled:bg-slate-100 disabled:text-slate-400"
             />
             <p class="mt-1 text-xs text-slate-400">
-              <template v-if="basicsForm.supplier_company_id !== ''">
-                สินค้านี้มีผู้จัดหา — ต้นทุนคือยอดที่คืนให้ผู้จัดหา ระบบคำนวณและบันทึกให้เองทุกครั้งที่ขาย ไม่ต้องกรอกเอง
+              <template v-if="basicsForm.supplier_id !== ''">
+                สินค้านี้มีคู่ค้าเป็นผู้จัดหา — ต้นทุนคือยอดที่คืนให้คู่ค้า ระบบคำนวณและบันทึกให้เองทุกครั้งที่ขาย ไม่ต้องกรอกเอง
               </template>
               <template v-else>
                 ใช้คำนวณกำไรขั้นต้นในหน้า ภาพรวมธุรกิจ · เว้นว่าง = ยอดขายของสินค้านี้จะไม่ถูกนำไปคิดกำไร (ไม่ใช่คิดเป็นกำไรเต็ม)
@@ -2744,23 +2747,24 @@ function goToVideoSettings() {
             the field above disables itself.
           -->
           <div v-if="isSuperAdmin && isPlatformProduct" class="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200">
-            <p class="text-sm font-bold text-slate-700">ผู้จัดหาสินค้า (บริษัทคู่ค้า)</p>
+            <p class="text-sm font-bold text-slate-700">คู่ค้าผู้จัดหาสินค้า</p>
             <p class="text-xs text-slate-500 mt-0.5">
-              ตั้งเมื่อสินค้านี้เป็นของบริษัทคู่ค้าที่นำเข้ามาขายผ่านเรา — ระบบจะคืนยอดค่าสินค้าหลังหักค่าแนะนำและ GP ให้บริษัทนั้น
+              ตั้งเมื่อสินค้านี้เป็นของคู่ค้าที่นำเข้ามาขายผ่านเรา — ระบบจะคืนยอดค่าสินค้าหลังหักค่าแนะนำและ GP ให้คู่ค้ารายนั้น
+              · เพิ่ม/แก้ไขคู่ค้าได้ที่ ตั้งค่าระบบ → จัดการคู่ค้า
             </p>
 
             <div class="grid gap-3 sm:grid-cols-2 mt-3">
               <div>
-                <label class="text-xs font-bold text-slate-500">บริษัทคู่ค้า</label>
+                <label class="text-xs font-bold text-slate-500">คู่ค้า</label>
                 <select
-                  v-model="basicsForm.supplier_company_id"
+                  v-model="basicsForm.supplier_id"
                   data-test="supplier-select"
                   :disabled="supplierChangeLocked"
                   class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm disabled:bg-slate-100"
                 >
                   <option value="">ไม่มี (สินค้าของเราเอง)</option>
-                  <option v-for="opt in supplierOptions" :key="opt.supplier_company_id" :value="opt.supplier_company_id">
-                    {{ opt.supplier_name }}
+                  <option v-for="opt in supplierOptions" :key="opt.id" :value="opt.id">
+                    {{ opt.name }}
                   </option>
                 </select>
                 <!-- Locked once money has moved. History keeps its own
@@ -2768,7 +2772,7 @@ function goToVideoSettings() {
                      different company with nothing on this screen recording
                      that it ever moved. -->
                 <p v-if="supplierChangeLocked" class="mt-1 text-xs text-amber-700" data-test="supplier-locked">
-                  สินค้านี้มีประวัติการคืนยอดให้ผู้จัดหารายนี้แล้ว จึงเปลี่ยนผู้จัดหาไม่ได้ — ถ้าเปลี่ยนคู่ค้าให้สร้างสินค้าใหม่
+                  สินค้านี้มีประวัติการคืนยอดให้คู่ค้ารายนี้แล้ว จึงเปลี่ยนคู่ค้าไม่ได้ — ถ้าเปลี่ยนคู่ค้าให้สร้างสินค้าใหม่
                 </p>
               </div>
 
@@ -2779,7 +2783,7 @@ function goToVideoSettings() {
                   data-test="supplier-gp-mode"
                   class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
                 >
-                  <option value="">ใช้ค่าที่ตั้งไว้กับบริษัทคู่ค้า</option>
+                  <option value="">ใช้ค่าที่ตั้งไว้กับคู่ค้า</option>
                   <option value="percent_of_sale">% ของราคาขาย</option>
                   <option value="percent_of_net">% ของยอดหลังหักค่าแนะนำ</option>
                   <option value="fixed_per_unit">จำนวนเงินคงที่ต่อชิ้น</option>

@@ -7,8 +7,8 @@ use App\Enums\ShippingStatus;
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SupplierOrderResource;
-use App\Models\Company;
 use App\Models\Order;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
 use App\Services\Supplier\ShipmentService;
@@ -30,10 +30,9 @@ use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
  * ── THE FILTER THAT IS THE WHOLE SECURITY MODEL ──
  *
  * `supplierScope()` below. Orders belong to the companies that SOLD them, and
- * a supplier is never one of those companies, so TenantScope gives no
- * protection here at all — it would scope to the supplier's own company and
- * return nothing. Every query therefore filters by
- * `products.supplier_company_id = the caller's company` by hand.
+ * a supplier is never one of those companies — a supplier is not a tenant at
+ * all — so TenantScope gives no protection here whatsoever. Every query
+ * therefore filters by `products.supplier_id = the caller's supplier` by hand.
  *
  * Get that wrong in the permissive direction and a supplier sees another
  * supplier's orders, complete with customers' names and home addresses. There
@@ -135,7 +134,7 @@ class SupplierPortalController extends Controller
         $this->assertPartner($request);
 
         $rows = SupplierSettlementLedger::query()
-            ->where('supplier_company_id', $request->user()->company_id)
+            ->where('supplier_id', $request->user()->supplier_id)
             ->with(['order:id,order_number,paid_at', 'product:id,name'])
             ->latest('id')
             ->paginate(50);
@@ -168,7 +167,7 @@ class SupplierPortalController extends Controller
         $this->assertPartner($request);
 
         $requests = SupplierWithdrawalRequest::query()
-            ->where('supplier_company_id', $request->user()->company_id)
+            ->where('supplier_id', $request->user()->supplier_id)
             ->latest('id')
             ->paginate(25);
 
@@ -198,40 +197,51 @@ class SupplierPortalController extends Controller
     }
 
     /**
-     * The caller is a Company Partner, and they belong to a company.
+     * The caller is a Company Partner, and they belong to a supplier.
      *
      * ── 2026-09-17: WHY THIS HAD TO BE ADDED, AND WHAT IT COST ──
      *
-     * Every method here assumed its caller was a partner and read
-     * `$request->user()->company_id` without checking. RestrictScopedRole
-     * looked like it made that safe, but it does the opposite job: it keeps
-     * scoped roles OUT of other endpoints, it does not keep other roles out of
-     * THESE. So anybody signed in could reach them.
+     * Every method here assumed its caller was a partner and read the caller's
+     * own tenant key without checking. RestrictScopedRole looked like it made
+     * that safe, but it does the opposite job: it keeps scoped roles OUT of
+     * other endpoints, it does not keep other roles out of THESE. So anybody
+     * signed in could reach them.
      *
      * The owner found it the unpleasant way — a Super Admin opened
      * /supplier/settlements (the menu wrongly offered it) and got a 500,
-     * because a Super Admin has no `company_id` at all and
-     * `balanceFor(null)` is a type error. A crash, from a screen that should
-     * never have been reachable, on the first day.
+     * because a Super Admin has no tenant key at all and `balanceFor(null)` is
+     * a type error. A crash, from a screen that should never have been
+     * reachable, on the first day.
      *
      * 403 rather than an empty list: an empty page invites the reader to
-     * wonder whether the data is missing. And it returns the company, so the
+     * wonder whether the data is missing. And it returns the supplier, so the
      * callers that need it cannot forget to re-fetch it.
+     *
+     * ── WHY THE ROLE AND THE LINK ARE CHECKED SEPARATELY ──
+     *
+     * `isCompanyPartner()` asks what kind of account this is; `supplier_id`
+     * asks which supplier it works for. They are two facts and they can
+     * disagree — a partner whose supplier row was deleted keeps the role and
+     * loses the link. Rolling them into one check would answer "not a partner"
+     * for the second case and fall through to whatever the caller does with a
+     * non-partner, which is not the same thing at all.
      */
-    private function assertPartner(Request $request): Company
+    private function assertPartner(Request $request): Supplier
     {
         $user = $request->user();
 
-        abort_unless($user?->role === UserRole::CompanyPartner, 403, 'หน้านี้สำหรับบัญชีบริษัทคู่ค้าเท่านั้น');
+        abort_unless($user?->role === UserRole::CompanyPartner, 403, 'หน้านี้สำหรับบัญชีคู่ค้าเท่านั้น');
 
-        $company = Company::withoutGlobalScopes()->find($user->company_id);
+        // `suppliers` carries no global scope, so this is a plain find. Soft
+        // deletes still apply, deliberately: a deleted supplier has no portal.
+        $supplier = Supplier::find($user->supplier_id);
 
-        // A partner account with no company is a broken account, not an empty
-        // one — refuse rather than hand every query a null to scope by, which
+        // A partner account with no supplier is a broken account, not an empty
+        // one — refuse rather than hand every query a null to filter by, which
         // is how "my orders" quietly becomes "everybody's".
-        abort_unless($company !== null, 403, 'บัญชีคู่ค้านี้ยังไม่ได้ผูกกับบริษัท');
+        abort_unless($supplier !== null, 403, 'บัญชีคู่ค้านี้ยังไม่ได้ผูกกับคู่ค้ารายใด');
 
-        return $company;
+        return $supplier;
     }
 
     /**
@@ -246,12 +256,12 @@ class SupplierPortalController extends Controller
      */
     private function supplierScope(Request $request)
     {
-        $supplierId = $request->user()->company_id;
+        $supplierId = $request->user()->supplier_id;
 
         return Order::withoutGlobalScopes()
             ->whereHas('product', fn ($q) => $q
                 ->withoutGlobalScopes()
-                ->where('supplier_company_id', $supplierId));
+                ->where('supplier_id', $supplierId));
     }
 
     /**
@@ -269,9 +279,16 @@ class SupplierPortalController extends Controller
 
         $product = $order->product()->withoutGlobalScopes()->first();
 
+        /*
+         * Both halves matter. Without the null check, a partner whose own
+         * supplier_id is somehow null would match every unsupplied product in
+         * the catalogue — null === null — and be able to mark our own orders
+         * shipped.
+         */
         abort_unless(
-            $product?->supplier_company_id !== null
-                && $product->supplier_company_id === $user->company_id,
+            $product?->supplier_id !== null
+                && $user->supplier_id !== null
+                && $product->supplier_id === $user->supplier_id,
             404,
         );
     }

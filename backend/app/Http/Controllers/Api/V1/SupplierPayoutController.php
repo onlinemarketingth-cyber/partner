@@ -2,12 +2,10 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Platform\UpdateSupplierTermsRequest;
-use App\Models\Company;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
 use App\Services\Supplier\SupplierPayoutService;
@@ -31,6 +29,13 @@ use Illuminate\Http\Request;
  * payment that includes other companies' sales is exactly the cross-tenant
  * read BR-6 exists to prevent. Same reasoning that makes refunds Super-Admin
  * only (OrderPolicy::refund).
+ *
+ * ── WHAT IS NOT HERE ANY MORE (2026-09-17) ──
+ *
+ * `terms()` and `updateTerms()` lived here for a day, editing supplier deal
+ * terms that were at the time columns on `companies`. Both moved to
+ * SupplierController, along with the table. This file is now only about MONEY
+ * MOVING: who we owe, raising a payment, recording that it went out.
  */
 class SupplierPayoutController extends Controller
 {
@@ -44,30 +49,33 @@ class SupplierPayoutController extends Controller
     {
         abort_unless($request->user()->isSuperAdmin(), 403);
 
-        $suppliers = Company::withoutGlobalScopes()
-            ->where('is_supplier', true)
-            ->orderBy('name')
-            ->get();
+        /*
+         * Inactive suppliers are listed too, and on purpose: ending a deal
+         * does not end a debt. Filtering them out here is exactly how a
+         * supplier we still owe money to disappears from the only screen that
+         * would have shown it. The screen marks them instead.
+         */
+        $suppliers = Supplier::query()->orderBy('name')->get();
 
         return response()->json([
-            'data' => $suppliers->map(function (Company $supplier) use ($payouts) {
+            'data' => $suppliers->map(function (Supplier $supplier) use ($payouts) {
                 $balance = $payouts->balanceFor($supplier);
 
                 return [
-                    'supplier_company_id' => $supplier->id,
+                    'supplier_id' => $supplier->id,
                     'supplier_name' => $supplier->name,
-                    'bank_name' => $supplier->supplier_payout_bank_name,
-                    'bank_account_number' => $supplier->supplier_payout_bank_account_number,
-                    'bank_account_holder_name' => $supplier->supplier_payout_bank_account_name,
+                    'is_active' => (bool) $supplier->is_active,
+                    'bank_name' => $supplier->payout_bank_name,
+                    'bank_account_number' => $supplier->payout_bank_account_number,
+                    'bank_account_holder_name' => $supplier->payout_bank_account_name,
                     /*
                      * Surfaced so the screen can say WHY a supplier cannot be
                      * paid rather than simply not offering the button. "GP not
                      * configured" is a thing somebody can go and fix; a
                      * disabled button with no explanation is a support ticket.
                      */
-                    'terms_complete' => $supplier->supplier_gp_mode !== null
-                        && $supplier->supplier_gp_value !== null
-                        && $supplier->supplier_release_trigger !== null,
+                    'terms_complete' => $supplier->hasCompleteTerms(),
+                    'missing_terms' => $supplier->missingTerms(),
                     ...$balance,
                 ];
             }),
@@ -80,12 +88,10 @@ class SupplierPayoutController extends Controller
         abort_unless($request->user()->isSuperAdmin(), 403);
 
         $validated = $request->validate([
-            'supplier_company_id' => ['required', 'integer', 'exists:companies,id'],
+            'supplier_id' => ['required', 'integer', 'exists:suppliers,id'],
         ]);
 
-        $supplier = Company::withoutGlobalScopes()->findOrFail($validated['supplier_company_id']);
-
-        abort_unless((bool) $supplier->is_supplier, 404);
+        $supplier = Supplier::findOrFail($validated['supplier_id']);
 
         // CompanyPayout, so it opens Approved: the admin pressing this button
         // IS the decision, and asking them to approve it on the next screen
@@ -106,6 +112,10 @@ class SupplierPayoutController extends Controller
             // An unknown status narrows to nothing rather than widening to
             // everything — the same anti-footgun the payout report uses.
             $query->where('status', WithdrawalStatus::tryFrom((string) $status)?->value ?? '__none__');
+        }
+
+        if ($supplierId = $request->query('supplier_id')) {
+            $query->where('supplier_id', (int) $supplierId);
         }
 
         return response()->json([
@@ -139,13 +149,24 @@ class SupplierPayoutController extends Controller
     }
 
     /** The sales behind one supplier's balance. */
-    public function settlements(Request $request, Company $company): JsonResponse
+    public function settlements(Request $request, Supplier $supplier): JsonResponse
     {
         abort_unless($request->user()->isSuperAdmin(), 403);
 
         $rows = SupplierSettlementLedger::query()
-            ->where('supplier_company_id', $company->id)
-            ->with(['order:id,order_number', 'product:id,name', 'company:id,name'])
+            ->where('supplier_id', $supplier->id)
+            /*
+             * `company` is one of OUR tenants and carries TenantScope keyed to
+             * the caller. A Super Admin is exempt, so this loads — but the
+             * scope is left off explicitly rather than relied upon, because
+             * "works only because the caller happens to be exempt" is the kind
+             * of dependency that breaks the day the gate above widens.
+             */
+            ->with([
+                'order:id,order_number',
+                'product' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'name'),
+                'company' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'name'),
+            ])
             ->latest('id')
             ->paginate(50);
 
@@ -172,81 +193,13 @@ class SupplierPayoutController extends Controller
     }
 
     /**
-     * The supplier deal for ONE company — read.
-     *
-     * Lives here rather than on CompanyController because it is the same
-     * subject as everything else in this file: what we owe a supplier and on
-     * what terms. CompanyController is about a tenant's identity.
-     */
-    public function terms(Request $request, Company $company): JsonResponse
-    {
-        abort_unless($request->user()->isSuperAdmin(), 403);
-
-        return response()->json(['data' => $this->presentTerms($company)]);
-    }
-
-    /**
-     * Set it.
-     *
-     * 2026-09-17 — the screen that was missing. Until this existed a company
-     * could only be made a supplier by editing the database, which made the
-     * whole feature unreachable from its own first step.
-     */
-    public function updateTerms(UpdateSupplierTermsRequest $request, Company $company): JsonResponse
-    {
-        $validated = $request->validated();
-
-        /*
-         * Turning a supplier OFF while we still owe them is refused.
-         *
-         * The settlement rows keep their own snapshots, so history is safe
-         * either way — the problem is the payout screen, which lists suppliers
-         * by this flag. Clearing it hides a company we owe money to, with the
-         * debt fully intact and nothing on any screen showing it. That is the
-         * kind of disappearance nobody notices until the supplier telephones.
-         */
-        if ($validated['is_supplier'] === false && $company->is_supplier) {
-            $owed = SupplierSettlementLedger::query()
-                ->where('supplier_company_id', $company->id)
-                ->where('payment_status', PaymentStatus::Pending->value)
-                ->exists();
-
-            abort_if($owed, 422, 'ยังมียอดค้างจ่ายให้บริษัทนี้อยู่ — จ่ายให้ครบก่อนจึงจะยกเลิกสถานะคู่ค้าได้');
-        }
-
-        $company->update($validated);
-
-        return response()->json(['data' => $this->presentTerms($company->fresh())]);
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function presentTerms(Company $company): array
-    {
-        return [
-            'id' => $company->id,
-            'name' => $company->name,
-            'is_supplier' => (bool) $company->is_supplier,
-            'supplier_gp_mode' => $company->supplier_gp_mode?->value,
-            'supplier_gp_value' => $company->supplier_gp_value,
-            'supplier_release_trigger' => $company->supplier_release_trigger?->value,
-            'supplier_min_withdrawal_satang' => $company->supplier_min_withdrawal_satang,
-            'supplier_wht_rate' => $company->supplier_wht_rate,
-            'supplier_payout_bank_name' => $company->supplier_payout_bank_name,
-            'supplier_payout_bank_account_number' => $company->supplier_payout_bank_account_number,
-            'supplier_payout_bank_account_name' => $company->supplier_payout_bank_account_name,
-        ];
-    }
-
-    /**
      * @return array<string, mixed>
      */
     private function present(SupplierWithdrawalRequest $r): array
     {
         return [
             'id' => $r->id,
-            'supplier_company_id' => $r->supplier_company_id,
+            'supplier_id' => $r->supplier_id,
             'supplier_name' => $r->supplier?->name,
             'status' => $r->status->value,
             'source' => $r->source->value,

@@ -557,6 +557,31 @@ export const routes: RouteRecordRaw[] = [
       component: () => import('../views/SupplierPayoutsView.vue'),
       meta: { navLabel: 'จ่ายคืนคู่ค้า', requiresSuperAdmin: true },
     },
+    /*
+     * 2026-09-17 — MANAGING THE COUNTERPARTIES THEMSELVES.
+     *
+     * `/suppliers`, PLURAL, and NOT marked companyPartner — mirroring the
+     * backend, where RestrictScopedRole opens the singular `supplier` to the
+     * partner role and this prefix is refused to them. This is the screen that
+     * edits every supplier's deal terms and bank account.
+     *
+     * Its own route rather than a tab on /companies because a tenant we pay
+     * commission TO and a counterparty we buy goods FROM are different
+     * relationships — the owner rejected the first attempt for putting the
+     * second on the first's screen.
+     */
+    {
+      path: '/suppliers',
+      name: 'supplier-management',
+      component: () => import('../views/SupplierManagementView.vue'),
+      meta: { navLabel: 'จัดการคู่ค้า', requiresSuperAdmin: true },
+    },
+    {
+      path: '/suppliers/:id',
+      name: 'supplier-detail',
+      component: () => import('../views/SupplierDetailView.vue'),
+      meta: { navLabel: 'รายละเอียดคู่ค้า', requiresSuperAdmin: true },
+    },
     // TASK-190 §5 — platform-wide SMTP settings. Same gating convention as
     // '/companies' above: `requiresSuperAdmin: true` meta, enforced client-
     // side by the guard below (UX only — real enforcement is the backend's

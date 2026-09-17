@@ -26,7 +26,7 @@ class SupplierWithdrawalRequest extends Model
     use HasFactory;
 
     protected $fillable = [
-        'supplier_company_id',
+        'supplier_id',
         'source',
         'status',
         'gross_satang',
@@ -58,10 +58,10 @@ class SupplierWithdrawalRequest extends Model
         ];
     }
 
-    /** @return BelongsTo<Company, $this> */
+    /** @return BelongsTo<Supplier, $this> */
     public function supplier(): BelongsTo
     {
-        return $this->belongsTo(Company::class, 'supplier_company_id');
+        return $this->belongsTo(Supplier::class);
     }
 
     /** @return HasMany<SupplierWithdrawalItem, $this> */

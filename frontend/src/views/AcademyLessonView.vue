@@ -112,6 +112,39 @@ async function load() {
 
 watch(lessonId, load, { immediate: true })
 
+/**
+ * 2026-09-17 — the player's source expired; mint a new one.
+ *
+ * A lesson video's `inline_url` is a signed URL with a 2-hour life (a
+ * `<video>` element cannot carry an Authorization header, so the
+ * authorization lives in the URL — see LessonVideoPlayer's docblock). A
+ * learner who leaves the page open over lunch comes back to a source that
+ * refuses its next ranged GET.
+ *
+ * Re-fetching the LESSON is what mints a fresh URL, so this is a plain
+ * reload of the detail payload rather than anything video-specific. The
+ * player keeps the playback position across it.
+ *
+ * Deliberately NOT `load()`: that one sets `loading`, which swaps the whole
+ * page for a skeleton — and the learner is watching a video, not waiting for
+ * a page. It also re-reads the bookmark, which would fight the position the
+ * player is about to restore.
+ */
+async function refreshLessonSource(): Promise<void> {
+  try {
+    const detail = await api.get<{ data: ModuleLessonItem }>(
+      `/module-lessons/${lessonId.value}`,
+      pageAbort.signal,
+    )
+    lesson.value = detail.data
+  } catch (e) {
+    if (isAbortError(e)) return
+    // The player is already showing its own failure state with a retry
+    // button, so this stays quiet rather than stacking a second error on a
+    // screen that has one.
+  }
+}
+
 // ── §4.1 — FINISHING THE CONTENT ────────────────────────────────────
 /**
  * Where the learner goes once this lesson is finished (human decision,
@@ -349,6 +382,7 @@ const heroSubtitle = computed(() => (lesson.value ? contentTypeLabel(lesson.valu
             class="w-full"
             @position="reportVideoPosition"
             @flush="progress.flush()"
+            @refresh="refreshLessonSource"
             @ended="completedHere && goAfterLesson()"
           />
 

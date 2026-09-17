@@ -3,8 +3,8 @@
 namespace App\Http\Requests\Catalog\Concerns;
 
 use App\Enums\SupplierGpMode;
-use App\Models\Company;
 use App\Models\Product;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
@@ -33,7 +33,7 @@ use Illuminate\Validation\Validator;
  *
  * ── RULE 3: MODE AND VALUE TRAVEL TOGETHER ──
  *
- * A product that names a mode but no value falls back to the COMPANY's value,
+ * A product that names a mode but no value falls back to the SUPPLIER's value,
  * and a 30% deal read as 30 satang is a number 1000x wrong that still looks
  * like a number. So the override is all-or-nothing, enforced rather than
  * documented.
@@ -42,7 +42,7 @@ use Illuminate\Validation\Validator;
  *
  * Settled rows keep their own snapshot, so history is safe. What is not safe
  * is the next sale: changing the supplier silently redirects it to a different
- * company, with nothing on the product to record that it ever moved. A product
+ * counterparty, with nothing on the product to record that it ever moved. A product
  * that has sold under one supplier and now sells under another is two products
  * wearing one name, and the reconciliation nobody can do afterwards is the
  * reason this refuses instead of warning.
@@ -57,15 +57,20 @@ trait HandlesSupplierTerms
         $superAdminOnly = Rule::prohibitedIf(fn () => ! $this->user()->isSuperAdmin());
 
         return [
-            'supplier_company_id' => [
+            'supplier_id' => [
                 'sometimes',
                 'nullable',
                 $superAdminOnly,
                 'integer',
-                // The company must actually be flagged as a supplier. Without
-                // this, any company id at all is accepted and the payout
-                // screen later lists a tenant it has no deal with.
-                Rule::exists('companies', 'id')->where('is_supplier', true),
+                /*
+                 * Must be a supplier that is still trading. `exists` alone
+                 * would accept an ended deal, and a product listed against one
+                 * is a product whose sales nobody is going to be paid for.
+                 *
+                 * Soft-deleted rows are excluded by the same clause, since the
+                 * query builder here does not apply the model's scope.
+                 */
+                Rule::exists('suppliers', 'id')->where('is_active', true)->whereNull('deleted_at'),
             ],
             'supplier_gp_mode' => [
                 'sometimes',
@@ -100,7 +105,7 @@ trait HandlesSupplierTerms
     protected function validateSupplierTerms(Validator $validator, ?Product $product = null): void
     {
         $validator->after(function (Validator $validator) use ($product) {
-            $supplierId = $this->input('supplier_company_id', $product?->supplier_company_id);
+            $supplierId = $this->input('supplier_id', $product?->supplier_id);
 
             // RULE 3 — never one without the other.
             $mode = $this->input('supplier_gp_mode', $product?->supplier_gp_mode?->value);
@@ -126,19 +131,19 @@ trait HandlesSupplierTerms
 
             if ($companyId !== null) {
                 $validator->errors()->add(
-                    'supplier_company_id',
-                    'ตั้งผู้จัดหาได้เฉพาะสินค้าของแพลตฟอร์มเท่านั้น (สินค้าที่ไม่ได้เป็นของบริษัทใดบริษัทหนึ่ง)',
+                    'supplier_id',
+                    'ตั้งคู่ค้าได้เฉพาะสินค้าของแพลตฟอร์มเท่านั้น (สินค้าที่ไม่ได้เป็นของบริษัทใดบริษัทหนึ่ง)',
                 );
             }
 
             // RULE 4 — frozen once this product has settlement history.
             if ($product
-                && $product->supplier_company_id !== null
-                && (int) $supplierId !== (int) $product->supplier_company_id
+                && $product->supplier_id !== null
+                && (int) $supplierId !== (int) $product->supplier_id
                 && SupplierSettlementLedger::where('product_id', $product->id)->exists()) {
                 $validator->errors()->add(
-                    'supplier_company_id',
-                    'สินค้านี้มีประวัติการคืนยอดให้ผู้จัดหารายเดิมแล้ว จึงเปลี่ยนผู้จัดหาไม่ได้ — ให้สร้างสินค้าใหม่แทน',
+                    'supplier_id',
+                    'สินค้านี้มีประวัติการคืนยอดให้คู่ค้ารายเดิมแล้ว จึงเปลี่ยนคู่ค้าไม่ได้ — ให้สร้างสินค้าใหม่แทน',
                 );
             }
         });
@@ -156,7 +161,7 @@ trait HandlesSupplierTerms
     {
         $validator->after(function (Validator $validator) use ($product) {
             $active = $this->has('is_active') ? $this->boolean('is_active') : ($product?->is_active ?? false);
-            $supplierId = $this->input('supplier_company_id', $product?->supplier_company_id);
+            $supplierId = $this->input('supplier_id', $product?->supplier_id);
 
             if (! $active || $supplierId === null) {
                 return;
@@ -169,14 +174,12 @@ trait HandlesSupplierTerms
                 return;
             }
 
-            $supplier = Company::withoutGlobalScopes()->find($supplierId);
+            $supplier = Supplier::find($supplierId);
 
-            if ($supplier?->supplier_gp_mode === null
-                || $supplier?->supplier_gp_value === null
-                || $supplier?->supplier_release_trigger === null) {
+            if ($supplier === null || ! $supplier->hasCompleteTerms()) {
                 $validator->errors()->add(
-                    'supplier_company_id',
-                    'ผู้จัดหารายนี้ยังไม่ได้ตั้งเงื่อนไข GP หรือจังหวะการเบิกไว้ — ตั้งค่าที่ข้อมูลบริษัทคู่ค้าก่อน จึงจะเปิดขายสินค้านี้ได้',
+                    'supplier_id',
+                    'คู่ค้ารายนี้ยังไม่ได้ตั้งเงื่อนไข GP หรือจังหวะการเบิกไว้ — ตั้งค่าที่หน้าจัดการคู่ค้าก่อน จึงจะเปิดขายสินค้านี้ได้',
                 );
             }
         });

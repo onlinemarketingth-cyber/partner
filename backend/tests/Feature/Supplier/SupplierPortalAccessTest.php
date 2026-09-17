@@ -10,6 +10,7 @@ use App\Models\Company;
 use App\Models\Order;
 use App\Models\OrderVoucher;
 use App\Models\Product;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,7 +25,7 @@ use Tests\TestCase;
  * TenantScope enforces that for free — forget a filter and you see nothing.
  * A supplier looks the other way: the orders they need belong to OTHER
  * tenants, so every query here crosses TenantScope deliberately and filters by
- * `products.supplier_company_id` by hand.
+ * `products.supplier_id` by hand.
  *
  * That inverts the failure mode. A missing filter does not show a supplier too
  * little; it shows them another supplier's orders, complete with our
@@ -35,25 +36,32 @@ class SupplierPortalAccessTest extends TestCase
 {
     use RefreshDatabase;
 
-    /** @return array{supplier: Company, partner: User, product: Product} */
+    /** @return array{supplier: Supplier, partner: User, product: Product} */
     private function supplierWith(string $name = 'Supplier A'): array
     {
-        $supplier = Company::factory()->create([
+        $supplier = Supplier::factory()->create([
             'name' => $name,
-            'is_supplier' => true,
-            'supplier_gp_mode' => SupplierGpMode::PercentOfSale->value,
-            'supplier_gp_value' => 3000,
-            'supplier_release_trigger' => 'on_payment',
+            'gp_mode' => SupplierGpMode::PercentOfSale->value,
+            'gp_value' => 3000,
+            'release_trigger' => 'on_payment',
         ]);
 
+        /*
+         * `company_id` is explicitly NULL, which is the shape a partner login
+         * really has — a supplier is not one of our tenants. It is spelled out
+         * rather than omitted because UserFactory's default fills one in, and
+         * a fixture that quietly gave every partner a tenant would hide
+         * exactly the bug this file exists to catch.
+         */
         $partner = User::factory()->create([
-            'company_id' => $supplier->id,
+            'company_id' => null,
+            'supplier_id' => $supplier->id,
             'role' => 'company_partner',
         ]);
 
         $product = Product::factory()->create([
             'company_id' => null,
-            'supplier_company_id' => $supplier->id,
+            'supplier_id' => $supplier->id,
             'requires_shipping' => true,
         ]);
 
@@ -178,7 +186,7 @@ class SupplierPortalAccessTest extends TestCase
         $order = $this->paidOrderFor($a['product'], $seller);
 
         SupplierSettlementLedger::create([
-            'supplier_company_id' => $a['supplier']->id,
+            'supplier_id' => $a['supplier']->id,
             'company_id' => $seller->id,
             'order_id' => $order->id,
             'product_id' => $a['product']->id,
@@ -273,7 +281,7 @@ class SupplierPortalAccessTest extends TestCase
 
         $this->actingAs($a['partner'])->getJson('/api/v1/supplier-payouts')->assertForbidden();
         $this->actingAs($a['partner'])->postJson('/api/v1/supplier-payouts', [
-            'supplier_company_id' => $a['supplier']->id,
+            'supplier_id' => $a['supplier']->id,
         ])->assertForbidden();
     }
 

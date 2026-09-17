@@ -105,21 +105,28 @@ class Product extends Model
         'company_id',
         /*
          * 2026-09-16 — WHO BROUGHT THIS PRODUCT IN.
+         * 2026-09-17 — repointed from `companies` to `suppliers`.
          *
          * Distinct from `company_id`, which answers "who may sell it". A
          * supplier's product is a PLATFORM product (company_id null, so every
          * ADR-040 mechanism keeps working) that additionally names its
          * supplier here. Null = one of ours.
          *
+         * It points at App\Models\Supplier and not at a Company, because a
+         * supplier is a counterparty rather than a tenant — see that model.
+         * The old `supplier_company_id` column survives on the table until the
+         * follow-up migration drops it, and is deliberately not fillable so
+         * nothing can write to it in the meantime.
+         *
          * Not writable by a Company Admin: this column decides who receives
          * money, and the request classes gate it to Super Admin. It is also
          * frozen once the product has settlement history — changing it would
-         * silently redirect future payments to a different company with
+         * silently redirect future payments to a different supplier with
          * nothing on the screen recording that it ever moved.
          */
-        'supplier_company_id',
+        'supplier_id',
         // Per-product override of the supplier deal's GP terms; null = use
-        // companies.supplier_gp_*. A supplier may take a different margin on a
+        // suppliers.gp_*. A supplier may take a different margin on a
         // flagship item.
         'supplier_gp_mode',
         'supplier_gp_value',
@@ -213,16 +220,16 @@ class Product extends Model
         ];
     }
 
-    /** @return BelongsTo<Company, $this> */
+    /** @return BelongsTo<Supplier, $this> */
     public function supplier(): BelongsTo
     {
-        return $this->belongsTo(Company::class, 'supplier_company_id');
+        return $this->belongsTo(Supplier::class);
     }
 
     /** A product somebody else supplies and we sell on their behalf. */
     public function hasSupplier(): bool
     {
-        return $this->supplier_company_id !== null;
+        return $this->supplier_id !== null;
     }
 
     /**

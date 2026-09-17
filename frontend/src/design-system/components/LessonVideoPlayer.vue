@@ -33,22 +33,34 @@ const { td } = useI18n()
  * TASK-143 gave the stream endpoint real HTTP Range support
  * (RangeFileResponder, 206/416), so the right client is a plain
  * `<video src>` that issues its OWN ranged GETs and lets the browser
- * buffer what it needs. The one thing that makes that possible without
- * weakening authorization is `crossorigin="use-credentials"`: the media
- * element then sends the Sanctum session cookie on a cross-origin
- * request, and the server's Policy check runs before any bytes exactly
- * as before (CLAUDE.md §5 rule 6 is untouched — nothing was made
- * public).
+ * buffer what it needs.
  *
- * Requirements this places on the API side, verified in config/cors.php:
- *  - `supports_credentials: true` (present) and an explicit origin
- *    allowlist (present) — a credentialed request is rejected against a
- *    wildcard origin.
- *  - `Accept-Ranges` / `Content-Range` do NOT need to be in
- *    `exposed_headers` for playback: Access-Control-Expose-Headers gates
- *    what SCRIPT may read from a Response, not what the media element
- *    itself parses. They are still worth exposing for diagnosability —
- *    see the note in the TASK-147 hand-back.
+ * ── 2026-09-17: HOW THAT REQUEST PROVES WHO IT IS ───────────────────
+ *
+ * It used to carry `crossorigin="use-credentials"` and rely on a Sanctum
+ * SESSION COOKIE. That stopped being true when the agent portal moved to
+ * bearer tokens (ADR-039 — api/client.ts's ensureCsrfCookie() is a
+ * documented no-op and its hosts are no longer stateful domains). There
+ * was no cookie left to send, and a media element cannot carry an
+ * Authorization header — that is a property of the element, not
+ * something a client can work around.
+ *
+ * So every uploaded video lesson asked the stream route anonymously and
+ * got 401, and the "ลองใหม่" button below could never succeed, because a
+ * 401 is an ANSWER rather than a blip. Images and PDFs survived the same
+ * migration only because they are fetched by JS and were fixed on
+ * 2026-09-04 (`authHeaders`); this component deliberately cannot take
+ * that route — see the blob note above.
+ *
+ * `inlineUrl` is now a SHORT-LIVED SIGNED URL minted by
+ * ModuleLessonResource: the authorization lives in the URL's HMAC rather
+ * than in a header the element cannot send, and the server still runs the
+ * Module policy and LessonAccessGate before any bytes (CLAUDE.md §5 rule
+ * 6 is untouched — nothing was made public). The element therefore needs
+ * NO `crossorigin` attribute at all: no credentials are involved, so
+ * asking for CORS mode would only add a way for this to fail.
+ *
+ * The URL expires. See `onError` below for what happens then.
  *
  * ── WHAT THIS COMPONENT DELIBERATELY DOES NOT DO ────────────────────
  * It never computes or shows a completion percentage. ADR-028 §4 (human
@@ -59,7 +71,7 @@ const { td } = useI18n()
  * meter — and the threshold it would have to be measured against is not
  * exposed to this app at all.
  */
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import Icon from './Icon.vue'
 
 const props = withDefaults(
@@ -87,6 +99,18 @@ const emit = defineEmits<{
    * not the same event as the credits rolling.
    */
   ended: []
+  /**
+   * 2026-09-17 — "this URL no longer works; fetch me a new one."
+   *
+   * `inlineUrl` is signed and expires (2 hours). A learner who leaves a
+   * lesson open over lunch comes back to a src that answers 403 on its next
+   * ranged GET, and retrying the SAME url would fail forever — the exact
+   * dead end the 401 bug produced.
+   *
+   * The parent owns the lesson payload, so only it can mint a fresh URL.
+   * This component asks; it does not know what a signature is.
+   */
+  refresh: []
 }>()
 
 const videoEl = ref<HTMLVideoElement | null>(null)
@@ -156,15 +180,65 @@ function onEnded() {
   emit('ended')
 }
 
+/**
+ * Where playback was when the source died, so a refresh does not send the
+ * learner back to 00:00.
+ *
+ * Not the same thing as `resumeSeconds`, which is the server's record of a
+ * previous session and is offered rather than applied (see resumeOffered).
+ * This one is applied silently, because nothing visible happened from the
+ * learner's point of view: the picture stopped and came back.
+ */
+const positionBeforeFailure = ref<number | null>(null)
+
 function onError() {
+  const el = videoEl.value
+  if (el && el.currentTime > 0) positionBeforeFailure.value = el.currentTime
+
   failed.value = true
   emit('flush')
 }
 
+/**
+ * Re-requesting the SAME url is the one thing that cannot help.
+ *
+ * The likely cause of a failure here is an expired signature, and an expired
+ * signature stays expired. So retry asks the parent for a fresh lesson first;
+ * the `inlineUrl` prop changing is what actually reloads the element (see the
+ * watcher below). `reloadKey` still gets bumped for the case where the URL
+ * comes back identical — a genuine network blip — because then nothing else
+ * would tell the element to try again.
+ */
 function retry() {
   failed.value = false
   reloadKey.value += 1
+  emit('refresh')
 }
+
+/*
+ * A new signed URL arrived: clear the error, and put the learner back where
+ * they were. `loadeddata` rather than an immediate assignment because
+ * currentTime cannot be set on an element that has not loaded metadata yet —
+ * it is silently ignored, which would look exactly like the seek working and
+ * then being undone.
+ */
+watch(
+  () => props.inlineUrl,
+  () => {
+    failed.value = false
+    reloadKey.value += 1
+
+    const at = positionBeforeFailure.value
+    if (at === null) return
+
+    positionBeforeFailure.value = null
+    void nextTick(() => {
+      const el = videoEl.value
+      if (!el) return
+      el.addEventListener('loadeddata', () => { el.currentTime = at }, { once: true })
+    })
+  },
+)
 
 defineExpose({ flush: () => emit('flush') })
 </script>
@@ -208,10 +282,11 @@ defineExpose({ flush: () => emit('flush') })
     </div>
 
     <!--
-      `crossorigin="use-credentials"` is the whole point (see the header
-      comment): it makes the element send the Sanctum session cookie, so
-      the browser can issue its own ranged GETs against the authenticated
-      stream instead of us pre-downloading the file into a blob.
+      NO `crossorigin` attribute, deliberately (see the header comment).
+      `inlineUrl` is a signed URL: there are no credentials to send, so
+      putting the element in CORS mode would add a failure path and buy
+      nothing. It carried `use-credentials` until 2026-09-17, aimed at a
+      session cookie this app had already stopped having.
 
       `preload="metadata"` rather than "auto": we want duration + the
       ability to seek without pulling the body on a mobile connection.
@@ -221,7 +296,6 @@ defineExpose({ flush: () => emit('flush') })
       :key="reloadKey"
       ref="videoEl"
       :src="inlineUrl"
-      crossorigin="use-credentials"
       controls
       playsinline
       preload="metadata"

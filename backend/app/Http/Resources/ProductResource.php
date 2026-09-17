@@ -220,7 +220,7 @@ class ProductResource extends JsonResource
              * resource that lied about the stored value would make that screen
              * impossible to build correctly.
              */
-            'supplier_company_id' => $this->supplier_company_id,
+            'supplier_id' => $this->supplier_id,
             'supplier_name' => $this->whenLoaded('supplier', fn () => $this->supplier?->name),
             'supplier_gp_mode' => $this->supplier_gp_mode?->value,
             'supplier_gp_value' => $this->supplier_gp_value,

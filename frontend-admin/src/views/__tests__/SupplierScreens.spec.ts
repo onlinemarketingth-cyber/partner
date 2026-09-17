@@ -49,19 +49,43 @@ const STUBS = {
   EmptyState: true,
   Icon: true,
   LoadingSkeleton: true,
+  /*
+   * 2026-09-17 — the supplier name on the payout screen became a link into
+   * จัดการคู่ค้า, and a real RouterLink needs an injected router. Stubbed as a
+   * plain element so the text it wraps still appears in `wrapper.text()` —
+   * `true` would render <router-link-stub> and swallow the name these tests
+   * assert on.
+   */
+  RouterLink: { template: '<a><slot /></a>' },
 }
 
 function mountView(component: unknown) {
   return mount(component as never, { global: { stubs: STUBS } })
 }
 
-const SUPPLIER = {
-  supplier_company_id: 7,
+const SUPPLIER: {
+  supplier_id: number
+  supplier_name: string
+  is_active: boolean
+  bank_name: string | null
+  bank_account_number: string | null
+  bank_account_holder_name: string | null
+  terms_complete: boolean
+  missing_terms: string[]
+  payable_satang: number
+  reserved_satang: number
+  unreleased_satang: number
+} = {
+  supplier_id: 7,
   supplier_name: 'บริษัท ซัพพลายเออร์ จำกัด',
+  is_active: true,
   bank_name: 'ธนาคารกสิกรไทย',
   bank_account_number: '123-4-56789-0',
   bank_account_holder_name: 'บริษัท ซัพพลายเออร์ จำกัด',
   terms_complete: true,
+  // Empty, not absent: the screen reads this array to decide whether to offer
+  // ตั้งจ่าย, and an undefined here would throw rather than fail an assertion.
+  missing_terms: [],
   payable_satang: 100000,
   reserved_satang: 0,
   unreleased_satang: 25000,
@@ -76,7 +100,7 @@ const SUPPLIER = {
  */
 const REQUEST: {
   id: number
-  supplier_company_id: number
+  supplier_id: number
   supplier_name: string | null
   status: string
   source: string
@@ -93,7 +117,7 @@ const REQUEST: {
   created_at: string | null
 } = {
   id: 1,
-  supplier_company_id: 7,
+  supplier_id: 7,
   supplier_name: 'บริษัท ซัพพลายเออร์ จำกัด',
   status: 'approved',
   source: 'company_payout',
@@ -146,12 +170,50 @@ describe('SupplierPayoutsView — จ่ายคืนคู่ค้า', () =
   it('names the missing configuration rather than showing a dead button', async () => {
     // "GP ยังไม่ได้ตั้ง" is something somebody can go and fix. A greyed button
     // with no explanation is a support ticket.
-    mockPayouts([{ ...SUPPLIER, terms_complete: false }])
+    mockPayouts([{ ...SUPPLIER, terms_complete: false, missing_terms: ['gp'] }])
     const wrapper = mountView(SupplierPayoutsView)
     await flushPromises()
 
     expect(wrapper.find('[data-test="raise-payout"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('ยังไม่ได้ตั้งเงื่อนไข GP')
+  })
+
+  it('refuses to pay a supplier whose bank account is blank, and says so', async () => {
+    /*
+     * 2026-09-17 — the terms can be COMPLETE and the payment still impossible.
+     *
+     * `terms_complete` covers GP and the release trigger, deliberately: a
+     * balance is correct and worth showing without a bank account. But nobody
+     * can transfer to an account that is not there, and discovering that after
+     * raising the payout means unpicking a reservation.
+     */
+    mockPayouts([{
+      ...SUPPLIER,
+      terms_complete: true,
+      missing_terms: ['bank'],
+      bank_account_number: null,
+    }])
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="raise-payout"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('ยังไม่ได้กรอกบัญชีรับเงิน')
+  })
+
+  it('keeps listing a supplier whose deal has ended but whose balance has not', async () => {
+    /*
+     * Ending a deal does not end a debt. The first cut REFUSED to deactivate a
+     * supplier we still owed, which sounds careful and is not: the flag then
+     * never gets set and the supplier stays on the current list forever. The
+     * rule moved here instead — deactivate freely, and the payout screen keeps
+     * showing them, marked.
+     */
+    mockPayouts([{ ...SUPPLIER, is_active: false }])
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('ปิดใช้งาน')
+    expect(wrapper.find('[data-test="raise-payout"]').exists()).toBe(true)
   })
 
   it('shows gross, withholding and net — all three, not just the amount', async () => {

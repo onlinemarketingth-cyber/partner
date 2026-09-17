@@ -54,9 +54,15 @@ use Symfony\Component\HttpFoundation\Response;
  * A supplier gets /vouchers too (they provide the service being redeemed) plus
  * /supplier/*, which is where every screen built for them lives. Nothing else:
  * not /orders, not /clients, not /commission-*. Their own orders are served by
- * /supplier/orders, filtered by supplier_company_id, precisely so that
+ * /supplier/orders, filtered by supplier_id, precisely so that
  * reaching them cannot be done through an endpoint that was written for a
  * tenant and scoped like one.
+ *
+ * 2026-09-17: note the SINGULAR. `supplier` is opened here; `suppliers` (the
+ * Super-Admin screen that edits every supplier's deal terms and bank details)
+ * and `supplier-payouts` (the one that decides what gets paid) are not — the
+ * matcher below compares whole segments precisely so that a one-letter
+ * difference cannot become an authorisation difference by accident.
  */
 class RestrictScopedRole
 {

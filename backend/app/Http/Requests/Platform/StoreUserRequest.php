@@ -4,7 +4,7 @@ namespace App\Http\Requests\Platform;
 
 use App\Enums\IdDocumentType;
 use App\Enums\UserRole;
-use App\Models\Company;
+use App\Models\Supplier;
 use App\Models\User;
 use App\Rules\IdDocument;
 use App\Support\PasswordRuleMessages;
@@ -32,11 +32,30 @@ class StoreUserRequest extends FormRequest
     public function rules(): array
     {
         return [
+            /*
+             * 2026-09-17 — a partner login has NO company.
+             *
+             * `company_id` is the tenant this person belongs to, and a
+             * supplier is not one of our tenants. The first cut set it to the
+             * supplier's company row, which made one column mean two things
+             * depending on the reader's role — see User::$fillable.
+             */
             'company_id' => [
-                Rule::prohibitedIf(fn () => ! $this->user()->isSuperAdmin()),
-                Rule::requiredIf(fn () => $this->user()->isSuperAdmin()),
+                Rule::prohibitedIf(fn () => ! $this->user()->isSuperAdmin() || $this->isPartner()),
+                Rule::requiredIf(fn () => $this->user()->isSuperAdmin() && ! $this->isPartner()),
                 'integer',
                 'exists:companies,id',
+            ],
+            /*
+             * …and a login for any other role has no supplier. The two are
+             * exclusive, enforced from both sides so neither can be smuggled
+             * in by omitting the other.
+             */
+            'supplier_id' => [
+                Rule::prohibitedIf(fn () => ! $this->isPartner()),
+                Rule::requiredIf(fn () => $this->isPartner()),
+                'integer',
+                'exists:suppliers,id',
             ],
             'first_name' => ['required', 'string', 'max:255'],
             'last_name' => ['required', 'string', 'max:255'],
@@ -58,18 +77,19 @@ class StoreUserRequest extends FormRequest
              * endpoint creates a company's own staff, and the platform owner
              * is not one of them.
              *
-             * 2026-09-16 — `company_partner` joins, with a condition the other
-             * four do not carry: the company must be flagged `is_supplier`.
+             * 2026-09-16 — `company_partner` joins. 2026-09-17 — and it is
+             * SUPER ADMIN ONLY, which the other three are not.
              *
-             * A partner login is a login into a SUPPLIER's side of the system —
-             * it reads orders belonging to other tenants, filtered by
-             * `products.supplier_company_id`. Minted against a company that
-             * supplies nothing, it is an account that can see nothing and means
-             * nothing, and the person holding it would have no way to tell that
-             * from a bug. Refusing here is cheaper than explaining an empty
-             * screen later.
+             * A partner login reads orders belonging to tenants OTHER than the
+             * creator's, filtered by `products.supplier_id`. Letting a Company
+             * Admin mint one would let them hand somebody a window onto every
+             * company that sells that supplier's products — the cross-tenant
+             * read BR-6 exists to prevent, issued by the tenant itself.
+             *
+             * Suppliers are platform data with a platform screen, and the
+             * accounts that read them are made there.
              */
-            'role' => ['required', Rule::in(['agent', 'company_admin', 'voucher_staff', 'company_partner'])],
+            'role' => ['required', Rule::in($this->assignableRoles())],
             // TASK-122 — WHICH identity document `national_id` below is.
             // `required_with`, not `required`: the document itself stays
             // optional here (see below), so demanding a type for an absent
@@ -93,32 +113,52 @@ class StoreUserRequest extends FormRequest
         ];
     }
 
+    /** Is this request minting a supplier's login? */
+    private function isPartner(): bool
+    {
+        return $this->input('role') === UserRole::CompanyPartner->value;
+    }
+
     /**
-     * A partner login only makes sense against a supplier company.
+     * @return list<string>
+     */
+    private function assignableRoles(): array
+    {
+        $roles = ['agent', 'company_admin', 'voucher_staff'];
+
+        /*
+         * `super_admin` is absent from both branches, and still deliberately:
+         * this endpoint creates staff, and the platform owner is not staff.
+         */
+        if ($this->user()->isSuperAdmin()) {
+            $roles[] = UserRole::CompanyPartner->value;
+        }
+
+        return $roles;
+    }
+
+    /**
+     * A partner login only makes sense against a supplier that is still
+     * trading.
      *
-     * Checked here rather than in `rules()` because the company being created
-     * into is either the actor's own (Company Admin, inferred server-side) or
-     * the `company_id` they named (Super Admin) — one rule cannot see both.
+     * Checked here rather than in `rules()` because `exists:suppliers,id` says
+     * the row is there, not that the deal is live. Pointing a new login at an
+     * ended deal produces an account that can sign in and see nothing, which
+     * the person holding it cannot tell from a bug.
      */
     public function withValidator(Validator $validator): void
     {
         $validator->after(function ($validator) {
-            if ($this->input('role') !== UserRole::CompanyPartner->value) {
+            if (! $this->isPartner() || $this->integer('supplier_id') === 0) {
                 return;
             }
 
-            $companyId = $this->user()->isSuperAdmin()
-                ? $this->integer('company_id')
-                : $this->user()->company_id;
+            $isActive = Supplier::whereKey($this->integer('supplier_id'))->value('is_active');
 
-            $isSupplier = Company::withoutGlobalScopes()
-                ->whereKey($companyId)
-                ->value('is_supplier');
-
-            if (! $isSupplier) {
+            if (! $isActive) {
                 $validator->errors()->add(
-                    'role',
-                    'บริษัทนี้ยังไม่ได้ตั้งเป็นบริษัทคู่ค้า จึงสร้างบัญชีคู่ค้าไม่ได้',
+                    'supplier_id',
+                    'คู่ค้ารายนี้ถูกปิดการใช้งานอยู่ จึงสร้างบัญชีผู้ใช้ใหม่ไม่ได้',
                 );
             }
         });

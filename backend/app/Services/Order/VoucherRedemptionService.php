@@ -186,11 +186,11 @@ class VoucherRedemptionService
      *   an ordinary actor  — "did MY company sell this?"
      *   a partner          — "did I supply what this card is for?"
      *
-     * The second reads `products.supplier_company_id`, the same column every
-     * other supplier-facing query filters on, and it is checked ONLY for the
-     * partner role. Widening the first rule to accept either answer for
-     * everybody would let a Company Admin redeem another tenant's card
-     * whenever the two happened to share a supplier.
+     * The second reads `products.supplier_id`, the same column every other
+     * supplier-facing query filters on, and it is checked ONLY for the partner
+     * role. Widening the first rule to accept either answer for everybody
+     * would let a Company Admin redeem another tenant's card whenever the two
+     * happened to share a supplier.
      */
     private function assertSameTenant(OrderVoucher $voucher, User $actor): void
     {
@@ -201,9 +201,16 @@ class VoucherRedemptionService
         if ($actor->role === UserRole::CompanyPartner) {
             // withoutGlobalScopes already applied on the eager load above, so
             // this reads the real product rather than a scoped-away null.
+            /*
+             * Three conditions, and the third is not padding: without it, a
+             * partner whose own supplier_id is null would match every product
+             * in the catalogue that has no supplier — null === null — and be
+             * able to redeem our own companies' vouchers.
+             */
             abort_unless(
-                $voucher->order?->product?->supplier_company_id !== null
-                    && $voucher->order->product->supplier_company_id === $actor->company_id,
+                $voucher->order?->product?->supplier_id !== null
+                    && $actor->supplier_id !== null
+                    && $voucher->order->product->supplier_id === $actor->supplier_id,
                 404,
             );
 

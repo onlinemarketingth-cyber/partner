@@ -14,6 +14,7 @@ use App\Models\Company;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Referral;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\User;
 use App\Models\UserCertification;
@@ -51,10 +52,10 @@ class SupplierSettlementTest extends TestCase
     }
 
     /**
-     * A supplier company with terms set, plus one of our companies selling
-     * one of its products.
+     * A supplier with terms set, plus one of our companies selling one of its
+     * products.
      *
-     * @return array{supplier: Company, seller: Company, agent: User, product: Product}
+     * @return array{supplier: Supplier, seller: Company, agent: User, product: Product}
      */
     private function scenario(
         SupplierGpMode $mode = SupplierGpMode::PercentOfSale,
@@ -64,12 +65,11 @@ class SupplierSettlementTest extends TestCase
         ?int $whtRate = null,
         int $commissionRate = 1000,
     ): array {
-        $supplier = Company::factory()->create([
-            'is_supplier' => true,
-            'supplier_gp_mode' => $mode->value,
-            'supplier_gp_value' => $gpValue,
-            'supplier_release_trigger' => $trigger->value,
-            'supplier_wht_rate' => $whtRate,
+        $supplier = Supplier::factory()->create([
+            'gp_mode' => $mode->value,
+            'gp_value' => $gpValue,
+            'release_trigger' => $trigger->value,
+            'wht_rate' => $whtRate,
         ]);
 
         $seller = Company::factory()->create();
@@ -80,7 +80,7 @@ class SupplierSettlementTest extends TestCase
         // §3.1 of the spec describes and the only one the rules allow.
         $product = Product::factory()->create([
             'company_id' => null,
-            'supplier_company_id' => $supplier->id,
+            'supplier_id' => $supplier->id,
             'price_satang' => $price,
         ]);
 
@@ -264,7 +264,7 @@ class SupplierSettlementTest extends TestCase
     public function test_it_refuses_rather_than_defaulting_a_missing_gp(): void
     {
         $s = $this->scenario();
-        $s['supplier']->forceFill(['supplier_gp_mode' => null, 'supplier_gp_value' => null])->save();
+        $s['supplier']->forceFill(['gp_mode' => null, 'gp_value' => null])->save();
         $order = $this->paidOrder($s);
 
         $this->expectException(RuntimeException::class);
@@ -275,7 +275,7 @@ class SupplierSettlementTest extends TestCase
     public function test_it_refuses_rather_than_guessing_when_money_becomes_payable(): void
     {
         $s = $this->scenario();
-        $s['supplier']->forceFill(['supplier_release_trigger' => null])->save();
+        $s['supplier']->forceFill(['release_trigger' => null])->save();
         $order = $this->paidOrder($s);
 
         $this->expectException(RuntimeException::class);
@@ -404,7 +404,7 @@ class SupplierSettlementTest extends TestCase
     public function test_an_ordinary_product_with_no_supplier_records_nothing(): void
     {
         $s = $this->scenario();
-        $s['product']->forceFill(['supplier_company_id' => null])->save();
+        $s['product']->forceFill(['supplier_id' => null])->save();
 
         $this->assertNull($this->service()->recordForOrder($this->paidOrder($s)));
         $this->assertDatabaseCount('supplier_settlement_ledger', 0);

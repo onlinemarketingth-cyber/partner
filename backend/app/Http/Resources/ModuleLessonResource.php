@@ -8,6 +8,7 @@ use App\Services\Academy\LessonAccessGate;
 use App\Services\Academy\LessonCompletionGate;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\URL;
 
 // ADR-009 — carries the exact per-item shape the old ModuleResource
 // used to expose directly (content_type/source_type/content_ref/
@@ -22,6 +23,16 @@ use Illuminate\Http\Resources\Json\JsonResource;
 // content_type=quiz, and the quiz is gated behind the ADR-028 content gate.
 class ModuleLessonResource extends JsonResource
 {
+    /**
+     * How long a video's signed URL stays good. Owner's choice, 2026-09-17.
+     *
+     * Long enough for the longest lesson plus a pause; short enough that a
+     * link pasted into a chat group is stale the same afternoon. The player
+     * asks for a fresh lesson payload when playback fails, so an expiry
+     * mid-video costs a reload and the position is kept.
+     */
+    private const INLINE_URL_TTL_HOURS = 2;
+
     /**
      * @return array<string, mixed>
      */
@@ -109,9 +120,42 @@ class ModuleLessonResource extends JsonResource
              *
              * ag-ui: render from inline_url, download from stream_url.
              */
-            'inline_url' => $isUploadedFile
-                ? route('module-lessons.stream', $this->id).($this->is_downloadable ? '?inline=1' : '')
-                : null,
+            /*
+             * 2026-09-17 — A VIDEO GETS A SIGNED URL. NOTHING ELSE DOES.
+             *
+             * A `<video src>` cannot carry an Authorization header, and since
+             * ADR-039 the agent portal has no session cookie either, so the
+             * authenticated stream route is simply unreachable from a media
+             * element: every uploaded video lesson answered 401 and the
+             * player showed "เล่นวิดีโอไม่สำเร็จ" with a retry that could
+             * never succeed. The authorization therefore moves into the URL —
+             * see ModuleLessonController::inlineStream for what is being
+             * traded and why 2 hours.
+             *
+             * NARROW ON PURPOSE. PDFs and images already work: they are
+             * fetched by JS (PdfViewerModal, useAuthenticatedMedia), which
+             * sends the header perfectly well, and they were fixed for this
+             * exact migration on 2026-09-04. Handing THEM a signed URL too
+             * would be tidier to read and would widen the set of
+             * forwardable links for no gain, so they keep the authenticated
+             * route.
+             *
+             * Signed for a locked lesson as well, matching the note below:
+             * the URL is minted, the route refuses it. Blanking it here would
+             * put the client back in charge of the rule.
+             */
+            'inline_url' => match (true) {
+                ! $isUploadedFile => null,
+                $this->content_type === ModuleContentType::Video => URL::temporarySignedRoute(
+                    'module-lessons.inline-stream',
+                    now()->addHours(self::INLINE_URL_TTL_HOURS),
+                    // `u` is what the route re-derives the learner from. It is
+                    // inside the signature, so it cannot be edited into
+                    // somebody else's id — see that method's own note.
+                    ['moduleLesson' => $this->id, 'u' => $user?->id],
+                ),
+                default => route('module-lessons.stream', $this->id).($this->is_downloadable ? '?inline=1' : ''),
+            },
             'is_downloadable' => (bool) $this->is_downloadable,
             'processing_status' => $this->processing_status?->value,
             // ADR-028 §2.3 — needed by the player for the resume

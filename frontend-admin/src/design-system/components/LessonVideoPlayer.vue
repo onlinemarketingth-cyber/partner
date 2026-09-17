@@ -32,12 +32,24 @@
  * writes progress is a preview that quietly changes the data it is
  * previewing.
  *
- * Everything else is the learner's element verbatim:
- * `crossorigin="use-credentials"` is what lets the browser issue its own
- * ranged GETs against the Sanctum-protected stream (ADR-028 §2.5) with
- * the Policy check still running before any bytes (CLAUDE.md §5 rule 6),
- * and `preload="metadata"` avoids pulling the body just to open a
- * preview.
+ * Everything else is the learner's element verbatim, including what is
+ * NOT on it: no `crossorigin` attribute.
+ *
+ * 2026-09-17 — it carried `crossorigin="use-credentials"` until the agent
+ * portal's video stopped playing entirely. `inline_url` for a video is now
+ * a short-lived SIGNED url (ModuleLessonResource), because a `<video>`
+ * element can carry neither an Authorization header nor — since ADR-039 —
+ * a session cookie. The Policy check and LessonAccessGate still run before
+ * any bytes (CLAUDE.md §5 rule 6); the proof of identity simply moved into
+ * the URL.
+ *
+ * This console DOES authenticate with a cookie, so `use-credentials` was
+ * harmless here and the preview kept working while the learner's player
+ * did not. It comes off anyway: a preview whose element differs from the
+ * one it previews has stopped being a preview, which is the whole point of
+ * the KEEP IN SYNC block above.
+ *
+ * `preload="metadata"` avoids pulling the body just to open a preview.
  */
 import { ref } from 'vue'
 import Icon from './Icon.vue'
@@ -88,7 +100,6 @@ function retry() {
       v-else
       :key="reloadKey"
       :src="inlineUrl"
-      crossorigin="use-credentials"
       controls
       playsinline
       preload="metadata"

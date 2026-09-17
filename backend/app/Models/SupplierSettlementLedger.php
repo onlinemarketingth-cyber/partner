@@ -32,7 +32,7 @@ class SupplierSettlementLedger extends Model
     protected $table = 'supplier_settlement_ledger';
 
     protected $fillable = [
-        'supplier_company_id',
+        'supplier_id',
         'company_id',
         'order_id',
         'product_id',
@@ -63,10 +63,15 @@ class SupplierSettlementLedger extends Model
         ];
     }
 
-    /** @return BelongsTo<Company, $this> */
+    /**
+     * Who we owe. A Supplier, not a Company — see the Supplier model for why
+     * those are different things.
+     *
+     * @return BelongsTo<Supplier, $this>
+     */
     public function supplier(): BelongsTo
     {
-        return $this->belongsTo(Company::class, 'supplier_company_id');
+        return $this->belongsTo(Supplier::class);
     }
 
     /** The company that SOLD it — not this row's owner. */

@@ -5,7 +5,7 @@ namespace App\Services\Supplier;
 use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
-use App\Models\Company;
+use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalItem;
 use App\Models\SupplierWithdrawalRequest;
@@ -28,7 +28,7 @@ use Illuminate\Validation\ValidationException;
  * ── WHAT IS DIFFERENT, AND IT IS ONLY TAX ──
  *
  * Owner: "ทำตามมาตรฐาน". Everything else about this class is the commission
- * flow with a company where a person used to be. Tax is the genuinely new
+ * flow with a supplier where a person used to be. Tax is the genuinely new
  * idea, and it lives in withholdingFor() below — read that one before
  * changing anything here.
  */
@@ -52,12 +52,12 @@ class SupplierPayoutService
      *
      * @return array{payable_satang: int, reserved_satang: int, unreleased_satang: int}
      */
-    public function balanceFor(Company $supplier): array
+    public function balanceFor(Supplier $supplier): array
     {
         $reservedLedgerIds = $this->reservedLedgerIds($supplier);
 
         $payable = (int) SupplierSettlementLedger::query()
-            ->where('supplier_company_id', $supplier->id)
+            ->where('supplier_id', $supplier->id)
             ->payable()
             ->whereNotIn('id', $reservedLedgerIds ?: [0])
             ->sum('amount_satang');
@@ -67,7 +67,7 @@ class SupplierPayoutService
             ->sum('allocated_satang');
 
         $unreleased = (int) SupplierSettlementLedger::query()
-            ->where('supplier_company_id', $supplier->id)
+            ->where('supplier_id', $supplier->id)
             ->where('payment_status', PaymentStatus::Pending->value)
             ->whereNull('released_at')
             ->sum('amount_satang');
@@ -92,13 +92,13 @@ class SupplierPayoutService
      * and leaves a permanent debit that reduces every future payout. Taking
      * the whole payable set is the only version that cannot do that.
      */
-    public function open(Company $supplier, User $actor, WithdrawalSource $source): SupplierWithdrawalRequest
+    public function open(Supplier $supplier, User $actor, WithdrawalSource $source): SupplierWithdrawalRequest
     {
         $rows = $this->payableRows($supplier);
 
         if ($rows->isEmpty()) {
             throw ValidationException::withMessages([
-                'supplier' => 'ไม่มียอดที่พร้อมจ่ายสำหรับบริษัทคู่ค้านี้',
+                'supplier' => 'ไม่มียอดที่พร้อมจ่ายสำหรับคู่ค้ารายนี้',
             ]);
         }
 
@@ -124,8 +124,8 @@ class SupplierPayoutService
          * refusing to let ourselves pay a debt we have decided to pay is not.
          */
         if ($source === WithdrawalSource::AgentRequest
-            && $supplier->supplier_min_withdrawal_satang !== null
-            && $gross < $supplier->supplier_min_withdrawal_satang) {
+            && $supplier->min_withdrawal_satang !== null
+            && $gross < $supplier->min_withdrawal_satang) {
             throw ValidationException::withMessages([
                 'supplier' => 'ยอดคงเหลือยังไม่ถึงขั้นต่ำที่กำหนดไว้สำหรับการขอเบิก',
             ]);
@@ -135,7 +135,7 @@ class SupplierPayoutService
 
         return DB::transaction(function () use ($supplier, $actor, $source, $rows, $gross, $tax) {
             $request = SupplierWithdrawalRequest::create([
-                'supplier_company_id' => $supplier->id,
+                'supplier_id' => $supplier->id,
                 'source' => $source->value,
                 // Same rule as WithdrawalSource documents for agents: a
                 // supplier asking needs a decision; an admin raising it has
@@ -151,16 +151,15 @@ class SupplierPayoutService
                  * Snapshot — a supplier changing bank details later must not
                  * rewrite where this money was sent.
                  *
-                 * 2026-09-17 — `supplier_payout_bank_*`, NOT `payment_bank_*`.
-                 * The latter is the account this company takes CUSTOMER money
-                 * in through; paying a trading partner into it was a
-                 * convenience that conflated two different accounts and, worse,
-                 * would have required letting a Super Admin edit another
-                 * tenant's customer-facing bank details.
+                 * 2026-09-17 — the supplier's OWN payout account, on the
+                 * suppliers table. It was briefly `companies.payment_bank_*`,
+                 * which is the account a TENANT takes customer money in
+                 * through — paying a trading partner into it conflated two
+                 * different accounts pointing in opposite directions.
                  */
-                'bank_name' => $supplier->supplier_payout_bank_name,
-                'bank_account_number' => $supplier->supplier_payout_bank_account_number,
-                'bank_account_holder_name' => $supplier->supplier_payout_bank_account_name,
+                'bank_name' => $supplier->payout_bank_name,
+                'bank_account_number' => $supplier->payout_bank_account_number,
+                'bank_account_holder_name' => $supplier->payout_bank_account_name,
                 'decided_by_user_id' => $source === WithdrawalSource::CompanyPayout ? $actor->id : null,
                 'decided_at' => $source === WithdrawalSource::CompanyPayout ? now() : null,
             ]);
@@ -321,10 +320,10 @@ class SupplierPayoutService
      *
      * @return Collection<int, SupplierSettlementLedger>
      */
-    private function payableRows(Company $supplier): Collection
+    private function payableRows(Supplier $supplier): Collection
     {
         return SupplierSettlementLedger::query()
-            ->where('supplier_company_id', $supplier->id)
+            ->where('supplier_id', $supplier->id)
             ->payable()
             ->whereNotIn('id', $this->reservedLedgerIds($supplier) ?: [0])
             ->orderBy('id')
@@ -332,10 +331,10 @@ class SupplierPayoutService
     }
 
     /** @return list<int> */
-    private function openRequestIds(Company $supplier): array
+    private function openRequestIds(Supplier $supplier): array
     {
         return SupplierWithdrawalRequest::query()
-            ->where('supplier_company_id', $supplier->id)
+            ->where('supplier_id', $supplier->id)
             ->open()
             ->pluck('id')
             ->all();
@@ -350,7 +349,7 @@ class SupplierPayoutService
      *
      * @return list<int>
      */
-    private function reservedLedgerIds(Company $supplier): array
+    private function reservedLedgerIds(Supplier $supplier): array
     {
         $openIds = $this->openRequestIds($supplier);
 
