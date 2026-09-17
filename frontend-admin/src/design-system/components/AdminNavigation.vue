@@ -100,6 +100,23 @@ interface NavItem {
   icon: string
   label: { th: string; en: string }
   superAdminOnly?: boolean
+  /**
+   * 2026-09-17 — shown ONLY to a Company Partner.
+   *
+   * The mirror image of `superAdminOnly`, and it needs to exist for a reason
+   * the first draft of the supplier work got wrong: the partner filter below
+   * is written as "keep only these pillars WHEN the viewer is a partner",
+   * which correctly hides everything else from them — and does nothing at all
+   * in the other direction. So a Super Admin saw "สินค้าของฉัน" in their menu:
+   * a pillar built for suppliers, pointing at screens that filter by
+   * `products.supplier_company_id = my company` and therefore show an admin
+   * an empty page with no explanation.
+   *
+   * Not a data leak (the filter still holds), but a menu item that cannot
+   * work is worse than no menu item — it is the thing somebody clicks while
+   * looking for the screen they actually wanted.
+   */
+  partnerOnly?: boolean
   subMenus: SubMenuItem[]
 }
 
@@ -413,6 +430,7 @@ const navItems: NavItem[] = [
     name: 'supplier-orders',
     icon: 'box',
     label: { th: 'สินค้าของฉัน', en: 'My products' },
+    partnerOnly: true,
     subMenus: [
       { name: 'supplier-orders', icon: 'box', label: { th: 'คำสั่งซื้อสินค้าของฉัน', en: 'Orders for my products' } },
       { name: 'supplier-settlements', icon: 'money', label: { th: 'ยอดค้างรับ', en: 'Amounts due to me' } },
@@ -457,6 +475,9 @@ const PARTNER_PILLARS = ['supplier-orders', 'voucher-redeem']
 const visibleNavItems = computed(() => navItems
   .filter((item) => !isVoucherStaff.value || item.name === 'voucher-redeem')
   .filter((item) => !isCompanyPartner.value || PARTNER_PILLARS.includes(item.name))
+  // …and the other direction: a supplier's pillar is hidden from everybody
+  // who is not one. See NavItem.partnerOnly for what went wrong without it.
+  .filter((item) => !item.partnerOnly || isCompanyPartner.value)
   .filter((item) => !item.superAdminOnly || isSuperAdmin.value))
 const activeName = computed(() => route.name as string)
 

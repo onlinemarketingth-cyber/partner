@@ -72,7 +72,19 @@ interface RowPermissions {
  * Being a Company Admin no longer carries it by itself. That is the point: it
  * was a permission nobody chose to give and nobody could take away.
  */
-type ManageableRole = 'agent' | 'company_admin' | 'voucher_staff'
+/*
+ * 2026-09-17 — `company_partner` joins, and it is the odd one out.
+ *
+ * The three above are people inside a tenant, looking at their own company's
+ * data. A partner is a SUPPLIER's login: it reads orders belonging to other
+ * tenants, reached through `products.supplier_company_id`, and its own company
+ * has to be flagged as a supplier first — the server refuses the account
+ * otherwise, with a message saying so.
+ *
+ * Added because the supplier feature shipped with no way to create one of
+ * these at all, which made the whole thing unusable from its first step.
+ */
+type ManageableRole = 'agent' | 'company_admin' | 'voucher_staff' | 'company_partner'
 
 /** Ability::VoucherRedeem — the only ability this screen may hand out today
  *  (UserAbilityController::GRANTABLE holds the authoritative list). */
@@ -177,6 +189,9 @@ function roleChangeWarning(user: UserRow, role: ManageableRole): string {
   }
   if (role === 'voucher_staff') {
     return `${user.name} จะเข้าได้เฉพาะหน้า "ตัดสิทธิ์บัตรกำนัล" หน้าเดียว — คำสั่งซื้อ ลูกค้า ค่าแนะนำ และรายชื่อผู้ใช้จะเข้าไม่ได้ทั้งหมด · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
+  }
+  if (role === 'company_partner') {
+    return `${user.name} จะกลายเป็นบัญชีบริษัทคู่ค้า — เห็นเฉพาะคำสั่งซื้อของสินค้าที่บริษัทนี้เป็นผู้จัดหา (รวมชื่อและที่อยู่ลูกค้าสำหรับสินค้าที่ต้องจัดส่ง) ยอดค้างรับ และหน้าตัดสิทธิ์บัตรกำนัล · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
   }
 
   return `${user.name} จะกลับไปเห็นเฉพาะข้อมูลของตัวเอง และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที`
@@ -441,6 +456,7 @@ function formatDateTime(iso: string | null): string {
 function roleLabel(role: string): string {
   if (role === 'company_admin') return 'ผู้ดูแลบริษัท'
   if (role === 'voucher_staff') return 'พนักงานหน้าร้าน'
+  if (role === 'company_partner') return 'บริษัทคู่ค้า'
 
   return 'สมาชิก'
 }
@@ -529,6 +545,7 @@ onMounted(() => {
           <option value="company_admin">ผู้ดูแลบริษัท</option>
           <option value="agent">สมาชิก</option>
           <option value="voucher_staff">พนักงานหน้าร้าน</option>
+          <option value="company_partner">บริษัทคู่ค้า</option>
         </select>
       </div>
       <div class="flex-1 min-w-[16rem]">
@@ -811,9 +828,18 @@ onMounted(() => {
             <option value="company_admin">ผู้ดูแลบริษัท</option>
             <option value="agent">สมาชิก</option>
             <option value="voucher_staff">พนักงานหน้าร้าน (ตัดสิทธิ์บัตรกำนัลอย่างเดียว)</option>
+            <option value="company_partner">บริษัทคู่ค้า (ผู้จัดหาสินค้า)</option>
           </select>
           <!-- Said at the moment the choice is made, not discovered after the
                account is handed over. -->
+          <!-- Says the prerequisite BEFORE they fill the form in. The server
+               refuses a partner account against a company that is not flagged
+               as a supplier, and "go and set that first" is a better place to
+               learn it than a validation error after typing a password. -->
+          <p v-if="createForm.role === 'company_partner'" class="mt-1 text-[11px] text-slate-500" data-test="company-partner-hint">
+            บริษัทต้องถูกตั้งเป็น <strong>บริษัทคู่ค้า</strong> ที่หน้า "จัดการบริษัท" ก่อน จึงจะสร้างบัญชีนี้ได้ ·
+            บัญชีนี้จะเห็นคำสั่งซื้อของสินค้าที่ตัวเองเป็นผู้จัดหา ข้ามบริษัทผู้ขาย
+          </p>
           <p v-if="createForm.role === 'voucher_staff'" class="mt-1 text-[11px] text-slate-500" data-test="voucher-staff-hint">
             บัญชีนี้จะเข้าได้เฉพาะหน้า <strong>ตัดสิทธิ์บัตรกำนัล</strong> หน้าเดียว — เห็นคำสั่งซื้อ ลูกค้า หรือค่าแนะนำไม่ได้เลย
           </p>

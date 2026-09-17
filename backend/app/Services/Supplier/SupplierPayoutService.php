@@ -147,11 +147,20 @@ class SupplierPayoutService
                 'wht_rate_at_time' => $tax['rate'],
                 'wht_satang' => $tax['satang'],
                 'net_satang' => $gross - $tax['satang'],
-                // Snapshot — a supplier changing bank details later must not
-                // rewrite where this money was sent.
-                'bank_name' => $supplier->payment_bank_name,
-                'bank_account_number' => $supplier->payment_bank_account_number,
-                'bank_account_holder_name' => $supplier->payment_bank_account_name,
+                /*
+                 * Snapshot — a supplier changing bank details later must not
+                 * rewrite where this money was sent.
+                 *
+                 * 2026-09-17 — `supplier_payout_bank_*`, NOT `payment_bank_*`.
+                 * The latter is the account this company takes CUSTOMER money
+                 * in through; paying a trading partner into it was a
+                 * convenience that conflated two different accounts and, worse,
+                 * would have required letting a Super Admin edit another
+                 * tenant's customer-facing bank details.
+                 */
+                'bank_name' => $supplier->supplier_payout_bank_name,
+                'bank_account_number' => $supplier->supplier_payout_bank_account_number,
+                'bank_account_holder_name' => $supplier->supplier_payout_bank_account_name,
                 'decided_by_user_id' => $source === WithdrawalSource::CompanyPayout ? $actor->id : null,
                 'decided_at' => $source === WithdrawalSource::CompanyPayout ? now() : null,
             ]);

@@ -61,6 +61,18 @@ class Company extends Model
         // agents, and for the same reason (see WithdrawalSource).
         'supplier_min_withdrawal_satang',
         'supplier_wht_rate',
+        /*
+         * 2026-09-17 — where we TRANSFER TO when settling with this supplier.
+         *
+         * Distinct from `payment_bank_*` above, which is where this company
+         * RECEIVES customer payments. Two accounts because in practice they
+         * are two accounts, and because setting a supplier's payout details is
+         * a Super Admin job — reusing the other columns would have made that
+         * an edit on the account another tenant collects customer money into.
+         */
+        'supplier_payout_bank_name',
+        'supplier_payout_bank_account_number',
+        'supplier_payout_bank_account_name',
         'commission_plan_type',
         // 2026-09-12 — the second half of "how does this company pay":
         // commission_plan_type says WHO is paid, this says what a

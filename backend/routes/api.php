@@ -1282,6 +1282,16 @@ Route::prefix('v1')->group(function () {
         Route::post('/supplier-payouts', [SupplierPayoutController::class, 'store']);
         Route::get('/supplier-payouts/requests', [SupplierPayoutController::class, 'requests']);
         Route::get('/supplier-payouts/{company}/settlements', [SupplierPayoutController::class, 'settlements']);
+        /*
+         * 2026-09-17 — the deal terms for one supplier company.
+         *
+         * Under /supplier-payouts rather than /companies/{company} because it
+         * is the same subject as the rest of this prefix — what we owe a
+         * supplier and on what terms — and because that prefix is already the
+         * one a partner account cannot reach.
+         */
+        Route::get('/supplier-payouts/{company}/terms', [SupplierPayoutController::class, 'terms']);
+        Route::put('/supplier-payouts/{company}/terms', [SupplierPayoutController::class, 'updateTerms']);
         Route::post(
             '/supplier-payouts/{supplierWithdrawalRequest}/mark-transferred',
             [SupplierPayoutController::class, 'markTransferred'],

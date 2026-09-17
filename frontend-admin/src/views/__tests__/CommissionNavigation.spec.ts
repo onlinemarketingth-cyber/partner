@@ -296,3 +296,123 @@ describe('the รายงาน pillar', () => {
     expect(subs).not.toContain('นโยบายและรายงาน')
   })
 })
+
+/**
+ * 2026-09-17 — WHO SEES THE SUPPLIER PILLARS.
+ *
+ * The owner could not find the new supplier screens and asked where they were.
+ * Chasing that turned up the mirror-image mistake in the menu: the Company
+ * Partner filter is written as "keep only these pillars WHEN the viewer is a
+ * partner", which hides everything else from them and does nothing in the
+ * other direction — so every Super Admin had "สินค้าของฉัน" in their menu,
+ * pointing at screens that filter by `products.supplier_company_id = my
+ * company` and therefore show an admin an empty page with no explanation.
+ *
+ * Not a leak. Worse than useless, though: a menu item that cannot work is the
+ * thing somebody clicks while hunting for the one they actually wanted. So
+ * both directions are pinned here, because only one of them was obvious.
+ */
+describe('the supplier pillars are visible to exactly the right roles', () => {
+  function labelsFor(role: string): string[] {
+    useAuthStore().user = { id: 1, name: 'ผู้ใช้', role } as never
+
+    return pillarLabels(mountNav())
+  }
+
+  it('shows จ่ายคืนคู่ค้า to a Super Admin', () => {
+    // This is the screen the owner was looking for. It decides what suppliers
+    // get paid, so it is Super-Admin-only — a supplier's sales span several of
+    // our companies and no single tenant's admin owns that queue.
+    expect(labelsFor('super_admin').join(' ')).toContain('จ่ายคืนคู่ค้า')
+  })
+
+  it('hides จ่ายคืนคู่ค้า from a Company Admin', () => {
+    expect(labelsFor('company_admin').join(' ')).not.toContain('จ่ายคืนคู่ค้า')
+  })
+
+  it('hides สินค้าของฉัน from everybody who is not a supplier', () => {
+    // The regression this describe block exists for.
+    for (const role of ['super_admin', 'company_admin']) {
+      expect(labelsFor(role).join(' ')).not.toContain('สินค้าของฉัน')
+    }
+  })
+
+  it('shows a Company Partner their two pillars and nothing else', () => {
+    const labels = labelsFor('company_partner')
+
+    expect(labels.join(' ')).toContain('สินค้าของฉัน')
+    expect(labels.join(' ')).toContain('ตัดสิทธิ์บัตรกำนัล')
+    // And emphatically not the screen that decides what they are paid.
+    expect(labels.join(' ')).not.toContain('จ่ายคืนคู่ค้า')
+    expect(labels).toHaveLength(2)
+  })
+})
+
+/**
+ * 2026-09-17 — WHO SEES THE SUPPLIER SCREENS, IN BOTH DIRECTIONS.
+ *
+ * The owner could not find the new supplier pages, and chasing that turned up
+ * the mirror-image mistake: the Company Partner rules were written once, as
+ * "when the viewer IS a partner, keep only their pillars". Nothing said what
+ * happens when they are NOT. So every Super Admin had "สินค้าของฉัน" in their
+ * menu — a pillar built for suppliers — clicked it while hunting for the
+ * screen they actually wanted, and got a 500: those pages scope every query by
+ * a `company_id` a Super Admin does not have.
+ *
+ * Two lessons, both pinned below:
+ *   · a visibility rule has two directions and testing one proves nothing
+ *     about the other;
+ *   · the pillar somebody clicks by mistake is the one they were looking for
+ *     something else in.
+ */
+describe('the supplier pillars are visible to exactly the right roles', () => {
+  function labelsFor(role: string): string[] {
+    useAuthStore().user = { id: 1, name: 'ผู้ใช้', role } as never
+
+    return pillarLabels(mountNav())
+  }
+
+  it('shows จ่ายคืนคู่ค้า to a Super Admin', () => {
+    // The screen the owner was looking for. Super-Admin-only because a
+    // supplier's sales span several of our companies and no single tenant's
+    // admin owns that queue.
+    expect(labelsFor('super_admin').join(' ')).toContain('จ่ายคืนคู่ค้า')
+  })
+
+  it('hides จ่ายคืนคู่ค้า from a Company Admin', () => {
+    expect(labelsFor('company_admin').join(' ')).not.toContain('จ่ายคืนคู่ค้า')
+  })
+
+  it('hides สินค้าของฉัน from everybody who is not a supplier', () => {
+    // The regression. Both roles, because the bug hit both.
+    for (const role of ['super_admin', 'company_admin']) {
+      expect(labelsFor(role).join(' ')).not.toContain('สินค้าของฉัน')
+    }
+  })
+
+  it('shows a Company Partner their two pillars and nothing else', () => {
+    const labels = labelsFor('company_partner')
+
+    expect(labels.join(' ')).toContain('สินค้าของฉัน')
+    expect(labels.join(' ')).toContain('ตัดสิทธิ์บัตรกำนัล')
+    // Emphatically not the screen that decides what they are paid.
+    expect(labels.join(' ')).not.toContain('จ่ายคืนคู่ค้า')
+    expect(labels).toHaveLength(2)
+  })
+
+  it('marks the partner-only routes so the guard can turn others away', () => {
+    /*
+     * Hiding a menu item is not access control — the URL is still typeable,
+     * and that is exactly how the owner reached the broken page. `partnerOnly`
+     * is what the router's guard reads.
+     *
+     * /voucher-redeem deliberately does NOT carry it: a partner may open it
+     * and so may everybody else, which is why "may a partner open this" and
+     * "may only a partner open this" had to become two different flags.
+     */
+    expect(routeNamed('supplier-orders')?.meta?.partnerOnly).toBe(true)
+    expect(routeNamed('supplier-settlements')?.meta?.partnerOnly).toBe(true)
+    expect(routeNamed('voucher-redeem')?.meta?.partnerOnly).toBeUndefined()
+    expect(routeNamed('supplier-payouts')?.meta?.requiresSuperAdmin).toBe(true)
+  })
+})

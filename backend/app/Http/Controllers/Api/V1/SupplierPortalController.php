@@ -7,6 +7,7 @@ use App\Enums\ShippingStatus;
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SupplierOrderResource;
+use App\Models\Company;
 use App\Models\Order;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
@@ -52,6 +53,8 @@ class SupplierPortalController extends Controller
      */
     public function orders(Request $request): AnonymousResourceCollection
     {
+        $this->assertPartner($request);
+
         $query = $this->supplierScope($request)
             ->where('status', OrderStatus::Paid->value)
             /*
@@ -121,7 +124,7 @@ class SupplierPortalController extends Controller
      */
     public function balance(Request $request, SupplierPayoutService $payouts): JsonResponse
     {
-        $supplier = $request->user()->company;
+        $supplier = $this->assertPartner($request);
 
         return response()->json(['data' => $payouts->balanceFor($supplier)]);
     }
@@ -129,6 +132,8 @@ class SupplierPortalController extends Controller
     /** The individual sales behind that balance. */
     public function settlements(Request $request): JsonResponse
     {
+        $this->assertPartner($request);
+
         $rows = SupplierSettlementLedger::query()
             ->where('supplier_company_id', $request->user()->company_id)
             ->with(['order:id,order_number,paid_at', 'product:id,name'])
@@ -160,6 +165,8 @@ class SupplierPortalController extends Controller
     /** Payments we have raised or made to this supplier. */
     public function payouts(Request $request): JsonResponse
     {
+        $this->assertPartner($request);
+
         $requests = SupplierWithdrawalRequest::query()
             ->where('supplier_company_id', $request->user()->company_id)
             ->latest('id')
@@ -188,6 +195,43 @@ class SupplierPortalController extends Controller
                 'total' => $requests->total(),
             ],
         ]);
+    }
+
+    /**
+     * The caller is a Company Partner, and they belong to a company.
+     *
+     * ── 2026-09-17: WHY THIS HAD TO BE ADDED, AND WHAT IT COST ──
+     *
+     * Every method here assumed its caller was a partner and read
+     * `$request->user()->company_id` without checking. RestrictScopedRole
+     * looked like it made that safe, but it does the opposite job: it keeps
+     * scoped roles OUT of other endpoints, it does not keep other roles out of
+     * THESE. So anybody signed in could reach them.
+     *
+     * The owner found it the unpleasant way — a Super Admin opened
+     * /supplier/settlements (the menu wrongly offered it) and got a 500,
+     * because a Super Admin has no `company_id` at all and
+     * `balanceFor(null)` is a type error. A crash, from a screen that should
+     * never have been reachable, on the first day.
+     *
+     * 403 rather than an empty list: an empty page invites the reader to
+     * wonder whether the data is missing. And it returns the company, so the
+     * callers that need it cannot forget to re-fetch it.
+     */
+    private function assertPartner(Request $request): Company
+    {
+        $user = $request->user();
+
+        abort_unless($user?->role === UserRole::CompanyPartner, 403, 'หน้านี้สำหรับบัญชีบริษัทคู่ค้าเท่านั้น');
+
+        $company = Company::withoutGlobalScopes()->find($user->company_id);
+
+        // A partner account with no company is a broken account, not an empty
+        // one — refuse rather than hand every query a null to scope by, which
+        // is how "my orders" quietly becomes "everybody's".
+        abort_unless($company !== null, 403, 'บัญชีคู่ค้านี้ยังไม่ได้ผูกกับบริษัท');
+
+        return $company;
     }
 
     /**

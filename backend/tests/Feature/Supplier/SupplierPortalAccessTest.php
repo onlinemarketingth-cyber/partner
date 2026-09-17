@@ -201,6 +201,53 @@ class SupplierPortalAccessTest extends TestCase
 
     // ── The wall ───────────────────────────────────────────────────────
 
+    /**
+     * 2026-09-17 — THE OTHER DIRECTION, WHICH THE FIRST DRAFT MISSED.
+     *
+     * Every test in this file asked "can a partner reach things they should
+     * not?" and none asked "can anybody else reach the PARTNER's screens?"
+     *
+     * They could. RestrictScopedRole keeps scoped roles out of other
+     * endpoints; it does not keep other roles out of /supplier. The owner
+     * found it by opening /supplier/settlements as a Super Admin — the menu
+     * wrongly offered it — and getting a 500, because a Super Admin has no
+     * company_id and balanceFor(null) is a type error.
+     *
+     * A crash is the loud version. The quiet version is a Company Admin of a
+     * supplier company reading a portal built for somebody else.
+     */
+    public function test_nobody_but_a_partner_can_reach_the_partner_portal(): void
+    {
+        $company = Company::factory()->create();
+
+        $actors = [
+            'super admin' => User::factory()->superAdmin()->create(),
+            'company admin' => User::factory()->companyAdmin()->create(['company_id' => $company->id]),
+        ];
+
+        foreach ($actors as $who => $actor) {
+            foreach ([
+                '/api/v1/supplier/orders',
+                '/api/v1/supplier/balance',
+                '/api/v1/supplier/settlements',
+                '/api/v1/supplier/payouts',
+            ] as $path) {
+                $this->actingAs($actor)
+                    ->getJson($path)
+                    ->assertForbidden(); // never 500, and never a page of data
+            }
+        }
+    }
+
+    public function test_a_super_admin_hitting_the_partner_portal_gets_403_not_a_crash(): void
+    {
+        // Named separately because the SYMPTOM is what was reported. A Super
+        // Admin has company_id null, and every query here scopes by it.
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->getJson('/api/v1/supplier/balance')
+            ->assertStatus(403);
+    }
+
     public function test_a_partner_is_refused_everywhere_outside_their_own_prefixes(): void
     {
         /*

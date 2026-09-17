@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Platform\UpdateSupplierTermsRequest;
 use App\Models\Company;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
@@ -54,9 +56,9 @@ class SupplierPayoutController extends Controller
                 return [
                     'supplier_company_id' => $supplier->id,
                     'supplier_name' => $supplier->name,
-                    'bank_name' => $supplier->payment_bank_name,
-                    'bank_account_number' => $supplier->payment_bank_account_number,
-                    'bank_account_holder_name' => $supplier->payment_bank_account_name,
+                    'bank_name' => $supplier->supplier_payout_bank_name,
+                    'bank_account_number' => $supplier->supplier_payout_bank_account_number,
+                    'bank_account_holder_name' => $supplier->supplier_payout_bank_account_name,
                     /*
                      * Surfaced so the screen can say WHY a supplier cannot be
                      * paid rather than simply not offering the button. "GP not
@@ -167,6 +169,74 @@ class SupplierPayoutController extends Controller
             ]),
             'meta' => ['total' => $rows->total()],
         ]);
+    }
+
+    /**
+     * The supplier deal for ONE company — read.
+     *
+     * Lives here rather than on CompanyController because it is the same
+     * subject as everything else in this file: what we owe a supplier and on
+     * what terms. CompanyController is about a tenant's identity.
+     */
+    public function terms(Request $request, Company $company): JsonResponse
+    {
+        abort_unless($request->user()->isSuperAdmin(), 403);
+
+        return response()->json(['data' => $this->presentTerms($company)]);
+    }
+
+    /**
+     * Set it.
+     *
+     * 2026-09-17 — the screen that was missing. Until this existed a company
+     * could only be made a supplier by editing the database, which made the
+     * whole feature unreachable from its own first step.
+     */
+    public function updateTerms(UpdateSupplierTermsRequest $request, Company $company): JsonResponse
+    {
+        $validated = $request->validated();
+
+        /*
+         * Turning a supplier OFF while we still owe them is refused.
+         *
+         * The settlement rows keep their own snapshots, so history is safe
+         * either way — the problem is the payout screen, which lists suppliers
+         * by this flag. Clearing it hides a company we owe money to, with the
+         * debt fully intact and nothing on any screen showing it. That is the
+         * kind of disappearance nobody notices until the supplier telephones.
+         */
+        if ($validated['is_supplier'] === false && $company->is_supplier) {
+            $owed = SupplierSettlementLedger::query()
+                ->where('supplier_company_id', $company->id)
+                ->where('payment_status', PaymentStatus::Pending->value)
+                ->exists();
+
+            abort_if($owed, 422, 'ยังมียอดค้างจ่ายให้บริษัทนี้อยู่ — จ่ายให้ครบก่อนจึงจะยกเลิกสถานะคู่ค้าได้');
+        }
+
+        $company->update($validated);
+
+        return response()->json(['data' => $this->presentTerms($company->fresh())]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function presentTerms(Company $company): array
+    {
+        return [
+            'id' => $company->id,
+            'name' => $company->name,
+            'is_supplier' => (bool) $company->is_supplier,
+            'supplier_gp_mode' => $company->supplier_gp_mode?->value,
+            'supplier_gp_value' => $company->supplier_gp_value,
+            'supplier_release_trigger' => $company->supplier_release_trigger?->value,
+            'supplier_min_withdrawal_satang' => $company->supplier_min_withdrawal_satang,
+            'supplier_wht_rate' => $company->supplier_wht_rate,
+            'supplier_payout_bank_name' => $company->supplier_payout_bank_name,
+            'supplier_payout_bank_account_number' => $company->supplier_payout_bank_account_number,
+            'supplier_payout_bank_account_name' => $company->supplier_payout_bank_account_name,
+        ];
     }
 
     /**

@@ -530,13 +530,17 @@ export const routes: RouteRecordRaw[] = [
       path: '/supplier/orders',
       name: 'supplier-orders',
       component: () => import('../views/SupplierOrdersView.vue'),
-      meta: { navLabel: 'คำสั่งซื้อสินค้าของฉัน', companyPartner: true },
+      // `partnerOnly` as well as `companyPartner`: the first says a partner
+      // MAY open it, the second says nobody else may. They are different
+      // questions, and /voucher-redeem is the proof — partners may open it and
+      // so may everybody else.
+      meta: { navLabel: 'คำสั่งซื้อสินค้าของฉัน', companyPartner: true, partnerOnly: true },
     },
     {
       path: '/supplier/settlements',
       name: 'supplier-settlements',
       component: () => import('../views/SupplierSettlementsView.vue'),
-      meta: { navLabel: 'ยอดค้างรับ', companyPartner: true },
+      meta: { navLabel: 'ยอดค้างรับ', companyPartner: true, partnerOnly: true },
     },
     /*
      * OUR side of the same money. Super Admin only — a supplier's sales span
@@ -648,6 +652,23 @@ router.beforeEach(async (to) => {
    */
   if (authStore.user?.role === 'company_partner' && !to.meta.public && !to.meta.companyPartner) {
     return { name: 'supplier-orders' }
+  }
+
+  /*
+   * 2026-09-17 — AND THE OTHER DIRECTION.
+   *
+   * The block above keeps a partner off everybody else's screens. It does
+   * nothing to keep everybody else off the PARTNER's, and the owner found
+   * that by landing on /supplier/settlements as a Super Admin: the page
+   * rendered, then failed, because every query on it scopes by a company_id
+   * a Super Admin does not have.
+   *
+   * The API refuses these with 403 now regardless — this is the half that
+   * stops a reader arriving at a screen that was never theirs and reading an
+   * error as a fault in the system.
+   */
+  if (to.meta.partnerOnly && authStore.user?.role !== 'company_partner') {
+    return { name: 'home' }
   }
 
   if (!to.meta.public && !authStore.isAuthenticated) {

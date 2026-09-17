@@ -51,9 +51,12 @@ class SupplierPayoutTest extends TestCase
             'supplier_gp_mode' => SupplierGpMode::PercentOfSale->value,
             'supplier_gp_value' => 3000,
             'supplier_release_trigger' => 'on_payment',
-            'payment_bank_name' => 'ธนาคารกสิกรไทย',
-            'payment_bank_account_number' => '123-4-56789-0',
-            'payment_bank_account_name' => 'บริษัท ซัพพลายเออร์ จำกัด',
+            // 2026-09-17 — the PAYOUT account, not the one this company takes
+            // customer money in through. See the migration for why they are two
+            // columns rather than one.
+            'supplier_payout_bank_name' => 'ธนาคารกสิกรไทย',
+            'supplier_payout_bank_account_number' => '123-4-56789-0',
+            'supplier_payout_bank_account_name' => 'บริษัท ซัพพลายเออร์ จำกัด',
         ]);
 
         $this->seller = Company::factory()->create();
@@ -294,7 +297,7 @@ class SupplierPayoutTest extends TestCase
         $this->ledgerRow(60000);
         $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
 
-        $this->supplier->forceFill(['payment_bank_account_number' => '999-9-99999-9'])->save();
+        $this->supplier->forceFill(['supplier_payout_bank_account_number' => '999-9-99999-9'])->save();
 
         $this->assertSame('123-4-56789-0', $request->fresh()->bank_account_number);
     }
