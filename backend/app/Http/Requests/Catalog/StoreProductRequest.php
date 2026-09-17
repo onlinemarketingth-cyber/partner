@@ -5,10 +5,12 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Catalog\Concerns\HandlesSupplierTerms;
 use App\Http\Requests\Concerns\HandlesRichText;
 use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 // BR-3: price_satang must be a non-negative integer — no floats accepted.
 // brand_id/category_id must belong to the SAME company as the product
@@ -18,6 +20,7 @@ class StoreProductRequest extends FormRequest
     use Concerns\ChoosesPlatformOrCompany;
     use Concerns\ValidatesProductTaxonomy;
     use HandlesRichText;
+    use HandlesSupplierTerms;
 
     protected function prepareForValidation(): void
     {
@@ -155,6 +158,16 @@ class StoreProductRequest extends FormRequest
             'voucher_usage_quota' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'voucher_validity_days' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'requires_shipping' => ['sometimes', 'boolean'],
+            // 2026-09-16 — who supplies this product and on what terms. Super
+            // Admin only, platform products only; see the trait for all four
+            // rules and why each one refuses rather than corrects.
+            ...$this->supplierTermRules(),
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $this->validateSupplierTerms($validator);
+        $this->assertSellableSupplierTerms($validator);
     }
 }

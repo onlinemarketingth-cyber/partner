@@ -10,7 +10,12 @@ import { api, ApiError, ensureCsrfCookie } from '@/api/client'
 // THIS app and sees the redemption screen only. The real wall is the backend's
 // RestrictVoucherStaff middleware — the router guard below just keeps them off
 // screens that would render as a wall of 403s.
-export type UserRole = 'agent' | 'company_admin' | 'super_admin' | 'voucher_staff'
+// 2026-09-16 — `company_partner` is a SUPPLIER's login: a company that brings
+// products into our catalogue for our members to sell. Unlike every role
+// before it, it looks OUTWARD — the orders it reads belong to other tenants
+// and are reached through products.supplier_company_id, never through its own
+// company_id. See the backend's UserRole enum for the full note.
+export type UserRole = 'agent' | 'company_admin' | 'super_admin' | 'voucher_staff' | 'company_partner'
 
 export interface UserBackground {
   type: 'gradient' | 'image' | null

@@ -25,7 +25,7 @@ use Illuminate\Http\Request;
  * agent portal deliberately does not call this endpoint at all).
  *
  * Voucher staff never reach it either, and not by this gate: the whole
- * authenticated group sits behind `restrict.voucher-staff`, whose allowlist
+ * authenticated group sits behind `restrict.scoped-role`, whose allowlist
  * does not include this path.
  */
 class CommissionReadinessController extends Controller

@@ -15,6 +15,7 @@ use App\Services\Catalog\ProductPricingService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Notification\NotificationService;
 use App\Services\Referral\PipelineService;
+use App\Services\Supplier\SupplierSettlementService;
 use App\Support\Media\StoredFileName;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
@@ -57,6 +58,10 @@ class OrderService
         // every order has one from the moment it exists rather than the
         // first time somebody opens the share modal.
         private TrackedLinkService $trackedLinks,
+        // 2026-09-16 — records what a paid sale owes the product's supplier.
+        // Called at the very end of confirmPayment()'s transaction, after the
+        // commission rows exist; see the call site for why the order matters.
+        private SupplierSettlementService $supplierSettlementService,
     ) {}
 
     /**
@@ -457,6 +462,30 @@ class OrderService
                     ['order_id' => $order->id],
                 );
             }
+
+            /*
+             * 2026-09-16 — WHAT THIS SALE OWES ITS SUPPLIER.
+             *
+             * LAST, and that position is the whole correctness argument.
+             *
+             * The amount is `sale − commission − GP`, and `commission` is read
+             * back out of commission_ledger. Those rows are written by
+             * pipelineService->advance() twenty lines above. Move this call
+             * any earlier and the sum reads 0 — not an error, not an empty
+             * result, just a smaller number — so every supplier with an upline
+             * in the chain is overpaid on every single sale, and nothing
+             * anywhere says so.
+             *
+             * NOT guarded by `! $alreadyClosed`, unlike the three blocks
+             * above. Those mint things that must exist once; this one is
+             * idempotent on its own (UNIQUE on order_id, and the service
+             * returns the existing row) and the guard would add a second
+             * condition for the same property.
+             *
+             * Returns null for the ordinary case — a product we supply
+             * ourselves — which is almost every order in the system.
+             */
+            $this->supplierSettlementService->recordForOrder($order->fresh());
 
             return $order->fresh();
         });

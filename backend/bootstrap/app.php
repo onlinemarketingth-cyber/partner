@@ -3,7 +3,7 @@
 use App\Http\Middleware\EnsureCompanyIsOperational;
 use App\Http\Middleware\ExtendAccessToken;
 use App\Http\Middleware\ResolveChunkedUpload;
-use App\Http\Middleware\RestrictVoucherStaff;
+use App\Http\Middleware\RestrictScopedRole;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\ServerTiming;
 use Illuminate\Foundation\Application;
@@ -83,7 +83,7 @@ return Application::configure(basePath: dirname(__DIR__))
              * the only position where it can both see the user and stop the
              * request.
              */
-            'restrict.voucher-staff' => RestrictVoucherStaff::class,
+            'restrict.scoped-role' => RestrictScopedRole::class,
         ]);
 
         /*

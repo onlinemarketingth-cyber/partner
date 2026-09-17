@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentProvider;
+use App\Enums\ShippingStatus;
 use App\Models\Concerns\HasTrackedLink;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -70,6 +71,20 @@ class Order extends Model
         'shipping_recipient_name',
         'shipping_phone',
         'shipping_address',
+        /*
+         * 2026-09-16 — the fulfilment half, added when a SUPPLIER became the
+         * one who ships (owner: "supplier เป็นคนส่งเอง").
+         *
+         * Written by ShipmentService and nothing else. They are listed here so
+         * that service can use update(), the same arrangement the gateway
+         * fields above have — no request payload reaches this model directly,
+         * because who may mark a parcel sent is a question about the actor's
+         * relationship to the product's supplier, not about a form field.
+         */
+        'shipping_status',
+        'tracking_number',
+        'shipped_at',
+        'shipped_by_user_id',
         // ADR-027 / TASK-139 — stamped ONCE by OrderService at creation from
         // the company's active gateway, then never re-read from the company.
         // A /pay link already in a customer's hand must not change what it
@@ -122,7 +137,23 @@ class Order extends Model
             'last_payment_error_at' => 'datetime',
             'refund_reported_at' => 'datetime',
             'refund_reported_satang' => 'integer',
+            'shipping_status' => ShippingStatus::class,
+            'shipped_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Does this order need something physically sent?
+     *
+     * Reads the PRODUCT, because that is where the answer has always lived
+     * (`requires_shipping`, ADR-033). `shipping_status` says where a parcel
+     * is; this says whether there is one at all, and the two must not be
+     * conflated — every order carries a shipping_status, including the ones
+     * that will never have a parcel.
+     */
+    public function needsShipping(): bool
+    {
+        return $this->product?->requires_shipping === true;
     }
 
     /**

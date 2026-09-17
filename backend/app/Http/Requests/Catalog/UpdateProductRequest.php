@@ -5,14 +5,17 @@ namespace App\Http\Requests\Catalog;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Http\Requests\Catalog\Concerns\HandlesSupplierTerms;
 use App\Http\Requests\Concerns\HandlesRichText;
 use App\Models\Product;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 class UpdateProductRequest extends FormRequest
 {
     use HandlesRichText;
+    use HandlesSupplierTerms;
 
     protected function prepareForValidation(): void
     {
@@ -114,6 +117,17 @@ class UpdateProductRequest extends FormRequest
             'voucher_usage_quota' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'voucher_validity_days' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'requires_shipping' => ['sometimes', 'boolean'],
+            // 2026-09-16 — see the trait. The change-lock (rule 4) only has
+            // anything to bite on here, because only an existing product can
+            // have settlement history.
+            ...$this->supplierTermRules(),
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $product = $this->route('product');
+        $this->validateSupplierTerms($validator, $product);
+        $this->assertSellableSupplierTerms($validator, $product);
     }
 }

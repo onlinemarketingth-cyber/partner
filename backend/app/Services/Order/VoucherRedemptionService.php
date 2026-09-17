@@ -2,10 +2,13 @@
 
 namespace App\Services\Order;
 
+use App\Enums\SupplierReleaseTrigger;
+use App\Enums\UserRole;
 use App\Enums\VoucherStatus;
 use App\Models\OrderVoucher;
 use App\Models\User;
 use App\Models\VoucherRedemption;
+use App\Services\Supplier\SupplierSettlementService;
 use App\Support\VoucherCode;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -18,6 +21,13 @@ use Illuminate\Validation\ValidationException;
  */
 class VoucherRedemptionService
 {
+    public function __construct(
+        // 2026-09-16 — a redemption can be the moment a supplier's money
+        // becomes payable (SupplierReleaseTrigger::OnRedeemed). This service
+        // decides whether it is; this class only reports that it happened.
+        private SupplierSettlementService $supplierSettlements,
+    ) {}
+
     /**
      * Resolve a voucher by its redemption code. Looks up WITHOUT
      * TenantScope on the query itself (OrderVoucher has no company_id
@@ -108,6 +118,31 @@ class VoucherRedemptionService
                 'redeemed_at' => now(),
             ]);
 
+            /*
+             * 2026-09-16 — a redemption is one of the three things that can
+             * make a supplier's money payable (SupplierReleaseTrigger).
+             *
+             * Fires on EVERY redemption, and the service itself checks whether
+             * this supplier's deal is the OnRedeemed kind — the alternative is
+             * this method learning the supplier rules, which would put them in
+             * two places.
+             *
+             * A no-op for every order that has no supplier, which is most of
+             * them. Inside the transaction because "the service was taken" and
+             * "the money for it became payable" are one fact; a crash between
+             * them would leave a supplier permanently unpaid for a card that
+             * says it was used.
+             *
+             * On a multi-use card this runs again on the second redemption and
+             * finds nothing to release, because `released_at` is already set
+             * and the query only touches null ones. Releasing is a one-way
+             * door by construction.
+             */
+            $this->supplierSettlements->releaseFor(
+                $voucher->order,
+                SupplierReleaseTrigger::OnRedeemed,
+            );
+
             return $voucher->fresh(['order.product', 'order.client', 'order.company']);
         });
     }
@@ -134,10 +169,44 @@ class VoucherRedemptionService
      * with 404, matching every other cross-tenant lookup in this codebase,
      * so an actor cannot distinguish "wrong code" traffic from "right code,
      * wrong company" traffic.
+     *
+     * ── 2026-09-16: THE SAME-TENANT RULE WAS NOT ENOUGH ──
+     *
+     * A Company Partner supplies the product and very often IS the business
+     * that performs the service the card entitles the customer to — the clinic
+     * behind the shopfront. But the voucher hangs off an order belonging to
+     * the company that SOLD it, and a partner is never that company. Under the
+     * single rule below, `$voucher->order->company_id === $actor->company_id`
+     * is false for every card a partner will ever be handed, so the feature
+     * "partners redeem vouchers" would have returned 404 on all of them while
+     * every line of code looked correct.
+     *
+     * So there are two ways in now, and they are genuinely different questions:
+     *
+     *   an ordinary actor  — "did MY company sell this?"
+     *   a partner          — "did I supply what this card is for?"
+     *
+     * The second reads `products.supplier_company_id`, the same column every
+     * other supplier-facing query filters on, and it is checked ONLY for the
+     * partner role. Widening the first rule to accept either answer for
+     * everybody would let a Company Admin redeem another tenant's card
+     * whenever the two happened to share a supplier.
      */
     private function assertSameTenant(OrderVoucher $voucher, User $actor): void
     {
         if ($actor->isSuperAdmin()) {
+            return;
+        }
+
+        if ($actor->role === UserRole::CompanyPartner) {
+            // withoutGlobalScopes already applied on the eager load above, so
+            // this reads the real product rather than a scoped-away null.
+            abort_unless(
+                $voucher->order?->product?->supplier_company_id !== null
+                    && $voucher->order->product->supplier_company_id === $actor->company_id,
+                404,
+            );
+
             return;
         }
 

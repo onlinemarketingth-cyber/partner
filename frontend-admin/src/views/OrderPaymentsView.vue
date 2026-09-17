@@ -102,6 +102,25 @@ interface OrderRow {
    * closed costs a button, failing open ships a 403.
    */
   permissions?: { confirm: boolean; upload_slip?: boolean }
+  /*
+   * 2026-09-16 — THE ADDRESS THIS SYSTEM HAS BEEN COLLECTING SINCE ADR-033
+   * AND SHOWING NOBODY.
+   *
+   * The three shipping_* columns and the payment page that fills them in have
+   * existed for weeks; a grep of both front-ends found them rendered on
+   * exactly zero screens. Staff asking "where does this go?" had no answer.
+   *
+   * Absent — not null — on a product that does not ship, so a row cannot
+   * render an empty "Ship to:" block for a service appointment.
+   */
+  requires_shipping?: boolean
+  shipping_status?: string | null
+  shipping_status_label?: string | null
+  tracking_number?: string | null
+  shipped_at?: string | null
+  shipping_recipient_name?: string
+  shipping_phone?: string
+  shipping_address?: string
 }
 
 interface SummaryRow {
@@ -701,6 +720,34 @@ function badgeClasses(tone: string): string {
               sentence on this screen that tells somebody money is sitting
               unaccounted for. A second row costs a line and stays readable.
             -->
+            <!--
+              THE DELIVERY ADDRESS GETS ITS OWN SPANNING ROW, like the
+              warnings below it and for the same reason: it is a block of text
+              nobody can read out of a table cell, and squeezing it into one
+              would truncate the part that matters (the house number).
+
+              Shown only when the product ships — the keys are absent
+              otherwise, so this cannot render an empty block.
+            -->
+            <tr v-if="order.requires_shipping" :key="`${order.id}-shipping`" class="border-b border-slate-100 last:border-0">
+              <td colspan="9" class="px-4 pb-3">
+                <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs" data-test="shipping-block">
+                  <span class="font-bold text-slate-500">จัดส่ง:</span>
+                  <span class="text-slate-800 ml-1">{{ order.shipping_recipient_name || '—' }}</span>
+                  <span class="text-slate-600 ml-2">{{ order.shipping_phone || '—' }}</span>
+                  <span class="text-slate-600 ml-2">{{ order.shipping_address || 'ยังไม่ได้กรอกที่อยู่' }}</span>
+                  <span
+                    class="ml-2 px-1.5 py-0.5 rounded-full font-bold"
+                    :class="order.shipping_status === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'"
+                  >{{ order.shipping_status_label }}</span>
+                  <span v-if="order.tracking_number" class="text-slate-600 ml-2">
+                    เลขพัสดุ {{ order.tracking_number }}
+                    <template v-if="order.shipped_at">· {{ formatDateTime(order.shipped_at) }}</template>
+                  </span>
+                </div>
+              </td>
+            </tr>
+
             <tr v-if="rowNotice(order)" :key="`${order.id}-notice`" class="border-b border-slate-100 last:border-0">
               <td colspan="9" class="px-4 pb-3">
                 <p

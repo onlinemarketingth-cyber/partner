@@ -193,6 +193,30 @@ class PermissionResolver
         ],
 
         /*
+         * COMPANY PARTNER (2026-09-16).
+         *
+         * A supplier holds ONE ability for the same reason voucher staff do,
+         * and the row is short for the same guarantee: it cannot quietly grow
+         * without appearing in a diff.
+         *
+         * VoucherRedeem, because the supplier is usually the one actually
+         * providing the service the voucher entitles the customer to — they
+         * are the clinic, we are the shopfront. Note this ability alone does
+         * NOT let them redeem anything: VoucherRedemptionService still decides
+         * WHICH vouchers, and for a partner that is "cards for products I
+         * supply" rather than the same-tenant rule every other role uses.
+         *
+         * Everything else a partner does — reading their orders, recording a
+         * shipment, seeing what they are owed — lives under /supplier and is
+         * gated by the role itself plus the supplier_company_id filter, not by
+         * an ability. They are not doing a smaller version of an admin's job;
+         * they are doing a different job on rows an admin cannot see either.
+         */
+        UserRole::CompanyPartner->value => [
+            Ability::VoucherRedeem,
+        ],
+
+        /*
          * SUPER ADMIN — ENUMERATED, NOT ASSUMED (TASK-185 §3).
          *
          * The 28 above plus Ability::ReportPlatformView, plus

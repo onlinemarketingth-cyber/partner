@@ -403,6 +403,35 @@ const navItems: NavItem[] = [
     label: { th: 'ตัดสิทธิ์บัตรกำนัล', en: 'Redeem Voucher' },
     subMenus: [{ name: 'voucher-redeem', icon: 'tag', label: { th: 'ตัดสิทธิ์บัตรกำนัล', en: 'Redeem Voucher' } }],
   },
+  /*
+   * 2026-09-16 — the supplier's own pillar.
+   *
+   * Only a Company Partner ever sees it (the filter below keeps exactly two
+   * pillars for that role), so it costs no space on anybody else's menu.
+   */
+  {
+    name: 'supplier-orders',
+    icon: 'box',
+    label: { th: 'สินค้าของฉัน', en: 'My products' },
+    subMenus: [
+      { name: 'supplier-orders', icon: 'box', label: { th: 'คำสั่งซื้อสินค้าของฉัน', en: 'Orders for my products' } },
+      { name: 'supplier-settlements', icon: 'money', label: { th: 'ยอดค้างรับ', en: 'Amounts due to me' } },
+    ],
+  },
+  /*
+   * OUR side — paying suppliers back. Super Admin only, and deliberately NOT
+   * in the partner's allowlist below: a supplier must never reach the screen
+   * that decides what suppliers get paid.
+   */
+  {
+    name: 'supplier-payouts',
+    icon: 'money',
+    label: { th: 'จ่ายคืนคู่ค้า', en: 'Pay suppliers' },
+    superAdminOnly: true,
+    subMenus: [
+      { name: 'supplier-payouts', icon: 'money', label: { th: 'จ่ายคืนคู่ค้า', en: 'Pay suppliers' } },
+    ],
+  },
 ]
 
 const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
@@ -415,8 +444,19 @@ const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
  * `meta.voucherStaff` allowlist and the backend's RestrictVoucherStaff.
  */
 const isVoucherStaff = computed(() => authStore.user?.role === 'voucher_staff')
+/*
+ * 2026-09-16 — the supplier account sees TWO pillars: their products, and the
+ * redemption screen.
+ *
+ * Same "keep only these" shape as the line above rather than a flag on every
+ * other item, so a pillar added tomorrow is hidden from them without anybody
+ * having to remember this role exists.
+ */
+const isCompanyPartner = computed(() => authStore.user?.role === 'company_partner')
+const PARTNER_PILLARS = ['supplier-orders', 'voucher-redeem']
 const visibleNavItems = computed(() => navItems
   .filter((item) => !isVoucherStaff.value || item.name === 'voucher-redeem')
+  .filter((item) => !isCompanyPartner.value || PARTNER_PILLARS.includes(item.name))
   .filter((item) => !item.superAdminOnly || isSuperAdmin.value))
 const activeName = computed(() => route.name as string)
 

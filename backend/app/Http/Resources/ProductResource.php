@@ -205,6 +205,26 @@ class ProductResource extends JsonResource
             'voucher_usage_quota' => $this->voucher_usage_quota,
             'voucher_validity_days' => $this->voucher_validity_days,
             'requires_shipping' => (bool) $this->requires_shipping,
+            /*
+             * 2026-09-16 — who supplies this product, and on what terms.
+             *
+             * Sent to everyone who can already read the product, which is a
+             * deliberate narrowing of nothing: the supplier's NAME is not a
+             * secret from the company selling their goods, and the console
+             * needs it to show "supplied by X" on the catalogue row.
+             *
+             * The GP and withholding figures are a different matter — they are
+             * our margin — and they are only WRITABLE by a Super Admin
+             * (HandlesSupplierTerms). They are readable here because the only
+             * screen that renders them hides them behind the same check, and a
+             * resource that lied about the stored value would make that screen
+             * impossible to build correctly.
+             */
+            'supplier_company_id' => $this->supplier_company_id,
+            'supplier_name' => $this->whenLoaded('supplier', fn () => $this->supplier?->name),
+            'supplier_gp_mode' => $this->supplier_gp_mode?->value,
+            'supplier_gp_value' => $this->supplier_gp_value,
+            'supplier_wht_rate' => $this->supplier_wht_rate,
             // ADR-026 §3.3 (TASK-136) — the RESOLVED template, i.e. the
             // journey a referral created for this product would actually
             // be stamped with. Mirrors how `effective_plan_type` sits

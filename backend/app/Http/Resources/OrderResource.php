@@ -169,6 +169,30 @@ class OrderResource extends JsonResource
              * refuse, and that refusal names the missing step, which is
              * information the person needs rather than a button to hide.
              */
+            /*
+             * 2026-09-16 — THE ADDRESS THIS SYSTEM HAS BEEN COLLECTING AND
+             * NEVER SHOWING ANYONE.
+             *
+             * ADR-033 added the three shipping_* columns and the payment page
+             * that fills them in. Nothing ever read them back: a grep of both
+             * front-ends found them rendered on exactly zero screens. Staff
+             * asking "where does this go?" had no way to find out.
+             *
+             * Gated on the PRODUCT's requires_shipping rather than on the
+             * address being non-empty — an address captured by accident must
+             * not become a reason to display one — and absent rather than null
+             * when it does not apply, so a screen cannot render an empty
+             * "Ship to:" block for a service appointment.
+             */
+            'requires_shipping' => (bool) $this->product?->requires_shipping,
+            'shipping_status' => $this->shipping_status?->value,
+            'shipping_status_label' => $this->shipping_status?->label(),
+            'tracking_number' => $this->tracking_number,
+            'shipped_at' => $this->shipped_at?->toIso8601String(),
+            'shipping_recipient_name' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_recipient_name),
+            'shipping_phone' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_phone),
+            'shipping_address' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_address),
+
             'permissions' => [
                 'confirm' => (bool) $request->user()?->can('confirm', $this->resource)
                     && $this->isPayable()

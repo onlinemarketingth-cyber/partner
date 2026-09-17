@@ -513,7 +513,45 @@ export const routes: RouteRecordRaw[] = [
       // 2026-09-10 — `voucherStaff: true` marks the ONE screen a front-desk
       // account may open. The ability is no longer something a Company Admin
       // holds by being one: it is granted, per person, on the user screen.
-      meta: { navLabel: 'ตัดสิทธิ์บัตรกำนัล', voucherStaff: true },
+      // 2026-09-16 — `companyPartner: true` joins it. A supplier provides
+      // the service the card entitles the customer to, so this is their
+      // screen too; the backend decides WHICH cards (their own products'),
+      // not whether they may open the page.
+      meta: { navLabel: 'ตัดสิทธิ์บัตรกำนัล', voucherStaff: true, companyPartner: true },
+    },
+    /*
+     * 2026-09-16 — THE COMPANY PARTNER'S OWN SCREENS.
+     *
+     * `companyPartner: true` is an allowlist, exactly like `voucherStaff`
+     * above and mirroring the backend's RestrictScopedRole: a route added
+     * tomorrow is closed to this role until somebody opens it deliberately.
+     */
+    {
+      path: '/supplier/orders',
+      name: 'supplier-orders',
+      component: () => import('../views/SupplierOrdersView.vue'),
+      meta: { navLabel: 'คำสั่งซื้อสินค้าของฉัน', companyPartner: true },
+    },
+    {
+      path: '/supplier/settlements',
+      name: 'supplier-settlements',
+      component: () => import('../views/SupplierSettlementsView.vue'),
+      meta: { navLabel: 'ยอดค้างรับ', companyPartner: true },
+    },
+    /*
+     * OUR side of the same money. Super Admin only — a supplier's sales span
+     * several of our companies, so there is no single tenant whose admin
+     * could own this queue, and approving a payment that includes another
+     * company's sales is the cross-tenant read BR-6 exists to prevent.
+     *
+     * Note it is NOT marked companyPartner: a supplier must never reach the
+     * screen that decides what suppliers get paid.
+     */
+    {
+      path: '/supplier-payouts',
+      name: 'supplier-payouts',
+      component: () => import('../views/SupplierPayoutsView.vue'),
+      meta: { navLabel: 'จ่ายคืนคู่ค้า', requiresSuperAdmin: true },
     },
     // TASK-190 §5 — platform-wide SMTP settings. Same gating convention as
     // '/companies' above: `requiresSuperAdmin: true` meta, enforced client-
@@ -598,6 +636,18 @@ router.beforeEach(async (to) => {
    */
   if (authStore.user?.role === 'voucher_staff' && !to.meta.public && !to.meta.voucherStaff) {
     return { name: 'voucher-redeem' }
+  }
+
+  /*
+   * 2026-09-16 — the supplier account, on the same principle as the line
+   * above and mirroring the same backend middleware.
+   *
+   * They land on their orders rather than the voucher screen: shipping what
+   * has been bought is the job they open the console to do, and the cards
+   * come to them one at a time at a counter.
+   */
+  if (authStore.user?.role === 'company_partner' && !to.meta.public && !to.meta.companyPartner) {
+    return { name: 'supplier-orders' }
   }
 
   if (!to.meta.public && !authStore.isAuthenticated) {

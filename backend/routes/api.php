@@ -110,6 +110,8 @@ use App\Http\Controllers\Api\V1\UserCertificationController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserProfileController;
 use App\Http\Controllers\Api\V1\VideoProcessingSettingController;
+use App\Http\Controllers\Api\V1\SupplierPayoutController;
+use App\Http\Controllers\Api\V1\SupplierPortalController;
 use App\Http\Controllers\Api\V1\VoucherController;
 use App\Http\Controllers\Api\V1\XpLedgerController;
 use Illuminate\Support\Facades\Route;
@@ -361,7 +363,7 @@ Route::prefix('v1')->group(function () {
      * App\Http\Middleware\EnsureCompanyIsOperational for the reasoning and for
      * why a Super Admin (company_id = null) is never refused by it.
      */
-    Route::middleware(['auth:sanctum', 'company.operational', 'restrict.voucher-staff'])->group(function () {
+    Route::middleware(['auth:sanctum', 'company.operational', 'restrict.scoped-role'])->group(function () {
         /*
          * THE ONE DELIBERATE EXCLUSION (TASK-183 §3.3).
          *
@@ -1248,6 +1250,42 @@ Route::prefix('v1')->group(function () {
          */
         Route::get('/vouchers/{code}', [VoucherController::class, 'show'])->middleware('throttle:30,1');
         Route::post('/vouchers/redeem', [VoucherController::class, 'redeem'])->middleware('throttle:30,1');
+
+        /*
+         * 2026-09-16 — THE COMPANY PARTNER'S OWN SCREENS.
+         *
+         * The `/supplier` prefix is not a naming choice: RestrictScopedRole
+         * opens exactly this prefix to the partner role, so a supplier-visible
+         * endpoint has to live here and an endpoint here is visible to every
+         * supplier. Adding a route to this block is a security decision.
+         *
+         * Every one of them filters by `products.supplier_company_id` rather
+         * than by TenantScope — a supplier is never the company that sold the
+         * order they are looking at. See SupplierPortalController.
+         */
+        Route::get('/supplier/orders', [SupplierPortalController::class, 'orders']);
+        Route::post('/supplier/orders/{orderId}/ship', [SupplierPortalController::class, 'ship']);
+        Route::get('/supplier/balance', [SupplierPortalController::class, 'balance']);
+        Route::get('/supplier/settlements', [SupplierPortalController::class, 'settlements']);
+        Route::get('/supplier/payouts', [SupplierPortalController::class, 'payouts']);
+
+        /*
+         * OUR side of the same money — Super Admin only.
+         *
+         * `/supplier-payouts`, NOT `/supplier/payouts`. RestrictScopedRole
+         * matches prefixes segment-exactly, so this one is refused to the
+         * partner role while the block above is allowed. Moving these under
+         * /supplier would hand every supplier the screen that decides what
+         * suppliers get paid.
+         */
+        Route::get('/supplier-payouts', [SupplierPayoutController::class, 'index']);
+        Route::post('/supplier-payouts', [SupplierPayoutController::class, 'store']);
+        Route::get('/supplier-payouts/requests', [SupplierPayoutController::class, 'requests']);
+        Route::get('/supplier-payouts/{company}/settlements', [SupplierPayoutController::class, 'settlements']);
+        Route::post(
+            '/supplier-payouts/{supplierWithdrawalRequest}/mark-transferred',
+            [SupplierPayoutController::class, 'markTransferred'],
+        );
 
         // TASK-190 §3.4 — platform-wide SMTP settings (one global row, no
         // company_id — see PlatformMailSetting's own docblock). Gated by

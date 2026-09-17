@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\AffiliateOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
+use App\Enums\SupplierGpMode;
 use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -102,6 +103,35 @@ class Product extends Model
 
     protected $fillable = [
         'company_id',
+        /*
+         * 2026-09-16 — WHO BROUGHT THIS PRODUCT IN.
+         *
+         * Distinct from `company_id`, which answers "who may sell it". A
+         * supplier's product is a PLATFORM product (company_id null, so every
+         * ADR-040 mechanism keeps working) that additionally names its
+         * supplier here. Null = one of ours.
+         *
+         * Not writable by a Company Admin: this column decides who receives
+         * money, and the request classes gate it to Super Admin. It is also
+         * frozen once the product has settlement history — changing it would
+         * silently redirect future payments to a different company with
+         * nothing on the screen recording that it ever moved.
+         */
+        'supplier_company_id',
+        // Per-product override of the supplier deal's GP terms; null = use
+        // companies.supplier_gp_*. A supplier may take a different margin on a
+        // flagship item.
+        'supplier_gp_mode',
+        'supplier_gp_value',
+        /*
+         * Per-product override of the supplier deal's withholding rate.
+         *
+         * This one is not a convenience: Thai practice withholds nothing on a
+         * sale of GOODS and a percentage on a SERVICE fee, and that is a fact
+         * about the product, not about the company supplying it. A supplier
+         * shipping boxes and also running a clinic needs two rates.
+         */
+        'supplier_wht_rate',
         'brand_id',
         'category_id',
         // ADR-036 §2/§3 (TASK-211/212) — opt-in link to a shared
@@ -177,7 +207,22 @@ class Product extends Model
             'voucher_usage_quota' => 'integer',
             'voucher_validity_days' => 'integer',
             'requires_shipping' => 'boolean',
+            'supplier_gp_mode' => SupplierGpMode::class,
+            'supplier_gp_value' => 'integer',
+            'supplier_wht_rate' => 'integer',
         ];
+    }
+
+    /** @return BelongsTo<Company, $this> */
+    public function supplier(): BelongsTo
+    {
+        return $this->belongsTo(Company::class, 'supplier_company_id');
+    }
+
+    /** A product somebody else supplies and we sell on their behalf. */
+    public function hasSupplier(): bool
+    {
+        return $this->supplier_company_id !== null;
     }
 
     /**

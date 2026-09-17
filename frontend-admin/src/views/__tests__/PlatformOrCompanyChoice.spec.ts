@@ -229,8 +229,18 @@ describe('ProductEditView — whose product is this?', () => {
     await flushPromises()
 
     await fillBasics(w, PLATFORM_BRAND.id, PLATFORM_CATEGORY.id)
-    // A platform product has nothing to inherit a plan type from.
-    await nth(w.findAll('select'), 2, 'ช่องเลือก').setValue('unilevel')
+    /*
+     * A platform product has nothing to inherit a plan type from.
+     *
+     * 2026-09-16 — addressed by data-test rather than by position. This line
+     * used to be `nth(w.findAll('select'), 2)`, which broke the day a second
+     * select appeared earlier in the form (the supplier fields): the value
+     * landed on the wrong control, the plan type stayed empty, the form
+     * refused to submit, and the failure read as "post was never called" —
+     * nothing pointing at the select at all. The test's intent was always
+     * "set the plan type", so it now says that.
+     */
+    await w.find('[data-test="plan-type-select"]').setValue('unilevel')
     await submitProduct(w)
 
     expect(post).toHaveBeenCalledTimes(1)

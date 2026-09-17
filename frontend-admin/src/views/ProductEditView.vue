@@ -76,6 +76,44 @@ const isSuperAdmin = computed(() => authStore.user?.role === 'super_admin')
 // company A in the form while the brand list showed company B's was two
 // clicks away.
 const activeCompany = useActiveCompanyStore()
+
+/**
+ * 2026-09-16 — the companies that may be named as a supplier.
+ *
+ * Read from /supplier-payouts rather than the company picker's own list,
+ * because that list is every company and this field must offer only the ones
+ * flagged `is_supplier`. The endpoint is already Super-Admin-only, which is
+ * the same gate these fields sit behind — so a Company Admin never calls it
+ * and never sees a 403 for a screen they opened legitimately.
+ */
+const supplierOptions = ref<{ supplier_company_id: number; supplier_name: string }[]>([])
+
+/**
+ * Once this product has paid a supplier, the supplier cannot be changed.
+ *
+ * Mirrors the server's rule rather than duplicating its reasoning: settled
+ * rows keep their own snapshots, so history is safe — what is not safe is the
+ * NEXT sale silently going to a different company. Derived from
+ * `supplier_company_id` being already set on a SAVED product: the server has
+ * the authoritative test (does a settlement row exist) and answers 422, so
+ * this is the cheap client-side half that stops somebody typing into a field
+ * that is going to refuse them.
+ */
+const supplierChangeLocked = computed(
+  () => !isCreateMode.value && (product.value?.supplier_company_id ?? null) !== null,
+)
+
+async function loadSupplierOptions(): Promise<void> {
+  if (!isSuperAdmin.value) return
+  try {
+    const res = await api.get<{ data: { supplier_company_id: number; supplier_name: string }[] }>('/supplier-payouts')
+    supplierOptions.value = res.data
+  } catch {
+    // A missing list is a missing dropdown, not a broken page: the rest of
+    // this form is about the product, and a supplier is set once in its life.
+    supplierOptions.value = []
+  }
+}
 const selectedCompanyId = computed(() => activeCompany.companyId)
 
 /**
@@ -195,6 +233,13 @@ interface Product {
    * sale from gross profit entirely and says how many it could not measure.
    */
   cost_satang: number | null
+  // 2026-09-16 — who supplies this product and on what terms. Null on every
+  // product we supply ourselves, which is almost all of them.
+  supplier_company_id: number | null
+  supplier_name?: string | null
+  supplier_gp_mode: string | null
+  supplier_gp_value: number | null
+  supplier_wht_rate: number | null
   // 2026-09-12 — PV, this product's commissionable value in satang (BR-3),
   // or null when nobody has set one. null and 0 are NOT the same answer:
   // null is "no PV yet" (the readiness banner warns about it and the server
@@ -622,6 +667,12 @@ interface BasicsForm {
   voucher_usage_quota: string | number
   voucher_validity_days: string | number
   requires_shipping: boolean
+  // 2026-09-16 — the supplier arrangement. Super Admin only, platform
+  // products only; '' means "not set / use the deal's own terms".
+  supplier_company_id: number | ''
+  supplier_gp_mode: string
+  supplier_gp_value: string | number
+  supplier_wht_rate: string | number
 }
 const basicsForm = ref<BasicsForm>({
   name: '',
@@ -643,6 +694,10 @@ const basicsForm = ref<BasicsForm>({
   voucher_usage_quota: 1,
   voucher_validity_days: '',
   requires_shipping: false,
+  supplier_company_id: '',
+  supplier_gp_mode: '',
+  supplier_gp_value: '',
+  supplier_wht_rate: '',
 })
 // TASK-189 follow-up (human, 2026-08-16, second revision): calendar-first
 // entry. Value is STILL stored/sent as an integer day-count counted from
@@ -1000,6 +1055,15 @@ function syncBasicsFormFromProduct(p: Product) {
     voucher_usage_quota: p.voucher_usage_quota ?? '',
     voucher_validity_days: p.voucher_validity_days ?? '',
     requires_shipping: p.requires_shipping,
+    supplier_company_id: p.supplier_company_id ?? '',
+    supplier_gp_mode: p.supplier_gp_mode ?? '',
+    // Basis points on the wire, percent in the box — 3000 shows as 30.
+    supplier_gp_value: p.supplier_gp_value === null || p.supplier_gp_value === undefined
+      ? ''
+      : (p.supplier_gp_mode === 'fixed_per_unit' ? p.supplier_gp_value / 100 : p.supplier_gp_value / 100),
+    supplier_wht_rate: p.supplier_wht_rate === null || p.supplier_wht_rate === undefined
+      ? ''
+      : p.supplier_wht_rate / 100,
   }
 
   // The form now matches what the server holds — from a load or from a
@@ -1045,8 +1109,31 @@ async function saveBasics() {
       // the field for a Company Admin (a 422, not a silent drop). Omitted
       // entirely for them — sending it would fail an unrelated edit on a field
       // they were never shown.
+      /*
+       * 2026-09-16 — the supplier arrangement rides in the SAME Super-Admin
+       * block as PV, and for a stronger version of the same reason: PV decides
+       * what our members are paid, these decide WHO RECEIVES MONEY and how much
+       * of each sale we keep. Store/UpdateProductRequest PROHIBIT them for a
+       * Company Admin (a 422, not a silent drop), so they are omitted entirely
+       * rather than sent as null — sending them would fail an unrelated edit on
+       * fields that person was never shown.
+       *
+       * Percent in the box, basis points on the wire: 30 becomes 3000. The
+       * fixed-amount mode is baht in the box and satang on the wire, which is
+       * ×100 either way — stated rather than left to be noticed.
+       */
       ...(isSuperAdmin.value
         ? {
+            supplier_company_id: basicsForm.value.supplier_company_id === ''
+              ? null
+              : Number(basicsForm.value.supplier_company_id),
+            supplier_gp_mode: basicsForm.value.supplier_gp_mode || null,
+            supplier_gp_value: basicsForm.value.supplier_gp_value === ''
+              ? null
+              : Math.round(Number(basicsForm.value.supplier_gp_value) * 100),
+            supplier_wht_rate: basicsForm.value.supplier_wht_rate === ''
+              ? null
+              : Math.round(Number(basicsForm.value.supplier_wht_rate) * 100),
             // '' -> explicit null, the same inherit/clear contract as the
             // sentinel fields below — but here null is not "inherit", it is
             // "no PV set", which the readiness banner reports and the server
@@ -2273,6 +2360,7 @@ async function loadInitialData() {
 
 onMounted(async () => {
   await loadInitialData()
+  void loadSupplierOptions()
   // CREATE mode never calls syncBasicsFormFromProduct (there is no product
   // to sync from), so without this the blank form reads as "changed" and a
   // company switch would ask about work nobody has done yet.
@@ -2623,12 +2711,121 @@ function goToVideoSettings() {
               step="0.01"
               placeholder="ยังไม่กำหนด"
               data-test="cost-input"
-              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              :disabled="basicsForm.supplier_company_id !== ''"
+              class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm disabled:bg-slate-100 disabled:text-slate-400"
             />
             <p class="mt-1 text-xs text-slate-400">
-              ใช้คำนวณกำไรขั้นต้นในหน้า ภาพรวมธุรกิจ · เว้นว่าง = ยอดขายของสินค้านี้จะไม่ถูกนำไปคิดกำไร (ไม่ใช่คิดเป็นกำไรเต็ม)
-              · ระบบเก็บต้นทุน ณ วันที่ขายไว้กับคำสั่งซื้อ การแก้ตรงนี้จึงไม่กระทบกำไรย้อนหลัง
+              <template v-if="basicsForm.supplier_company_id !== ''">
+                สินค้านี้มีผู้จัดหา — ต้นทุนคือยอดที่คืนให้ผู้จัดหา ระบบคำนวณและบันทึกให้เองทุกครั้งที่ขาย ไม่ต้องกรอกเอง
+              </template>
+              <template v-else>
+                ใช้คำนวณกำไรขั้นต้นในหน้า ภาพรวมธุรกิจ · เว้นว่าง = ยอดขายของสินค้านี้จะไม่ถูกนำไปคิดกำไร (ไม่ใช่คิดเป็นกำไรเต็ม)
+                · ระบบเก็บต้นทุน ณ วันที่ขายไว้กับคำสั่งซื้อ การแก้ตรงนี้จึงไม่กระทบกำไรย้อนหลัง
+              </template>
             </p>
+          </div>
+
+          <!--
+            ── 2026-09-16: WHO SUPPLIES THIS PRODUCT ──
+
+            Two gates, both deliberate:
+
+            · isSuperAdmin — these fields decide who RECEIVES money and how
+              much we keep. That is not catalogue administration, and the
+              server PROHIBITS them for anybody else (a 422, not a silent
+              drop).
+            · isPlatformProduct — a product owned by one company is sold by
+              that company alone; there is nobody for a supplier arrangement
+              to sit between.
+
+            Placed beside ต้นทุนต่อหน่วย rather than in its own tab because it
+            is the same question asked twice: what does this sale cost us. For
+            a supplied product the answer is computed, not typed, which is why
+            the field above disables itself.
+          -->
+          <div v-if="isSuperAdmin && isPlatformProduct" class="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200">
+            <p class="text-sm font-bold text-slate-700">ผู้จัดหาสินค้า (บริษัทคู่ค้า)</p>
+            <p class="text-xs text-slate-500 mt-0.5">
+              ตั้งเมื่อสินค้านี้เป็นของบริษัทคู่ค้าที่นำเข้ามาขายผ่านเรา — ระบบจะคืนยอดค่าสินค้าหลังหักค่าแนะนำและ GP ให้บริษัทนั้น
+            </p>
+
+            <div class="grid gap-3 sm:grid-cols-2 mt-3">
+              <div>
+                <label class="text-xs font-bold text-slate-500">บริษัทคู่ค้า</label>
+                <select
+                  v-model="basicsForm.supplier_company_id"
+                  data-test="supplier-select"
+                  :disabled="supplierChangeLocked"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm disabled:bg-slate-100"
+                >
+                  <option value="">ไม่มี (สินค้าของเราเอง)</option>
+                  <option v-for="opt in supplierOptions" :key="opt.supplier_company_id" :value="opt.supplier_company_id">
+                    {{ opt.supplier_name }}
+                  </option>
+                </select>
+                <!-- Locked once money has moved. History keeps its own
+                     snapshots so it is safe, but the NEXT sale would pay a
+                     different company with nothing on this screen recording
+                     that it ever moved. -->
+                <p v-if="supplierChangeLocked" class="mt-1 text-xs text-amber-700" data-test="supplier-locked">
+                  สินค้านี้มีประวัติการคืนยอดให้ผู้จัดหารายนี้แล้ว จึงเปลี่ยนผู้จัดหาไม่ได้ — ถ้าเปลี่ยนคู่ค้าให้สร้างสินค้าใหม่
+                </p>
+              </div>
+
+              <div>
+                <label class="text-xs font-bold text-slate-500">รูปแบบ GP ที่เราหัก</label>
+                <select
+                  v-model="basicsForm.supplier_gp_mode"
+                  data-test="supplier-gp-mode"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                >
+                  <option value="">ใช้ค่าที่ตั้งไว้กับบริษัทคู่ค้า</option>
+                  <option value="percent_of_sale">% ของราคาขาย</option>
+                  <option value="percent_of_net">% ของยอดหลังหักค่าแนะนำ</option>
+                  <option value="fixed_per_unit">จำนวนเงินคงที่ต่อชิ้น</option>
+                </select>
+              </div>
+
+              <div>
+                <label class="text-xs font-bold text-slate-500">
+                  {{ basicsForm.supplier_gp_mode === 'fixed_per_unit' ? 'ค่า GP (บาทต่อชิ้น)' : 'ค่า GP (%)' }}
+                </label>
+                <input
+                  v-model="basicsForm.supplier_gp_value"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="ใช้ค่าของบริษัทคู่ค้า"
+                  data-test="supplier-gp-value"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+                <!-- Mode and value travel together — a mode with no value
+                     would fall back to the COMPANY's number and read a 30%
+                     deal as 30 satang. The server refuses the pair; this says
+                     so before they press save. -->
+                <p class="mt-1 text-xs text-slate-400">ต้องกรอกคู่กับรูปแบบ GP หรือเว้นว่างทั้งคู่</p>
+              </div>
+
+              <div>
+                <label class="text-xs font-bold text-slate-500">ภาษีหัก ณ ที่จ่าย (%)</label>
+                <input
+                  v-model="basicsForm.supplier_wht_rate"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="ใช้ค่าของบริษัทคู่ค้า"
+                  data-test="supplier-wht-rate"
+                  class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                />
+                <!-- The rate genuinely differs BY PRODUCT, not by supplier:
+                     Thai practice withholds nothing on a sale of goods and a
+                     percentage on a service fee, and one supplier can provide
+                     both. -->
+                <p class="mt-1 text-xs text-slate-400">
+                  ขายสินค้าโดยทั่วไปไม่หัก · ค่าบริการมักหัก 3% — ยืนยันกับฝ่ายบัญชีก่อนตั้ง
+                </p>
+              </div>
+            </div>
           </div>
           <div v-if="isSuperAdmin">
             <label class="text-sm font-bold text-slate-500">PV (มูลค่าที่ใช้คิดค่าแนะนำ)</label>
@@ -2653,7 +2850,7 @@ function goToVideoSettings() {
                applies, never just the raw possibly-null override. -->
           <div class="sm:col-span-2">
             <label class="text-sm font-bold text-slate-500">รูปแบบค่าแนะนำของสินค้านี้</label>
-            <select v-model="basicsForm.commission_plan_type" :required="isPlatformProduct" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+            <select v-model="basicsForm.commission_plan_type" data-test="plan-type-select" :required="isPlatformProduct" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
               <!-- "สืบทอดจากบริษัท" is not on offer for a platform product:
                    there is no company to inherit from, and
                    Product::effectivePlanType() throws rather than guess. -->
