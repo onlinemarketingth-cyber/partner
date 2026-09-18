@@ -151,7 +151,7 @@ const overallPercentText = computed(() =>
 )
 // The one BR-1 sentence this screen owns, declared once so the HeroHeader
 // description and the next-step card cannot drift apart.
-const BR1_NOTE = 'ผ่านใบรับรอง Basic เพื่อปลดล็อกการส่ง Referral และ Pipeline (BR-1)'
+const BASIC_GATE_NOTE = 'ผ่านใบรับรอง Basic เพื่อปลดล็อกการส่ง Referral และ Pipeline'
 
 /**
  * "What do I do next" — PRESENTATION-LEVEL PRIORITISATION ONLY. It decides
@@ -404,7 +404,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
       :icon="pageIcon"
       :title="pageTitle"
       :subtitle="td('academy.subtitle')"
-      :description="BR1_NOTE"
+      :description="BASIC_GATE_NOTE"
       :kpis="kpis"
       accent-color="brand"
       storage-key="academy"
@@ -493,7 +493,7 @@ const pageIcon = computed(() => theme.icon('nav_academy', 'brain'))
           <!-- BR-1 stays visible where the decision is made, not only in the
                header: this is the certification that unlocks selling. -->
           <p v-if="currentTier?.is_mandatory" class="mt-2 text-xs font-bold text-ink-warning">
-            {{ BR1_NOTE }}
+            {{ BASIC_GATE_NOTE }}
           </p>
         </AppCard>
 

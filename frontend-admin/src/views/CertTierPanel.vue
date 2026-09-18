@@ -277,7 +277,7 @@ onMounted(load)
             />
             <span class="text-xs leading-relaxed">
               <span class="font-bold text-slate-700">เป็นระดับบังคับ</span>
-              <span class="block text-slate-400">สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)</span>
+              <span class="block text-slate-400">สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้</span>
             </span>
           </label>
         </div>
@@ -327,7 +327,7 @@ onMounted(load)
               <p class="text-sm font-bold text-slate-900 truncate">{{ tier.name }}</p>
               <span
                 v-if="tier.is_mandatory"
-                title="สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้ (BR-1)"
+                title="สมาชิกต้องผ่านระดับนี้ก่อนจึงจะขายได้"
                 class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[11px] font-bold"
               >
                 <Icon name="shield_check" :size="11" />

@@ -220,7 +220,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       icon="money"
       title="Commission Ledger"
       subtitle="คอมมิชชั่นทั้งบริษัท"
-      description="รายการเป็นแบบอ่านอย่างเดียว ยกเว้นสถานะการจ่ายเงิน (BR-4) — Agent ไม่สามารถ mark paid ให้ตัวเองได้"
+      description="รายการเป็นแบบอ่านอย่างเดียว ยกเว้นสถานะการจ่ายเงิน — สมาชิกกดยืนยันว่าจ่ายเงินให้ตัวเองไม่ได้"
       :kpis="kpis"
       accent-color="brand"
       storage-key="admin-commission"

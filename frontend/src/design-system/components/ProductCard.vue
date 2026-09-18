@@ -152,7 +152,7 @@ function priceOf(product: ProductCardItem): number {
       <div class="mt-auto pt-3 flex items-stretch gap-1.5">
         <button
           :disabled="!hasPassedBasic || sharing || buying"
-          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'สร้าง/เปิดลิงก์แชร์'"
+          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน' : 'สร้าง/เปิดลิงก์แชร์'"
           class="flex-1 min-w-0 min-h-[44px] flex items-center justify-center gap-1 text-[11px] font-bold py-2 px-1.5 rounded-lg transition-all active:scale-95"
           :class="hasPassedBasic
             ? 'bg-surface-chip text-ink-card border border-line-card hover:opacity-90'
@@ -170,7 +170,7 @@ function priceOf(product: ProductCardItem): number {
              toward a sale rather than the sale. -->
         <button
           :disabled="!hasPassedBasic || sharing || buying"
-          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน (BR-1)' : 'เปิดหน้าสั่งซื้อของสินค้านี้'"
+          :title="!hasPassedBasic ? 'ต้องผ่านการรับรอง Basic ก่อน' : 'เปิดหน้าสั่งซื้อของสินค้านี้'"
           class="flex-1 min-w-0 min-h-[44px] flex items-center justify-center gap-1 text-[11px] font-bold py-2 px-1.5 rounded-lg transition-all active:scale-95"
           :class="hasPassedBasic
             ? 'bg-surface-primary text-ink-primary hover:opacity-90'

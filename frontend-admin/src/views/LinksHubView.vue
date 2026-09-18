@@ -105,7 +105,7 @@ const TABS: Array<{
     label: c('links.tab_team', 'ลิงก์ชวนทีม'),
     icon: 'users',
     title: c('team.title', 'ลิงก์ชวนทีม'),
-    subtitle: c('team.subtitle', 'ลิงก์ชวนเข้าทีมทั้งหมดที่หัวหน้าทีมสร้างไว้ (ADR-025 §7)'),
+    subtitle: c('team.subtitle', 'ลิงก์ชวนเข้าทีมทั้งหมดที่หัวหน้าทีมสร้างไว้'),
     scopeAction: c('team.scope_action', 'จัดการลิงก์ชวนทีม'),
   },
 ]

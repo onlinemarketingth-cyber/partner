@@ -574,7 +574,7 @@ function onBackdropClick(event: MouseEvent) {
                     </div>
                     <p class="text-[11px] text-slate-400 leading-relaxed">
                       เมื่อผู้เรียนกดส่ง ระบบจะตรวจให้ที่เซิร์ฟเวอร์ แล้วบอกว่า<strong class="font-bold">ตอบถูกกี่ข้อจากทั้งหมดกี่ข้อ</strong>
-                      และ<strong class="font-bold">ข้อไหนตอบผิด</strong> — แต่จะไม่บอกว่าคำตอบที่ถูกคือข้อใด และไม่บอกเกณฑ์ผ่าน (ADR-029 §2.7) ·
+                      และ<strong class="font-bold">ข้อไหนตอบผิด</strong> — แต่จะไม่บอกว่าคำตอบที่ถูกคือข้อใด และไม่บอกเกณฑ์ผ่าน ·
                       ทำซ้ำได้ไม่จำกัดครั้ง
                     </p>
                   </div>
@@ -613,7 +613,7 @@ function onBackdropClick(event: MouseEvent) {
                 <p v-if="gateKind === 'downloadable'" class="mt-2 text-xs text-slate-600 leading-relaxed">
                   ไฟล์นี้ตั้งค่าให้<strong class="font-bold">ดาวน์โหลดได้</strong>
                   ระบบจึงไม่บังคับเปอร์เซ็นต์การดู/อ่าน —
-                  ผู้เรียนกดปุ่ม “เรียนจบ” ได้ทันที (ADR-028 §2.3)
+                  ผู้เรียนกดปุ่ม “เรียนจบ” ได้ทันที
                 </p>
                 <p v-else-if="gateKind === 'external'" class="mt-2 text-xs text-slate-600 leading-relaxed">
                   เนื้อหานี้เป็น<strong class="font-bold">ลิงก์ภายนอก</strong>
@@ -669,7 +669,7 @@ function onBackdropClick(event: MouseEvent) {
                   <p class="mt-2.5 pt-2.5 border-t border-slate-100 text-xs text-slate-600 leading-relaxed">
                     <template v-if="lesson.quiz_blocks_completion">
                       บทเรียนนี้<strong class="font-bold text-slate-900">บังคับให้ทำแบบทดสอบท้ายบทผ่านก่อน</strong>จึงจะกดเรียนจบได้
-                      และอยู่บนเส้นทางการได้ใบรับรอง (BR-1)
+                      และอยู่บนเส้นทางการได้ใบรับรอง
                     </template>
                     <template v-else>
                       แบบทดสอบท้ายบทนี้<strong class="font-bold text-slate-900">ไม่บล็อกการกดเรียนจบ</strong> —
@@ -687,7 +687,7 @@ function onBackdropClick(event: MouseEvent) {
                 <p class="mt-2.5 pt-2.5 border-t border-slate-100 text-[11px] text-slate-400 leading-relaxed">
                   ตัวเลขนี้เป็นค่าตั้งค่าต่อบริษัท (แก้ได้ที่ตั้งค่า Academy) และ
                   <strong class="font-bold">ผู้เรียนจะไม่เห็นตัวเลขนี้</strong> —
-                  ถ้ายังไม่ถึงเกณฑ์ ระบบจะบอกแค่ให้ดู/อ่านให้ครบก่อน (ADR-028 §4)
+                  ถ้ายังไม่ถึงเกณฑ์ ระบบจะบอกแค่ให้ดู/อ่านให้ครบก่อน
                 </p>
               </template>
             </div>

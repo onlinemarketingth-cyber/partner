@@ -128,7 +128,7 @@ onMounted(loadVideoSettings)
       <p class="text-xs text-slate-400 mb-3 leading-relaxed">
         ค่าตั้งการย่อไฟล์วิดีโอก่อนอัปโหลด (ขนาดสูงสุด / ความละเอียด / บิตเรตเป้าหมาย) — ใช้กับรูป-วิดีโอสินค้า,
         สื่อการขาย และคลิปใน Academy ทั้งหมด ถ้าไม่ตั้งค่าจะใช้ค่า default ของระบบ
-        (BR-7 — ค่านี้เป็น config ที่แก้ไขได้เสมอ ไม่ hardcode)
+        (ค่านี้ปรับได้ตลอดเวลา ไม่ได้ถูกกำหนดตายตัวไว้ในระบบ)
       </p>
 
       <p v-if="videoSettingsError" class="mb-2 text-xs font-bold text-rose-600">{{ videoSettingsError }}</p>

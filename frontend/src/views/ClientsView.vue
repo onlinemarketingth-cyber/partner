@@ -1160,7 +1160,7 @@ async function submitReferral() {
     if (e instanceof ApiError && e.status === 422) {
       const errors = (e.body as { errors?: Record<string, string[]> } | undefined)?.errors
       const message = errors?.agent_id?.[0]?.includes('BR-1')
-        ? 'คุณยังไม่ผ่านใบรับรอง Basic — ไปที่หน้า Academy เพื่อเรียนและสอบผ่านก่อน (BR-1)'
+        ? 'คุณยังไม่ผ่านใบรับรอง Basic — ไปที่หน้า Academy เพื่อเรียนและสอบผ่านก่อน'
         : errors
           ? Object.values(errors).flat().join(' ')
           : 'บันทึกไม่สำเร็จ'

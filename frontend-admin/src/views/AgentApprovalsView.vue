@@ -339,7 +339,7 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
         {{ s.label }}
       </button>
       <p class="text-xs text-slate-400">
-        ดู "อนุมัติแล้ว" เพื่อตรวจสอบว่าหัวหน้าทีมรับใครเข้าบริษัทไปบ้าง (ADR-025 §7)
+        ดู "อนุมัติแล้ว" เพื่อตรวจสอบว่าหัวหน้าทีมรับใครเข้าบริษัทไปบ้าง
       </p>
     </div>
 

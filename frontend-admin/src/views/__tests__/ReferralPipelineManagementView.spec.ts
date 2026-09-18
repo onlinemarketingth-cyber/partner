@@ -413,7 +413,12 @@ describe('§4.2 — the action goes through ConfirmDialog', () => {
     // The dialog is up; the ledger has not been touched.
     expect(post).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('ยืนยันว่าได้รับเงิน 8,900.00 บาท สำหรับ ORD-TEST01 แล้ว?')
-    expect(wrapper.text()).toContain('ระบบจะบันทึกค่าแนะนำทันทีและแก้ไขภายหลังไม่ได้ (BR-4)')
+    // 2026-09-18 — the "(BR-4)" tail went with every other internal rule id
+    // on screen (human: "คำว่า BR-1 ไม่เข้าใจ คือศัพท์ technic หรือไม่ ถ้าใช่
+    // เปลี่ยน"). The WARNING stays, because before confirming a payment it is
+    // a real consequence of a real press — only the citation left.
+    expect(wrapper.text()).toContain('ระบบจะบันทึกค่าแนะนำทันทีและแก้ไขภายหลังไม่ได้')
+    expect(wrapper.text()).not.toContain('BR-4')
 
     await dialogConfirm(wrapper).trigger('click')
     await flushPromises()

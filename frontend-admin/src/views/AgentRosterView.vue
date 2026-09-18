@@ -792,7 +792,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 </p>
                 <p class="text-xs text-slate-400 truncate">{{ a.email }}</p>
                 <p v-if="a.role === 'agent'" class="text-xs mt-1" :class="a.has_passed_basic_cert ? 'text-emerald-600' : 'text-amber-600'">
-                  {{ a.has_passed_basic_cert ? 'ผ่าน Basic แล้ว' : 'ยังไม่ผ่าน Basic (BR-1)' }}
+                  {{ a.has_passed_basic_cert ? 'ผ่าน Basic แล้ว — ขายได้' : 'ยังไม่ผ่าน Basic — ยังขายไม่ได้' }}
                 </p>
                 <p v-if="a.agent_approval_status === 'pending'" class="text-xs text-amber-600 mt-1">รออนุมัติ (สมัครผ่าน {{ registeredViaLabel(a.registered_via) }})</p>
                 <p v-else-if="a.agent_approval_status === 'rejected'" class="text-xs text-rose-600 mt-1">

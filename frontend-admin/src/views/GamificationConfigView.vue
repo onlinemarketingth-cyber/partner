@@ -326,7 +326,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       icon-color="text-gold-600"
       title="ตั้งค่า Gamification"
       subtitle="อัตรา XP และการมอบ Badge"
-      description="gamification_rules — อัตรา XP, เงื่อนไข badge, และ Level curve (BR-5, BR-7)"
+      description="อัตรา XP เงื่อนไขการได้เหรียญรางวัล และเกณฑ์เลื่อนเลเวล — ปรับได้ตลอดเวลา"
       accent-color="gold"
       storage-key="gamification-config"
     >

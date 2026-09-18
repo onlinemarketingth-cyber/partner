@@ -1740,7 +1740,7 @@ watch(
                  ManualCertificationService's docblock. -->
             <div v-if="agent.role === 'agent' && editCertTiersNotYetPassed.length" class="mt-3 pt-3 border-t border-slate-200">
               <p class="text-xs font-bold text-slate-700">มอบใบรับรองโดยไม่ต้องสอบ</p>
-              <p class="text-[11px] text-slate-500 mt-0.5">สมาชิกจะไม่ได้รับ XP จากการอนุมัติแบบนี้ (TASK-058)</p>
+              <p class="text-[11px] text-slate-500 mt-0.5">สมาชิกจะไม่ได้รับ XP จากการอนุมัติแบบนี้</p>
               <div class="mt-1.5 flex flex-wrap gap-1.5">
                 <button
                   v-for="t in editCertTiersNotYetPassed"

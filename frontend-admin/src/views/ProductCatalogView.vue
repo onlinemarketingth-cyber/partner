@@ -2185,7 +2185,7 @@ function toggleRefForm(): void {
       icon="cube"
       title="Product catalog"
       subtitle="แบรนด์ / หมวดหมู่ / แพ็กเกจ / อัตราค่าแนะนำ"
-      description="ERD-001 §Product Catalog — BR-2, BR-3. ตัวเลขราคา/อัตราค่าแนะนำบางส่วนยังเป็นค่าตัวอย่างชั่วคราว (seed placeholder) รอค่าจริงยืนยัน (BR-7)"
+      description="ราคาและอัตราค่าแนะนำบางรายการยังเป็นตัวเลขตัวอย่าง รอใส่ค่าจริง"
       accent-color="brand"
       storage-key="product-catalog"
     >

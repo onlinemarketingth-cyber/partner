@@ -2939,7 +2939,7 @@ function goToVideoSettings() {
               </div>
               <!-- BR-4 is untouched by ADR-026: commission fires at
                    Complete Payment and nowhere else, on every template. -->
-              <p class="mt-2 text-[11px] text-slate-400">ค่าแนะนำ (BR-4) เกิดขึ้นที่ขั้น “ชำระเงินสำเร็จ” เท่านั้น</p>
+              <p class="mt-2 text-[11px] text-slate-400">ค่าแนะนำเกิดขึ้นที่ขั้น “ชำระเงินสำเร็จ” เท่านั้น</p>
 
               <!-- 2026-09-09 — the consequence of this field that nobody
                    could see from this page, and therefore found out about
