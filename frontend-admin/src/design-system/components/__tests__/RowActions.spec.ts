@@ -52,7 +52,42 @@ function mountRow(props: Record<string, unknown> = {}) {
   return wrapper
 }
 
-const panel = () => document.querySelector('[data-test="row-menu-panel"]')
+const panel = () => document.querySelector<HTMLElement>('[data-test="row-menu-panel"]')
+
+/*
+ * jsdom gives every element a zero-sized box, so placement has to be fed its
+ * inputs by hand: where the trigger sits, and how tall the panel came out.
+ * Both are restored afterwards — a leaked offsetHeight getter would quietly
+ * change the arithmetic of every other suite in the run.
+ */
+function stubGeometry({ triggerTop, viewportHeight, panelHeight }: {
+  triggerTop: number
+  viewportHeight: number
+  panelHeight: number
+}) {
+  const realOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+  const realRect = HTMLElement.prototype.getBoundingClientRect
+
+  Object.defineProperty(window, 'innerHeight', { configurable: true, writable: true, value: viewportHeight })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+    configurable: true,
+    get(this: HTMLElement) {
+      return this.dataset.test === 'row-menu-panel' ? panelHeight : 0
+    },
+  })
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.dataset.test === 'row-menu') {
+      return { top: triggerTop, bottom: triggerTop + 36, left: 500, right: 536, width: 36, height: 36, x: 500, y: triggerTop, toJSON: () => ({}) } as DOMRect
+    }
+
+    return realRect.call(this)
+  }
+
+  return () => {
+    HTMLElement.prototype.getBoundingClientRect = realRect
+    if (realOffsetHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', realOffsetHeight)
+  }
+}
 const item = (test: string) => document.querySelector<HTMLButtonElement>(`[data-test="${test}"]`)
 
 describe('RowActions — one loud thing at a time', () => {
@@ -201,5 +236,86 @@ describe('RowActions — the menu', () => {
 
     expect(panel()!.closest('[data-test="row-menu"]')).toBeNull()
     expect(panel()!.parentElement).toBe(document.body)
+  })
+})
+
+/**
+ * 2026-09-18 (human, on a screenshot of the last row on screen: "เนื่องจาก
+ * เป็นบรรทัดสุดท้ายของหน้าจอ เลยแสดงผลไม่ได้เห็นไม่ครบ").
+ *
+ * The first cut clamped left and right and forgot the bottom entirely, so on
+ * the last visible row the menu ran off the screen — and since destructive
+ * items sit LAST, the part you could not see was the delete.
+ */
+describe('RowActions — staying on screen', () => {
+  it('opens downward when there is room', async () => {
+    const restore = stubGeometry({ triggerTop: 100, viewportHeight: 800, panelHeight: 180 })
+    const wrapper = mountRow()
+
+    await wrapper.find('[data-test="row-menu"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // trigger bottom 136 + the 6px gap
+    expect(panel()!.style.top).toBe('142px')
+    restore()
+  })
+
+  it('flips above the trigger on the last row, instead of running off the bottom', async () => {
+    // A 180px menu under a trigger with 60px of window left below it.
+    const restore = stubGeometry({ triggerTop: 704, viewportHeight: 800, panelHeight: 180 })
+    const wrapper = mountRow()
+
+    await wrapper.find('[data-test="row-menu"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // 704 − 6 gap − 180 tall = 518, which keeps the whole menu on screen.
+    expect(panel()!.style.top).toBe('518px')
+    restore()
+  })
+
+  it('never lets the panel hang past the bottom edge', async () => {
+    const restore = stubGeometry({ triggerTop: 704, viewportHeight: 800, panelHeight: 180 })
+    const wrapper = mountRow()
+
+    await wrapper.find('[data-test="row-menu"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(Number.parseInt(panel()!.style.top, 10) + 180).toBeLessThanOrEqual(800)
+    restore()
+  })
+
+  it('scrolls inside itself when neither side can hold it whole', async () => {
+    // A long menu in a short window: something has to give, and an item
+    // nobody can reach is worse than a scrollbar.
+    const restore = stubGeometry({ triggerTop: 150, viewportHeight: 320, panelHeight: 600 })
+    const wrapper = mountRow()
+
+    await wrapper.find('[data-test="row-menu"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const maxHeight = Number.parseInt(panel()!.style.maxHeight, 10)
+    expect(maxHeight).toBeGreaterThan(0)
+    expect(maxHeight).toBeLessThan(600)
+    restore()
+  })
+
+  it('is never left sitting at the window origin', async () => {
+    /*
+     * Placement needs the panel's height, which needs the panel to exist —
+     * so it renders one frame BEFORE it is positioned, and is held invisible
+     * for that frame (the `placed` flag). What is observable, and what
+     * actually matters, is that by the time anyone can see it, it carries
+     * real coordinates rather than the 0,0 it was born with.
+     */
+    const restore = stubGeometry({ triggerTop: 100, viewportHeight: 800, panelHeight: 180 })
+    const wrapper = mountRow()
+
+    await wrapper.find('[data-test="row-menu"]').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    expect(panel()!.className).not.toContain('opacity-0')
+    expect(panel()!.style.top).not.toBe('0px')
+    expect(panel()!.style.left).not.toBe('0px')
+    restore()
   })
 })

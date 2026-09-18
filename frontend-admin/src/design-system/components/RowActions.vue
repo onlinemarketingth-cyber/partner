@@ -96,7 +96,17 @@ const props = withDefaults(defineProps<{
 const open = ref(false)
 const trigger = ref<HTMLElement | null>(null)
 const panel = ref<HTMLElement | null>(null)
-const pos = ref({ top: 0, left: 0 })
+const pos = ref({ top: 0, left: 0, maxHeight: 0 })
+/*
+ * 2026-09-18 — the panel is rendered BEFORE it is positioned, because its
+ * height is the input to the decision (open up or down?) and nothing can
+ * measure an element that does not exist yet.
+ *
+ * So it mounts invisible for one frame, gets measured and placed, and only
+ * then becomes visible. Without this it would flash at the top-left corner
+ * of the window on every open.
+ */
+const placed = ref(false)
 
 /** Destructive items sink to the bottom, whatever order the caller passed
  *  them in — the separator above them has to mean something. */
@@ -105,7 +115,29 @@ const destructive = computed(() => props.items.filter((i) => i.destructive))
 const hasMenu = computed(() => props.items.length > 0)
 
 const PANEL_WIDTH = 224
+const GAP = 6
+/** Never let the panel touch the window edge on any side. */
+const MARGIN = 8
 
+/**
+ * 2026-09-18 (human, on a screenshot of the last row on screen: "เนื่องจาก
+ * เป็นบรรทัดสุดท้ายของหน้าจอ เลยแสดงผลไม่ได้เห็นไม่ครบ").
+ *
+ * The first cut clamped LEFT and RIGHT and simply did not think about the
+ * bottom, so a menu opened on the last visible row ran off the screen and
+ * its last item — which is the destructive one — was the part you could not
+ * see. On a table you cannot scroll further down, it was unreachable.
+ *
+ * Three cases, in order of preference:
+ *   1. It fits below the trigger — the normal direction, so the menu reads
+ *      as belonging to the row it came from.
+ *   2. It does not, but fits ABOVE — flip up. This is what a native menu
+ *      near the bottom of a screen does.
+ *   3. Neither side fits (a short window, or a long menu) — take the taller
+ *      side and let the panel scroll, with a max-height that keeps both ends
+ *      on screen. Scrolling is worse than not scrolling and much better than
+ *      an item nobody can reach.
+ */
 function place(): void {
   const el = trigger.value
   if (!el) return
@@ -113,8 +145,28 @@ function place(): void {
   const r = el.getBoundingClientRect()
   // Right-aligned to the trigger, and nudged back inside the viewport on a
   // narrow screen rather than hanging off the edge.
-  const left = Math.max(8, Math.min(r.right - PANEL_WIDTH, window.innerWidth - PANEL_WIDTH - 8))
-  pos.value = { top: r.bottom + 6, left }
+  const left = Math.max(MARGIN, Math.min(r.right - PANEL_WIDTH, window.innerWidth - PANEL_WIDTH - MARGIN))
+
+  const height = panel.value?.offsetHeight ?? 0
+  const roomBelow = window.innerHeight - r.bottom - GAP - MARGIN
+  const roomAbove = r.top - GAP - MARGIN
+
+  if (height <= roomBelow) {
+    pos.value = { top: r.bottom + GAP, left, maxHeight: roomBelow }
+
+    return
+  }
+
+  if (height <= roomAbove) {
+    pos.value = { top: r.top - GAP - height, left, maxHeight: roomAbove }
+
+    return
+  }
+
+  // Neither side can hold it whole: take the roomier one and scroll.
+  pos.value = roomBelow >= roomAbove
+    ? { top: r.bottom + GAP, left, maxHeight: Math.max(roomBelow, 0) }
+    : { top: MARGIN, left, maxHeight: Math.max(roomAbove, 0) }
 }
 
 function close(): void {
@@ -122,13 +174,7 @@ function close(): void {
 }
 
 function toggle(): void {
-  if (open.value) {
-    close()
-
-    return
-  }
-  place()
-  open.value = true
+  open.value = !open.value
 }
 
 function choose(item: RowAction): void {
@@ -164,12 +210,16 @@ watch(open, async (isOpen) => {
     document.addEventListener('keydown', onKey)
     window.addEventListener('scroll', close, true)
     window.addEventListener('resize', close)
+    // Measure, THEN place, THEN reveal — see `placed`.
     await nextTick()
+    place()
+    placed.value = true
     panel.value?.querySelector<HTMLElement>('[data-menuitem]:not([disabled])')?.focus()
 
     return
   }
 
+  placed.value = false
   document.removeEventListener('pointerdown', onDocumentPointer, true)
   document.removeEventListener('keydown', onKey)
   window.removeEventListener('scroll', close, true)
@@ -237,8 +287,14 @@ function move(e: KeyboardEvent, delta: number): void {
         ref="panel"
         role="menu"
         data-test="row-menu-panel"
-        class="fixed z-[1100] rounded-xl bg-white border border-slate-200 shadow-xl p-1.5"
-        :style="{ top: `${pos.top}px`, left: `${pos.left}px`, width: `${PANEL_WIDTH}px` }"
+        class="fixed z-[1100] rounded-xl bg-white border border-slate-200 shadow-xl p-1.5 overflow-y-auto"
+        :class="placed ? '' : 'opacity-0 pointer-events-none'"
+        :style="{
+          top: `${pos.top}px`,
+          left: `${pos.left}px`,
+          width: `${PANEL_WIDTH}px`,
+          maxHeight: placed ? `${pos.maxHeight}px` : 'none',
+        }"
         style="font-family: Kanit, sans-serif;"
         @keydown.down="move($event, 1)"
         @keydown.up="move($event, -1)"
