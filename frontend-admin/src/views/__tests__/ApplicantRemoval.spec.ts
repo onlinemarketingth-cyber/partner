@@ -12,7 +12,7 @@
  * over a working agent's name, and the roster is the one screen where every
  * agent in the company is listed together.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 const get = vi.fn()
@@ -92,6 +92,21 @@ function mockRoster(rows: unknown[]) {
   })
 }
 
+/*
+ * 2026-09-18 — mounted views are UNMOUNTED after every test now.
+ *
+ * RowActions teleports its panel to <body>, so a view left mounted leaves a
+ * live menu behind. `document.querySelector` then finds the PREVIOUS test's
+ * panel, and the assertion reads a stale row — which fails with a message
+ * about the wrong label and sends you looking in entirely the wrong place.
+ */
+let mounted: ReturnType<typeof mount>[] = []
+
+afterEach(() => {
+  mounted.forEach((w) => w.unmount())
+  mounted = []
+})
+
 async function mountView() {
   const wrapper = mount(AgentRosterView, {
     global: {
@@ -118,6 +133,7 @@ async function mountView() {
     },
   })
   await flushPromises()
+  mounted.push(wrapper)
 
   return wrapper
 }
@@ -125,6 +141,27 @@ async function mountView() {
 type Wrapper = Awaited<ReturnType<typeof mountView>>
 
 const at = (w: Wrapper, test: string) => w.find(`[data-test="${test}"]`)
+
+/*
+ * 2026-09-18 — the row's secondary actions moved behind a ⋯ menu
+ * (RowActions), and that menu is TELEPORTED to <body> so a horizontally
+ * scrolling table cannot clip it. Two consequences for every test below that
+ * reaches for one of them:
+ *
+ *   • it has to open the menu first — which is the point of the change, and
+ *     a test that did not would not be testing what an admin does;
+ *   • it has to look in `document`, not in the wrapper, because the panel is
+ *     no longer inside the component's own tree.
+ *
+ * `approve-applicant` and `restore-applicant` are NOT in here: they stay on
+ * the row as the one prominent action, so they are still found with `at()`.
+ */
+async function openMenu(w: Wrapper) {
+  await at(w, 'row-menu').trigger('click')
+  await flushPromises()
+}
+
+const inMenu = (test: string) => document.querySelector<HTMLButtonElement>(`[data-test="${test}"]`)
 
 beforeEach(() => {
   get.mockReset()
@@ -155,9 +192,10 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
   it('offers the delete on an unfinished sign-up', async () => {
     const wrapper = await mountView()
+    await openMenu(wrapper)
 
-    expect(at(wrapper, 'remove-member').exists()).toBe(true)
-    expect(at(wrapper, 'remove-member').attributes('disabled')).toBeUndefined()
+    expect(inMenu('remove-member')).not.toBeNull()
+    expect(inMenu('remove-member')!.disabled).toBe(false)
   })
 
   it('offers it on an approved member who has never done anything', async () => {
@@ -170,9 +208,10 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
     mockRoster([applicant({ is_unconfirmed_applicant: false, agent_approval_status: 'approved' })])
 
     const wrapper = await mountView()
+    await openMenu(wrapper)
 
-    expect(at(wrapper, 'remove-member').exists()).toBe(true)
-    expect(at(wrapper, 'remove-member').text()).toContain('ลบสมาชิก')
+    expect(inMenu('remove-member')).not.toBeNull()
+    expect(inMenu('remove-member')!.textContent).toContain('ลบสมาชิก')
   })
 
   it('shows the delete DISABLED, with a reason, on a member who has history', async () => {
@@ -191,7 +230,10 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
     const wrapper = await mountView()
 
-    expect(at(wrapper, 'remove-member').attributes('disabled')).toBeDefined()
+    // The reason is on the ROW, readable without opening anything — the menu
+    // repeats it next to the dead item for whoever opens it anyway.
+    await openMenu(wrapper)
+    expect(inMenu('remove-member')!.disabled).toBe(true)
 
     const reason = at(wrapper, 'removal-blocked-reason').text()
     expect(reason).toContain('ลูกค้าที่แนะนำ 3 ราย')
@@ -209,8 +251,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
     mockRoster([applicant({ removal_blockers: undefined })])
 
     const wrapper = await mountView()
+    await openMenu(wrapper)
 
-    expect(at(wrapper, 'remove-member').exists()).toBe(false)
+    expect(inMenu('remove-member')).toBeNull()
   })
 
   it('does NOT offer it when the server says this admin may not', async () => {
@@ -219,8 +262,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
     mockRoster([applicant({ permissions: { ...ALL, deactivate: false } })])
 
     const wrapper = await mountView()
+    await openMenu(wrapper)
 
-    expect(at(wrapper, 'remove-member').exists()).toBe(false)
+    expect(inMenu('remove-member')).toBeNull()
   })
 
   it('does NOT offer it when the server sent no permissions at all', async () => {
@@ -232,8 +276,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
     mockRoster([applicant({ permissions: undefined })])
 
     const wrapper = await mountView()
+    await openMenu(wrapper)
 
-    expect(at(wrapper, 'remove-member').exists()).toBe(false)
+    expect(inMenu('remove-member')).toBeNull()
   })
 
   it('warns by name and promises the row comes back', async () => {
@@ -244,7 +289,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
      * irreversible one and nobody uses it.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-member').trigger('click')
+    await openMenu(wrapper)
+    inMenu('remove-member')!.click()
+    await flushPromises()
 
     const body = at(wrapper, 'confirm').text()
     expect(body).toContain('ทดสอบสมัครใหม่ นามสกุล')
@@ -264,7 +311,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
      * later.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-member').trigger('click')
+    await openMenu(wrapper)
+    inMenu('remove-member')!.click()
+    await flushPromises()
 
     const body = at(wrapper, 'confirm').text()
     expect(body).toContain('ikenyaa+4321568@gmail.com')
@@ -280,7 +329,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
      * edits this copy.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-member').trigger('click')
+    await openMenu(wrapper)
+    inMenu('remove-member')!.click()
+    await flushPromises()
 
     const body = at(wrapper, 'confirm').text()
     for (const jargon of ['deleted_at', 'soft delete', 'is_active', 'pending', 'null', '422']) {
@@ -290,7 +341,9 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
   it('sends the delete only after the confirm', async () => {
     const wrapper = await mountView()
-    await at(wrapper, 'remove-member').trigger('click')
+    await openMenu(wrapper)
+    inMenu('remove-member')!.click()
+    await flushPromises()
 
     expect(del).not.toHaveBeenCalled()
 
@@ -318,8 +371,13 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
 
     const wrapper = await mountView()
 
+    // อนุมัติ stays on the row as the one prominent action; ไม่อนุมัติ moved
+    // into the menu deliberately — rejection writes a permanent negative
+    // record the registrant is shown by name, and that does not belong under
+    // a hurried cursor.
     expect(at(wrapper, 'approve-applicant').exists()).toBe(true)
-    expect(at(wrapper, 'reject-applicant').exists()).toBe(true)
+    await openMenu(wrapper)
+    expect(inMenu('reject-applicant')).not.toBeNull()
   })
 
   it('offers neither on somebody who is already approved', async () => {
@@ -385,7 +443,9 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
     mockRoster([applicant({ permissions: { ...ALL, reject_registration: true } })])
 
     const wrapper = await mountView()
-    await at(wrapper, 'reject-applicant').trigger('click')
+    await openMenu(wrapper)
+    inMenu('reject-applicant')!.click()
+    await flushPromises()
 
     expect(at(wrapper, 'reject-reason').exists()).toBe(true)
     expect(wrapper.text()).toContain('จะเห็นเหตุผลนี้ตอนพยายามเข้าสู่ระบบ')
@@ -396,7 +456,9 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
     mockRoster([applicant({ permissions: { ...ALL, reject_registration: true } })])
 
     const wrapper = await mountView()
-    await at(wrapper, 'reject-applicant').trigger('click')
+    await openMenu(wrapper)
+    inMenu('reject-applicant')!.click()
+    await flushPromises()
     await at(wrapper, 'reject-reason').setValue('ข้อมูลไม่ครบ')
     await at(wrapper, 'reject-confirm').trigger('click')
     await flushPromises()
@@ -410,7 +472,9 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
     mockRoster([applicant({ permissions: { ...ALL, reject_registration: true } })])
 
     const wrapper = await mountView()
-    await at(wrapper, 'reject-applicant').trigger('click')
+    await openMenu(wrapper)
+    inMenu('reject-applicant')!.click()
+    await flushPromises()
     await at(wrapper, 'reject-reason').setValue('   ')
     await at(wrapper, 'reject-confirm').trigger('click')
     await flushPromises()

@@ -42,6 +42,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import RowActions, { type RowAction, type RowPrimaryAction } from '@/design-system/components/RowActions.vue'
 import AgentEditModal from './AgentEditModal.vue'
 import {
   type AgentItem,
@@ -451,12 +452,87 @@ function removalBlockerLabel(blocker: { key: string; count: number }): string {
   return labels[blocker.key] ?? `ข้อมูลที่ผูกอยู่ ${blocker.count} รายการ`
 }
 
-/** One sentence for the disabled button's tooltip and the note under it. */
+/** One sentence for the disabled menu item and the note under the row. */
 function removalBlockedReason(a: AgentItem): string {
   const blockers = removalBlockers(a)
   if (blockers.length === 0) return ''
 
   return `ลบไม่ได้ เพราะมี${blockers.map(removalBlockerLabel).join(' · ')} — ใช้ปิดใช้งานแทน`
+}
+
+/*
+ * 2026-09-18 — the row's actions, as data rather than as five buttons.
+ *
+ * THE PROMINENT ONE IS THE DECISION THE ROW IS ALREADY ASKING FOR. A row
+ * that says "รออนุมัติ" is asking to be approved, so อนุมัติ is the filled
+ * button; a row in the ปิดใช้งาน tab is asking to be restored. Every other
+ * row has no such question and gets no filled button at all — which is the
+ * rule RowActions exists to hold (see its docblock).
+ *
+ * ไม่อนุมัติ is NOT the prominent one even though it appears on the same
+ * rows: rejection writes a permanent negative record the registrant is
+ * shown by name, and that is not the thing to put under a hurried cursor.
+ */
+function rowPrimary(a: AgentItem): RowPrimaryAction | null {
+  if (canApprove(a)) {
+    return {
+      label: 'อนุมัติ',
+      icon: 'check',
+      test: 'approve-applicant',
+      tone: 'positive',
+      busy: decidingId.value === a.id,
+      busyLabel: 'กำลังอนุมัติ…',
+      disabled: decidingId.value !== null,
+      onSelect: () => approveApplicant(a),
+    }
+  }
+
+  if (canRestoreApplicant(a)) {
+    return {
+      label: 'กู้คืน',
+      icon: 'refresh',
+      test: 'restore-applicant',
+      disabled: rowActionBusy.value,
+      onSelect: () => restoreApplicant(a),
+    }
+  }
+
+  return null
+}
+
+/**
+ * Everything else, in the order an admin thinks about it: the everyday edit
+ * first, the heavier decisions after, and anything destructive last —
+ * RowActions sinks those below a separator whatever order they arrive in.
+ */
+function rowMenu(a: AgentItem): RowAction[] {
+  const items: RowAction[] = [
+    { label: 'แก้ไขข้อมูล', icon: 'pencil', test: 'edit-agent', onSelect: () => { editingAgentId.value = a.id } },
+  ]
+
+  if (canReject(a)) {
+    items.push({
+      label: 'ไม่อนุมัติ',
+      icon: 'x',
+      test: 'reject-applicant',
+      disabled: decidingId.value !== null,
+      onSelect: () => { rejectingId.value = rejectingId.value === a.id ? null : a.id; rejectReason.value = '' },
+    })
+  }
+
+  if (canRemoveMember(a)) {
+    items.push({
+      label: a.is_unconfirmed_applicant ? 'ลบผู้สมัคร' : 'ลบสมาชิก',
+      icon: 'trash',
+      test: 'remove-member',
+      destructive: true,
+      disabled: rowActionBusy.value || !isRemovable(a),
+      disabledReason: removalBlockedReason(a),
+      onSelect: () => { pendingRemoveMember.value = a },
+    })
+  }
+
+  return items
 }
 
 /** The mirror. Offered on the same rows, so the undo is where the delete was. */
@@ -747,71 +823,15 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 </p>
               </div>
             </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <!-- 2026-09-08 — the decision the row is already telling them
-                   about ("รออนุมัติ"), offered on the row itself. Same two
-                   endpoints the approvals queue uses; separate permissions
-                   because the server treats approve and reject as separate
-                   grants. -->
-              <button
-                v-if="canApprove(a)"
-                type="button"
-                class="btn-secondary gap-1.5 text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200 disabled:opacity-50"
-                data-test="approve-applicant"
-                :disabled="decidingId !== null"
-                @click="approveApplicant(a)"
-              >
-                <Icon name="check" :size="14" />
-                {{ decidingId === a.id ? 'กำลังอนุมัติ…' : 'อนุมัติ' }}
-              </button>
-              <button
-                v-if="canReject(a)"
-                type="button"
-                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-50"
-                data-test="reject-applicant"
-                :disabled="decidingId !== null"
-                @click="rejectingId = rejectingId === a.id ? null : a.id; rejectReason = ''"
-              >
-                <Icon name="x" :size="14" />
-                ไม่อนุมัติ
-              </button>
-              <!-- 2026-09-18 — offered on every removable row, disabled with
-                   a reason on the rows that have history. The reason is a
-                   `title` AND a visible note: a tooltip alone never opens on
-                   touch (CLAUDE.md §7's own objection to `title=`), and an
-                   admin on a tablet would just see a dead button. -->
-              <button
-                v-if="canRemoveMember(a)"
-                type="button"
-                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
-                data-test="remove-member"
-                :disabled="rowActionBusy || !isRemovable(a)"
-                :title="removalBlockedReason(a)"
-                @click="pendingRemoveMember = a"
-              >
-                <Icon name="trash" :size="14" />
-                {{ a.is_unconfirmed_applicant ? 'ลบผู้สมัคร' : 'ลบสมาชิก' }}
-              </button>
-              <button
-                v-if="canRestoreApplicant(a)"
-                type="button"
-                class="btn-secondary gap-1.5"
-                data-test="restore-applicant"
-                :disabled="rowActionBusy"
-                @click="restoreApplicant(a)"
-              >
-                <Icon name="refresh" :size="14" />
-                กู้คืน
-              </button>
-              <button
-                type="button"
-                class="btn-secondary gap-1.5"
-                @click="editingAgentId = a.id"
-              >
-                <Icon name="pencil" :size="14" />
-                แก้ไข
-              </button>
-            </div>
+            <!-- 2026-09-18 — was five buttons in identical 2px navy borders
+                 (human, on a screenshot: "ตอนนี้ดูยากไปหน่อยเรื่องปุ่ม เพราะ
+                 สีมันไม่ชัดเจน"). One prominent action, the rest behind ⋯ —
+                 see RowActions for why the colours were never the problem. -->
+            <RowActions
+              :primary="rowPrimary(a)"
+              :items="rowMenu(a)"
+              :menu-label="`ตัวเลือกสำหรับ ${a.name}`"
+            />
           </div>
           <!-- 2026-09-08 — the reason box, inline rather than in a dialog: the
                text is optional but it is shown to the applicant verbatim at the
