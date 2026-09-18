@@ -97,7 +97,21 @@ interface RowPermissions {
  * It was briefly creatable here, against a company flagged `is_supplier`. That
  * whole model was rejected — see CompanyManagementView's note.
  */
-type ManageableRole = 'agent' | 'company_admin' | 'voucher_staff' | 'company_partner'
+/*
+ * 2026-09-18 — `super_admin` joins (human: "เพิ่มสิทธิ์ Super Admin ในการเพิ่ม
+ * และแก้ไข user"). It is the one role in this union that belongs to NO
+ * company, and the one that only a Super Admin can see, grant or take away
+ * (UserPolicy::view()'s own note says why the old blanket refusal changed).
+ *
+ * `agent` stays in the union and LEAVES the screen. Same day, same request:
+ * "ระบบตอนนี้เอา User ทุกคนทั้ง Agent และมารวมกัน แต่ในการตั้งค่า ความต้องการ
+ * จริงคือ Admin เท่านั้น". The rows are filtered out server-side
+ * (`?admins_only=1`), not hidden here — this list paginates, so filtering in
+ * the browser would show page 1 of everybody and call it the admins. The
+ * type keeps the case because a demotion still produces one, and the row has
+ * to render for the instant before it disappears from this list.
+ */
+type ManageableRole = 'agent' | 'company_admin' | 'voucher_staff' | 'company_partner' | 'super_admin'
 
 /** Ability::VoucherRedeem — the only ability this screen may hand out today
  *  (UserAbilityController::GRANTABLE holds the authoritative list). */
@@ -166,6 +180,15 @@ function queryString(): string {
   // "Who may redeem a voucher?" has to be answerable at a glance. One extra
   // eager load for the page, not one query per row — see UserController.
   params.set('with_abilities', '1')
+  /*
+   * 2026-09-18 — the screen's whole subject, stated to the server.
+   *
+   * Not a client-side `.filter()`: this endpoint paginates at 15, so
+   * narrowing here would mean "page 1 of everybody, minus its agents",
+   * which is not page 1 of the admins and is not what the count below
+   * would be describing either.
+   */
+  params.set('admins_only', '1')
   if (filters.value.include_inactive) params.set('include_inactive', '1')
   if (filters.value.role) params.set('role', filters.value.role)
   if (filters.value.q.trim()) params.set('q', filters.value.q.trim())
@@ -203,6 +226,12 @@ function roleChangeWarning(user: UserRow, role: ManageableRole): string {
   if (role === 'voucher_staff') {
     return `${user.name} จะเข้าได้เฉพาะหน้า "ตัดสิทธิ์บัตรกำนัล" หน้าเดียว — คำสั่งซื้อ ลูกค้า ค่าแนะนำ และรายชื่อผู้ใช้จะเข้าไม่ได้ทั้งหมด · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
   }
+  if (role === 'super_admin') {
+    return `${user.name} จะกลายเป็น Super Admin — เห็นและแก้ไขข้อมูลได้ทุกบริษัทบนแพลตฟอร์ม รวมถึงสร้างและถอดสิทธิ์ Super Admin คนอื่น\nบัญชีนี้จะไม่สังกัดบริษัทใดอีกต่อไป (ตอนนี้อยู่ ${user.company?.name ?? '—'})\nระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด เขาต้องเข้าสู่ระบบใหม่`
+  }
+  if (role === 'agent') {
+    return `${user.name} จะกลับไปเห็นเฉพาะข้อมูลของตัวเอง และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที\nหลังบันทึก แถวนี้จะหายจากหน้านี้ — บัญชีสมาชิกจัดการที่หน้า จัดการตัวแทน`
+  }
   if (role === 'company_partner') {
     return `${user.name} จะกลายเป็นบัญชีคู่ค้า — เห็นเฉพาะคำสั่งซื้อของสินค้าที่คู่ค้ารายนี้เป็นผู้จัดหา (รวมชื่อและที่อยู่ลูกค้าสำหรับสินค้าที่ต้องจัดส่ง) ยอดค้างรับ และหน้าตัดสิทธิ์บัตรกำนัล · ระบบจะถอนการเข้าใช้งานเดิมของเขาทั้งหมด`
   }
@@ -230,6 +259,97 @@ async function confirmRoleChange() {
     errorMessage.value = apiErrorMessage(e, 'เปลี่ยนบทบาทไม่สำเร็จ')
   } finally {
     pendingRoleChange.value = null
+  }
+}
+
+// ── Super Admin, granted ───────────────────────────────────────────────
+/*
+ * 2026-09-18. Its own flow rather than another askRoleChange() target, for
+ * two reasons that both come from the owner's answer on the guards:
+ *
+ *   1. It is TYPE-TO-CONFIRM. ConfirmDialog's `confirmPhrase` turns the
+ *      dialog into one that cannot be dismissed by a click landing in the
+ *      wrong place — the same treatment the platform-wide catalogue hide
+ *      already gets, for a click with a larger blast radius.
+ *   2. The phrase is the person's EMAIL, not a fixed word. "ยืนยัน" typed
+ *      into the wrong row's dialog still grants the platform to the wrong
+ *      person; an address does not transfer between rows.
+ */
+const pendingSuperAdminGrant = ref<UserRow | null>(null)
+const grantingSuperAdmin = ref(false)
+
+async function confirmSuperAdminGrant(): Promise<void> {
+  const user = pendingSuperAdminGrant.value
+  if (!user) return
+
+  grantingSuperAdmin.value = true
+  errorMessage.value = ''
+  try {
+    await api.put(`/users/${user.id}`, { role: 'super_admin' })
+    successMessage.value = `${user.name} เป็น Super Admin แล้ว — ไม่สังกัดบริษัทใดอีกต่อไป และถูกถอนการเข้าใช้งานเดิมทั้งหมด`
+    pendingSuperAdminGrant.value = null
+    await load()
+  } catch (e) {
+    errorMessage.value = apiErrorMessage(e, 'ให้สิทธิ์ Super Admin ไม่สำเร็จ')
+    pendingSuperAdminGrant.value = null
+  } finally {
+    grantingSuperAdmin.value = false
+  }
+}
+
+// ── Super Admin, taken back ────────────────────────────────────────────
+/*
+ * A panel rather than a dialog, because this one has to ASK something:
+ * WHICH COMPANY the account lands in.
+ *
+ * A Super Admin has no company_id. Take the role away without naming a
+ * company and the column stays null — and TenantScope is fail-closed, so the
+ * demoted admin logs in perfectly well and finds an empty system with
+ * nothing on screen to explain it. The server refuses that request
+ * (UpdateUserRequest), and this is the form that makes the refusal
+ * unreachable rather than something to run into.
+ *
+ * The typed confirmation is here too, inline — ConfirmDialog has no slot for
+ * a picker, and splitting the question across two modals would mean
+ * confirming before knowing what was being confirmed.
+ */
+const demoting = ref<UserRow | null>(null)
+const demoteCompanyId = ref<number | ''>('')
+const demoteTyped = ref('')
+const demoteError = ref('')
+const savingDemote = ref(false)
+
+function openDemote(user: UserRow): void {
+  demoting.value = user
+  demoteCompanyId.value = ''
+  demoteTyped.value = ''
+  demoteError.value = ''
+  activeCompany.loadCompanies()
+}
+
+/** Trimmed — a trailing space from copy-paste is not a different answer. */
+const demotePhraseSatisfied = computed(
+  () => demoteTyped.value.trim() !== '' && demoteTyped.value.trim() === demoting.value?.email.trim(),
+)
+
+async function submitDemote(): Promise<void> {
+  const user = demoting.value
+  if (!user || demoteCompanyId.value === '' || !demotePhraseSatisfied.value) return
+
+  savingDemote.value = true
+  demoteError.value = ''
+  try {
+    // `company_id` travels WITH the role. The server requires it on exactly
+    // this path and prohibits it everywhere else — see UpdateUserRequest.
+    await api.put(`/users/${user.id}`, { role: 'company_admin', company_id: demoteCompanyId.value })
+    const target = activeCompany.companies.find((c) => c.id === demoteCompanyId.value)
+    successMessage.value = `ถอดสิทธิ์ Super Admin ของ ${user.name} แล้ว — เป็นผู้ดูแลบริษัท ${target?.name ?? `#${demoteCompanyId.value}`}`
+    demoting.value = null
+    await load()
+  } catch (e) {
+    demoteError.value = apiErrorMessage(e, 'ถอดสิทธิ์ไม่สำเร็จ')
+  } finally {
+    savingDemote.value = false
   }
 }
 
@@ -314,6 +434,17 @@ const showCreate = ref(false)
 const createForm = ref({ first_name: '', last_name: '', email: '', password: '', role: 'company_admin' as ManageableRole })
 const createError = ref('')
 const creating = ref(false)
+/*
+ * 2026-09-18 — the create form's own type-to-confirm step, for one role.
+ *
+ * Creating a Company Admin is an everyday act and stays a single click.
+ * Creating a Super Admin hands somebody every company on the platform, so it
+ * gets the same second gate the row action does — and the phrase is the
+ * address just typed into the form, which is the one thing on screen that
+ * identifies the account being made.
+ */
+const pendingCreateSuperAdmin = ref(false)
+const creatingSuperAdmin = computed(() => createForm.value.role === 'super_admin')
 
 /**
  * StoreUserRequest REQUIRES company_id from a Super Admin and PROHIBITS it
@@ -321,16 +452,44 @@ const creating = ref(false)
  * company. So in "ทุกบริษัท" the answer is genuinely missing, and the form
  * says which company it is about to create in rather than picking one.
  */
-const createCompanyBlocked = computed(() => isSuperAdmin.value && activeCompany.companyId === null)
+/*
+ * 2026-09-18 — …unless the account being created is a Super Admin, who
+ * belongs to no company at all. StoreUserRequest PROHIBITS `company_id` on
+ * that path, so "pick a company first" would be demanding a value the server
+ * would then reject.
+ */
+const createCompanyBlocked = computed(
+  () => isSuperAdmin.value && activeCompany.companyId === null && !creatingSuperAdmin.value,
+)
 const createCompanyName = computed(() => activeCompany.companyName ?? auth.user?.company?.name ?? '')
 
 function openCreate(): void {
   createForm.value = { first_name: '', last_name: '', email: '', password: '', role: 'company_admin' }
   createError.value = ''
+  pendingCreateSuperAdmin.value = false
   showCreate.value = true
 }
 
-async function submitCreate(): Promise<void> {
+/** The gate in front of doCreate() — one role has to be typed for. */
+function submitCreate(): void {
+  if (creatingSuperAdmin.value) {
+    if (createForm.value.email.trim() === '') {
+      createError.value = 'กรอกอีเมลก่อน — ต้องพิมพ์อีเมลนี้ยืนยันอีกครั้งก่อนสร้าง Super Admin'
+
+      return
+    }
+    createError.value = ''
+    pendingCreateSuperAdmin.value = true
+
+    return
+  }
+
+  void doCreate()
+}
+
+async function doCreate(): Promise<void> {
+  pendingCreateSuperAdmin.value = false
+
   if (createCompanyBlocked.value) {
     createError.value = 'เลือกบริษัทที่แถบด้านบนก่อน จึงจะสร้างผู้ใช้ได้'
 
@@ -349,7 +508,11 @@ async function submitCreate(): Promise<void> {
       ...createForm.value,
       // Only a Super Admin may send it, and must; a Company Admin sending it
       // is a 422 by rule, not an oversight.
-      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
+      //
+      // 2026-09-18 — and a Super Admin being CREATED takes none: the role
+      // has no tenant, and StoreUserRequest prohibits the key rather than
+      // ignoring it, so sending null here would be a 422 too.
+      ...(isSuperAdmin.value && !creatingSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
     })
     // The password is deliberately absent from this sentence — it was typed a
     // second ago by the person reading it, and repeating a live credential on
@@ -467,6 +630,7 @@ function formatDateTime(iso: string | null): string {
 }
 
 function roleLabel(role: string): string {
+  if (role === 'super_admin') return 'Super Admin'
   if (role === 'company_admin') return 'ผู้ดูแลบริษัท'
   if (role === 'voucher_staff') return 'พนักงานหน้าร้าน'
   if (role === 'company_partner') return 'คู่ค้า'
@@ -522,6 +686,9 @@ async function submitGrants(): Promise<void> {
 }
 
 const adminCount = computed(() => rows.value.filter((r) => r.role === 'company_admin' && r.is_active).length)
+// 2026-09-18 — countable for the same reason the redemption right is: a
+// platform-wide privilege nobody can count is one nobody audits.
+const superAdminCount = computed(() => rows.value.filter((r) => r.role === 'super_admin' && r.is_active).length)
 // A right nobody can count is a right nobody audits — see holdsRedemption().
 const redeemerCount = computed(() => rows.value.filter((r) => r.is_active && holdsRedemption(r)).length)
 
@@ -542,12 +709,17 @@ onMounted(() => {
       storage-key="user-management"
     />
 
-    <!-- The two invisible rules, said once, where they are read. -->
-    <div class="mt-4 mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500">
-      หน้านี้จัดการ <strong>ผู้ดูแลบริษัท</strong> และ <strong>สมาชิก</strong> —
-      <strong>ไม่แสดง Super Admin</strong> เพราะสร้างและจัดการจากบรรทัดคำสั่งเท่านั้น (<code>admin:create-super</code>)
-      ไม่ใช่เพราะยังไม่มี · ปุ่มแต่ละแถวขึ้นตาม<strong>สิทธิ์จริงของคุณ</strong> ที่เซิร์ฟเวอร์เป็นคนตอบ
-      และคุณจะปิดบัญชีตัวเองไม่ได้
+    <!-- The invisible rules, said once, where they are read.
+         2026-09-18 — rewritten end to end. It used to say Super Admin was
+         command-line-only and that this page also managed สมาชิก; both
+         stopped being true on the same day and a note that lies about the
+         screen is worse than no note. -->
+    <div class="mt-4 mb-3 px-4 py-3 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500" data-test="screen-note">
+      หน้านี้จัดการ<strong>ผู้ดูแลระบบเท่านั้น</strong> — Super Admin, ผู้ดูแลบริษัท, พนักงานหน้าร้าน และคู่ค้า ·
+      <strong>ไม่แสดงสมาชิก (Agent)</strong> เพราะจัดการที่หน้า
+      <RouterLink :to="{ name: 'agent-roster' }" class="text-brand-700 font-bold hover:underline">จัดการตัวแทน</RouterLink>
+      แทน · ปุ่มแต่ละแถวขึ้นตาม<strong>สิทธิ์จริงของคุณ</strong> ที่เซิร์ฟเวอร์เป็นคนตอบ
+      คุณจะปิดบัญชีหรือถอดสิทธิ์ตัวเองไม่ได้ และ <strong>Super Admin คนสุดท้ายจะถูกถอดหรือปิดบัญชีไม่ได้</strong>
     </div>
 
     <div class="mb-3 p-4 rounded-xl bg-white/95 border border-slate-200 flex flex-wrap items-end gap-3">
@@ -555,8 +727,14 @@ onMounted(() => {
         <label class="block text-xs font-bold text-slate-500 mb-1">บทบาท</label>
         <select v-model="filters.role" data-test="role-filter" class="px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white min-w-[12rem]" @change="load">
           <option value="">ทุกบทบาท</option>
+          <!-- 2026-09-18 — สมาชิก is gone from this list, not merely
+               unselected: the endpoint no longer returns agents here
+               (?admins_only=1), so the option would filter an empty set and
+               read as "there are no agents". Super Admin takes its place,
+               and only a Super Admin is offered it — nobody else can see
+               such a row at all. -->
+          <option v-if="isSuperAdmin" value="super_admin">Super Admin</option>
           <option value="company_admin">ผู้ดูแลบริษัท</option>
-          <option value="agent">สมาชิก</option>
           <option value="voucher_staff">พนักงานหน้าร้าน</option>
           <option value="company_partner">คู่ค้า</option>
         </select>
@@ -588,6 +766,7 @@ onMounted(() => {
       <EmptyState v-if="!rows.length" icon="users" title="ไม่พบผู้ใช้ตามเงื่อนไขนี้" />
       <div v-else>
         <p class="mb-2 text-xs text-slate-500">
+          <span v-if="isSuperAdmin" data-test="super-admin-count">Super Admin ที่ใช้งานอยู่ <strong>{{ superAdminCount }}</strong> คน · </span>
           ผู้ดูแลบริษัทที่ใช้งานอยู่ <strong>{{ adminCount }}</strong> คน ·
           <span data-test="redeemer-count">ตัดสิทธิ์บัตรกำนัลได้ <strong>{{ redeemerCount }}</strong> คน</span> ·
           ทั้งหมด {{ rows.length }} รายการ
@@ -628,7 +807,7 @@ onMounted(() => {
                 <td class="px-4 py-2.5">
                   <span
                     class="text-[11px] font-bold px-2 py-0.5 rounded-full"
-                    :class="user.role === 'company_admin' ? 'bg-brand-50 text-brand-700' : user.role === 'voucher_staff' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'"
+                    :class="user.role === 'super_admin' ? 'bg-violet-100 text-violet-800' : user.role === 'company_admin' ? 'bg-brand-50 text-brand-700' : user.role === 'voucher_staff' ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-600'"
                   >
                     {{ roleLabel(user.role) }}
                   </span>
@@ -643,7 +822,13 @@ onMounted(() => {
                     ตัดบัตรกำนัลได้
                   </span>
                 </td>
-                <td v-if="isSuperAdmin" class="px-4 py-2.5 text-slate-500 text-xs">{{ user.company?.name ?? '—' }}</td>
+                <!-- 2026-09-18 — a Super Admin's blank company is a FACT
+                     about the role, not missing data. "—" alone reads as
+                     "nobody filled this in". -->
+                <td v-if="isSuperAdmin" class="px-4 py-2.5 text-slate-500 text-xs">
+                  <span v-if="user.role === 'super_admin'" class="text-slate-400">ทุกบริษัท (ไม่สังกัด)</span>
+                  <span v-else>{{ user.company?.name ?? '—' }}</span>
+                </td>
                 <!-- Null is spelled out. "—" alone would be read as "never",
                      and the true statement is narrower than that. -->
                 <td class="px-4 py-2.5 text-xs whitespace-nowrap" :class="user.last_login_at ? 'text-slate-500' : 'text-slate-400'">
@@ -668,14 +853,12 @@ onMounted(() => {
                     >
                       แก้ไขข้อมูล
                     </button>
-                    <button
-                      v-if="user.permissions.update && user.is_active && user.role === 'agent'"
-                      class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
-                      data-test="promote"
-                      @click="askRoleChange(user, 'company_admin')"
-                    >
-                      ให้เป็นผู้ดูแล
-                    </button>
+                    <!-- 2026-09-18 — ให้เป็นผู้ดูแล is gone from this screen.
+                         It only ever appeared on an `agent` row, and agents
+                         are no longer listed here; promoting a salesperson
+                         to admin now starts where that person is, on
+                         จัดการตัวแทน. A button that can never render is dead
+                         code that reads as a missing feature. -->
                     <button
                       v-if="user.permissions.update && user.is_active && user.role === 'company_admin'"
                       class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
@@ -684,12 +867,38 @@ onMounted(() => {
                     >
                       ถอดสิทธิ์ผู้ดูแล
                     </button>
+                    <!-- 2026-09-18 — the platform-owner role, both
+                         directions. Offered only to a Super Admin, because
+                         nobody else can see such a row in the first place
+                         (UserPolicy::view) — `permissions.update` alone
+                         would be the server's answer about a DIFFERENT
+                         question, so the role check is explicit. -->
+                    <button
+                      v-if="isSuperAdmin && user.permissions.update && user.is_active && user.role !== 'super_admin'"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50"
+                      data-test="make-super-admin"
+                      @click="pendingSuperAdminGrant = user"
+                    >
+                      ให้เป็น Super Admin
+                    </button>
+                    <button
+                      v-if="user.permissions.update && user.is_active && user.role === 'super_admin' && user.id !== auth.user?.id"
+                      class="text-xs font-bold px-2 py-1 rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50"
+                      data-test="unmake-super-admin"
+                      @click="openDemote(user)"
+                    >
+                      ถอดสิทธิ์ Super Admin
+                    </button>
                     <!-- 2026-09-10 — the two ways to hold the redemption
                          right, one button each (see ManageableRole above).
                          The ROLE, for somebody whose whole job is the
                          counter. -->
+                    <!-- …and never on a Super Admin row: that change is a
+                         demotion, which the server refuses without a company
+                         to land in (UpdateUserRequest). ถอดสิทธิ์ Super Admin
+                         above is the path that asks for one. -->
                     <button
-                      v-if="user.permissions.update && user.is_active && user.role !== 'voucher_staff'"
+                      v-if="user.permissions.update && user.is_active && user.role !== 'voucher_staff' && user.role !== 'super_admin'"
                       class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
                       data-test="make-voucher-staff"
                       @click="askRoleChange(user, 'voucher_staff')"
@@ -808,16 +1017,99 @@ onMounted(() => {
       @cancel="pendingDeactivate = null"
     />
 
+    <!-- 2026-09-18 — granting the platform. Type-to-confirm, and the phrase
+         is the person's own address: "ยืนยัน" typed into the wrong row's
+         dialog would still hand the platform to the wrong person. -->
+    <ConfirmDialog
+      :show="pendingSuperAdminGrant !== null"
+      title="ให้สิทธิ์ Super Admin"
+      :body="pendingSuperAdminGrant ? roleChangeWarning(pendingSuperAdminGrant, 'super_admin') : ''"
+      :confirm-phrase="pendingSuperAdminGrant?.email ?? ''"
+      :busy="grantingSuperAdmin"
+      confirm-label="ให้สิทธิ์ Super Admin"
+      cancel-label="ยกเลิก"
+      variant="warning"
+      size="md"
+      @confirm="confirmSuperAdminGrant"
+      @cancel="pendingSuperAdminGrant = null"
+    />
+
+    <!-- 2026-09-18 — creating one. Same gate as the row action above, on the
+         address just typed into the form. -->
+    <ConfirmDialog
+      :show="pendingCreateSuperAdmin"
+      title="สร้างบัญชี Super Admin"
+      :body="`บัญชีใหม่นี้จะเห็นและแก้ไขข้อมูลได้ทุกบริษัทบนแพลตฟอร์ม และสร้างหรือถอดสิทธิ์ Super Admin คนอื่นได้\nบัญชีนี้จะไม่สังกัดบริษัทใด\nรหัสผ่านที่คุณพิมพ์ไว้จะไม่ถูกแสดงอีกหลังบันทึก — ส่งให้เจ้าตัวโดยตรง`"
+      :confirm-phrase="createForm.email.trim()"
+      :busy="creating"
+      confirm-label="สร้าง Super Admin"
+      cancel-label="กลับไปแก้ไข"
+      variant="warning"
+      size="md"
+      @confirm="doCreate"
+      @cancel="pendingCreateSuperAdmin = false"
+    />
+
+    <!-- 2026-09-18 — taking it back. A panel, not a dialog, because it has to
+         ASK which company the account lands in: a demoted Super Admin with no
+         company_id is filtered out of every query by fail-closed TenantScope
+         — signs in fine, sees an empty system, is told nothing. -->
+    <div v-if="demoting" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" data-test="demote-dialog" @click.self="demoting = null">
+      <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
+        <p class="text-sm font-bold text-slate-900">ถอดสิทธิ์ Super Admin</p>
+        <p class="mt-0.5 text-xs text-slate-400">{{ demoting.name }} · {{ demoting.email }}</p>
+        <p class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
+          บัญชีนี้จะกลายเป็น <strong>ผู้ดูแลบริษัท</strong> ของบริษัทที่เลือกด้านล่าง
+          เห็นเฉพาะข้อมูลของบริษัทนั้นบริษัทเดียว และจะถูกถอนการเข้าใช้งานเดิมทั้งหมดทันที
+        </p>
+
+        <label class="mt-3 block text-xs font-bold text-slate-500">บริษัทปลายทาง</label>
+        <select v-model="demoteCompanyId" data-test="demote-target" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+          <option value="" disabled>เลือกบริษัท</option>
+          <option v-for="c in activeCompany.companies" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+        <p class="mt-1 text-[11px] text-slate-400">
+          จำเป็นต้องเลือก — Super Admin ไม่สังกัดบริษัท ถ้าถอดสิทธิ์โดยไม่ระบุบริษัท บัญชีนี้จะเข้าระบบได้แต่มองไม่เห็นอะไรเลย
+        </p>
+
+        <label class="mt-3 block text-xs font-bold text-slate-500">
+          พิมพ์ <span class="font-mono text-slate-800">{{ demoting.email }}</span> เพื่อยืนยัน
+        </label>
+        <input
+          v-model="demoteTyped"
+          type="text"
+          autocomplete="off"
+          data-test="demote-phrase"
+          class="mt-1 w-full px-3 py-2 rounded-lg border text-sm"
+          :class="demotePhraseSatisfied ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200'"
+        />
+
+        <p v-if="demoteError" class="mt-2 text-xs font-bold text-rose-600" data-test="demote-error">{{ demoteError }}</p>
+        <div class="mt-4 flex justify-end gap-2">
+          <button class="btn-secondary" :disabled="savingDemote" @click="demoting = null">ยกเลิก</button>
+          <button
+            class="btn-primary"
+            :disabled="savingDemote || demoteCompanyId === '' || !demotePhraseSatisfied"
+            data-test="submit-demote"
+            @click="submitDemote"
+          >
+            {{ savingDemote ? 'กำลังบันทึก…' : 'ถอดสิทธิ์' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- TASK-246 — create. Its own modal rather than an inline row so the
          password field is never sitting open on a screen somebody walked
          away from. -->
     <div v-if="showCreate" class="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4" @click.self="showCreate = false">
       <div class="w-full max-w-md bg-white rounded-2xl p-5 shadow-xl">
         <p class="text-sm font-bold text-slate-900">เพิ่มผู้ใช้เข้าระบบ</p>
-        <p v-if="!createCompanyBlocked" class="mt-0.5 text-xs text-slate-400">บริษัท: <strong>{{ createCompanyName }}</strong></p>
+        <p v-if="creatingSuperAdmin" class="mt-0.5 text-xs text-slate-400" data-test="create-no-company">ไม่สังกัดบริษัท — Super Admin เห็นทุกบริษัท</p>
+        <p v-else-if="!createCompanyBlocked" class="mt-0.5 text-xs text-slate-400">บริษัท: <strong>{{ createCompanyName }}</strong></p>
         <!-- The server REQUIRES a company from a Super Admin and has nothing
              to infer one from. Said here, before the form is filled in. -->
-        <p v-else class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700" data-test="create-needs-company">
+        <p v-else-if="createCompanyBlocked" class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700" data-test="create-needs-company">
           ตอนนี้เลือก "ทุกบริษัท" อยู่ — เลือกบริษัทที่แถบด้านบนก่อน จึงจะสร้างผู้ใช้ได้ว่าอยู่บริษัทไหน
         </p>
 
@@ -839,8 +1131,14 @@ onMounted(() => {
           <label class="text-xs font-bold text-slate-500">บทบาท</label>
           <select v-model="createForm.role" data-test="create-role" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
             <option value="company_admin">ผู้ดูแลบริษัท</option>
-            <option value="agent">สมาชิก</option>
+            <!-- 2026-09-18 — สมาชิก is gone: this screen no longer lists
+                 agents, and creating one here would make an account that
+                 vanishes the moment it is saved. They are created on
+                 จัดการตัวแทน, where they are then visible. -->
             <option value="voucher_staff">พนักงานหน้าร้าน (ตัดสิทธิ์บัตรกำนัลอย่างเดียว)</option>
+            <!-- Super-Admin-only, and last in the list rather than first:
+                 the everyday choice should be the one under the cursor. -->
+            <option v-if="isSuperAdmin" value="super_admin">Super Admin (ทุกบริษัท)</option>
           </select>
           <!-- Said at the moment the choice is made, not discovered after the
                account is handed over. -->
@@ -854,6 +1152,10 @@ onMounted(() => {
             ต้องการสร้าง <strong>บัญชีคู่ค้า</strong>? สร้างที่
             <RouterLink :to="{ name: 'supplier-management' }" class="text-brand-700 font-bold hover:underline">ตั้งค่าระบบ → จัดการคู่ค้า</RouterLink>
             แล้วเปิดแท็บ "บัญชีผู้ใช้" ของคู่ค้ารายนั้น
+          </p>
+          <p v-if="creatingSuperAdmin" class="mt-1 text-[11px] text-violet-700" data-test="super-admin-hint">
+            บัญชีนี้จะ<strong>ไม่สังกัดบริษัทใด</strong> และเห็นข้อมูลได้ทุกบริษัทบนแพลตฟอร์ม
+            รวมถึงสร้างและถอดสิทธิ์ Super Admin คนอื่น — ต้องพิมพ์อีเมลยืนยันอีกครั้งก่อนสร้าง
           </p>
           <p v-if="createForm.role === 'voucher_staff'" class="mt-1 text-[11px] text-slate-500" data-test="voucher-staff-hint">
             บัญชีนี้จะเข้าได้เฉพาะหน้า <strong>ตัดสิทธิ์บัตรกำนัล</strong> หน้าเดียว — เห็นคำสั่งซื้อ ลูกค้า หรือค่าแนะนำไม่ได้เลย

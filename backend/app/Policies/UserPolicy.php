@@ -4,14 +4,37 @@ namespace App\Policies;
 
 use App\Models\User;
 use App\Services\Registration\LeaderRecruitScope;
+use App\Support\SuperAdminGuard;
 
 // "Manage Agents" (CLAUDE.md §10 ag-lead task, human-confirmed scope
 // this phase): Company Admin manages team members (agent + company_admin
 // role) within their own company only — never a Super Admin row, and
 // never across companies. Super Admin manages across every company.
-// Creating a NEW Super Admin account is deliberately NOT possible via
+//
+// ── 2026-09-18 — A SUPER ADMIN MAY NOW SEE AND MANAGE ANOTHER ONE ──
+//
+// This paragraph replaces the one that used to end this docblock:
+// "Creating a NEW Super Admin account is deliberately NOT possible via
 // this API at all (see StoreUserRequest) — that's an out-of-band/manual
-// action, too sensitive for a same-tier "add teammate" flow.
+// action, too sensitive for a same-tier 'add teammate' flow."
+//
+// The owner asked for the opposite ("เพิ่มสิทธิ์ Super Admin ในการเพิ่มและ
+// แก้ไข user"), having been told what the old sentence was protecting:
+// `artisan admin:create-super` needs SSH to the production host, which
+// means every platform-owner change waits on the one person holding the
+// key. The old rule made a real operational problem out of a
+// theoretical one.
+//
+// WHAT DID NOT CHANGE, and is now the whole of the protection:
+//   * ONLY a Super Admin may see, create, promote or demote one. A
+//     Company Admin's view of a Super Admin row is still false, exactly
+//     as before — the widening is same-tier, never downward.
+//   * The LAST active Super Admin cannot be demoted or deactivated
+//     (SuperAdminGuard), and nobody may demote themselves
+//     (UpdateUserRequest) — the two ways this endpoint could otherwise
+//     have locked every administrator out of the platform.
+//   * move() still refuses a Super Admin target: they have no
+//     company_id to move between, which is the point of the role.
 class UserPolicy
 {
     // Resolved from the container (Laravel instantiates Policies through it),
@@ -27,9 +50,17 @@ class UserPolicy
     public function view(User $user, User $target): bool
     {
         if ($target->isSuperAdmin()) {
-            // Never exposed via this resource, even to another Super
-            // Admin — platform admins aren't "team members" to browse.
-            return false;
+            // 2026-09-18 — was `return false` unconditionally ("never
+            // exposed via this resource, even to another Super Admin —
+            // platform admins aren't 'team members' to browse").
+            //
+            // A Super Admin may now see another one, because they now have
+            // to: the screen that creates and demotes them has to list them,
+            // and a role you can grant but never see afterwards is one
+            // nobody can audit. A Company Admin still cannot — this returns
+            // before the tenant comparison below, so the widening reaches
+            // exactly one caller and no further.
+            return $user->isSuperAdmin();
         }
 
         if ($user->isSuperAdmin()) {
@@ -116,6 +147,15 @@ class UserPolicy
             // endpoint — an obvious self-lockout risk, same defensive
             // shape as the self-dealing exclusions elsewhere (e.g.
             // UserBadgePolicy::award()).
+            return false;
+        }
+
+        // 2026-09-18 — the OTHER self-lockout, and the one the rule above
+        // does not cover: closing the last remaining Super Admin's account
+        // locks every administrator out at once, including the person
+        // clicking. Unreachable before Super Admin rows became visible here
+        // at all — see SuperAdminGuard.
+        if (SuperAdminGuard::isLastActive($target)) {
             return false;
         }
 

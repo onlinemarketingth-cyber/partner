@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\IdDocumentType;
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Platform\MoveUserCompanyRequest;
 use App\Http\Requests\Platform\ResetUserPasswordRequest;
@@ -13,6 +14,7 @@ use App\Models\AuditLog;
 use App\Models\User;
 use App\Services\Platform\UserService;
 use App\Support\CompanyScopeFilter;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -21,8 +23,14 @@ use Illuminate\Http\Response;
 // roles only, TenantScope already narrows Company Admin to their own
 // company_id; Super Admin's queries are unscoped by TenantScope so they
 // see every company by default — see TenantScope's own docblock).
-// Super Admin rows are always excluded from this list (UserPolicy::view()
-// backs this up too) — they aren't "team members" to browse/manage here.
+//
+// 2026-09-18 — Super Admin rows are no longer "always excluded from this
+// list (UserPolicy::view() backs this up too) — they aren't 'team
+// members' to browse/manage here". They are excluded from EVERYBODY
+// ELSE'S list and shown to a Super Admin, who can now create, promote
+// and demote them from this screen (UserPolicy's docblock says why the
+// rule changed). Two consequences are handled in index(): the header's
+// company scope must not hide them, and they sort to the top.
 class UserController extends Controller
 {
     public function __construct()
@@ -32,10 +40,55 @@ class UserController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = User::query()->with(['company', 'manager'])->where('role', '!=', 'super_admin');
+        $query = User::query()->with(['company', 'manager']);
 
-        // TASK-209 — Super Admin's header company scope, applied in SQL.
-        CompanyScopeFilter::apply($query, $request);
+        $viewerIsSuperAdmin = (bool) $request->user()?->isSuperAdmin();
+
+        /*
+         * 2026-09-18 — was an unconditional
+         * `where('role', '!=', 'super_admin')`.
+         *
+         * A Company Admin's list is unchanged: still no platform owners in
+         * it, for the reason UserPolicy::view() gives. What changed is that
+         * a Super Admin now sees them, because the screen that creates and
+         * demotes them has to list them.
+         *
+         * This is the LIST half only, and it is a convenience, not the
+         * control: UserPolicy::view() refuses a Super Admin row to anyone
+         * else one at a time, so a Company Admin who guessed an id still
+         * gets a 403 from /users/{id} whatever this query returns.
+         */
+        if (! $viewerIsSuperAdmin) {
+            $query->where('role', '!=', UserRole::SuperAdmin->value);
+        }
+
+        if ($viewerIsSuperAdmin && $request->filled('company_id')) {
+            /*
+             * 2026-09-18 — the header's company scope, WITH the platform
+             * owners kept in it.
+             *
+             * A Super Admin has no company_id, so the plain filter below
+             * would drop every one of them the moment a company is picked
+             * in the header — and "จัดการผู้ใช้ระบบ shows no Super Admins"
+             * is indistinguishable from "there are none", on the one screen
+             * that is supposed to account for them.
+             *
+             * Not CompanyScopeFilter's `includePlatformWide` flag, which
+             * means something else here: on `users` a NULL company_id is
+             * also what a `company_partner` carries, and a supplier's login
+             * is not "platform-wide" — it has nothing to do with the company
+             * being looked at, and should keep disappearing under a company
+             * scope exactly as it does today.
+             */
+            $companyId = $request->integer('company_id');
+
+            $query->where(fn (Builder $q) => $q
+                ->where('company_id', $companyId)
+                ->orWhere('role', UserRole::SuperAdmin->value));
+        } else {
+            // TASK-209 — Super Admin's header company scope, applied in SQL.
+            CompanyScopeFilter::apply($query, $request);
+        }
 
         if ($request->boolean('include_inactive')) {
             $query->withTrashed();
@@ -51,10 +104,36 @@ class UserController extends Controller
          * page 1 of the admins).
          */
         if ($request->filled('role')) {
-            // Never 'super_admin': the base query already excludes those rows
-            // and UserPolicy::view() refuses them individually. Passing it
-            // here must return nothing rather than quietly widening the list.
+            // 2026-09-18 — `super_admin` is now a value this filter can
+            // meaningfully take, and only for a Super Admin: the branch above
+            // has already narrowed anybody else's query to exclude those
+            // rows, so asking for them still returns nothing rather than
+            // quietly widening the list. The old note said the same thing
+            // about a stricter base query; the guarantee is unchanged.
             $query->where('role', $request->string('role')->toString());
+        }
+
+        /*
+         * 2026-09-18 — ?admins_only=1 (human: "ระบบตอนนี้เอา User ทุกคนทั้ง
+         * Agent และมารวมกัน แต่ในการตั้งค่า ความต้องการจริงคือ Admin เท่านั้น").
+         *
+         * จัดการผู้ใช้ระบบ is about who administers the system. Agents are
+         * managed on จัดการตัวแทน, which is about selling — and mixing the
+         * two made a settings screen where a company's two admins were
+         * buried under two hundred salespeople.
+         *
+         * IN SQL, not in the browser, and for the same reason `?role=`
+         * exists (TASK-259): this endpoint paginates at 15, so "load
+         * everybody and filter" is a lie — page 1 of everybody is not page 1
+         * of the admins.
+         *
+         * Why not `?role=` four times: it takes ONE value, and the answer
+         * this screen needs is "everyone who is not an agent" — which stays
+         * correct when a new administrative role is added, where a list of
+         * four literals in the query string would quietly omit it.
+         */
+        if ($request->boolean('admins_only')) {
+            $query->where('role', '!=', UserRole::Agent->value);
         }
 
         /*
@@ -147,7 +226,22 @@ class UserController extends Controller
             $query->whereIn('national_id_hash', $candidates ?: ['no-match']);
         }
 
-        return UserResource::collection($query->orderBy('name')->paginate());
+        /*
+         * 2026-09-18 — platform owners first, then by name as before.
+         *
+         * This list paginates at 15. A handful of Super Admins sorted purely
+         * by name would scatter through the pages of a 200-person company and
+         * could easily be on none of the first few — which on this screen
+         * reads as "there aren't any", the exact misreading the company-scope
+         * branch above also exists to prevent. Bound rather than
+         * interpolated so the enum stays the single source of the literal.
+         */
+        return UserResource::collection(
+            $query
+                ->orderByRaw('CASE WHEN role = ? THEN 0 ELSE 1 END', [UserRole::SuperAdmin->value])
+                ->orderBy('name')
+                ->paginate()
+        );
     }
 
     public function store(StoreUserRequest $request, UserService $service): UserResource

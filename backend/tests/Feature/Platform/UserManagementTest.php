@@ -123,22 +123,36 @@ class UserManagementTest extends TestCase
         $this->actingAs($admin)->getJson("/api/v1/users/{$foreignAgent->id}")->assertNotFound();
     }
 
-    public function test_super_admin_row_is_never_visible_through_this_endpoint(): void
+    public function test_super_admin_row_is_never_visible_to_a_company_admin(): void
     {
-        $anotherSuperAdmin = User::factory()->superAdmin()->create();
+        /*
+         * 2026-09-18 — this used to assert that a Super Admin row was
+         * invisible to EVERYONE, "even to another Super Admin". A Super
+         * Admin may now see one (UserPolicy::view()'s own note says why, and
+         * SuperAdminManagementTest covers that direction). This is the half
+         * that did not move, and it is the one doing the protecting: the
+         * widening is same-tier, never downward.
+         */
         $superAdmin = User::factory()->superAdmin()->create();
+        $company = Company::factory()->create();
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
 
-        $this->actingAs($superAdmin)->getJson("/api/v1/users/{$anotherSuperAdmin->id}")->assertForbidden();
+        // 404, not 403: TenantScope removes the row from the Company
+        // Admin's route-model binding before the Policy is ever consulted,
+        // so the endpoint cannot even confirm the account exists. Stronger
+        // than the refusal this test used to assert, and asserted as what it
+        // actually is rather than as what reads nicer.
+        $this->actingAs($admin)->getJson("/api/v1/users/{$superAdmin->id}")->assertNotFound();
     }
 
-    public function test_super_admin_row_is_excluded_from_the_index_list(): void
+    public function test_super_admin_row_is_excluded_from_a_company_admins_index_list(): void
     {
         $company = Company::factory()->create();
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         User::factory()->agent()->create(['company_id' => $company->id]);
         User::factory()->superAdmin()->create();
-        $superAdmin = User::factory()->superAdmin()->create();
 
-        $response = $this->actingAs($superAdmin)->getJson('/api/v1/users')->assertOk();
+        $response = $this->actingAs($admin)->getJson('/api/v1/users')->assertOk();
         $roles = collect($response->json('data'))->pluck('role');
         $this->assertFalse($roles->contains('super_admin'));
     }

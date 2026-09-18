@@ -2,6 +2,7 @@
 
 namespace App\Services\Platform;
 
+use App\Enums\AgentApprovalStatus;
 use App\Enums\CommissionPlanType;
 use App\Enums\UserRole;
 use App\Models\AuditLog;
@@ -30,6 +31,13 @@ class UserService
         'is_team_leader' => 'user.team_leader_changed',
         'manager_id' => 'user.manager_changed',
     ];
+
+    /**
+     * 2026-09-18 — what `source` says on the Super-Admin audit rows this
+     * class can write. Its counterpart is the string
+     * CreateSuperAdminCommand records, `artisan admin:create-super`.
+     */
+    private const SUPER_ADMIN_UI_SOURCE = 'ui:จัดการผู้ใช้ระบบ';
 
     public function __construct(private readonly MatrixCommissionService $matrixCommissionService) {}
 
@@ -65,20 +73,85 @@ class UserService
          * requires `supplier_id`; this keeps the service honest about it
          * rather than trusting every future caller to pass the right shape.
          */
-        if (($data['role'] ?? null) === UserRole::CompanyPartner->value) {
+        /*
+         * 2026-09-18 — and a platform owner belongs to NEITHER.
+         *
+         * Same shape as the partner branch above and the same reason: the
+         * column would be a claim no query agrees with. StoreUserRequest
+         * prohibits `company_id` on this path; this makes the service say so
+         * too rather than trusting every future caller.
+         */
+        $isNewSuperAdmin = ($data['role'] ?? null) === UserRole::SuperAdmin->value;
+
+        if ($isNewSuperAdmin) {
+            $data['company_id'] = null;
+            $data['supplier_id'] = null;
+        } elseif (($data['role'] ?? null) === UserRole::CompanyPartner->value) {
             $data['company_id'] = null;
         } else {
             $data['company_id'] = $actor->isSuperAdmin() ? $data['company_id'] : $actor->company_id;
             $data['supplier_id'] = null;
         }
 
-        return DB::transaction(function () use ($data, $actor) {
+        return DB::transaction(function () use ($data, $actor, $isNewSuperAdmin) {
             $user = User::create($data);
 
-            $this->writeAudit('user.created', $user, $actor, null, $this->auditableRightsFields($user));
+            if ($isNewSuperAdmin) {
+                $this->openTheLoginGatesForSuperAdmin($user);
+            }
+
+            /*
+             * 2026-09-18 — a Super Admin's creation gets its OWN action name,
+             * the one `artisan admin:create-super` already writes. One event,
+             * one name, whichever door it came through: an auditor asking
+             * "who has ever been made a platform owner, and by whom" must not
+             * have to know the answer is split across two vocabularies
+             * because the second door was added later.
+             *
+             * `source` says which door, for the same reason the command
+             * records its own — the two mean very different things about how
+             * the actor was authenticated (SSH to the host vs. a browser
+             * session), and the command's rows carry a null actor while
+             * these carry a real one.
+             */
+            $this->writeAudit(
+                $isNewSuperAdmin ? 'user.super_admin_created' : 'user.created',
+                $user,
+                $actor,
+                null,
+                $isNewSuperAdmin
+                    ? [...$this->auditableRightsFields($user), 'company_id' => null, 'source' => self::SUPER_ADMIN_UI_SOURCE]
+                    : $this->auditableRightsFields($user),
+            );
 
             return $user;
         });
+    }
+
+    /**
+     * 2026-09-18 — the columns a new or newly-promoted Super Admin needs
+     * before they can actually sign in, lifted from CreateSuperAdminCommand
+     * (which learned them the hard way — see the bug note in its handle()).
+     *
+     * `forceFill`, because `email_verified_at` is deliberately NOT in
+     * User::$fillable: an HTTP request must never be able to mark an address
+     * verified, and mass assignment would drop the column IN SILENCE,
+     * leaving an account that reports "created" and cannot log in.
+     *
+     * Strictly, LoginGateService returns early for anyone who is not an
+     * agent, so a Super Admin passes every gate today regardless. This is
+     * set anyway for the case that motivated it in the command: a row
+     * RAISED to the role keeps whatever approval state it had as an agent,
+     * and a later demotion hands it back. Leaving a pending or unverified
+     * stamp on the row would make the demotion — not the promotion — the
+     * thing that locks somebody out, weeks later, for no visible reason.
+     */
+    private function openTheLoginGatesForSuperAdmin(User $user): void
+    {
+        $user->forceFill([
+            'email_verified_at' => $user->email_verified_at ?? now(),
+            'agent_approval_status' => AgentApprovalStatus::Approved,
+        ])->save();
     }
 
     /**
@@ -115,6 +188,34 @@ class UserService
             $this->assertValidManager($target, $data['manager_id']);
         }
 
+        /*
+         * 2026-09-18 — THE TWO ENDS OF THE PLATFORM-OWNER ROLE.
+         *
+         * Both directions have to move `company_id` with the role, and both
+         * would be wrong in the same way if they did not:
+         *
+         *   PROMOTION clears it. A Super Admin scoped to one company is a
+         *   contradiction — TenantScope reads the ROLE and leaves them
+         *   unscoped, so the column would sit there claiming a tenant no
+         *   query honours (CreateSuperAdminCommand::promote() clears it for
+         *   exactly this reason).
+         *
+         *   DEMOTION sets it, from the company UpdateUserRequest requires on
+         *   that one path. Leaving it null would produce a company_admin
+         *   whom fail-closed TenantScope filters with `1 = 0`: signs in,
+         *   sees an empty system, is told nothing.
+         *
+         * Read off `$target` BEFORE the write, because afterwards there is
+         * no way to tell a promotion from an edit to somebody who was
+         * already a Super Admin.
+         */
+        $promotingToSuperAdmin = ($data['role'] ?? null) === UserRole::SuperAdmin->value && ! $target->isSuperAdmin();
+
+        if ($promotingToSuperAdmin) {
+            $data['company_id'] = null;
+            $data['supplier_id'] = null;
+        }
+
         // BUG FIX (2026-07-23) — $target->update() and the AuditLog::create()
         // below used to run un-wrapped: a real production incident showed
         // that if AuditLog::create() throws AFTER $target->update() already
@@ -126,14 +227,25 @@ class UserService
         // failing cleanly). DB::transaction() makes the data write and its
         // audit log entry atomic: either both persist or neither does,
         // same pattern this class's own moveToCompany() already uses.
-        $target = DB::transaction(function () use ($target, $data, $actor) {
+        $target = DB::transaction(function () use ($target, $data, $actor, $promotingToSuperAdmin) {
             $oldBankValues = $this->maskedBankFields($target);
             $oldIdDocument = $this->maskedIdDocumentFields($target);
             // TASK-183 §4.1 — snapshot BEFORE the write, same shape and same
             // reason as the two lines above it.
             $oldRights = $this->auditableRightsFields($target);
+            // 2026-09-18 — not a "right" in auditableRightsFields' sense (it
+            // is not something one grants), but a role change to or from
+            // super_admin moves it, and a row saying "became a Super Admin"
+            // without saying which company they left is half the event.
+            // Snapshotted here for the same reason as the three lines above:
+            // after the write it is gone.
+            $oldCompanyId = $target->company_id;
 
             $target->update($data);
+
+            if ($promotingToSuperAdmin) {
+                $this->openTheLoginGatesForSuperAdmin($target);
+            }
 
             // Section 6 Audit Log rule — bank fields are money-adjacent
             // (payout destination) same as the self-service path
@@ -214,12 +326,37 @@ class UserService
                     continue;
                 }
 
+                /*
+                 * 2026-09-18 — a role change that crosses the super_admin
+                 * line is named for what it IS, and carries the company it
+                 * moved.
+                 *
+                 * `user.role_changed` is the right name for agent ↔
+                 * company_admin ↔ voucher_staff: one company's staff being
+                 * rearranged. Handing somebody the platform, or taking it
+                 * back, is not that event, and burying it under the same
+                 * action would mean the only way to find it is to read every
+                 * role change ever made and check the values. The two names
+                 * used here are the ones `artisan admin:create-super`
+                 * already writes.
+                 */
+                $isSuperAdminGrant = $column === 'role' && $newValue === UserRole::SuperAdmin->value;
+                $isSuperAdminRevoke = $column === 'role' && $oldRights['role'] === UserRole::SuperAdmin->value;
+
                 $this->writeAudit(
-                    self::RIGHTS_AUDIT_ACTIONS[$column],
+                    match (true) {
+                        $isSuperAdminGrant => 'user.super_admin_granted',
+                        $isSuperAdminRevoke => 'user.super_admin_revoked',
+                        default => self::RIGHTS_AUDIT_ACTIONS[$column],
+                    },
                     $target,
                     $actor,
-                    [$column => $oldRights[$column]],
-                    [$column => $newValue],
+                    $isSuperAdminGrant || $isSuperAdminRevoke
+                        ? [$column => $oldRights[$column], 'company_id' => $oldCompanyId]
+                        : [$column => $oldRights[$column]],
+                    $isSuperAdminGrant || $isSuperAdminRevoke
+                        ? [$column => $newValue, 'company_id' => $target->company_id, 'source' => self::SUPER_ADMIN_UI_SOURCE]
+                        : [$column => $newValue],
                 );
 
                 /*

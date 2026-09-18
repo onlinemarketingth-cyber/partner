@@ -111,14 +111,28 @@ class AbilityCatalogueTest extends TestCase
         $companyAdmin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
 
-        // UserPolicy::view — a Super Admin target is refused to everyone,
-        // including another Super Admin.
-        $this->assertFalse($superAdmin->can('view', $otherSuperAdmin));
+        /*
+         * UserPolicy::view — 2026-09-18. This used to assert that a Super
+         * Admin target was "refused to everyone, including another Super
+         * Admin". The owner asked for the same-tier half of that to be
+         * opened so the role can be granted and taken back from
+         * จัดการผู้ใช้ระบบ; UserPolicy's docblock says why, and
+         * SuperAdminManagementTest covers what that buys.
+         *
+         * THE EXCLUSION THIS TEST GUARDS IS THE DOWNWARD ONE, and it is
+         * unchanged: a tenant reaches no part of a platform-owner row.
+         */
         $this->assertFalse($companyAdmin->can('view', $superAdmin));
-        // ...and the same refusal is inherited by update/delete/restore, which
-        // all delegate to view().
-        $this->assertFalse($superAdmin->can('update', $otherSuperAdmin));
-        $this->assertFalse($superAdmin->can('delete', $otherSuperAdmin));
+        $this->assertFalse($companyAdmin->can('update', $superAdmin));
+        $this->assertFalse($companyAdmin->can('delete', $superAdmin));
+        // Same-tier is now allowed, asserted here rather than only in the
+        // feature test — a blanket added to UserPolicy would break the
+        // feature silently and this loudly.
+        $this->assertTrue($superAdmin->can('view', $otherSuperAdmin));
+        $this->assertTrue($superAdmin->can('update', $otherSuperAdmin));
+        // …but not delete, because $otherSuperAdmin is one of only two and
+        // deleting is separately guarded — assert the guard, not the tier.
+        $this->assertFalse($superAdmin->can('move', $otherSuperAdmin));
         // Control: a non-Super-Admin target IS viewable, so the assertions
         // above are about the target's role and not about a broken Policy.
         $this->assertTrue($superAdmin->can('view', $agent));

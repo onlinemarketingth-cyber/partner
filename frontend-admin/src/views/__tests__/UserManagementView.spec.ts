@@ -63,7 +63,13 @@ function makeUser(over: Partial<Record<string, unknown>> = {}) {
     last_name: 'ใจดี',
     phone: null,
     email: 'somchai@example.com',
-    role: 'agent',
+    /*
+     * 2026-09-18 — was 'agent'. This endpoint no longer returns agents to
+     * this screen (`?admins_only=1`), so a fixture that defaults to one
+     * would be testing every button against a row the screen can never
+     * receive — the quiet kind of green test.
+     */
+    role: 'company_admin',
     company: { id: 4, name: 'ไทยประกันชีวิต' },
     is_active: true,
     is_team_leader: false,
@@ -102,10 +108,16 @@ async function mountView() {
         EmptyState: true,
         Icon: true,
         LoadingSkeleton: true,
+        /*
+         * 2026-09-18 — `confirmPhrase` joins the stub's props, and the stub
+         * RENDERS it. The Super Admin dialogs are type-to-confirm, and a
+         * stub that silently dropped the prop would let a test pass while
+         * the real dialog demanded a phrase the screen never supplied.
+         */
         ConfirmDialog: {
           name: 'ConfirmDialog',
-          props: ['show', 'title', 'body', 'confirmLabel', 'variant'],
-          template: '<div v-if="show" data-test="confirm"><p>{{ title }}</p><p>{{ body }}</p><button data-test="confirm-yes" @click="$emit(\'confirm\')">ok</button></div>',
+          props: ['show', 'title', 'body', 'confirmLabel', 'variant', 'confirmPhrase', 'busy', 'size'],
+          template: '<div v-if="show" data-test="confirm"><p>{{ title }}</p><p>{{ body }}</p><p data-test="confirm-phrase-prop">{{ confirmPhrase }}</p><button data-test="confirm-yes" @click="$emit(\'confirm\')">ok</button></div>',
         },
         RouterLink: { props: ['to'], template: '<a><slot /></a>' },
       },
@@ -156,24 +168,20 @@ describe('UserManagementView — the buttons come from the server', () => {
     expect(btn(wrapper, 'reset-password').exists()).toBe(true)
   })
 
-  it('offers promotion when the server allows it', async () => {
+  it('offers the role changes that are reachable from this screen', async () => {
     /*
-     * Defect 2, and the reason this task exists: the API has allowed
-     * agent → company_admin since UpdateUserRequest was written, and the only
-     * form that could reach it hid the option. In practice "promote somebody"
-     * meant editing the database by hand.
+     * 2026-09-18 — this replaces "offers promotion when the server allows
+     * it", which asserted a `promote` button on an agent row. That button is
+     * gone with the agents: promoting a salesperson to admin now starts
+     * where the salesperson is, on จัดการตัวแทน.
+     *
+     * Defect 2 still applies to what IS reachable here, so the assertions
+     * moved rather than disappearing.
      */
     const wrapper = await mountView()
 
-    expect(btn(wrapper, 'promote').exists()).toBe(true)
-  })
-
-  it('offers demotion on an admin, not promotion', async () => {
-    mockUsers([makeUser({ role: 'company_admin' })])
-
-    const wrapper = await mountView()
-
     expect(btn(wrapper, 'demote').exists()).toBe(true)
+    expect(btn(wrapper, 'make-super-admin').exists()).toBe(true)
     expect(btn(wrapper, 'promote').exists()).toBe(false)
   })
 
@@ -192,14 +200,14 @@ describe('UserManagementView — the buttons come from the server', () => {
 })
 
 describe('UserManagementView — saying what an action costs', () => {
-  it('warns that a promotion signs the person out, before the click', async () => {
+  it('warns that a role change signs the person out, before the click', async () => {
     /*
      * Defect 3. TASK-238 revokes every token on a rights change — correct,
-     * and invisible: the promoted person is simply logged out mid-task and
-     * nobody can explain why.
+     * and invisible: the person is simply logged out mid-task and nobody can
+     * explain why.
      */
     const wrapper = await mountView()
-    await btn(wrapper, 'promote').trigger('click')
+    await btn(wrapper, 'demote').trigger('click')
 
     const dialog = wrapper.find('[data-test="confirm"]')
     expect(dialog.exists()).toBe(true)
@@ -208,13 +216,22 @@ describe('UserManagementView — saying what an action costs', () => {
     expect(put).not.toHaveBeenCalled()
   })
 
+  it('says the demoted admin will leave this screen', async () => {
+    // 2026-09-18 — the row vanishes on save, because agents are not listed
+    // here any more. A row disappearing with no warning reads as a bug.
+    const wrapper = await mountView()
+    await btn(wrapper, 'demote').trigger('click')
+
+    expect(wrapper.find('[data-test="confirm"]').text()).toContain('จัดการตัวแทน')
+  })
+
   it('sends the role change only after it is confirmed', async () => {
     const wrapper = await mountView()
-    await btn(wrapper, 'promote').trigger('click')
+    await btn(wrapper, 'demote').trigger('click')
     await btn(wrapper, 'confirm-yes').trigger('click')
     await flushPromises()
 
-    expect(put).toHaveBeenCalledWith('/users/7', { role: 'company_admin' })
+    expect(put).toHaveBeenCalledWith('/users/7', { role: 'agent' })
   })
 
   it('warns that deactivation is immediate but reversible', async () => {
@@ -277,13 +294,21 @@ describe('UserManagementView — what the list says', () => {
     expect(wrapper.find('tbody').text()).toContain('ไม่พบบันทึกการเข้าระบบ')
   })
 
-  it('explains why no Super Admin is in the list', async () => {
-    // Otherwise an empty admin column reads as "this platform has no
-    // administrator", which is alarming and false.
+  it('says what this screen covers and where the agents went', async () => {
+    /*
+     * 2026-09-18 — this used to assert the opposite note ("ไม่แสดง Super
+     * Admin ... admin:create-super"). Both halves of the screen's subject
+     * changed on the same day, and a standing note that lies about the
+     * screen is worse than no note: the previous one would now be telling
+     * an admin to SSH to production for something there is a button for.
+     */
     const wrapper = await mountView()
+    const note = wrapper.find('[data-test="screen-note"]').text()
 
-    expect(wrapper.text()).toContain('ไม่แสดง Super Admin')
-    expect(wrapper.text()).toContain('admin:create-super')
+    expect(note).toContain('ไม่แสดงสมาชิก')
+    expect(note).toContain('จัดการตัวแทน')
+    // The guard an admin has to know about before they go looking for it.
+    expect(note).toContain('คนสุดท้าย')
   })
 
   it('filters by role at the API, not in the browser', async () => {
@@ -641,5 +666,220 @@ describe('the company commission seat', () => {
     for (const control of ['edit-user', 'reset-password', 'move-company', 'demote']) {
       expect(wrapper.find(`[data-test="${control}"]`).exists()).toBe(false)
     }
+  })
+})
+
+/**
+ * 2026-09-18 — the platform-owner role, from this screen (human: "เพิ่มสิทธิ์
+ * Super Admin ในการเพิ่มและแก้ไข user").
+ *
+ * The screen's job here is narrow and worth stating: make the four server
+ * guards unreachable by accident rather than something to run into. The
+ * server refuses all four regardless (SuperAdminManagementTest) — these
+ * tests are about whether the admin is told before the click or after it.
+ */
+describe('UserManagementView — Super Admin', () => {
+  it('offers the role only to a Super Admin', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, name: 'แอดมินบริษัท', role: 'company_admin' } as never
+
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'make-super-admin').exists()).toBe(false)
+    // …and the filter does not offer a role they can never see a row of.
+    expect(wrapper.find('[data-test="role-filter"]').text()).not.toContain('Super Admin')
+  })
+
+  it('makes the grant type-to-confirm, against the person own address', async () => {
+    /*
+     * A fixed word typed into the wrong row's dialog still hands the
+     * platform to the wrong person. An address does not transfer between
+     * rows, which is the whole reason the phrase is not "ยืนยัน".
+     */
+    const wrapper = await mountView()
+    await btn(wrapper, 'make-super-admin').trigger('click')
+
+    expect(btn(wrapper, 'confirm-phrase-prop').text()).toBe('somchai@example.com')
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('says the account will leave its company, before the click', async () => {
+    // The consequence nobody expects from a word like "promote": the
+    // account stops belonging to the company it was administering.
+    const wrapper = await mountView()
+    await btn(wrapper, 'make-super-admin').trigger('click')
+
+    const body = wrapper.find('[data-test="confirm"]').text()
+    expect(body).toContain('ไม่สังกัดบริษัท')
+    expect(body).toContain('ไทยประกันชีวิต')
+  })
+
+  it('sends the grant once confirmed', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'make-super-admin').trigger('click')
+    await btn(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7', { role: 'super_admin' })
+  })
+
+  it('does not offer to take the role away from yourself', async () => {
+    // UpdateUserRequest refuses it; the button is simply not drawn, because
+    // a refusal after the click reads as a broken screen.
+    mockUsers([makeUser({ id: 1, role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'unmake-super-admin').exists()).toBe(false)
+  })
+
+  it('will not send a demotion without a company to land in', async () => {
+    /*
+     * THE TRAP: fail-closed TenantScope filters a company_admin with a null
+     * company_id using `1 = 0`. They log in fine and see an empty system.
+     * The server refuses the request; this keeps the admin from making it.
+     */
+    mockUsers([makeUser({ role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'unmake-super-admin').trigger('click')
+
+    expect(btn(wrapper, 'submit-demote').attributes('disabled')).toBeDefined()
+  })
+
+  it('still will not send it with a company but no typed confirmation', async () => {
+    mockUsers([makeUser({ role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'unmake-super-admin').trigger('click')
+    await btn(wrapper, 'demote-target').setValue(5)
+
+    expect(btn(wrapper, 'submit-demote').attributes('disabled')).toBeDefined()
+  })
+
+  it('sends the role and the company together', async () => {
+    // One request, because they are one decision: the role change without
+    // the company is the trap above.
+    mockUsers([makeUser({ role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'unmake-super-admin').trigger('click')
+    await btn(wrapper, 'demote-target').setValue(5)
+    await btn(wrapper, 'demote-phrase').setValue('somchai@example.com')
+    await btn(wrapper, 'submit-demote').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/7', { role: 'company_admin', company_id: 5 })
+  })
+
+  it('does not offer to turn a Super Admin into front-desk staff', async () => {
+    // That change is a demotion too, and the server refuses it without a
+    // company. ถอดสิทธิ์ Super Admin is the path that asks for one.
+    mockUsers([makeUser({ role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+
+    expect(btn(wrapper, 'make-voucher-staff').exists()).toBe(false)
+  })
+
+  it('says a Super Admin belongs to no company rather than showing a dash', async () => {
+    // An empty cell reads as "nobody filled this in". It is a fact about
+    // the role.
+    mockUsers([makeUser({ role: 'super_admin', company: null })])
+
+    const wrapper = await mountView()
+
+    expect(wrapper.find('tbody').text()).toContain('ไม่สังกัด')
+  })
+})
+
+describe('UserManagementView — creating a Super Admin', () => {
+  it('asks the server for admins only', async () => {
+    // In SQL, not in the browser: /users paginates, so a client-side filter
+    // would answer "the admins who happen to be on page 1 of everybody".
+    await mountView()
+
+    expect(get.mock.calls[0]![0] as string).toContain('admins_only=1')
+  })
+
+  it('does not offer สมาชิก as a role to create here', async () => {
+    // It would make an account that vanishes from this screen on save.
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+
+    const options = btn(wrapper, 'create-role').findAll('option').map((o) => o.attributes('value'))
+    expect(options).not.toContain('agent')
+    expect(options).toContain('super_admin')
+  })
+
+  it('does not demand a company for a role that has none', async () => {
+    /*
+     * StoreUserRequest PROHIBITS company_id on this path, so "pick a company
+     * first" would be demanding a value the server would then reject. With
+     * "ทุกบริษัท" selected, every other role is still blocked.
+     */
+    useActiveCompanyStore().setCompany(null)
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    expect(btn(wrapper, 'create-needs-company').exists()).toBe(true)
+
+    await btn(wrapper, 'create-role').setValue('super_admin')
+    expect(btn(wrapper, 'create-needs-company').exists()).toBe(false)
+    expect(btn(wrapper, 'create-no-company').exists()).toBe(true)
+  })
+
+  it('will not create one until the address is typed back', async () => {
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-role').setValue('super_admin')
+    await btn(wrapper, 'create-email').setValue('nida@example.com')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await flushPromises()
+
+    // The confirm step is up and nothing has been sent.
+    expect(btn(wrapper, 'confirm-phrase-prop').text()).toBe('nida@example.com')
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('creates one without a company_id once confirmed', async () => {
+    useActiveCompanyStore().setCompany(4)
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-role').setValue('super_admin')
+    await btn(wrapper, 'create-first-name').setValue('นิดา')
+    await btn(wrapper, 'create-last-name').setValue('แพลตฟอร์ม')
+    await btn(wrapper, 'create-email').setValue('nida@example.com')
+    await btn(wrapper, 'create-password').setValue('Str0ngTemp0rary')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await btn(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    // A company IS selected in the header, and is deliberately not sent:
+    // the key is prohibited, not merely unnecessary.
+    expect(post).toHaveBeenCalledWith('/users', {
+      first_name: 'นิดา',
+      last_name: 'แพลตฟอร์ม',
+      email: 'nida@example.com',
+      password: 'Str0ngTemp0rary',
+      role: 'super_admin',
+    })
+  })
+
+  it('still sends the company for every other role', async () => {
+    // The guard above must not have quietly removed it for everybody.
+    useActiveCompanyStore().setCompany(4)
+
+    const wrapper = await mountView()
+    await btn(wrapper, 'open-create').trigger('click')
+    await btn(wrapper, 'create-first-name').setValue('สม')
+    await btn(wrapper, 'create-last-name').setValue('ชาย')
+    await btn(wrapper, 'create-email').setValue('som@example.com')
+    await btn(wrapper, 'create-password').setValue('Str0ngTemp0rary')
+    await btn(wrapper, 'submit-create').trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/users', expect.objectContaining({ company_id: 4, role: 'company_admin' }))
   })
 })

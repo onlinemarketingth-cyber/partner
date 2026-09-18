@@ -213,15 +213,31 @@ class SystemUserAdministrationTest extends TestCase
          */
         $target = User::factory()->agent()->create(['company_id' => $this->thaiLife->id]);
 
-        $superAdminSees = $this->actingAs(User::factory()->superAdmin()->create())
-            ->getJson('/api/v1/users?with_permissions=1')
-            ->assertOk()
-            ->json('data.0.permissions.move_company');
+        /*
+         * 2026-09-18 — BY ID, not by position. This used to read `data.0`,
+         * which was the agent because the list could not contain a Super
+         * Admin at all. It can now (and they sort first), so `data.0` in a
+         * Super Admin's response is the acting Super Admin — whose
+         * `move_company` is correctly false, so the assertion below would
+         * have failed while describing an agent.
+         */
+        $rowFor = fn (array $rows, int $id): array => collect($rows)->firstWhere('id', $id);
 
-        $companyAdminSees = $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $this->thaiLife->id]))
-            ->getJson('/api/v1/users?with_permissions=1')
-            ->assertOk()
-            ->json('data.0.permissions.move_company');
+        $superAdminSees = $rowFor(
+            $this->actingAs(User::factory()->superAdmin()->create())
+                ->getJson('/api/v1/users?with_permissions=1')
+                ->assertOk()
+                ->json('data'),
+            $target->id,
+        )['permissions']['move_company'];
+
+        $companyAdminSees = $rowFor(
+            $this->actingAs(User::factory()->companyAdmin()->create(['company_id' => $this->thaiLife->id]))
+                ->getJson('/api/v1/users?with_permissions=1')
+                ->assertOk()
+                ->json('data'),
+            $target->id,
+        )['permissions']['move_company'];
 
         $this->assertTrue($superAdminSees);
         $this->assertFalse($companyAdminSees);

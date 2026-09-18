@@ -3,16 +3,26 @@
 namespace App\Http\Requests\Platform;
 
 use App\Enums\IdDocumentType;
+use App\Enums\UserRole;
+use App\Models\User;
 use App\Rules\IdDocument;
+use App\Support\SuperAdminGuard;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 // company_id is never editable here — moving a user between companies
 // is a much bigger operation (re-parenting every referral/commission/
 // xp row they own) than a simple team-management edit; not requested,
-// not built. role is restricted the same way as StoreUserRequest —
-// this can promote an agent to company_admin (human-confirmed scope)
-// but can never touch super_admin in either direction.
+// not built. There is now ONE exception, and only one: demoting a
+// Super Admin has to say which company they land in (see the rule
+// below).
+//
+// 2026-09-18 — role is restricted the same way as StoreUserRequest, and
+// that now INCLUDES super_admin for a Super Admin actor. The sentence
+// this replaces said it "can never touch super_admin in either
+// direction"; the owner asked for both directions, with guards attached
+// — see withValidator() for the two that live here.
 class UpdateUserRequest extends FormRequest
 {
     public function authorize(): bool
@@ -45,7 +55,31 @@ class UpdateUserRequest extends FormRequest
              * disagree about what a valid number is.
              */
             'phone' => ['sometimes', 'nullable', 'string', 'max:32'],
-            'role' => ['sometimes', Rule::in(['agent', 'company_admin', 'voucher_staff'])],
+            'role' => ['sometimes', Rule::in($this->assignableRoles())],
+            /*
+             * 2026-09-18 — THE ONE PATH ON WHICH THIS ENDPOINT ACCEPTS A
+             * COMPANY, and it is not an edit of the person's tenant: it is
+             * the answer to "where does a demoted platform owner land?"
+             *
+             * A Super Admin has no company_id by design. Take the role away
+             * and the column is still null — and since the supplier rework
+             * made TenantScope fail-closed, a `company_admin` with a null
+             * company_id is filtered with `1 = 0` on every query: an account
+             * that logs in fine and finds an empty system, with no error to
+             * explain it. That is not a demotion, it is a trap.
+             *
+             * So the demotion must name a company, and nothing else may pass
+             * one: `prohibited` everywhere else keeps the old rule ("moving
+             * a user between companies is a much bigger operation") intact
+             * for every other request — a move is still
+             * POST /users/{user}/move-company.
+             */
+            'company_id' => [
+                Rule::prohibitedIf(fn () => ! $this->isSuperAdminDemotion()),
+                Rule::requiredIf(fn () => $this->isSuperAdminDemotion()),
+                'integer',
+                'exists:companies,id',
+            ],
             // TASK-112 / ADR-025 §1 — the "may mint recruit links and
             // approve their own recruits" flag. Company Admin / Super
             // Admin only, expressed with the same Rule::prohibitedIf()
@@ -92,5 +126,70 @@ class UpdateUserRequest extends FormRequest
             // or passport, per the type above.
             'national_id' => ['sometimes', 'nullable', 'string', 'max:255', new IdDocument($this->input('id_document_type'))],
         ];
+    }
+
+    /**
+     * 2026-09-18 — mirrors StoreUserRequest::assignableRoles() minus
+     * `company_partner`, which is unchanged: a partner login is bound to a
+     * supplier at creation and this endpoint has no `supplier_id`, so
+     * "become a partner" is not a role change, it is a different account.
+     *
+     * @return list<string>
+     */
+    private function assignableRoles(): array
+    {
+        $roles = ['agent', 'company_admin', 'voucher_staff'];
+
+        if ($this->user()->isSuperAdmin()) {
+            $roles[] = UserRole::SuperAdmin->value;
+        }
+
+        return $roles;
+    }
+
+    /** Is this request taking the platform-owner role AWAY from somebody? */
+    private function isSuperAdminDemotion(): bool
+    {
+        $target = $this->route('user');
+
+        return $target instanceof User
+            && $target->isSuperAdmin()
+            && $this->filled('role')
+            && $this->input('role') !== UserRole::SuperAdmin->value;
+    }
+
+    /**
+     * The two guards the owner asked for that need the TARGET rather than
+     * just the payload — so they cannot live in rules().
+     *
+     * Both are about the same failure: a platform with no Super Admin left
+     * has nobody who can create one, and the way back is SSH to production.
+     * UserPolicy::delete() holds the deactivation half of the same line.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            if (! $this->isSuperAdminDemotion()) {
+                return;
+            }
+
+            /** @var User $target */
+            $target = $this->route('user');
+
+            /*
+             * Demoting yourself is the mistake that cannot be undone from
+             * the screen you just made it on: the moment it saves, the
+             * button that would put it back is gone, along with the rest of
+             * the console. Same shape as UserPolicy::delete()'s refusal to
+             * let you close your own account.
+             */
+            if ($this->user()->id === $target->id) {
+                $validator->errors()->add('role', 'ถอดสิทธิ์ Super Admin ของตัวเองไม่ได้ — ให้ Super Admin อีกคนเป็นคนถอดให้');
+            }
+
+            if (SuperAdminGuard::isLastActive($target)) {
+                $validator->errors()->add('role', SuperAdminGuard::LAST_ONE_MESSAGE);
+            }
+        });
     }
 }
