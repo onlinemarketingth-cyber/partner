@@ -186,6 +186,33 @@ export const useActiveCompanyStore = defineStore('activeCompany', () => {
     }
   }
 
+  /**
+   * 2026-09-17 — the list is STALE after somebody edits a company.
+   *
+   * Owner: "พอผมเปลี่ยนชื่อบริษัท list ที่เลือกบริษัทด้านบนยังเป็นอันเดิม
+   * ต้อง Refresh ถึงจะมา".
+   *
+   * `loadCompanies()` above is idempotent on purpose — it is called from
+   * every view's onMounted and must not refetch on each one — so after a
+   * rename it correctly does nothing, and the switcher keeps showing a name
+   * that no longer exists until the page is reloaded.
+   *
+   * ── AND IT IS NOT ONLY A LABEL ──
+   *
+   * CompanyOption carries the SLUG, and ThemeSettingsView loads a company's
+   * theme from GET /public/theme/{slug}. A stale slug there does not show a
+   * wrong name; it fetches a company that is no longer at that address and
+   * the theme page silently returns having loaded nothing — the same class of
+   * failure that field was added to fix in the first place.
+   *
+   * So anything that CHANGES the set or the contents of this list calls this:
+   * creating a company, editing one, switching one off.
+   */
+  async function reloadCompanies(): Promise<void> {
+    loaded.value = false
+    await loadCompanies()
+  }
+
   return {
     companies,
     loaded,
@@ -205,5 +232,6 @@ export const useActiveCompanyStore = defineStore('activeCompany', () => {
     releaseSwitch,
     scopedPath,
     loadCompanies,
+    reloadCompanies,
   }
 })

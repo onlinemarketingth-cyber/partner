@@ -49,6 +49,8 @@ vi.mock('@/api/client', () => ({
 }))
 
 import CompanyManagementView from '../CompanyManagementView.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { useAuthStore } from '@/stores/auth'
 
 const STUBS = {
   HeroHeader: { template: '<div><slot name="actions" /><slot /></div>' },
@@ -99,6 +101,90 @@ function dialogButtons(wrapper: ReturnType<typeof mountView>) {
 
   return dialog.exists() ? dialog.findAll('button') : []
 }
+
+// ── The header switcher ──────────────────────────────────────────────────
+
+describe('the company switcher follows what this screen changes', () => {
+  /*
+   * 2026-09-17 — owner: "พอผมเปลี่ยนชื่อบริษัท list ที่เลือกบริษัทด้านบนยัง
+   * เป็นอันเดิม ต้อง Refresh ถึงจะมา".
+   *
+   * The switcher caches its list on purpose (every view's onMounted calls
+   * loadCompanies, which is idempotent). Nothing invalidated that cache, so a
+   * rename here left the control at the top of EVERY page naming a company
+   * that no longer exists.
+   *
+   * And it is not only a label: CompanyOption carries the slug, and
+   * ThemeSettingsView loads a theme by slug — a stale one there fetches an
+   * address that no longer resolves and the page silently loads nothing.
+   */
+  it('refreshes the switcher after an edit', async () => {
+    const wrapper = await openEditor()
+    put.mockResolvedValue({ data: COMPANY })
+
+    const store = useActiveCompanyStore()
+    const reload = vi.spyOn(store, 'reloadCompanies').mockResolvedValue()
+
+    await wrapper.find('[data-test="edit-name"]').setValue('SWS')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('refreshes it after a new company is created too', async () => {
+    // Same cache, same staleness: a company created here was missing from the
+    // picker until a reload, which is the more confusing half of the bug —
+    // the thing you just made is not there.
+    get.mockResolvedValue({ data: [COMPANY] })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const store = useActiveCompanyStore()
+    const reload = vi.spyOn(store, 'reloadCompanies').mockResolvedValue()
+
+    await wrapper.find('[data-test="toggle-create"]').trigger('click')
+    await wrapper.find('[data-test="create-name"]').setValue('บริษัทใหม่')
+    // The form submits, rather than the button being clicked: `required` on
+    // the name input means a click alone would be swallowed by validation in
+    // a real browser, and the test should exercise the path that runs.
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(reload).toHaveBeenCalled()
+  })
+
+  it('reloadCompanies actually refetches, where loadCompanies does not', async () => {
+    /*
+     * The distinction the whole fix rests on. `loadCompanies` short-circuits
+     * once `loaded` is true — correct, because it runs on every view's mount
+     * — which is exactly why calling it again after a rename changed nothing.
+     *
+     * Asserted on the store directly rather than through the view: this is
+     * the behaviour every future caller will rely on, and a test that only
+     * watched the view would still pass if somebody "simplified" reload into
+     * another call to load.
+     */
+    const auth = useAuthStore()
+    // The list is fetched for a Super Admin only, so the role has to be real
+    // or both calls short-circuit for the wrong reason and prove nothing.
+    auth.user = { role: 'super_admin' } as never
+
+    const store = useActiveCompanyStore()
+    get.mockResolvedValue({ data: [{ id: 3, name: 'SWS', slug: 'sws' }] })
+
+    await store.loadCompanies()
+    expect(get).toHaveBeenCalledTimes(1)
+
+    // Cached: a second load is a no-op, which is the whole bug.
+    await store.loadCompanies()
+    expect(get).toHaveBeenCalledTimes(1)
+
+    await store.reloadCompanies()
+    expect(get).toHaveBeenCalledTimes(2)
+    expect(store.companies[0]?.name).toBe('SWS')
+  })
+})
 
 describe('CompanyManagementView — แก้ไขบริษัท', () => {
   it('opens prefilled with what the company already is', async () => {

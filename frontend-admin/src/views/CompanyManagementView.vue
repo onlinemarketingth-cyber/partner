@@ -31,6 +31,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 // TASK-209 P4 — this screen ignores the header company scope on purpose.
 import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 
 // ADR-006 Round 3/4 → ADR-011 (TASK-034 update): one commission plan
 // type per company. All 6 enum values now have a working
@@ -107,6 +108,31 @@ const planTypeLabels: Record<CommissionPlanType, string> = {
 }
 const planTypeOptions = Object.keys(planTypeLabels) as CommissionPlanType[]
 
+/**
+ * 2026-09-17 — this screen is the ONE place company names and slugs change,
+ * so it is the one place that has to tell the header switcher.
+ *
+ * The switcher keeps its own copy of the list, loaded once and cached
+ * (deliberately — it is read on every view's mount). Nothing invalidated it,
+ * so a rename here left the control at the top of every page naming a company
+ * that no longer exists, until somebody pressed F5.
+ *
+ * Owner: "แก้ไขให้เมื่อมีการเปลี่ยนชื่อ ให้เปลี่ยนที่ list ตรง Menu ทันที".
+ */
+const activeCompany = useActiveCompanyStore()
+
+/**
+ * Reload the list, then refresh the switcher from the same truth.
+ *
+ * One function rather than two calls at four sites: the create path, the edit
+ * path and the two toggles all change what the switcher shows, and the one
+ * that gets forgotten is the one that reintroduces the bug.
+ */
+async function reloadAll(): Promise<void> {
+  await loadCompanies()
+  await activeCompany.reloadCompanies()
+}
+
 const loading = ref(false)
 const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
@@ -154,7 +180,7 @@ async function submitCreate() {
     })
     createForm.value = { name: '', slug: '', commission_plan_type: 'unilevel' }
     showCreateForm.value = false
-    await loadCompanies()
+    await reloadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `สร้างไม่สำเร็จ (${e.status})` : 'สร้างไม่สำเร็จ'
   } finally {
@@ -294,7 +320,7 @@ async function saveEdit(company: CompanyItem) {
     })
     editingId.value = null
     editForm.value = null
-    await loadCompanies()
+    await reloadAll()
   } catch (e) {
     // In full: the server refuses a duplicate slug by name, and "แก้ไขไม่
     // สำเร็จ (422)" would leave somebody guessing which field it meant.
@@ -310,7 +336,7 @@ async function saveEdit(company: CompanyItem) {
 async function toggleActive(company: CompanyItem) {
   try {
     await api.put(`/companies/${company.id}`, { is_active: !company.is_active })
-    await loadCompanies()
+    await reloadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'
   }
@@ -337,7 +363,10 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
     // company_id is required here (the endpoint scopes a Super Admin by it),
     // where PUT /companies/{id} carried the company in the path.
     await api.put('/commission-settings', { company_id: company.id, commission_plan_type: planType })
-    await loadCompanies()
+    // The switcher shows neither the plan nor the active flag, but this goes
+    // through the same door so that "a write on this screen refreshes the
+    // header" has no exceptions to remember.
+    await reloadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'
   }
@@ -357,6 +386,7 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
       <template #actions>
         <button
           class="btn-primary"
+          data-test="toggle-create"
           @click="showCreateForm = !showCreateForm"
         >
           + เพิ่มบริษัท
@@ -377,7 +407,7 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
     >
       <div>
         <label class="text-xs font-bold text-slate-500">ชื่อบริษัท</label>
-        <input v-model="createForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        <input v-model="createForm.name" required data-test="create-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">Slug (ไม่บังคับ — สร้างอัตโนมัติจากชื่อ)</label>
@@ -394,7 +424,7 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
       </div>
       <div class="col-span-2 flex justify-end gap-2">
         <button type="button" class="btn-secondary" @click="showCreateForm = false">ยกเลิก</button>
-        <button type="submit" :disabled="creating" class="btn-primary">
+        <button type="submit" :disabled="creating" data-test="submit-create" class="btn-primary">
           {{ creating ? 'กำลังบันทึก...' : 'บันทึก' }}
         </button>
       </div>
