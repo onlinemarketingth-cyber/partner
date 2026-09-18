@@ -12,6 +12,7 @@ use App\Http\Requests\Platform\UpdateUserRequest;
 use App\Http\Resources\UserResource;
 use App\Models\AuditLog;
 use App\Models\User;
+use App\Services\Platform\AccountActivityProbe;
 use App\Services\Platform\UserService;
 use App\Support\CompanyScopeFilter;
 use Illuminate\Database\Eloquent\Builder;
@@ -160,6 +161,29 @@ class UserController extends Controller
         }
 
         /*
+         * 2026-09-18 — ?with_activity=1 (human: "หากไม่มีกิจกรรม การซื้อขาย
+         * อะไร ให้สามารถลบ รายชื่อสมาชิก แบบ Soft Delete ได้").
+         *
+         * The roster needs "has this person ever done anything?" per row,
+         * to decide whether ลบสมาชิก is offered and — when it is not — to
+         * say WHY in a sentence with numbers in it.
+         *
+         * ONE query for the page, not seven per row: `withCount` compiles
+         * to correlated subselects on the row the list is already
+         * fetching, the same shape `?with_last_login=1` above uses and for
+         * the same reason. The relation list comes from the probe rather
+         * than being spelled out here, so a check added there cannot
+         * quietly become an N+1 nobody notices until the roster has two
+         * hundred people on it.
+         *
+         * Opt-in, because the other callers of /users render no delete
+         * button and should not pay seven subselects for it.
+         */
+        if ($request->boolean('with_activity')) {
+            $query->withCount(AccountActivityProbe::countableRelations());
+        }
+
+        /*
          * ?with_abilities=1 — 2026-09-10. "Who in this company may redeem a
          * voucher?" is the question the grant screen exists to answer, and it
          * has to be answerable at a GLANCE, not one row at a time: a right
@@ -271,7 +295,15 @@ class UserController extends Controller
      */
     public function destroy(Request $request, User $user, UserService $service): Response
     {
-        $service->deactivate($user, $request->user());
+        /*
+         * 2026-09-18 — `release_email` says WHICH ACT this was: removal from
+         * the roster (ลบสมาชิก / ลบผู้สมัคร) rather than a switch-off from
+         * the edit modal. Both soft-delete; only removal gives the address
+         * back, and only when the account is provably untouched — the
+         * service re-checks that and refuses, so this flag can widen
+         * nothing by itself.
+         */
+        $service->deactivate($user, $request->user(), $request->boolean('release_email'));
 
         return response()->noContent();
     }

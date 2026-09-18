@@ -112,6 +112,15 @@ function buildUsersPath(): string {
    * the 403 be the answer, which TASK-245 already ruled out.
    */
   params.set('with_permissions', '1')
+  /*
+   * 2026-09-18 — "has this person ever done anything?", per row.
+   *
+   * It decides whether ลบสมาชิก is offered at all and, when it is not, what
+   * the disabled button says is in the way. Computed server-side for the
+   * same reason `with_permissions` is: the answer spans seven relations and
+   * a screen that re-derived it would be guessing about somebody's money.
+   */
+  params.set('with_activity', '1')
   if (q.value.trim()) params.set('q', q.value.trim())
   if (nationalIdSearch.value.trim()) params.set('national_id', nationalIdSearch.value.trim())
   return `/users?${params.toString()}`
@@ -305,7 +314,7 @@ async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMess
  * it. A soft delete the screen gives no way to undo is a hard delete with
  * better paperwork.
  */
-const pendingRemoveApplicant = ref<AgentItem | null>(null)
+const pendingRemoveMember = ref<AgentItem | null>(null)
 const rowActionBusy = ref(false)
 /** Which row is mid-request, so its buttons can say so and refuse a second click. */
 const decidingId = ref<number | null>(null)
@@ -392,29 +401,95 @@ async function submitRejectApplicant(a: AgentItem): Promise<void> {
 }
 
 /** Only where the server would allow it, and only for an unfinished sign-up. */
-function canRemoveApplicant(a: AgentItem): boolean {
-  return a.is_active && a.is_unconfirmed_applicant === true && a.permissions?.deactivate === true
+/*
+ * 2026-09-18 — was `canRemoveApplicant`, and only ever true for a sign-up
+ * that never completed (human: "หากไม่มีกิจกรรม การซื้อขายอะไร ให้สามารถลบ
+ * รายชื่อสมาชิก แบบ Soft Delete ได้").
+ *
+ * The button is now OFFERED on every row this admin may remove, and
+ * DISABLED with a reason on the rows that have history — the owner's answer
+ * on what a blocked row should look like ("แสดงแต่กดไม่ได้ + บอกเหตุผล").
+ * Hiding it was the other option and it is the worse one: an admin who
+ * cannot see the control concludes the feature does not exist, where one
+ * who sees it greyed out with "มีลูกค้า 3 คน" has learned something true
+ * about the account.
+ *
+ * `removal_blockers === undefined` means the server was not asked, which is
+ * not the same as "nothing is in the way" — so the button stays hidden
+ * rather than becoming enabled by an omission.
+ */
+function canRemoveMember(a: AgentItem): boolean {
+  return a.is_active && a.permissions?.deactivate === true && a.removal_blockers !== undefined
+}
+
+/** Empty = removable. Undefined (never asked) is deliberately NOT empty. */
+function removalBlockers(a: AgentItem): { key: string; count: number }[] {
+  return a.removal_blockers ?? []
+}
+
+function isRemovable(a: AgentItem): boolean {
+  return canRemoveMember(a) && removalBlockers(a).length === 0
+}
+
+/**
+ * The Thai wording for each blocker key. Lives here, not in the API, so it
+ * sits beside every other label on this screen it has to agree with — an
+ * endpoint that shipped copy would make the two drift the first time
+ * somebody reworded one of them.
+ */
+function removalBlockerLabel(blocker: { key: string; count: number }): string {
+  const labels: Record<string, string> = {
+    clients: `ลูกค้าที่แนะนำ ${blocker.count} ราย`,
+    referrals: `ดีล/ใบแนะนำ ${blocker.count} รายการ`,
+    commission: `ค่าแนะนำ ${blocker.count} รายการ`,
+    downline: `ลูกทีม ${blocker.count} คน`,
+    learning: `ใบรับรอง/บทเรียนที่เรียนจบ ${blocker.count} รายการ`,
+    rewards: `XP และเหรียญรางวัล ${blocker.count} รายการ`,
+    links: `ลิงก์ชวน/ลิงก์แนะนำ ${blocker.count} ลิงก์`,
+  }
+
+  return labels[blocker.key] ?? `ข้อมูลที่ผูกอยู่ ${blocker.count} รายการ`
+}
+
+/** One sentence for the disabled button's tooltip and the note under it. */
+function removalBlockedReason(a: AgentItem): string {
+  const blockers = removalBlockers(a)
+  if (blockers.length === 0) return ''
+
+  return `ลบไม่ได้ เพราะมี${blockers.map(removalBlockerLabel).join(' · ')} — ใช้ปิดใช้งานแทน`
 }
 
 /** The mirror. Offered on the same rows, so the undo is where the delete was. */
 function canRestoreApplicant(a: AgentItem): boolean {
-  return !a.is_active && a.is_unconfirmed_applicant === true && a.permissions?.restore === true
+  // 2026-09-18 — broadened with the delete above: anything this screen can
+  // remove, it has to be able to put back. Leaving กู้คืน applicant-only
+  // would have made a removed member unrecoverable from the screen that
+  // removed them.
+  return !a.is_active && a.permissions?.restore === true
 }
 
-async function confirmRemoveApplicant(): Promise<void> {
-  const target = pendingRemoveApplicant.value
+async function confirmRemoveMember(): Promise<void> {
+  const target = pendingRemoveMember.value
   if (!target) return
   rowActionBusy.value = true
   errorMessage.value = ''
   try {
-    await api.delete(`/users/${target.id}`)
-    pendingRemoveApplicant.value = null
+    // `release_email` says this was a REMOVAL, not the switch-off that the
+    // edit modal's ปิดใช้งาน performs against the same endpoint. The server
+    // re-checks that the account is untouched before honouring it, so this
+    // flag cannot widen anything on its own — see UserService::deactivate.
+    await api.delete(`/users/${target.id}`, { release_email: true })
+    pendingRemoveMember.value = null
     await loadAgents()
-    savedMessage.value = `ลบผู้สมัคร ${target.name} แล้ว — ยังกู้คืนได้ที่แท็บ "ปิดใช้งาน"`
+    // The email release is decided by the SERVER at the moment of deletion
+    // (UserService::deactivate), from the same activity check this screen
+    // read a moment ago — so the sentence is written for the case the
+    // button was enabled for, and never promises a release it did not see.
+    savedMessage.value = `ลบ ${target.name} แล้ว — อีเมล ${target.email} ว่างให้สมัครใหม่ได้ และยังกู้คืนบัญชีนี้ได้ที่แท็บ "ปิดใช้งาน"`
     showSavedDialog.value = true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
-    pendingRemoveApplicant.value = null
+    pendingRemoveMember.value = null
   } finally {
     rowActionBusy.value = false
   }
@@ -659,6 +734,17 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 >
                   ผู้สมัครที่ถูกลบ — สมัครไว้แต่ไม่เคยยืนยัน กู้คืนได้ตลอด
                 </p>
+                <!-- 2026-09-18 — why the ลบ button next to this row is grey.
+                     Visible text, not only a tooltip: a disabled control with
+                     no explanation is the thing that gets reported as a bug,
+                     and on touch there is no hover to reveal one. -->
+                <p
+                  v-if="a.is_active && canRemoveMember(a) && !isRemovable(a)"
+                  class="text-xs text-slate-400 mt-1"
+                  data-test="removal-blocked-reason"
+                >
+                  {{ removalBlockedReason(a) }}
+                </p>
               </div>
             </div>
             <div class="flex items-center gap-2 shrink-0">
@@ -689,20 +775,22 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 <Icon name="x" :size="14" />
                 ไม่อนุมัติ
               </button>
-              <!-- Only for a sign-up that never completed, and only when the
-                   server says this admin may. Deactivating a TRADING agent is
-                   a different decision and keeps its own control inside
-                   แก้ไข → การจัดการบัญชี. -->
+              <!-- 2026-09-18 — offered on every removable row, disabled with
+                   a reason on the rows that have history. The reason is a
+                   `title` AND a visible note: a tooltip alone never opens on
+                   touch (CLAUDE.md §7's own objection to `title=`), and an
+                   admin on a tablet would just see a dead button. -->
               <button
-                v-if="canRemoveApplicant(a)"
+                v-if="canRemoveMember(a)"
                 type="button"
-                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200"
-                data-test="remove-applicant"
-                :disabled="rowActionBusy"
-                @click="pendingRemoveApplicant = a"
+                class="btn-secondary gap-1.5 text-rose-600 hover:bg-rose-50 hover:border-rose-200 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                data-test="remove-member"
+                :disabled="rowActionBusy || !isRemovable(a)"
+                :title="removalBlockedReason(a)"
+                @click="pendingRemoveMember = a"
               >
                 <Icon name="trash" :size="14" />
-                ลบผู้สมัคร
+                {{ a.is_unconfirmed_applicant ? 'ลบผู้สมัคร' : 'ลบสมาชิก' }}
               </button>
               <button
                 v-if="canRestoreApplicant(a)"
@@ -785,28 +873,38 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
          So this says what HAPPENS TO THE PERSON, in the order an admin worries
          about it, and it names no column, no tab id, no status enum.
 
-         The third line is the one that would otherwise be discovered the hard
-         way: a removed account still holds its email address, so that address
-         cannot be used to sign up again — `unique:users,email` has always seen
-         soft-deleted rows, and RegisterController::checkEmail() deliberately
-         matches it with withTrashed(). The remedy is กู้คืน, not a second
-         registration, and an admin who does not know that will tell somebody
-         to "just sign up again" and then watch it fail. -->
+         2026-09-18 — THE THIRD LINE IS NOW THE OPPOSITE OF WHAT IT SAID, and
+         that is the point. It used to warn that the address stayed reserved
+         forever ("สมัครใหม่ด้วยอีเมลเดิมไม่ได้") — the thing admins
+         discovered the hard way after telling somebody to just sign up again.
+         The owner asked for the address to be released, so now it is, and the
+         line says so.
+
+         It is released ONLY because this button is only enabled on an account
+         with no history at all; a trading agent switched off from
+         แก้ไข → การจัดการบัญชี still keeps its address, because their name
+         is how a human recognises them in the ledger and the audit trail.
+
+         The last line is the honest cost of releasing it: กู้คืน can fail
+         later if somebody else took the address in the meantime, and an
+         admin should hear that here rather than from a refusal weeks on. -->
     <ConfirmDialog
-      :show="pendingRemoveApplicant !== null"
+      :show="pendingRemoveMember !== null"
       variant="danger"
       :busy="rowActionBusy"
-      title="ลบผู้สมัครรายนี้?"
-      confirm-label="ลบผู้สมัคร"
-      :body="pendingRemoveApplicant
-        ? `จะเกิดอะไรขึ้นกับ ${pendingRemoveApplicant.name}\n\n`
+      :title="pendingRemoveMember?.is_unconfirmed_applicant ? 'ลบผู้สมัครรายนี้?' : 'ลบสมาชิกรายนี้?'"
+      :confirm-label="pendingRemoveMember?.is_unconfirmed_applicant ? 'ลบผู้สมัคร' : 'ลบสมาชิก'"
+      size="md"
+      :body="pendingRemoveMember
+        ? `จะเกิดอะไรขึ้นกับ ${pendingRemoveMember.name}\n\n`
           + `• ชื่อจะหายไปจากรายชื่อสมาชิกและจากคิวรออนุมัติ\n`
-          + `• เขายังเข้าใช้งานไม่ได้เหมือนเดิม (ตอนนี้ก็ยังเข้าไม่ได้อยู่แล้ว เพราะยังไม่ยืนยัน)\n`
-          + `• อีเมล ${pendingRemoveApplicant.email} จะยังถูกจองไว้กับบัญชีนี้ ถ้าเขาอยากกลับมา ต้องให้คุณกดกู้คืน สมัครใหม่ด้วยอีเมลเดิมไม่ได้\n`
-          + `• ข้อมูลไม่ได้ถูกลบถาวร กดกู้คืนได้ตลอดที่หัวข้อ “ปิดใช้งาน” ด้านบน`
+          + `• เขาเข้าใช้งานไม่ได้ทันที และการเข้าใช้งานที่ค้างอยู่จะถูกถอนทั้งหมด\n`
+          + `• อีเมล ${pendingRemoveMember.email} จะถูกปลด ใช้สมัครใหม่ได้เลย\n`
+          + `• ข้อมูลไม่ได้ถูกลบถาวร กดกู้คืนได้ที่หัวข้อ “ปิดใช้งาน” ด้านบน\n`
+          + `• แต่ถ้ามีคนเอาอีเมลนี้ไปสมัครก่อน จะกู้คืนบัญชีนี้ไม่ได้จนกว่าจะตั้งอีเมลใหม่ให้`
         : ''"
-      @confirm="confirmRemoveApplicant"
-      @update:show="(v) => { if (!v) pendingRemoveApplicant = null }"
+      @confirm="confirmRemoveMember"
+      @update:show="(v) => { if (!v) pendingRemoveMember = null }"
     />
   </main>
 </template>

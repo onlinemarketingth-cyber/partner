@@ -68,6 +68,13 @@ function applicant(over: Record<string, unknown> = {}) {
     is_team_leader: false,
     created_at: '2026-09-01T00:00:00Z',
     permissions: { ...ALL },
+    /*
+     * 2026-09-18 — an EMPTY array, meaning "nothing is in the way". The
+     * distinction the screen depends on is empty vs UNDEFINED: undefined
+     * means the server was never asked, which must never render as
+     * removable (see the fail-closed test below).
+     */
+    removal_blockers: [],
     ...over,
   }
 }
@@ -149,18 +156,61 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
   it('offers the delete on an unfinished sign-up', async () => {
     const wrapper = await mountView()
 
-    expect(at(wrapper, 'remove-applicant').exists()).toBe(true)
+    expect(at(wrapper, 'remove-member').exists()).toBe(true)
+    expect(at(wrapper, 'remove-member').attributes('disabled')).toBeUndefined()
   })
 
-  it('does NOT offer it on a working agent', async () => {
-    // The one that matters most. This person has a downline, orders and
-    // commission behind them; their off-switch lives in the edit modal where
-    // the consequences are spelled out.
+  it('offers it on an approved member who has never done anything', async () => {
+    /*
+     * 2026-09-18 (human: "หากไม่มีกิจกรรม การซื้อขายอะไร ให้สามารถลบ รายชื่อ
+     * สมาชิก แบบ Soft Delete ได้"). Until then the button only ever appeared
+     * on a sign-up that never completed, so an admin-created account that
+     * was never used could only be switched off, never cleared away.
+     */
     mockRoster([applicant({ is_unconfirmed_applicant: false, agent_approval_status: 'approved' })])
 
     const wrapper = await mountView()
 
-    expect(at(wrapper, 'remove-applicant').exists()).toBe(false)
+    expect(at(wrapper, 'remove-member').exists()).toBe(true)
+    expect(at(wrapper, 'remove-member').text()).toContain('ลบสมาชิก')
+  })
+
+  it('shows the delete DISABLED, with a reason, on a member who has history', async () => {
+    /*
+     * The one that matters most, and the owner's own answer on how it should
+     * look ("แสดงแต่กดไม่ได้ + บอกเหตุผล"). Hiding it was the alternative:
+     * an admin who cannot see the control concludes the feature does not
+     * exist, where one who sees it greyed out with "มีลูกค้า 3 ราย" has
+     * learned something true about the account.
+     */
+    mockRoster([applicant({
+      is_unconfirmed_applicant: false,
+      agent_approval_status: 'approved',
+      removal_blockers: [{ key: 'clients', count: 3 }, { key: 'commission', count: 2 }],
+    })])
+
+    const wrapper = await mountView()
+
+    expect(at(wrapper, 'remove-member').attributes('disabled')).toBeDefined()
+
+    const reason = at(wrapper, 'removal-blocked-reason').text()
+    expect(reason).toContain('ลูกค้าที่แนะนำ 3 ราย')
+    expect(reason).toContain('ค่าแนะนำ 2 รายการ')
+    // …and it points at what to do instead, rather than only refusing.
+    expect(reason).toContain('ปิดใช้งาน')
+  })
+
+  it('does NOT offer it when the server never answered the activity question', async () => {
+    /*
+     * Fail closed, the same way the permissions object does. `undefined` is
+     * "nobody asked", not "nothing is in the way" — and an omission must
+     * never be the thing that enables a delete.
+     */
+    mockRoster([applicant({ removal_blockers: undefined })])
+
+    const wrapper = await mountView()
+
+    expect(at(wrapper, 'remove-member').exists()).toBe(false)
   })
 
   it('does NOT offer it when the server says this admin may not', async () => {
@@ -170,7 +220,7 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
     const wrapper = await mountView()
 
-    expect(at(wrapper, 'remove-applicant').exists()).toBe(false)
+    expect(at(wrapper, 'remove-member').exists()).toBe(false)
   })
 
   it('does NOT offer it when the server sent no permissions at all', async () => {
@@ -183,7 +233,7 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
     const wrapper = await mountView()
 
-    expect(at(wrapper, 'remove-applicant').exists()).toBe(false)
+    expect(at(wrapper, 'remove-member').exists()).toBe(false)
   })
 
   it('warns by name and promises the row comes back', async () => {
@@ -194,28 +244,32 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
      * irreversible one and nobody uses it.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-applicant').trigger('click')
+    await at(wrapper, 'remove-member').trigger('click')
 
     const body = at(wrapper, 'confirm').text()
     expect(body).toContain('ทดสอบสมัครใหม่ นามสกุล')
     expect(body).toContain('กู้คืน')
   })
 
-  it('warns that the email stays taken, in words', async () => {
+  it('says the email is released, and what that costs', async () => {
     /*
-     * The consequence that would otherwise be found the hard way. A removed
-     * account still holds its address — `unique:users,email` has always seen
-     * soft-deleted rows, and RegisterController::checkEmail() matches that
-     * deliberately with withTrashed(). So "just sign up again" does not work,
-     * and an admin who does not know that will tell somebody to do it and
-     * then watch it fail.
+     * 2026-09-18 — THIS TEST USED TO ASSERT THE OPPOSITE ("สมัครใหม่ด้วย
+     * อีเมลเดิมไม่ได้"), which was the true and unwelcome consequence of
+     * `unique:users,email` seeing soft-deleted rows. The owner asked for the
+     * address to be released, so the copy changed with the behaviour.
+     *
+     * The second half is the new consequence and is not optional: a released
+     * address can be taken by somebody else, and then กู้คืน cannot put the
+     * account back. An admin should hear that here, not from a refusal weeks
+     * later.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-applicant').trigger('click')
+    await at(wrapper, 'remove-member').trigger('click')
 
     const body = at(wrapper, 'confirm').text()
     expect(body).toContain('ikenyaa+4321568@gmail.com')
-    expect(body).toContain('สมัครใหม่ด้วยอีเมลเดิมไม่ได้')
+    expect(body).toContain('ปลด')
+    expect(body).toContain('กู้คืนบัญชีนี้ไม่ได้')
   })
 
   it('says the consequences without naming a column or a status code', async () => {
@@ -226,7 +280,7 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
      * edits this copy.
      */
     const wrapper = await mountView()
-    await at(wrapper, 'remove-applicant').trigger('click')
+    await at(wrapper, 'remove-member').trigger('click')
 
     const body = at(wrapper, 'confirm').text()
     for (const jargon of ['deleted_at', 'soft delete', 'is_active', 'pending', 'null', '422']) {
@@ -236,14 +290,21 @@ describe('AgentRosterView — removing a sign-up that never completed', () => {
 
   it('sends the delete only after the confirm', async () => {
     const wrapper = await mountView()
-    await at(wrapper, 'remove-applicant').trigger('click')
+    await at(wrapper, 'remove-member').trigger('click')
 
     expect(del).not.toHaveBeenCalled()
 
     await at(wrapper, 'confirm-yes').trigger('click')
     await flushPromises()
 
-    expect(del).toHaveBeenCalledWith('/users/7')
+    /*
+     * `release_email` says this was a REMOVAL, not the switch-off the edit
+     * modal performs against the same endpoint. The server re-checks that
+     * the account is untouched before honouring it, so the flag widens
+     * nothing on its own — but without it the address would stay locked and
+     * the dialog above would have lied.
+     */
+    expect(del).toHaveBeenCalledWith('/users/7', { release_email: true })
   })
 })
 

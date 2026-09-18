@@ -39,7 +39,10 @@ class UserService
      */
     private const SUPER_ADMIN_UI_SOURCE = 'ui:จัดการผู้ใช้ระบบ';
 
-    public function __construct(private readonly MatrixCommissionService $matrixCommissionService) {}
+    public function __construct(
+        private readonly MatrixCommissionService $matrixCommissionService,
+        private readonly AccountActivityProbe $activityProbe,
+    ) {}
 
     /**
      * TASK-183 §4.1 — creating a user IS a permissions event (§6: "record
@@ -633,16 +636,80 @@ class UserService
      * moment of deletion — never from a parameter the caller supplies. A
      * client that could name its own audit action could name the wrong one.
      */
-    public function deactivate(User $target, User $actor): void
+    /**
+     * @param  bool  $releaseEmail  The caller performed a REMOVAL (roster
+     *                              ลบสมาชิก), not a switch-off — see the
+     *                              block below for why that distinction
+     *                              cannot be inferred here.
+     */
+    public function deactivate(User $target, User $actor, bool $releaseEmail = false): void
     {
         // Soft-deleting the seat would leave every agent pointing at a
         // deleted manager and stop the company earning, silently.
         $this->assertNotHouseAccount($target, 'ปิดการใช้งานจากหน้านี้');
 
-        DB::transaction(function () use ($target, $actor) {
+        /*
+         * 2026-09-18 — TWO DIFFERENT HUMAN ACTS, ONE ENDPOINT.
+         *
+         * ปิดใช้งาน (แก้ไข → การจัดการบัญชี) switches an account off, often
+         * to switch it back on. ลบสมาชิก (the roster) is removal. They have
+         * always shared `DELETE /users/{id}` because the DATABASE effect is
+         * the same soft delete — but they are not the same decision, and
+         * only one of them should give the email address away.
+         *
+         * Releasing it on a temporary switch-off would be a trap: the admin
+         * re-enables the person next week and finds a stranger registered
+         * their address in the meantime.
+         *
+         * So the CALLER says which act it was, and the SERVER says whether
+         * it is allowed: an address is released only when removal was asked
+         * for AND the account is provably untouched. A stale screen that
+         * asks for it over an account that has since sold something gets a
+         * 422 naming what is in the way, never a silent switch-off that
+         * looks like it worked.
+         *
+         * Why a TRADING agent keeps the address even on removal: their rows
+         * are still in the ledger, the audit trail and somebody's downline,
+         * and their address is how a human recognises them there. Freeing it
+         * for a stranger to register would quietly rewrite who those records
+         * appear to belong to.
+         */
+        if ($releaseEmail) {
+            $blockers = $this->activityProbe->blockers($target);
+
+            if ($blockers !== []) {
+                throw ValidationException::withMessages([
+                    'user' => 'ลบบัญชีนี้ไม่ได้ เพราะมีข้อมูลผูกอยู่แล้ว — ใช้ปิดใช้งานแทน (โหลดหน้าใหม่เพื่อดูรายละเอียด)',
+                ]);
+            }
+        }
+
+        DB::transaction(function () use ($target, $actor, $releaseEmail) {
             $action = $target->isUnconfirmedApplicant()
                 ? 'user.applicant_removed'
                 : 'user.deactivated';
+
+            $releasedEmail = null;
+
+            if ($releaseEmail && $target->email_released_from === null) {
+                $releasedEmail = $target->email;
+
+                /*
+                 * forceFill: `email_released_from` is NOT in $fillable and
+                 * must not be, because nothing an HTTP request says should
+                 * ever be able to set where an address came back from.
+                 *
+                 * The tombstone carries the id, so it is unique by
+                 * construction — two removals can never collide on the
+                 * UNIQUE index, whatever addresses they held. `.invalid`
+                 * is the reserved TLD (RFC 2606): it can never resolve, so
+                 * nothing will ever try to deliver mail to it by accident.
+                 */
+                $target->forceFill([
+                    'email_released_from' => $releasedEmail,
+                    'email' => sprintf('removed+%d@removed.invalid', $target->id),
+                ])->save();
+            }
 
             $target->delete(); // SoftDeletes — see UserPolicy/TASK-009 design notes.
             $this->revokeApiTokens($target, 'account deactivated');
@@ -651,8 +718,18 @@ class UserService
                 $action,
                 $target,
                 $actor,
-                ['deleted_at' => null],
-                ['deleted_at' => $target->deleted_at?->toIso8601String()],
+                array_filter([
+                    'deleted_at' => null,
+                    'email' => $releasedEmail,
+                ], fn ($value, $key) => $key === 'deleted_at' || $value !== null, ARRAY_FILTER_USE_BOTH),
+                array_filter([
+                    'deleted_at' => $target->deleted_at?->toIso8601String(),
+                    // Says the address was let go, WITHOUT restating it —
+                    // old_values above already holds it once, and an
+                    // address is personal data (§6/PDPA): recording it
+                    // twice in the same row is a copy nobody asked for.
+                    'email_released' => $releasedEmail !== null ? true : null,
+                ], fn ($value) => $value !== null),
             );
         });
     }
@@ -660,8 +737,51 @@ class UserService
     /** TASK-183 §4.1 — the mirror of deactivate(): restoring hands every right back. */
     public function restore(User $target, User $actor): User
     {
+        /*
+         * 2026-09-18 — giving the address back, and the one way that can
+         * fail.
+         *
+         * Releasing an email on removal means somebody else may have
+         * registered it since. That is not an error in this code, it is
+         * the whole point of releasing it — but it does mean กู้คืน
+         * cannot always put the account back the way it was, and the
+         * admin has to be told WHICH problem they have rather than shown
+         * a unique-constraint error from the database.
+         *
+         * Checked before the transaction opens, `withTrashed()` because a
+         * second removed account can be holding the address too — the
+         * UNIQUE index counts those rows, so ignoring them would let the
+         * restore reach the database and fail there anyway.
+         */
+        if ($target->email_released_from !== null) {
+            $taken = User::withoutGlobalScopes()
+                ->withTrashed()
+                ->where('email', $target->email_released_from)
+                ->whereKeyNot($target->getKey())
+                ->exists();
+
+            if ($taken) {
+                throw ValidationException::withMessages([
+                    'email' => sprintf(
+                        'กู้คืนไม่ได้ เพราะอีเมล %s ถูกใช้ไปกับบัญชีอื่นแล้วหลังจากลบรายนี้ — ต้องตั้งอีเมลใหม่ให้บัญชีนี้ก่อนจึงจะกู้คืนได้',
+                        $target->email_released_from,
+                    ),
+                ]);
+            }
+        }
+
         return DB::transaction(function () use ($target, $actor) {
             $deletedAt = $target->deleted_at?->toIso8601String();
+            $restoredEmail = $target->email_released_from;
+
+            if ($restoredEmail !== null) {
+                // Cleared in the same write: the column means "an address
+                // is waiting to come back", and after this one is not.
+                $target->forceFill([
+                    'email' => $restoredEmail,
+                    'email_released_from' => null,
+                ])->save();
+            }
 
             $target->restore();
 
@@ -670,7 +790,10 @@ class UserService
                 $target,
                 $actor,
                 ['deleted_at' => $deletedAt],
-                ['deleted_at' => null],
+                array_filter([
+                    'deleted_at' => null,
+                    'email' => $restoredEmail,
+                ], fn ($value, $key) => $key === 'deleted_at' || $value !== null, ARRAY_FILTER_USE_BOTH),
             );
 
             return $target;

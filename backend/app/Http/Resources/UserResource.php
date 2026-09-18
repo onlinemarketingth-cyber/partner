@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Enums\Ability;
 use App\Models\User;
+use App\Services\Platform\AccountActivityProbe;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Storage;
@@ -292,6 +293,31 @@ class UserResource extends JsonResource
              * Costs no queries: every column it reads is already on the row.
              */
             'is_unconfirmed_applicant' => $this->isUnconfirmedApplicant(),
+            /*
+             * 2026-09-18 — "may this account be removed, and if not, why
+             * not?", answered by the server for the same reason
+             * `permissions` below is: the roster must never re-derive a
+             * rule it can ask for.
+             *
+             * A LIST, not a boolean. The owner asked for the blocked
+             * button to say what is in the way ("แสดงแต่กดไม่ได้ + บอก
+             * เหตุผล"), and "มีลูกค้า 3 คน" is not something a boolean can
+             * say. Empty list means removable.
+             *
+             * Keys, not sentences: the Thai wording lives on the screen
+             * beside every other label it has to agree with
+             * (AgentRosterView::removalBlockerLabel), and an API that
+             * shipped copy would make the two drift.
+             *
+             * whenHas-style opt-in via the same flag that eager-counts
+             * them — absent entirely for the four other callers of
+             * /users, so nothing can read it and get a wrong answer
+             * cheaply.
+             */
+            'removal_blockers' => $this->when(
+                $request->boolean('with_activity'),
+                fn () => app(AccountActivityProbe::class)->blockers($this->resource),
+            ),
             'created_at' => $this->created_at,
             'deleted_at' => $this->deleted_at,
             /*

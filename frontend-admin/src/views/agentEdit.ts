@@ -68,6 +68,21 @@ export interface AgentItem {
    */
   is_unconfirmed_applicant?: boolean
   /**
+   * 2026-09-18 (human: "หากไม่มีกิจกรรม การซื้อขายอะไร ให้สามารถลบ รายชื่อ
+   * สมาชิก แบบ Soft Delete ได้").
+   *
+   * Why this account may NOT be removed — an EMPTY ARRAY means it may.
+   * Computed by the server (AccountActivityProbe) and only present when the
+   * request asked for it (`?with_activity=1`); `undefined` means "nobody
+   * asked", which the screen must treat as "do not offer the button",
+   * never as "nothing is in the way".
+   *
+   * A list rather than a boolean because the blocked button has to say what
+   * is blocking it, with numbers — see AgentRosterView::removalBlockerLabel
+   * for the Thai wording each key turns into.
+   */
+  removal_blockers?: { key: string; count: number }[]
+  /**
    * TASK-259 — what THIS admin may do to THIS row, answered by the Policy
    * that will actually run. Only present when the request asked for it
    * (`?with_permissions=1`); absent means "do not offer row actions",
