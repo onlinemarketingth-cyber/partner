@@ -129,6 +129,7 @@ import RateResolutionMatrix, { type ResolutionRow } from '@/design-system/compon
  * confirmation step like the copy-rates modal.
  */
 import RateImpactPreview from '@/design-system/components/RateImpactPreview.vue'
+import PlanShapePreview from '@/design-system/components/PlanShapePreview.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -4552,6 +4553,23 @@ watch(companyPlanType, (pt) => {
                   การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
                 </p>
               </div>
+
+              <!--
+                ═══ ผังและตัวอย่างของแผน (owner, 2026-09-19) ═══
+
+                Owner, on this screen: "มันดูไม่ง่ายเลยในการ Setup ในแต่ละแผน
+                ผมอยากได้แบบแผนภูมิ ที่เป็นตัวอย่างในแต่ละแบบ".
+
+                It sits HERE, below both choices, because the example needs
+                both of them: the plan decides who is in the picture, the
+                basis decides what number the percentages are a percentage
+                OF. Placed above the basis card it would have to guess one.
+
+                Collapsed by default — an admin who already knows the plan
+                they run should not have to scroll past a sandbox to reach
+                the PV table below.
+              -->
+              <PlanShapePreview :plan-type="viewingPlanType" :basis="commissionBasis" />
 
               <!--
                 ═══ THE PV TABLE ═══
