@@ -37,6 +37,10 @@ class CommissionOverrideRule extends Model
         // at most ONE may be set; both null = the company-wide default.
         'product_id',
         'product_category_id',
+        // 2026-09-19 — which hop of the manager chain this rate prices.
+        // NULL = every level (the catch-all, and what every row written
+        // before levels existed means). See the migration.
+        'level',
         // TASK-214 — retained for legacy rows only. Resolution no longer
         // reads it (human ruling 2026-08-19: "ไม่ต้องผูก"); it survives so
         // an operator collapsing pre-TASK-214 per-tier rows can still see
@@ -62,6 +66,7 @@ class CommissionOverrideRule extends Model
         return [
             'rate_type' => CommissionRateType::class,
             'rate_value' => 'integer',
+            'level' => 'integer',
             'override_mode' => CommissionOverrideMode::class,
             'effective_from' => 'date',
             'effective_to' => 'date',

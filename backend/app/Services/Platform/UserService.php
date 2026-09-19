@@ -30,6 +30,12 @@ class UserService
         'role' => 'user.role_changed',
         'is_team_leader' => 'user.team_leader_changed',
         'manager_id' => 'user.manager_changed',
+        // 2026-09-19 — on a Binary company this is WHERE THE MONEY GOES: the
+        // leg decides which volume column a whole sub-tree's sales roll into,
+        // and the matching cycle pays from the weaker of the two. §6 audits
+        // "every action that affects money", and moving somebody between legs
+        // is one, even though it grants them nothing.
+        'binary_leg' => 'user.binary_leg_changed',
     ];
 
     /**
@@ -899,6 +905,7 @@ class UserService
             'role' => $user->role?->value,
             'is_team_leader' => (bool) $user->is_team_leader,
             'manager_id' => $user->manager_id,
+            'binary_leg' => $user->binary_leg?->value,
         ];
     }
 

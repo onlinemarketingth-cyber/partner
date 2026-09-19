@@ -5,6 +5,7 @@ namespace App\Http\Resources;
 use App\Enums\Ability;
 use App\Models\User;
 use App\Services\Platform\AccountActivityProbe;
+use App\Support\Money\SupportedCurrency;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Support\Facades\Storage;
@@ -192,12 +193,38 @@ class UserResource extends JsonResource
             'company' => $this->whenLoaded('company', fn () => $this->company ? [
                 'id' => $this->company->id,
                 'name' => $this->company->name,
+                /*
+                 * 2026-09-19 — so every money figure in the portal can be
+                 * printed with the right currency beside it.
+                 *
+                 * Sent HERE and not only on the platform companies resource
+                 * because that one is Super-Admin-only, while the people who
+                 * read prices, commission and payout amounts all day are
+                 * agents and company admins. Without it both frontends have
+                 * no source for the symbol but a hardcoded ฿, which is
+                 * exactly the bug the currency column exists to fix.
+                 */
+                'currency_code' => $this->company->currencyCode(),
+                'currency_symbol' => SupportedCurrency::symbol($this->company->currencyCode()),
             ] : null),
             // TASK-025 — this agent's upline. manager_id alone is enough
             // for the frontend's <select> to preselect the current value;
             // 'manager' (name) is included whenever eager-loaded so a
             // list screen doesn't need an extra lookup per row.
             'manager_id' => $this->manager_id,
+            /*
+             * 2026-09-19 — which side of their upline this agent sits on,
+             * for a Binary company. Sent flat beside manager_id and for the
+             * same reason: the edit screen's <select> needs the current value
+             * to preselect it, and until today no screen could show one
+             * because nothing could set one (see UpdateUserRequest).
+             *
+             * Always sent, never conditional on the plan type: a company that
+             * switches to Binary must be able to see the placements it
+             * already has, and a field that appears and disappears with a
+             * setting is harder to reason about than one that is simply null.
+             */
+            'binary_leg' => $this->binary_leg?->value,
             'manager' => $this->whenLoaded('manager', fn () => $this->manager ? [
                 'id' => $this->manager->id,
                 'name' => $this->manager->name,

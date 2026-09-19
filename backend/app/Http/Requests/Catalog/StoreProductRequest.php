@@ -113,8 +113,20 @@ class StoreProductRequest extends FormRequest
              * catalog:promote-products writes the value down for the same
              * reason.
              */
+            /*
+             * 2026-09-19 — AND PROHIBITED ON A COMPANY PRODUCT.
+             *
+             * One plan per company (owner, 2026-09-19, re-confirming ADR-006
+             * Round 3/4). Product::effectivePlanType() now returns the
+             * COMPANY's plan whenever there is a company, so a value stored
+             * here would be accepted, saved, displayed — and then ignored by
+             * every engine. A field that silently does nothing is worse than
+             * a missing one: somebody sets it, believes the product pays
+             * differently, and finds out from a payout.
+             */
             'commission_plan_type' => [
                 Rule::requiredIf(fn () => $platform),
+                Rule::prohibitedIf(fn () => ! $platform),
                 'nullable',
                 Rule::enum(CommissionPlanType::class),
             ],

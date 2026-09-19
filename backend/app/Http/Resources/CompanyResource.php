@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Enums\CommissionBasis;
+use App\Support\Money\SupportedCurrency;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -16,6 +17,18 @@ class CompanyResource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
+            /*
+             * 2026-09-19 — ISO 4217, plus the symbol to print with it.
+             *
+             * Resolved through the model, never read raw: a row from before
+             * the column existed is a THB company and the screen must not
+             * have to know that. The symbol is sent rather than looked up in
+             * the frontend so the two apps cannot disagree about what a
+             * currency looks like, and so a code this build does not
+             * recognise renders as the code itself instead of as ฿.
+             */
+            'currency_code' => $this->resource->currencyCode(),
+            'currency_symbol' => SupportedCurrency::symbol($this->resource->currencyCode()),
             'slug' => $this->slug,
             'is_active' => $this->is_active,
             'commission_plan_type' => $this->commission_plan_type?->value,

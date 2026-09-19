@@ -233,50 +233,84 @@ class Product extends Model
     }
 
     /**
-     * ADR-011 Section 1 (TASK-027): a product may override the company's
-     * plan type; NULL means "inherit the company's default." This is the
-     * single place plan-type resolution happens — callers (CommissionService
-     * and future TASK-029..032 engines) must always go through this, never
-     * read $product->commission_plan_type or $company->commission_plan_type
-     * directly, so the inherit rule can't be duplicated/drifted elsewhere.
+     * The plan type that governs this sale. ONE PLAN PER COMPANY.
+     *
+     * ── 2026-09-19 — THE COMPANY NOW WINS, AND THE PRODUCT DOES NOT ──
+     *
+     * This method used to return the product's own `commission_plan_type`
+     * whenever it was set, treating the company's as a default to be
+     * overridden. Owner, 2026-09-19: "ปิดช่องตั้งแผนต่อสินค้า ... ถ้าเจตนา
+     * คือบริษัทเดียวแผนเดียว" — confirming the ruling ADR-006 Round 3/4
+     * already recorded ("one plan type per company, human decision
+     * 2026-07-14") and that TASK-027 then quietly widened in this very file.
+     *
+     * Why the old order was not merely untidy:
+     *
+     *   - A compensation plan is a promise a company makes to its agents.
+     *     An agent has to be able to answer "how am I paid" once, not per
+     *     product — the same reasoning the owner applied to commission_basis
+     *     on 2026-09-12, and it binds harder here: the basis changes what a
+     *     percentage is a percentage OF, the plan changes WHO is paid at all.
+     *   - The structural engines cannot survive mixing. Binary keeps one
+     *     left/right volume pair per agent and Stairstep sums one trailing
+     *     volume; neither has any notion of "this part of the total came from
+     *     a product on a different plan". StairstepCommissionService's own
+     *     volume query filters by agent and company and nothing else, so a
+     *     Unilevel product's sale was already counting toward a Stairstep
+     *     rank ladder.
+     *   - It was silent. Anybody who could edit a product could put one
+     *     product on Binary while the company ran Unilevel, and the engines
+     *     obeyed, and the resulting ledger rows are immutable (BR-4).
+     *
+     * The product column is NOT dropped: a PLATFORM-owned product (ADR-040)
+     * has no company of its own, and `commission:audit-config` reports any
+     * product whose stored value disagrees with its company so the rows
+     * already computed under it can be judged by a human rather than
+     * silently reinterpreted here.
+     *
+     * Resolution order, and it is now exactly two rungs:
+     *   1. the company asking (`$context`, else the product's own owner)
+     *   2. only when there is NO company at all — a platform product asked
+     *      about by nobody in particular — the product's own value
      */
     public function effectivePlanType(?Company $context = null): CommissionPlanType
     {
+        /*
+         * TASK-253 / ADR-040 — `$context` is the company asking: the
+         * referral's for a commission calculation, the viewer's for a screen.
+         * A company-owned product ignores the argument and uses its owner.
+         */
+        $company = $context ?? $this->company;
+
+        if ($company !== null) {
+            return $company->commission_plan_type;
+        }
+
+        /*
+         * A platform-owned product, asked about by nobody in particular (a
+         * Super Admin reading across companies). Its own value is the only
+         * honest answer left, and it is required to have one.
+         */
         if ($this->commission_plan_type !== null) {
             return $this->commission_plan_type;
         }
 
         /*
-         * TASK-253 / ADR-040 — a PLATFORM-owned product has no company of its
-         * own to inherit from, so the caller says which company is asking.
+         * No company and no stored plan type. There is no honest answer: the
+         * plan type decides HOW commission is calculated, and inventing one
+         * here would put a wrong number in an immutable ledger row
+         * (BR-2/BR-4).
          *
-         * `$context` is that company: the referral's for a commission
-         * calculation, the viewer's for a screen. Falling back to
-         * `$this->company` keeps every existing caller byte-for-byte
-         * unchanged — a company-owned product ignores the argument entirely.
+         * Unreachable by construction — a platform-owned product is required
+         * to carry an explicit commission_plan_type (see ProductObserver /
+         * TASK-255's migration command) — and it throws rather than returning
+         * a default precisely so that "unreachable" stays true instead of
+         * quietly becoming "usually right".
          */
-        $company = $context ?? $this->company;
-
-        if ($company === null) {
-            /*
-             * A shared product with no plan type of its own, asked about by
-             * nobody in particular. There is no honest answer: the plan type
-             * decides HOW commission is calculated, and inventing one here
-             * would put a wrong number in an immutable ledger row (BR-2/BR-4).
-             *
-             * Unreachable by construction — a platform-owned product is
-             * required to carry an explicit commission_plan_type (see
-             * ProductObserver / TASK-255's migration command) — and it throws
-             * rather than returning a default precisely so that "unreachable"
-             * stays true instead of quietly becoming "usually right".
-             */
-            throw new \LogicException(
-                "Product #{$this->id} is platform-owned and has no commission_plan_type of its own; "
-                .'the caller must pass the company asking (ADR-040).'
-            );
-        }
-
-        return $company->commission_plan_type;
+        throw new \LogicException(
+            "Product #{$this->id} is platform-owned and has no commission_plan_type of its own; "
+            .'the caller must pass the company asking (ADR-040).'
+        );
     }
 
     /**

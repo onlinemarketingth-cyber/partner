@@ -4,6 +4,7 @@ namespace Tests\Feature\Engagement;
 
 use App\Console\Commands\PayDueAgentPromotionCredits;
 use App\Enums\CommissionEarnedVia;
+use App\Enums\CommissionPlanType;
 use App\Enums\CommissionRateType;
 use App\Enums\PipelineStage;
 use App\Enums\PromotionPayoutTiming;
@@ -15,7 +16,9 @@ use App\Models\CertTier;
 use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\Company;
+use App\Models\CompanyProductSetting;
 use App\Models\Product;
+use App\Models\ProductPricePromotion;
 use App\Models\Referral;
 use App\Models\User;
 use App\Models\UserCertification;
@@ -87,6 +90,78 @@ class PromotionBonusPayoutTest extends TestCase
             'ends_at' => null,
             'created_by' => null,
         ], $overrides);
+    }
+
+    /**
+     * 2026-09-19 — the bonus used to be a percentage of a price nobody paid.
+     *
+     * It read `products.price_satang` straight off the model, so a product on
+     * an active discount still paid its bonus on the full list price. The
+     * commission on the very same sale went through ProductPricingService and
+     * therefore used the discounted figure, so one Complete Payment wrote two
+     * ledger rows that disagreed about what the sale was worth — and BR-4
+     * means neither can ever be corrected afterwards.
+     */
+    public function test_a_price_promotion_lowers_the_bonus_to_what_the_customer_actually_paid(): void
+    {
+        [$company, $agent, , $referral] = $this->setUpAgentAndReferral(1000000); // list 10,000 THB
+
+        ProductPricePromotion::create([
+            'company_id' => $company->id,
+            'product_id' => $referral->product_id,
+            'discounted_price_satang' => 800000, // on sale at 8,000 THB
+            'note' => null,
+            'status' => PromotionStatus::Active,
+            'starts_at' => now()->subDay(),
+            'ends_at' => null,
+            'created_by' => null,
+        ]);
+
+        AgentPromotion::create($this->promotionAttributes($company, PromotionPayoutTiming::Immediate));
+
+        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+
+        $credit = AgentPromotionCredit::where('referral_id', $referral->id)->first();
+        $this->assertNotNull($credit);
+        // 10% of the 8,000 the customer was charged — not of the 10,000 list.
+        $this->assertSame(80000, $credit->bonus_amount_satang);
+    }
+
+    /**
+     * ADR-040 — a platform product's central price is not what every company
+     * charges for it, and the bonus must follow the seller's own price.
+     *
+     * CommissionService documents this trap in its own resolution block
+     * ("would pay commission on the platform's central price while the
+     * customer paid the company's"); the bonus was walking straight into it,
+     * so two companies selling one shared product at different prices paid
+     * byte-identical bonuses.
+     */
+    public function test_a_shared_product_uses_the_selling_company_s_own_price(): void
+    {
+        [$company, $agent, , $referral] = $this->setUpAgentAndReferral(1000000);
+
+        $shared = Product::factory()->create([
+            'company_id' => null,
+            'price_satang' => 1000000, // the platform's central 10,000 THB
+            'commission_plan_type' => CommissionPlanType::Unilevel,
+        ]);
+        CompanyProductSetting::create([
+            'company_id' => $company->id,
+            'product_id' => $shared->id,
+            'price_satang' => 500000, // this company sells it at 5,000 THB
+            'is_active' => true,
+        ]);
+        $referral->forceFill(['product_id' => $shared->id])->save();
+
+        AgentPromotion::create($this->promotionAttributes($company, PromotionPayoutTiming::Immediate));
+
+        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+
+        $credit = AgentPromotionCredit::where('referral_id', $referral->id)->first();
+        $this->assertNotNull($credit);
+        // 10% of this company's 5,000, not of the platform's 10,000.
+        $this->assertSame(50000, $credit->bonus_amount_satang);
     }
 
     public function test_immediate_promotion_credits_and_pays_in_the_same_request(): void

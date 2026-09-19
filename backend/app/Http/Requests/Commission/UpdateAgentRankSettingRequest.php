@@ -4,6 +4,7 @@ namespace App\Http\Requests\Commission;
 
 use App\Enums\Ability;
 use App\Enums\AgentRankRecalculationFrequency;
+use App\Enums\AgentRankVolumeScope;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -34,6 +35,12 @@ class UpdateAgentRankSettingRequest extends FormRequest
         return [
             'company_id' => [Rule::requiredIf(fn () => $this->user()->isSuperAdmin()), 'integer', 'exists:companies,id'],
             'trailing_window_days' => ['required', 'integer', 'min:1', 'max:3650'], // sanity ceiling only, not a BR-7 value
+            // 'sometimes', not 'required': this endpoint is an upsert that
+            // existing admin screens already call without this key, and a
+            // required field would break every one of them. Absent means
+            // "leave it as it is" on an update and "take the column
+            // default" (personal) on a first write.
+            'volume_scope' => ['sometimes', Rule::enum(AgentRankVolumeScope::class)],
             'recalculation_frequency' => ['required', Rule::enum(AgentRankRecalculationFrequency::class)],
         ];
     }

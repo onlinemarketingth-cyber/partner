@@ -42,7 +42,25 @@ const toast = useToastStore()
 
 interface WithdrawalRequest {
   id: number
+  /*
+   * GROSS — what this agent earned. The tax below does not reduce it: the
+   * company withholds part of it and remits that part in the agent's name,
+   * so the agent is credited with the withheld amount when they file. The
+   * headline on each card stays this number for exactly that reason.
+   */
   amount_satang: number
+  /*
+   * 2026-09-19 — ภาษีหัก ณ ที่จ่าย, as it was when this request was opened.
+   * Null rate = nothing was withheld, which is every request made before the
+   * setting existed.
+   *
+   * `net_transfer_satang` is what actually reaches the agent's bank, resolved
+   * by the server (a historical row with no net recorded reports its gross).
+   * This screen never subtracts anything itself.
+   */
+  wht_rate_at_time: number | null
+  wht_satang: number
+  net_transfer_satang: number
   status: 'pending_review' | 'approved' | 'rejected' | 'cancelled' | 'transferred'
   status_label: string
   rejection_reason: string | null
@@ -56,6 +74,17 @@ interface WithdrawalRequest {
 interface AvailableResponse {
   available_satang: number
   min_withdrawal_satang: number | null
+  /*
+   * 2026-09-19 — the company's withholding rate in basis points, or null for
+   * no withholding.
+   *
+   * The RATE, not a computed net: the amount is not known until the agent
+   * types it, so a net sent with this response would go stale on every
+   * keystroke. The estimate below is computed from whatever is in the field
+   * at the moment, and labelled as an estimate — the figure that binds is the
+   * one stamped onto the request when it is opened.
+   */
+  wht_rate: number | null
   payout_details_complete: boolean
 }
 
@@ -110,6 +139,33 @@ async function load(): Promise<void> {
     loading.value = false
   }
 }
+
+/**
+ * 2026-09-19 — what the agent will actually receive for the amount currently
+ * typed, or null when nothing is withheld or the field is not a number yet.
+ *
+ * AN ESTIMATE, and labelled as one. The binding figure is the one the server
+ * stamps onto the request when it is opened — this exists so the agent is not
+ * surprised by a smaller transfer, not so they can reconcile to the satang.
+ *
+ * Truncated with Math.floor, matching the server's intdiv: rounding up here
+ * would quote a tax one satang larger than the one that will be withheld,
+ * which is the wrong direction to be wrong in on somebody's own money.
+ */
+const withholdingPreview = computed<{ rate: number; tax: number; net: number } | null>(() => {
+  const rate = available.value?.wht_rate ?? null
+
+  if (rate === null || rate <= 0) return null
+
+  const baht = Number(amountBaht.value)
+
+  if (!Number.isFinite(baht) || baht <= 0) return null
+
+  const gross = Math.round(baht * 100)
+  const tax = Math.floor((gross * rate) / 10000)
+
+  return { rate, tax, net: gross - tax }
+})
 
 function fillMaximum(): void {
   if (!available.value) return
@@ -221,6 +277,25 @@ onMounted(load)
             </button>
           </div>
           <p v-if="formError" class="mt-1 text-xs font-bold text-ink-danger">{{ formError }}</p>
+          <!--
+            2026-09-19 — told BEFORE the button, not after the transfer.
+
+            An agent who asks for 1,500 and receives 1,455 without warning
+            reads it as the company short-paying them, and the first anybody
+            hears of it is a complaint. Shown only when there is something to
+            withhold, and only once an amount has been typed: a tax line over
+            an empty field is a warning about nothing.
+          -->
+          <p
+            v-if="withholdingPreview"
+            class="mt-1.5 text-xs text-ink-card-subtle"
+            data-test="withdraw-wht-preview"
+          >
+            {{ td('withdrawal.wht_notice', '', {
+              rate: String(withholdingPreview.rate / 100),
+              net: formatSatang(withholdingPreview.net),
+            }) }}
+          </p>
           <AppButton :loading="submitting" :disabled="!canRequest" class="mt-3" block @click="submit">
             {{ td('withdrawal.submit') }}
           </AppButton>
@@ -236,6 +311,25 @@ onMounted(load)
           <div class="flex items-start justify-between gap-3">
             <div>
               <p class="text-lg font-bold text-ink-card">{{ formatSatang(r.amount_satang) }}</p>
+              <!--
+                The headline above is the GROSS, and stays so: it is what this
+                agent earned, it is what their commission statement says, and
+                it is the figure their withholding certificate will be written
+                against. This line is the separate fact of what reached the
+                bank — absent entirely when nothing was withheld.
+              -->
+              <p
+                v-if="r.wht_satang > 0"
+                class="text-xs text-ink-card-subtle mt-0.5"
+                :data-test="`withdrawal-wht-${r.id}`"
+              >
+                {{ td('withdrawal.wht_line', '', {
+                  rate: String((r.wht_rate_at_time ?? 0) / 100),
+                  tax: formatSatang(r.wht_satang),
+                }) }}
+                ·
+                <b class="text-ink-card">{{ td('withdrawal.wht_net', '', { net: formatSatang(r.net_transfer_satang) }) }}</b>
+              </p>
               <p class="text-xs text-ink-card-subtle mt-0.5">{{ td('withdrawal.requested_on') }} {{ formatDate(r.created_at) }}</p>
               <p v-if="r.bank_account_number_masked" class="text-xs text-ink-card-subtle">
                 {{ r.bank_name }} {{ r.bank_account_number_masked }}

@@ -47,10 +47,33 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 // surfaced as a warning banner there instead of blocking selection here.
 type CommissionPlanType = 'unilevel' | 'binary' | 'matrix' | 'stairstep_breakaway' | 'generation' | 'affiliate'
 
+/**
+ * 2026-09-19 — one currency option, as the server offers it.
+ *
+ * Fetched rather than hardcoded for the reason every other closed vocabulary
+ * on this app is: two copies of a list are two lists, and the one in the
+ * browser keeps a removed option on screen until somebody redeploys. The
+ * server's list is also the one that enforces the restriction — it holds only
+ * currencies with two decimal places, because BR-3 stores hundredths
+ * (satang) and every formatter here divides by 100.
+ */
+interface CurrencyOption {
+  code: string
+  name: string
+  symbol: string
+}
+
 interface CompanyItem {
   id: number
   name: string
   slug: string
+  /*
+   * 2026-09-19 — ISO 4217, plus the symbol to print with it. A LABEL on the
+   * amounts this tenant already stores, never a conversion: nothing in this
+   * system converts between currencies and no exchange rate exists anywhere.
+   */
+  currency_code: string
+  currency_symbol: string
   is_active: boolean
   commission_plan_type: CommissionPlanType
   user_count: number
@@ -151,7 +174,10 @@ async function loadCompanies() {
     hasLoadedOnce.value = true
   }
 }
-onMounted(loadCompanies)
+onMounted(() => {
+  void loadCompanies()
+  void loadCurrencies()
+})
 
 function slugify(name: string): string {
   return name
@@ -161,11 +187,41 @@ function slugify(name: string): string {
     .replace(/(^-|-$)/g, '')
 }
 
+/* ── The currencies a tenant may be denominated in ──────────────────────────
+ *
+ * Loaded once for the screen. A failure is swallowed and leaves the list
+ * empty, which collapses the picker to a read-only line saying the current
+ * code: a dropdown that could not load its options must not offer a shorter
+ * list, because picking from it would re-denominate a company to whichever
+ * option happened to survive.
+ */
+const currencies = ref<CurrencyOption[]>([])
+const defaultCurrency = ref('THB')
+
+async function loadCurrencies(): Promise<void> {
+  try {
+    const r = await api.get<{ data: CurrencyOption[]; default: string }>('/currencies')
+    currencies.value = r.data ?? []
+    defaultCurrency.value = r.default ?? 'THB'
+    // The create form is seeded with a literal so it is never bound to an
+    // empty <select>; once the server has answered, its default is the one
+    // that stands. Preselecting the wrong code would let an admin provision a
+    // tenant in a currency they never chose by not touching the field.
+    createForm.value.currency_code = defaultCurrency.value
+  } catch {
+    currencies.value = []
+  }
+}
+
 // ── Create form ──
 const showCreateForm = ref(false)
-const createForm = ref<{ name: string; slug: string; commission_plan_type: CommissionPlanType }>({
+const createForm = ref<{ name: string; slug: string; currency_code: string; commission_plan_type: CommissionPlanType }>({
   name: '',
   slug: '',
+  // Seeded from the server's own default rather than a literal 'THB': the
+  // company this system was built for is Thai, but the default is a server
+  // fact and only one place should assert it.
+  currency_code: 'THB',
   commission_plan_type: 'unilevel',
 })
 const creating = ref(false)
@@ -176,9 +232,10 @@ async function submitCreate() {
     await api.post('/companies', {
       name: createForm.value.name,
       slug: createForm.value.slug || slugify(createForm.value.name),
+      currency_code: createForm.value.currency_code,
       commission_plan_type: createForm.value.commission_plan_type,
     })
-    createForm.value = { name: '', slug: '', commission_plan_type: 'unilevel' }
+    createForm.value = { name: '', slug: '', currency_code: defaultCurrency.value, commission_plan_type: 'unilevel' }
     showCreateForm.value = false
     await reloadAll()
   } catch (e) {
@@ -201,6 +258,7 @@ const editingId = ref<number | null>(null)
 const editForm = ref<{
   name: string
   slug: string
+  currency_code: string
   payment_promptpay_id: string
   payment_bank_name: string
   payment_bank_account_number: string
@@ -225,6 +283,7 @@ function startEdit(company: CompanyItem) {
   editForm.value = {
     name: company.name,
     slug: company.slug,
+    currency_code: company.currency_code,
     payment_promptpay_id: company.payment_promptpay_id ?? '',
     payment_bank_name: company.payment_bank_name ?? '',
     payment_bank_account_number: company.payment_bank_account_number ?? '',
@@ -310,6 +369,13 @@ async function saveEdit(company: CompanyItem) {
     await api.put(`/companies/${company.id}`, {
       name: form.name.trim(),
       slug: form.slug.trim(),
+      /*
+       * Sent on every save, including one that did not touch it. It is not
+       * nullable and has no "unset" state, so the round-trip is lossless —
+       * and omitting it conditionally would be one more branch to get wrong
+       * on the one field that decides what every amount in this tenant means.
+       */
+      currency_code: form.currency_code,
       // Empty means "not recorded", which is a real answer on the public
       // payment page — it simply omits that line. Sending '' would store a
       // blank string that reads as configured and prints as nothing.
@@ -412,6 +478,17 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
       <div>
         <label class="text-xs font-bold text-slate-500">Slug (ไม่บังคับ — สร้างอัตโนมัติจากชื่อ)</label>
         <input v-model="createForm.slug" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+      </div>
+      <!-- Chosen at provisioning so a non-Thai tenant never has a day of
+           amounts labelled ฿. Omitted entirely when the list did not load —
+           the server's own default applies, which is the honest fallback. -->
+      <div v-if="currencies.length" class="col-span-2">
+        <label class="text-xs font-bold text-slate-500">สกุลเงิน</label>
+        <select v-model="createForm.currency_code" data-test="create-currency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+          <option v-for="cur in currencies" :key="`create-${cur.code}`" :value="cur.code">
+            {{ cur.code }} — {{ cur.name }} ({{ cur.symbol }})
+          </option>
+        </select>
       </div>
       <div class="col-span-2">
         <label class="text-xs font-bold text-slate-500">รูปแบบค่าแนะนำ (เลือกได้ 1 แบบต่อบริษัท)</label>
@@ -518,6 +595,47 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
               </p>
               <p v-else class="mt-1 text-xs text-slate-400">
                 ใช้เป็นลิงก์สมัครและเข้าสู่ระบบของบริษัทนี้
+              </p>
+            </div>
+
+            <!--
+              ═══ 2026-09-19 — THE TENANT'S CURRENCY ═══
+
+              A LABEL on the amounts this company already stores. Changing it
+              does NOT convert anything and no exchange rate exists anywhere in
+              this system — the same stored numbers simply start being printed
+              with a different symbol. Said in as many words under the control,
+              because the opposite assumption is the obvious one and it is the
+              kind of mistake that is only noticed at a payout.
+
+              Only currencies with two decimal places are offered. BR-3 stores
+              satang — hundredths — and every formatter in both apps divides by
+              100, so a 0-decimal currency would make every figure a hundred
+              times the real one, silently. The list comes from the server so
+              there is exactly one copy of that restriction.
+
+              A failed load collapses this to a read-only line: a dropdown that
+              lost its options must not let somebody pick from the remainder.
+            -->
+            <div class="sm:col-span-2">
+              <label class="text-xs font-bold text-slate-500">สกุลเงินของบริษัทนี้</label>
+              <select
+                v-if="currencies.length"
+                v-model="editForm.currency_code"
+                data-test="edit-currency"
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+              >
+                <option v-for="cur in currencies" :key="cur.code" :value="cur.code">
+                  {{ cur.code }} — {{ cur.name }} ({{ cur.symbol }})
+                </option>
+              </select>
+              <p v-else class="mt-1 text-sm font-bold text-slate-700" data-test="edit-currency-readonly">
+                {{ c.currency_code }} ({{ c.currency_symbol }})
+                <span class="ml-1 text-xs font-normal text-rose-600">— โหลดรายการสกุลเงินไม่สำเร็จ จึงยังเปลี่ยนไม่ได้</span>
+              </p>
+              <p class="mt-1 text-xs text-slate-400">
+                เปลี่ยนแล้ว<b>ไม่แปลงค่าเงิน</b> — ตัวเลขเดิมทั้งหมดคงเดิม เปลี่ยนแค่สัญลักษณ์ที่แสดง ·
+                ระบบไม่มีอัตราแลกเปลี่ยน
               </p>
             </div>
 

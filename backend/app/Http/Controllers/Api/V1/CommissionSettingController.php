@@ -73,6 +73,17 @@ class CommissionSettingController extends Controller
             $planType === null ? null : CommissionPlanType::from($planType),
             $overrideMode === null ? null : CommissionOverrideMode::from($overrideMode),
             $request->user(),
+            /*
+             * 2026-09-19 — `has()` and not `validated(...) !== null`, because
+             * for this one setting an explicit null is a real instruction
+             * ("no cap") and must be distinguishable from "not mentioned".
+             * The three above have no unset state, so they can use absence.
+             */
+            $request->has('max_override_depth'),
+            $request->validated('max_override_depth'),
+            $request->has('override_compression')
+                ? $request->boolean('override_compression')
+                : null,
         ));
     }
 }

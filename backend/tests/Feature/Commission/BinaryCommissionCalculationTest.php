@@ -135,10 +135,20 @@ class BinaryCommissionCalculationTest extends TestCase
         $this->assertDatabaseHas('binary_leg_volumes', ['agent_id' => $manager->id, 'left_volume_satang' => 500000]);
     }
 
-    public function test_a_product_level_binary_override_credits_volume_even_when_company_default_is_unilevel(): void
+    /**
+     * REVERSED 2026-09-19. Until today this asserted that a product carrying
+     * `commission_plan_type = binary` credited leg volume even though its
+     * company ran Unilevel — TASK-027's per-product override, working as
+     * designed. Owner, 2026-09-19, closed that override ("ปิดช่องตั้งแผน
+     * ต่อสินค้า"), so the same setup must now credit NOTHING.
+     *
+     * This is the money half of that change and the reason the test was
+     * rewritten rather than removed: a leg that accepts volume from a product
+     * on another plan makes the matching cycle pay from a total nobody can
+     * explain, into ledger rows BR-4 forbids correcting.
+     */
+    public function test_a_product_carrying_binary_credits_nothing_when_the_company_runs_unilevel(): void
     {
-        // ADR-011/TASK-027 integration — company stays on its default
-        // (Unilevel), but this one product is overridden to Binary.
         $company = Company::factory()->create(['commission_plan_type' => CommissionPlanType::Unilevel->value]);
         $manager = User::factory()->agent()->create(['company_id' => $company->id]);
         $agent = User::factory()->agent()->create(['company_id' => $company->id, 'manager_id' => $manager->id, 'binary_leg' => BinaryLeg::Right->value]);
@@ -157,7 +167,8 @@ class BinaryCommissionCalculationTest extends TestCase
         ]);
         $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
 
-        $this->assertDatabaseHas('binary_leg_volumes', ['agent_id' => $manager->id, 'right_volume_satang' => 300000]);
+        // The company runs Unilevel, so the Binary engine never ran at all.
+        $this->assertDatabaseCount('binary_leg_volumes', 0);
     }
 
     public function test_running_due_cycles_creates_a_matched_ledger_entry_at_the_configured_rate(): void

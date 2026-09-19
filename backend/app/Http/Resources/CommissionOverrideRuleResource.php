@@ -15,6 +15,8 @@ class CommissionOverrideRuleResource extends JsonResource
         return [
             'id' => $this->id,
             'company_id' => $this->company_id,
+            // 2026-09-19 — which hop this rate prices; null = every level.
+            'level' => $this->level,
             // TASK-214 — the scope pair, same shape CommissionRuleResource
             // uses, so the Admin UI can render one list of both kinds of
             // rate with one label function.

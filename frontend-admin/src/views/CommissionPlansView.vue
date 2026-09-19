@@ -130,6 +130,13 @@ import RateResolutionMatrix, { type ResolutionRow } from '@/design-system/compon
  */
 import RateImpactPreview from '@/design-system/components/RateImpactPreview.vue'
 import PlanShapePreview from '@/design-system/components/PlanShapePreview.vue'
+/*
+ * §7 — a setting whose consequence is real money does not print a paragraph
+ * next to the field; it gets an ⓘ. Three of the controls added on 2026-09-19
+ * qualify (the per-level rate, compression, and withholding tax), and each of
+ * them changes what a real person is paid.
+ */
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -549,6 +556,16 @@ interface CommissionOverrideRuleItem {
   // ("ไม่ต้องผูก") — kept so a pre-TASK-214 row can still explain itself
   // in this list while an operator collapses it.
   manager_cert_tier: CertTierOption | null
+  /*
+   * 2026-09-19 — WHICH LEVEL of the chain this rate prices, or null for
+   * "every level nobody priced".
+   *
+   * Null is the catch-all and is what every rate that exists today is, so a
+   * company that never uses levels keeps one rate paid all the way up — see
+   * the migration. A levelled row beats the catch-all at its own level only;
+   * they are not alternatives and a company may sensibly hold both.
+   */
+  level: number | null
   rate_type: RateType
   rate_value: number
   /*
@@ -856,6 +873,17 @@ const overrideForm = ref({
   scope: 'company' as RuleScope,
   product_id: '' as number | '',
   product_category_id: '' as number | '',
+  /*
+   * 2026-09-19 — which level this rate prices. '' = every level (the
+   * catch-all, and what every rate that exists today is).
+   *
+   * A string for the same reason override_mode below is: it is bound to an
+   * <input>, whose empty value is '', and mapping it to null happens once on
+   * submit. Coalescing early would turn "every level" into level 0, which the
+   * server would reject as below min:1 — a refusal with no explanation for a
+   * field the admin deliberately left blank.
+   */
+  level: '' as string | number,
   rate_type: 'percentage' as RateType,
   rate_value_input: '' as string | number,
   // '' = follow the company (the default, and where nearly every rate stays).
@@ -899,6 +927,16 @@ const overrideFormFallbackFrom = ref(todayIso())
  * without cancelling and hunting for the right button — a form that locks you
  * out of your own mistake is the dead end this whole screen keeps removing.
  */
+/**
+ * The deepest level a company may price a rate for.
+ *
+ * Mirrors StoreCommissionOverrideRuleRequest::MAX_PRICEABLE_LEVEL exactly. A
+ * sanity ceiling, NOT a business rule (BR-7 does not apply): no published plan
+ * pays a hundred levels, and the number exists so a typo of "1000" is refused
+ * as a typo rather than stored as a ladder nobody can read.
+ */
+const MAX_PRICEABLE_LEVEL = 100
+
 const overrideFormScopeLocked = ref(false)
 const ruleFormScopeLocked = ref(false)
 const ruleFormFallbackFrom = ref(todayIso())
@@ -913,6 +951,7 @@ function resetOverrideForm(): void {
     scope: 'company',
     product_id: '',
     product_category_id: '',
+    level: '',
     rate_type: 'percentage',
     rate_value_input: '',
     override_mode: '',
@@ -965,6 +1004,9 @@ function openEditOverrideForm(r: CommissionOverrideRuleItem): void {
     scope: r.product ? 'product' : r.product_category ? 'category' : 'company',
     product_id: r.product?.id ?? '',
     product_category_id: r.product_category?.id ?? '',
+    // null → '' so the field reads "every level" rather than 0, which is the
+    // one value the server refuses (min:1).
+    level: r.level ?? '',
     rate_type: r.rate_type,
     // Both units are stored ×100 (basis points / satang), so one inverse
     // covers both — same asymmetry rateValueToBasisOrSatang() relies on.
@@ -990,6 +1032,30 @@ async function submitOverrideRule(): Promise<void> {
 
     return
   }
+  /*
+   * 2026-09-19 — the level, validated HERE as well as on the server.
+   *
+   * The server's min:1/max:100 refusal arrives as a field error under a
+   * different name than the one the admin typed into on some browsers, and
+   * "0" is the value somebody reaches for when they mean "all levels" — which
+   * this form spells as empty. Saying so here, before the request, is the
+   * difference between a corrected field and an admin retyping a percentage.
+   */
+  const levelRaw = String(overrideForm.value.level ?? '').trim()
+  let level: number | null = null
+
+  if (levelRaw !== '') {
+    const parsed = Number(levelRaw)
+
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_PRICEABLE_LEVEL) {
+      overrideFormError.value = `ชั้นต้องเป็นจำนวนเต็ม 1–${MAX_PRICEABLE_LEVEL} · เว้นว่าง = ใช้กับทุกชั้น`
+
+      return
+    }
+
+    level = parsed
+  }
+
   savingOverride.value = true
   overrideFormError.value = ''
   try {
@@ -999,12 +1065,25 @@ async function submitOverrideRule(): Promise<void> {
       // column, and an absent key would leave it in place.
       product_id: scope === 'product' ? Number(overrideForm.value.product_id) : null,
       product_category_id: scope === 'category' ? Number(overrideForm.value.product_category_id) : null,
+      // Same explicit-null rule: an edit that turns a levelled rate back into
+      // the catch-all has to clear the column.
+      level,
       rate_type: overrideForm.value.rate_type,
       rate_value: rateValueToBasisOrSatang(overrideForm.value.rate_type, overrideForm.value.rate_value_input),
-      // Explicit null for the same reason as the scope columns above: an edit
-      // that puts a rate BACK onto the company's setting has to clear the
-      // column, and an absent key would leave the old mode in place.
-      override_mode: overrideForm.value.override_mode || null,
+      /*
+       * Explicit null for the same reason as the scope columns above: an edit
+       * that puts a rate BACK onto the company's setting has to clear the
+       * column, and an absent key would leave the old mode in place.
+       *
+       * 2026-09-19 — and ALWAYS null on a levelled rate, which the server
+       * refuses to accept alongside a level (prohibitedIf). One walk up one
+       * chain has one funding model; letting level 2 deduct from the seller
+       * while level 1 was paid by the company would make the seller's own row
+       * depend on how deep their upline happened to go. The control is hidden
+       * in that case, but a stale value left in the form state would still be
+       * sent, so it is cleared here rather than trusted to be untouched.
+       */
+      override_mode: level === null ? overrideForm.value.override_mode || null : null,
       effective_from: overrideForm.value.effective_from,
       effective_to: overrideForm.value.effective_to || null,
     }
@@ -1383,6 +1462,18 @@ function leaderRowLabel(r: CommissionOverrideRuleItem): string {
 }
 
 /**
+ * 2026-09-19 — 'ชั้นที่ 2' / 'ทุกชั้น', for the badge on a leader-rate row.
+ *
+ * Every row gets one, including the catch-all. A screen that labelled only
+ * the levelled rows would leave an admin reading the unlabelled ones as
+ * "level 1" — which is the opposite of what a null level means, and the
+ * difference between paying one person and paying the whole chain.
+ */
+function leaderLevelLabel(r: CommissionOverrideRuleItem): string {
+  return r.level === null ? 'ทุกชั้น' : `ชั้นที่ ${r.level}`
+}
+
+/**
  * The three boxes, in the order they are SET in (broadest first) rather than
  * the order the server RESOLVES in (narrowest first).
  *
@@ -1625,6 +1716,8 @@ async function loadCompanySettings(): Promise<void> {
     overrideMode.value = 'additive'
     overrideModeUnknown.value = false
     deepestManagerChain.value = 0
+    maxOverrideDepth.value = ''
+    overrideCompression.value = false
     houseAccount.value = null
     uncertifiedLeaders.value = EMPTY_LEADER_WARNING
 
@@ -1637,6 +1730,8 @@ async function loadCompanySettings(): Promise<void> {
         commission_plan_type?: CommissionPlanType | null
         commission_override_mode?: CommissionOverrideMode
         deepest_manager_chain?: number
+        max_override_depth?: number | null
+        override_compression?: boolean
         commission_house_account?: HouseAccount | null
         leaders_missing_certification?: LeaderWarning
       }
@@ -1645,6 +1740,10 @@ async function loadCompanySettings(): Promise<void> {
     companyPlanTypeFromServer.value = r.data.commission_plan_type ?? null
     basisUnknown.value = false
     overrideMode.value = r.data.commission_override_mode ?? 'additive'
+    // null → '' — "no cap" is a real setting and the field must render empty
+    // for it, never a 0 that a later save would send back as "pay nobody".
+    maxOverrideDepth.value = r.data.max_override_depth ?? ''
+    overrideCompression.value = r.data.override_compression === true
     // Server-computed and never inferred here: the screen shows the maximum
     // leader rate from this number, and a guess would print a ceiling the
     // save-time refusal then disagrees with.
@@ -1661,6 +1760,12 @@ async function loadCompanySettings(): Promise<void> {
     // Same reason, one card further on — see overrideModeUnknown.
     overrideModeUnknown.value = true
     deepestManagerChain.value = 0
+    // Cleared, not left stale: an empty depth field means "no cap" on this
+    // screen, so leaving the previous company's number would be worse, and
+    // keeping this company's unread value would be a claim nobody verified.
+    // overrideModeUnknown already puts the whole card into its loud state.
+    maxOverrideDepth.value = ''
+    overrideCompression.value = false
     houseAccount.value = null
     /*
      * Cleared, never left stale. A warning naming people is a warning an
@@ -2390,6 +2495,123 @@ async function setOverrideMode(next: CommissionOverrideMode): Promise<void> {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-19 — HOW MANY LEVELS, AND WHO INHERITS A SKIPPED ONE.
+ *
+ * Two settings that only mean anything under Unilevel, because it is the only
+ * plan whose payout walks the manager chain level by level
+ * (CommissionService::resolveUnilevelOverrides). Affiliate pays one level and
+ * has no ladder; Binary, Matrix, Stairstep and Generation each have their own
+ * structure tab. Showing these controls on those plans would offer an admin a
+ * knob that does nothing, which is the failure this whole screen exists to
+ * remove.
+ *
+ * NEITHER IS DEFAULTED ON THE CLIENT. An empty depth is "as far as the chain
+ * goes" — what every company does today — and the field renders empty for it
+ * rather than showing a ceiling nobody set.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const maxOverrideDepth = ref<string | number>('')
+const overrideCompression = ref(false)
+const depthSaving = ref(false)
+const depthMessage = ref('')
+const compressionSaving = ref(false)
+
+/** Unilevel only — see the block comment above. */
+const levelLadderApplies = computed(() => companyPlanType.value === 'unilevel')
+
+async function saveMaxOverrideDepth(): Promise<void> {
+  if (!effectiveCompanyId.value || depthSaving.value) return
+
+  depthMessage.value = ''
+  const raw = String(maxOverrideDepth.value ?? '').trim()
+  let depth: number | null = null
+
+  if (raw !== '') {
+    const parsed = Number(raw)
+
+    /*
+     * 0 is refused rather than accepted as "pay nobody". A company that wants
+     * to stop paying leaders removes the rates or sets the mode; a cap of zero
+     * would achieve the same thing silently, through a field whose empty state
+     * already means something else entirely.
+     */
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_PRICEABLE_LEVEL) {
+      depthMessage.value = `จำนวนชั้นต้องเป็นจำนวนเต็ม 1–${MAX_PRICEABLE_LEVEL} · เว้นว่าง = จ่ายขึ้นไปทั้งสาย`
+
+      return
+    }
+
+    depth = parsed
+  }
+
+  depthSaving.value = true
+  try {
+    // Sent as an explicit null, never omitted: on this endpoint absence means
+    // "leave the cap alone" and null means "remove it", and the admin clearing
+    // the field means the second.
+    await commissionApi.put('/commission-settings', withCompanyBody({ max_override_depth: depth }))
+    depthMessage.value = depth === null ? 'บันทึกแล้ว — จ่ายขึ้นไปทั้งสาย' : `บันทึกแล้ว — จ่าย ${depth} ชั้น`
+    void loadResolution()
+  } catch (e) {
+    depthMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    depthSaving.value = false
+  }
+}
+
+async function setOverrideCompression(next: boolean): Promise<void> {
+  if (!effectiveCompanyId.value || compressionSaving.value || next === overrideCompression.value) return
+
+  compressionSaving.value = true
+  overrideModeError.value = ''
+  try {
+    await commissionApi.put('/commission-settings', withCompanyBody({ override_compression: next }))
+    overrideCompression.value = next
+  } catch (e) {
+    overrideModeError.value = apiErrorMessage(e, 'เปลี่ยนการเลื่อนชั้นไม่สำเร็จ')
+  } finally {
+    compressionSaving.value = false
+  }
+}
+
+/**
+ * The per-level rates a company has actually priced, lowest level first.
+ *
+ * Read off the SAME list the boxes below render, not a second request: a
+ * screen that fetched its own copy of the rates would be a second answer to
+ * "what is set", and the last time this file kept a private copy of a
+ * resolution ladder it displayed one company's rate on another's product.
+ */
+const levelledOverrideRules = computed<CommissionOverrideRuleItem[]>(() =>
+  byCompany(commissionOverrideRules.value)
+    .filter((r) => r.level !== null && r.product === null && r.product_category === null)
+    .sort((a, b) => (a.level ?? 0) - (b.level ?? 0)),
+)
+
+/**
+ * The levels between 1 and the deepest priced one that nobody priced, when
+ * there is no catch-all to cover them.
+ *
+ * A gap is not an error — the server pays the levels above it as normal
+ * (UnilevelPerLevelRatesTest pins that) — but it is almost never intended, and
+ * nothing else on this screen would say so: the box lists the rows that exist,
+ * and a missing level has no row to look at.
+ */
+const levelGaps = computed<number[]>(() => {
+  if (!levelledOverrideRules.value.length) return []
+  if (hasCompanyWideLeaderRate.value && companyLeaderRules.value.some((r) => r.level === null)) return []
+
+  const priced = new Set(levelledOverrideRules.value.map((r) => r.level as number))
+  const deepest = Math.max(...priced)
+  const gaps: number[] = []
+
+  for (let level = 1; level <= deepest; level++) {
+    if (!priced.has(level)) gaps.push(level)
+  }
+
+  return gaps
+})
+
+/* ═══════════════════════════════════════════════════════════════════════
  * 2026-09-13 — THE WITHDRAWAL MINIMUM, MOVED HERE (step 4).
  *
  * Owner: "ยอดขั้นต่ำในการเบิก ปรับมาเป็น UI หน้านี้หน้าเดียวให้จบ นำของเก่า
@@ -2419,6 +2641,8 @@ async function loadMinWithdrawal(): Promise<void> {
   if (!effectiveCompanyId.value) {
     minWithdrawalBaht.value = ''
     minWithdrawalUnknown.value = false
+    whtRatePercent.value = ''
+    whtUnknown.value = false
 
     return
   }
@@ -2426,9 +2650,14 @@ async function loadMinWithdrawal(): Promise<void> {
   minWithdrawalLoading.value = true
   minWithdrawalMessage.value = ''
   try {
-    const r = await api.get<{ min_withdrawal_satang: number | null }>(
+    const r = await api.get<{ min_withdrawal_satang: number | null; wht_rate: number | null }>(
       `/commission-withdrawal-settings${companyQuery()}`,
     )
+    // One request, two settings — they share an endpoint. Same "empty is a
+    // real answer" rule applies to both, for different reasons: no floor, and
+    // no withholding.
+    whtRatePercent.value = r.wht_rate === null || r.wht_rate === undefined ? '' : (r.wht_rate / 100).toString()
+    whtUnknown.value = false
     // EMPTY MEANS NO MINIMUM, and that is a real setting — bound to a string
     // so "" survives as null instead of collapsing into a 0 that would be
     // saved back as a floor of zero baht.
@@ -2436,9 +2665,116 @@ async function loadMinWithdrawal(): Promise<void> {
     minWithdrawalUnknown.value = false
   } catch {
     minWithdrawalUnknown.value = true
+    whtUnknown.value = true
   } finally {
     minWithdrawalLoading.value = false
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-19 — ภาษีหัก ณ ที่จ่าย.
+ *
+ * Entered as a PERCENT and stored as basis points (3 → 300), because that is
+ * how an accountant says it and how every other rate in this system is
+ * stored. The one conversion lives here, on submit, so nothing downstream has
+ * to remember which unit it is holding.
+ *
+ * EMPTY MEANS NO WITHHOLDING, and that is every company today. The rate
+ * itself is the owner's to supply (BR-7, and here it is also the law — which
+ * rate applies depends on the classification of the payment and on the
+ * payee), so nothing here defaults it, suggests one, or fills the field in
+ * for somebody who left it blank.
+ *
+ * Shares the endpoint — and therefore the Ability — with the withdrawal
+ * minimum above, so it is deliberately NOT gated on canEditCommissionConfig:
+ * a Company Admin the server would let save this must not be shown a
+ * read-only field.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const whtRatePercent = ref('')
+const whtSaving = ref(false)
+const whtMessage = ref('')
+/** Same loud-failure rule as the floor: a rate that would not load is not "no tax". */
+const whtUnknown = ref(false)
+
+async function saveWithholdingTax(): Promise<void> {
+  if (!effectiveCompanyId.value || whtSaving.value) return
+
+  whtMessage.value = ''
+  const trimmed = whtRatePercent.value.trim()
+  let basisPoints: number | null = null
+
+  if (trimmed !== '') {
+    const percent = Number(trimmed)
+
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+      whtMessage.value = 'อัตราภาษีต้องอยู่ระหว่าง 0–100%'
+
+      return
+    }
+
+    // Rounded, not truncated: this converts what the admin TYPED into the
+    // stored unit, and 3.005% typed is 300 or 301 basis points, never 300.5.
+    // The withholding arithmetic itself truncates, on the server, where the
+    // supplier flow already truncates the same obligation.
+    basisPoints = Math.round(percent * 100)
+  }
+
+  /*
+   * The floor travels with this save because the endpoint requires it to be
+   * present — so a floor the admin has typed but not yet saved, and left
+   * invalid, would otherwise be sent as null and DELETE a floor they never
+   * touched. Refused instead, naming the other field.
+   */
+  const floor = minWithdrawalSatangFromForm()
+
+  if (!floor.valid) {
+    whtMessage.value = 'ยอดขั้นต่ำในการเบิก (ช่องด้านบน) ไม่ถูกต้อง — แก้ก่อนจึงจะบันทึกอัตราภาษีได้'
+
+    return
+  }
+
+  whtSaving.value = true
+  try {
+    // Explicit null, never omitted: absence means "leave it alone" on this
+    // endpoint, and an admin clearing the field means "no withholding".
+    await api.put(`/commission-withdrawal-settings${companyQuery()}`, {
+      // Sent alongside because the endpoint's own rule is that the floor is
+      // `present`-required; sending only the tax would be refused.
+      min_withdrawal_satang: floor.satang,
+      wht_rate: basisPoints,
+    })
+    whtMessage.value = basisPoints === null ? 'บันทึกแล้ว — ไม่หักภาษี' : `บันทึกแล้ว — หัก ${(basisPoints / 100).toString()}%`
+    whtUnknown.value = false
+  } catch (e) {
+    whtMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    whtSaving.value = false
+  }
+}
+
+/**
+ * The floor as the form currently holds it, in satang — and whether it is
+ * readable at all.
+ *
+ * Extracted so the tax save can send the floor UNCHANGED rather than omitting
+ * it (the endpoint requires `min_withdrawal_satang` to be present). The
+ * `valid` flag is the point: an unreadable field must NOT collapse into null,
+ * because null is a real instruction on this endpoint — "no minimum" — and
+ * obeying it would delete a floor the admin never touched while they were
+ * saving a different setting.
+ *
+ * Empty IS valid, and means exactly that: no minimum.
+ */
+function minWithdrawalSatangFromForm(): { valid: boolean; satang: number | null } {
+  const trimmed = minWithdrawalBaht.value.trim()
+
+  if (trimmed === '') return { valid: true, satang: null }
+
+  const baht = Number(trimmed)
+
+  if (!Number.isFinite(baht) || baht < 0) return { valid: false, satang: null }
+
+  return { valid: true, satang: Math.round(baht * 100) }
 }
 
 async function saveMinWithdrawal(): Promise<void> {
@@ -3781,7 +4117,24 @@ const matrixPreviewGrid = computed(() => {
 
 // ══════════════════════════ Agent Ranks / Stairstep-Breakaway (TASK-031) ══════════════════════════
 type RecalcFrequency = 'daily' | 'weekly' | 'monthly'
-interface AgentRankSettingsData { trailing_window_days: number; recalculation_frequency: RecalcFrequency }
+/**
+ * 2026-09-19 — WHOSE sales decide an agent's rank.
+ *
+ * 'personal' is today's behaviour and the column default: only what the agent
+ * sold themselves. 'group' adds everyone below them in the manager tree.
+ *
+ * It matters more than it looks under Stairstep, which pays the DIFFERENCE
+ * between a manager's rank rate and their downline's: on personal-only, a
+ * leader who recruits instead of selling falls behind the people under them,
+ * the differential goes to zero, and no ledger row is written at all.
+ */
+type RankVolumeScope = 'personal' | 'group'
+
+interface AgentRankSettingsData {
+  trailing_window_days: number
+  volume_scope?: RankVolumeScope
+  recalculation_frequency: RecalcFrequency
+}
 interface AgentRankItem {
   id: number
   company_id: number
@@ -3794,12 +4147,23 @@ interface AgentRankItem {
 }
 const agentRankSettings = ref<AgentRankSettingsData | null>(null)
 const agentRanks = ref<AgentRankItem[]>([])
-const rankSettingsForm = ref({ trailing_window_days: '' as string | number, recalculation_frequency: 'monthly' as RecalcFrequency })
+const rankSettingsForm = ref({
+  trailing_window_days: '' as string | number,
+  volume_scope: 'personal' as RankVolumeScope,
+  recalculation_frequency: 'monthly' as RecalcFrequency,
+})
 const savingRankSettings = ref(false)
 const rankError = ref('')
 function syncRankSettingsForm(s: AgentRankSettingsData | null) {
   if (!s) return
-  rankSettingsForm.value = { trailing_window_days: s.trailing_window_days, recalculation_frequency: s.recalculation_frequency }
+  rankSettingsForm.value = {
+    trailing_window_days: s.trailing_window_days,
+    // Coalesced to 'personal', which is what the engine does for a row that
+    // predates the column — see AgentRankSetting::volumeScope(). The screen
+    // must show what WILL happen, not "nothing is set".
+    volume_scope: s.volume_scope ?? 'personal',
+    recalculation_frequency: s.recalculation_frequency,
+  }
 }
 async function submitRankSettings() {
   savingRankSettings.value = true
@@ -3809,6 +4173,7 @@ async function submitRankSettings() {
       `/agent-rank-settings${companyQuery()}`,
       withCompanyBody({
         trailing_window_days: Number(rankSettingsForm.value.trailing_window_days),
+        volume_scope: rankSettingsForm.value.volume_scope,
         recalculation_frequency: rankSettingsForm.value.recalculation_frequency,
       }),
     )
@@ -4817,6 +5182,62 @@ watch(companyPlanType, (pt) => {
                         <option value="weekly">รายสัปดาห์</option>
                         <option value="monthly">รายเดือน</option>
                       </select>
+                    </div>
+
+                    <!--
+                      2026-09-19 — WHOSE YODS COUNT. The setting that decides
+                      whether this plan can pay a leader at all.
+
+                      Stairstep pays the DIFFERENCE between a manager's rank
+                      rate and their downline's. On personal-only volume a
+                      leader who recruits instead of selling falls behind the
+                      people under them, the differential goes to zero or
+                      negative, and NO LEDGER ROW IS WRITTEN — the plan quietly
+                      stops paying the person it exists to pay, and
+                      is_breakaway_rank becomes unreachable, which leaves
+                      Generation with no breakaway legs to count.
+
+                      Default stays 'personal' because that is what every
+                      company on this system computes today (BR-7: which one a
+                      company promises its agents is theirs to decide).
+                    -->
+                    <div class="col-span-2">
+                      <label class="text-sm font-bold text-slate-500">
+                        นับยอดของใคร
+                        <InfoPopover label="นับยอดของใคร">
+                          <p>
+                            <b>เฉพาะยอดตัวเอง (ค่าเริ่มต้น):</b> นับเฉพาะดีลที่คนนั้นปิดเอง —
+                            เป็นแบบที่ระบบคิดอยู่ตอนนี้ทุกบริษัท
+                          </p>
+                          <p class="mt-2">
+                            <b>ยอดทั้งทีม:</b> นับยอดตัวเอง <u>บวก</u> ยอดของทุกคนที่อยู่ใต้สายงาน
+                          </p>
+                          <p class="mt-2">
+                            แผน Stairstep จ่าย<b>ส่วนต่าง</b>ระหว่างอัตราขั้นของหัวหน้ากับขั้นของลูกทีม
+                            ถ้านับเฉพาะยอดตัวเอง หัวหน้าที่หันไปสร้างทีมจะมีขั้นต่ำกว่าลูกทีม
+                            ส่วนต่างเป็นศูนย์ และ<b>ไม่มีการลงบัญชีเลย</b>
+                          </p>
+                          <p class="mt-2 text-slate-500">
+                            ถ้าเปลี่ยนมาเป็น "ยอดทั้งทีม" ควร<b>ปรับยอดขั้นต่ำของแต่ละขั้นให้สูงขึ้น</b>ด้วย —
+                            ตัวเลขนั้นเป็นของคุณกำหนด ระบบไม่ปรับให้เอง
+                          </p>
+                        </InfoPopover>
+                      </label>
+                      <select
+                        v-model="rankSettingsForm.volume_scope"
+                        data-test="rank-volume-scope"
+                        class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+                      >
+                        <option value="personal">เฉพาะยอดที่ขายเอง (ค่าเริ่มต้น — เท่าเดิม)</option>
+                        <option value="group">ยอดทั้งทีม (ยอดตัวเอง + ทุกคนใต้สายงาน)</option>
+                      </select>
+                      <p
+                        v-if="rankSettingsForm.volume_scope === 'group'"
+                        class="mt-1.5 text-[12px] font-bold text-amber-700"
+                        data-test="rank-volume-scope-warning"
+                      >
+                        ยอดของทุกคนจะสูงขึ้นทันทีที่คำนวณรอบถัดไป — ตรวจยอดขั้นต่ำของแต่ละขั้นข้างล่างก่อนบันทึก
+                      </p>
                     </div>
                   </fieldset>
                   <div v-if="canEditCommissionConfig" class="col-span-2 flex justify-end">
@@ -5936,6 +6357,123 @@ watch(companyPlanType, (pt) => {
                   สินค้า {{ leaderRateGaps.length }} รายการยังไม่มีอัตราหัวหน้าทีมที่ใช้ได้ — สมาชิกได้ตามปกติ แต่หัวหน้าจะไม่ได้ส่วนแบ่งจากดีลนั้น
                 </div>
 
+                <!--
+                  ═══ 4.2b — HOW FAR UP, AND WHO INHERITS A SKIPPED LEVEL ═══
+
+                  Unilevel only. It is the one plan whose payout walks the
+                  manager chain level by level
+                  (CommissionService::resolveUnilevelOverrides): Affiliate pays
+                  one level by definition, and Binary / Matrix / Stairstep /
+                  Generation each have their own structure tab. A knob that did
+                  nothing on four of six plans is exactly the confusion this
+                  screen exists to remove.
+
+                  Placed ABOVE the three rate boxes because it is the frame
+                  they sit in: "how many levels do we pay" has to be answered
+                  before "what does each one get", and an admin who sets three
+                  levels of rate under a cap of 1 has been allowed to do a
+                  contradictory thing quietly.
+
+                  Both controls are gated on canEditCommissionConfig, unlike
+                  the withdrawal floor below: they write through
+                  /commission-settings, which is Super-Admin-only.
+                -->
+                <div
+                  v-if="levelLadderApplies"
+                  class="mb-3 rounded-xl border border-amber-200 bg-white/70 p-3.5"
+                  data-test="step4-level-ladder"
+                >
+                  <p class="text-[13.5px] font-extrabold text-slate-900">
+                    <span class="text-slate-400 mr-1.5">4.2</span>จ่ายขึ้นไปกี่ชั้น
+                  </p>
+                  <p class="mt-0.5 text-[12px] text-slate-500">
+                    ทุกวันนี้จ่ายขึ้นไปทั้งสาย ไม่จำกัด · สายที่ลึกที่สุดของบริษัทตอนนี้คือ
+                    <b>{{ deepestManagerChain }}</b> ชั้น
+                  </p>
+
+                  <div class="mt-2.5 flex flex-wrap gap-2 max-w-md">
+                    <input
+                      v-model="maxOverrideDepth"
+                      type="number"
+                      min="1"
+                      :max="MAX_PRICEABLE_LEVEL"
+                      step="1"
+                      placeholder="เว้นว่าง = ทั้งสาย"
+                      :disabled="!canEditCommissionConfig || depthSaving"
+                      class="flex-1 min-w-[10rem] px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:opacity-60"
+                      data-test="override-depth-input"
+                    />
+                    <button
+                      v-if="canEditCommissionConfig"
+                      type="button"
+                      class="btn-primary"
+                      :disabled="depthSaving"
+                      data-test="override-depth-save"
+                      @click="saveMaxOverrideDepth"
+                    >
+                      {{ depthSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
+                    </button>
+                  </div>
+                  <p v-if="depthMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="override-depth-message">
+                    {{ depthMessage }}
+                  </p>
+
+                  <!--
+                    THE COMPRESSION SWITCH.
+
+                    A real difference in money, so it gets the ⓘ treatment (§7)
+                    rather than a paragraph: the gate that skips an uncertified
+                    manager is old behaviour, and this decides only what the
+                    NEXT manager up is then paid — the skipped person's rate, or
+                    the one after it. Both are plans real companies run.
+                  -->
+                  <div class="mt-3 pt-3 border-t border-amber-100 flex items-start gap-2.5" data-test="override-compression">
+                    <input
+                      id="override-compression-toggle"
+                      type="checkbox"
+                      :checked="overrideCompression"
+                      :disabled="!canEditCommissionConfig || compressionSaving"
+                      class="mt-0.5 h-4 w-4 rounded border-slate-300 disabled:opacity-60"
+                      data-test="override-compression-toggle"
+                      @change="setOverrideCompression(($event.target as HTMLInputElement).checked)"
+                    />
+                    <label for="override-compression-toggle" class="text-[12.5px] text-slate-700 leading-snug">
+                      <span class="font-bold">เลื่อนชั้นแทนคนที่ถูกข้าม</span>
+                      <InfoPopover label="เลื่อนชั้นแทนคนที่ถูกข้าม">
+                        <p>
+                          หัวหน้าที่ยังไม่ผ่านการอบรม (cert) จะถูก<b>ข้าม</b>และไม่ได้เงิน — อันนี้เป็นกติกาเดิม
+                          ไม่เกี่ยวกับสวิตช์นี้
+                        </p>
+                        <p class="mt-2">
+                          สวิตช์นี้ตอบว่า <b>คนถัดไปข้างบนจะได้อัตราของชั้นไหน</b>
+                        </p>
+                        <p class="mt-2">
+                          <b>ปิด (ค่าเริ่มต้น เท่าเดิมทุกอย่าง):</b> คนที่ถูกข้ามยังกินชั้นของตัวเอง —
+                          ผู้ขาย → A (ชั้น 1) → B ถูกข้าม (ชั้น 2) → C ได้อัตรา<b>ชั้นที่ 3</b>
+                        </p>
+                        <p class="mt-2">
+                          <b>เปิด:</b> ชั้นที่ถูกข้ามเลื่อนลงมา — C ได้อัตรา<b>ชั้นที่ 2</b> แทน
+                        </p>
+                        <p class="mt-2 text-slate-500">
+                          ตอนที่ทุกชั้นใช้อัตราเดียวกัน ความต่างนี้มองไม่เห็นเลย · พอตั้งอัตราต่อชั้นแล้ว
+                          มันคือส่วนต่างจริงที่ลงบัญชีค่าแนะนำแล้วแก้ย้อนหลังไม่ได้
+                        </p>
+                      </InfoPopover>
+                      <span v-if="compressionSaving" class="ml-1 text-[11px] text-slate-400">กำลังบันทึก...</span>
+                    </label>
+                  </div>
+
+                  <p
+                    v-if="levelGaps.length"
+                    class="mt-3 px-3 py-2 rounded-lg bg-amber-100/70 text-[12px] font-bold text-amber-800"
+                    data-test="level-gap-warning"
+                  >
+                    ยังไม่ได้ตั้งอัตราของชั้นที่ {{ levelGaps.join(', ') }} — ชั้นนั้นจะไม่ได้เงิน
+                    แต่ชั้นที่อยู่สูงกว่ายังได้ตามปกติ · ถ้าตั้งใจให้ชั้นที่เหลือได้เท่ากัน
+                    ให้เพิ่มอีกหนึ่งอัตราแบบ<b>เว้นช่องชั้นไว้</b>
+                  </p>
+                </div>
+
                 <div class="space-y-3">
                   <div
                     v-for="group in leaderRateGroups"
@@ -5987,6 +6525,16 @@ watch(companyPlanType, (pt) => {
                               :data-test="`leader-rule-date-status-${r.id}`"
                             >{{ ruleDateStatus(r) }}</span>
                             <span v-if="conflictingOverrideIds.has(r.id)" class="mr-2 px-2 py-0.5 rounded-md bg-rose-100 text-rose-700 text-[11px] align-middle">ซ้อนทับ</span>
+                            <!-- On EVERY row, including the catch-all: a badge
+                                 only on the levelled rows would leave an admin
+                                 reading the unlabelled ones as level 1, which
+                                 is the opposite of what null means. -->
+                            <span
+                              v-if="levelLadderApplies"
+                              class="mr-2 px-2 py-0.5 rounded-md text-[11px] align-middle"
+                              :class="r.level === null ? 'bg-slate-100 text-slate-500' : 'bg-indigo-100 text-indigo-700'"
+                              :data-test="`leader-rule-level-${r.id}`"
+                            >{{ leaderLevelLabel(r) }}</span>
                             {{ leaderRowLabel(r) }}
                             <span class="ml-1.5 text-amber-800">{{ formatRate(r.rate_type, r.rate_value) }}</span>
                             <!-- Shown only on legacy rows. A row created after
@@ -6138,6 +6686,81 @@ watch(companyPlanType, (pt) => {
                   <RouterLink :to="{ name: 'commission-withdrawals' }" class="font-bold text-brand-600 hover:underline" data-test="link-withdrawal-queue">
                     คำขอเบิกค่าแนะนำ →
                   </RouterLink>
+                </p>
+              </div>
+
+              <!--
+                ═══ 4.8 — ภาษีหัก ณ ที่จ่าย (2026-09-19) ═══
+
+                Same card, same endpoint and therefore the same Ability as 4.7
+                above: NOT gated on canEditCommissionConfig, because a Company
+                Admin holds SettingsCommissionWithdrawalUpdate and hiding a
+                control from somebody the server would let use it is the house
+                rule applied backwards.
+
+                THE RATE IS NOT SUGGESTED ANYWHERE ON THIS SCREEN. BR-7, and
+                this instance of it is the law rather than a preference: which
+                rate applies depends on how the payment is classified and on
+                whether the payee is an individual or a juristic person, and a
+                wrong number is a filing error with a penalty attached. The
+                placeholder is empty and the hint says who decides.
+
+                The card explains what does NOT change, which is the part
+                people get wrong: the tax never reduces what an agent earned or
+                what the ledger says, only what the bank sends.
+              -->
+              <div class="rounded-2xl border border-slate-200 bg-white p-4" data-test="step4-withholding-tax">
+                <p class="text-[15px] font-extrabold text-slate-900">
+                  <span class="text-slate-400 mr-1.5">4.8</span>ภาษีหัก ณ ที่จ่าย
+                  <InfoPopover label="ภาษีหัก ณ ที่จ่าย">
+                    <p>
+                      ตอนโอนเงินให้สมาชิก บริษัทหัก<b>ภาษี ณ ที่จ่าย</b>ไว้ แล้วนำส่งกรมสรรพากรในชื่อของสมาชิก
+                    </p>
+                    <p class="mt-2">
+                      <b>สิ่งที่ไม่เปลี่ยน:</b> ยอดค่าแนะนำที่สมาชิกหาได้ และตัวเลขในบัญชีค่าแนะนำ (ledger)
+                      ยังเป็น<b>ยอดเต็ม</b>เท่าเดิม · ภาษีไปลดเฉพาะ<b>ยอดที่โอนออกจากธนาคาร</b>
+                    </p>
+                    <p class="mt-2">
+                      ถ้าไปหักออกจากยอดที่หาได้ ยอดคงเหลือของสมาชิกกับหนังสือรับรองหักภาษีของเขาจะไม่ตรงกันตลอดไป
+                    </p>
+                    <p class="mt-2">
+                      อัตราจะถูก<b>บันทึกติดไปกับคำขอเบิกแต่ละใบ</b>ตอนที่เปิดคำขอ —
+                      เปลี่ยนอัตราทีหลังจะไม่ไปเปลี่ยนใบที่อนุมัติไปแล้ว
+                    </p>
+                  </InfoPopover>
+                </p>
+                <p class="mt-1 text-[12.5px] text-slate-500">
+                  กรอกเป็น <b>%</b> (เช่น 3 = 3%) · <b>เว้นว่าง = ไม่หักภาษี</b> (แบบที่ทุกบริษัทเป็นอยู่ตอนนี้)
+                </p>
+
+                <p v-if="whtUnknown" class="mt-2 text-[12.5px] font-bold text-rose-600" data-test="wht-unknown">
+                  อ่านค่าปัจจุบันไม่สำเร็จ — ยังไม่แสดงตัวเลข เพราะช่องว่างในนี้แปลว่า "ไม่หักภาษี" ซึ่งอาจไม่ใช่ค่าจริง
+                </p>
+                <div v-else class="mt-2.5 flex flex-wrap gap-2 max-w-md">
+                  <input
+                    v-model="whtRatePercent"
+                    type="text"
+                    inputmode="decimal"
+                    placeholder="เช่น 3"
+                    :disabled="minWithdrawalLoading || whtSaving"
+                    class="flex-1 min-w-[10rem] px-3 py-2 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:opacity-60"
+                    data-test="wht-input"
+                  />
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    :disabled="minWithdrawalLoading || whtSaving"
+                    data-test="wht-save"
+                    @click="saveWithholdingTax"
+                  >
+                    {{ whtSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
+                  </button>
+                </div>
+                <p v-if="whtMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="wht-message">
+                  {{ whtMessage }}
+                </p>
+                <p class="mt-2 text-[12px] text-slate-400">
+                  อัตราที่ถูกต้องขึ้นกับประเภทเงินได้และผู้รับเงิน — <b>ระบบไม่เดาให้</b> กรุณาใช้ตัวเลขจากฝ่ายบัญชีของคุณ
                 </p>
               </div>
 
@@ -6390,6 +7013,53 @@ watch(companyPlanType, (pt) => {
                 <option v-for="c in byCompany(productCategories)" :key="c.id" :value="c.id">{{ c.name }}</option>
               </select>
             </div>
+            <!--
+              2026-09-19 — WHICH LEVEL THIS RATE PRICES.
+
+              Unilevel only: it is the one plan whose payout walks the chain
+              level by level. Offering the field on Affiliate (one level by
+              definition) or on the plans with their own structure tab would be
+              a control that does nothing.
+
+              EMPTY IS THE DEFAULT AND IS A REAL ANSWER — one rate paid all the
+              way up, which is what every rate on this system is today. Spelled
+              out in the placeholder and the hint rather than left to be
+              inferred, because the value an admin reaches for when they mean
+              "all of them" is 0, and 0 is the one number the server refuses.
+            -->
+            <div v-if="levelLadderApplies" class="col-span-2">
+              <label class="text-sm font-bold text-slate-500">
+                ชั้นที่จ่าย
+                <InfoPopover label="ชั้นที่จ่าย">
+                  <p>
+                    แผน Unilevel จ่ายไล่ขึ้นไปทีละชั้น — หัวหน้าโดยตรงคือ <b>ชั้นที่ 1</b>,
+                    หัวหน้าของหัวหน้าคือ <b>ชั้นที่ 2</b> ไปเรื่อยๆ
+                  </p>
+                  <p class="mt-2">
+                    ใส่เลขชั้น = อัตรานี้ใช้กับชั้นนั้นชั้นเดียว (เช่น 10% / 5% / 3%) ·
+                    <b>เว้นว่าง = ใช้กับทุกชั้นที่ยังไม่ได้ตั้งอัตราเฉพาะ</b>
+                  </p>
+                  <p class="mt-2">
+                    ตั้งได้ทั้งสองแบบพร้อมกัน: ตั้งชั้นที่ 1 กับ 2 ไว้ชัดๆ แล้วเหลืออีกอันหนึ่งไม่ใส่เลขชั้น
+                    เพื่อเป็นค่ากลางของชั้นที่เหลือ
+                  </p>
+                </InfoPopover>
+              </label>
+              <input
+                v-model="overrideForm.level"
+                type="number"
+                min="1"
+                :max="MAX_PRICEABLE_LEVEL"
+                step="1"
+                placeholder="เว้นว่าง = ทุกชั้น"
+                data-test="override-form-level"
+                class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+              />
+              <p class="mt-1 text-[11.5px] text-slate-400">
+                เว้นว่าง = ใช้กับทุกชั้น (แบบเดิม) · ใส่เลข = ใช้กับชั้นนั้นชั้นเดียว
+              </p>
+            </div>
+
             <!-- TASK-213 — the field that did not exist. The old form sent
                  rate_type: 'percentage' unconditionally. -->
             <div>
@@ -6414,7 +7084,29 @@ watch(companyPlanType, (pt) => {
               one — so it keeps following the company when the company changes
               its mind, and the option says so in words.
             -->
-            <div class="col-span-2">
+            <!--
+              2026-09-19 — REPLACED BY A SENTENCE WHEN THE RATE HAS A LEVEL.
+
+              The server refuses override_mode alongside level
+              (prohibitedIf), because one walk up one chain has one funding
+              model: letting level 2 deduct from the seller while level 1 was
+              paid by the company would make the seller's own row depend on how
+              deep their upline happened to go.
+
+              Shown as an explanation rather than simply removed — a control
+              that vanishes when you type in another field reads as a bug, and
+              an admin who was about to change it needs to know why they no
+              longer can.
+            -->
+            <p
+              v-if="levelLadderApplies && String(overrideForm.level ?? '').trim() !== ''"
+              class="col-span-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-[12px] text-slate-500"
+              data-test="override-form-mode-locked"
+            >
+              อัตราที่ระบุชั้นจะใช้วิธีจ่ายของบริษัท ({{ overrideModeLabels[overrideMode] }}) เสมอ —
+              ทั้งสายต้องมาจากกระเป๋าเดียวกัน ไม่งั้นส่วนของผู้ขายจะขึ้นกับว่าสายบนลึกแค่ไหน
+            </p>
+            <div v-else class="col-span-2">
               <label class="text-sm font-bold text-slate-500">เงินของหัวหน้าทีมมาจากไหน (เฉพาะอัตรานี้)</label>
               <select v-model="overrideForm.override_mode" data-test="override-form-mode" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                 <option value="">ใช้ตามค่าเริ่มต้นของบริษัท — {{ overrideModeLabels[overrideMode] }}</option>

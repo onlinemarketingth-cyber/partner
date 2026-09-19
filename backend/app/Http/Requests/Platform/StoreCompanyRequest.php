@@ -4,7 +4,9 @@ namespace App\Http\Requests\Platform;
 
 use App\Enums\CommissionPlanType;
 use App\Models\Company;
+use App\Support\Money\SupportedCurrency;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Enum;
 
 // Only Super Admin can ever reach this (CompanyPolicy::create()) — a
@@ -26,6 +28,15 @@ class StoreCompanyRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255', 'alpha_dash', 'unique:companies,slug'],
             'is_active' => ['sometimes', 'boolean'],
+            /*
+             * 2026-09-19 — the tenant's currency, chosen at provisioning.
+             *
+             * Omitted takes the column default (THB), which is every company
+             * that exists today. Restricted to hundredth-based currencies:
+             * BR-3 stores satang and every formatter divides by 100. See
+             * App\Support\Money\SupportedCurrency.
+             */
+            'currency_code' => ['sometimes', 'string', 'size:3', Rule::in(SupportedCurrency::codes())],
             // ADR-006 Round 3/4 — defaults to unilevel (Company::commission_plan_type
             // migration default) when omitted. 'binary' is accepted here (schema
             // supports it) but has no working CommissionService yet — frontend-admin

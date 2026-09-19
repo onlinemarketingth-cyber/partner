@@ -29,6 +29,15 @@ use Illuminate\Validation\Rule;
 // simply omit it.
 class StoreCommissionOverrideRuleRequest extends FormRequest
 {
+    /**
+     * How deep a level may be priced. Not a business cap on how far the chain
+     * pays — that is `companies.max_override_depth`, and NULL there still
+     * means uncapped. This only stops a typo (level 9999) creating a row
+     * nothing will ever read; CommissionService's own circuit breaker sits at
+     * 100 hops for the same defensive reason.
+     */
+    public const MAX_PRICEABLE_LEVEL = 100;
+
     use ValidatesProductOwnership;
     use ValidatesProductTaxonomy;
 
@@ -96,7 +105,34 @@ class StoreCommissionOverrideRuleRequest extends FormRequest
              * Forcing a choice per rate would make every admin answer a
              * company-level question once per product.
              */
-            'override_mode' => ['sometimes', 'nullable', Rule::enum(CommissionOverrideMode::class)],
+            /*
+             * 2026-09-19 — which hop of the chain this rate prices.
+             *
+             * Omitted / null = every level, which is what every row written
+             * before today means and what keeps a company that never touches
+             * this computing exactly as before.
+             *
+             * `override_mode` is refused on a levelled row on purpose. The
+             * mode says who FUNDS the override — the company, the sale, or
+             * the seller's own commission — and one walk up one chain has one
+             * funding model. Letting level 2 deduct from the seller while
+             * level 1 was paid by the company would make the seller's own row
+             * depend on how deep their upline happened to go, which is not a
+             * rate question and has no honest answer.
+             */
+            'level' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                'min:1',
+                'max:'.self::MAX_PRICEABLE_LEVEL,
+            ],
+            'override_mode' => [
+                'sometimes',
+                'nullable',
+                Rule::prohibitedIf(fn () => $this->filled('level')),
+                Rule::enum(CommissionOverrideMode::class),
+            ],
             'effective_from' => ['required', 'date'],
             'effective_to' => ['nullable', 'date', 'after_or_equal:effective_from'],
         ];

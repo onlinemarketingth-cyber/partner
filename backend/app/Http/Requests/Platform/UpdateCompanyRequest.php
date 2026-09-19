@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Platform;
 
 use App\Models\Company;
+use App\Support\Money\SupportedCurrency;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -25,6 +26,25 @@ class UpdateCompanyRequest extends FormRequest
             'name' => ['sometimes', 'required', 'string', 'max:255'],
             'slug' => ['sometimes', 'required', 'string', 'max:255', 'alpha_dash', Rule::unique('companies', 'slug')->ignore($this->route('company'))],
             'is_active' => ['sometimes', 'boolean'],
+            /*
+             * 2026-09-19 — ISO 4217, the currency this tenant's money is in.
+             *
+             * `Rule::in(SupportedCurrency::codes())` and not a free string:
+             * every amount in this system is an integer number of HUNDREDTHS
+             * (BR-3 satang) and every formatter divides by 100, so a
+             * 0-decimal currency like JPY would make every stored figure a
+             * hundred times the real one, silently. The allowed list is
+             * restricted to hundredth-based currencies for that reason and
+             * the class says so at length.
+             *
+             * Editable rather than set-once, because a tenant provisioned
+             * before this existed has to be able to correct it. That is not a
+             * re-denomination: changing it relabels the same stored numbers,
+             * and nothing converts them — which is exactly why this is a
+             * Super-Admin-only endpoint and the change is audited by
+             * CompanyService like every other field here.
+             */
+            'currency_code' => ['sometimes', 'string', 'size:3', Rule::in(SupportedCurrency::codes())],
             /*
              * `commission_plan_type` AND `commission_basis` are both gone from
              * here as of 2026-09-12. Both are written by PUT

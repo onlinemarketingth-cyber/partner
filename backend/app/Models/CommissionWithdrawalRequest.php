@@ -38,7 +38,15 @@ class CommissionWithdrawalRequest extends Model
         // agent's own request and a payout an admin raised for them; see
         // WithdrawalSource for why they share this table at all.
         'source',
+        // GROSS. Not reduced by withholding — see the wht_* migration for
+        // why, and never change this without reading it.
         'amount_satang',
+        // 2026-09-19 — ภาษีหัก ณ ที่จ่าย, the same three columns
+        // supplier_withdrawal_requests carries, with amount_satang standing
+        // in for that table's gross_satang.
+        'wht_rate_at_time',
+        'wht_satang',
+        'net_satang',
         'status',
         'decided_by_user_id',
         'decided_at',
@@ -57,6 +65,9 @@ class CommissionWithdrawalRequest extends Model
     {
         return [
             'amount_satang' => 'integer',
+            'wht_rate_at_time' => 'integer',
+            'wht_satang' => 'integer',
+            'net_satang' => 'integer',
             'status' => WithdrawalStatus::class,
             'source' => WithdrawalSource::class,
             'decided_at' => 'datetime',
@@ -66,6 +77,22 @@ class CommissionWithdrawalRequest extends Model
             // plaintext.
             'bank_account_number' => 'encrypted',
         ];
+    }
+
+    /**
+     * What actually leaves the bank account — the ONLY figure an admin
+     * should ever be asked to transfer, and the only one an agent should be
+     * told to expect.
+     *
+     * Never read `net_satang` directly. It is NULL on every row written
+     * before withholding existed, and on such a row the truth is that
+     * nothing was withheld, so the net IS the gross. Returning null there
+     * would make a payout screen render an empty amount for historical rows,
+     * and a `?? 0` at a call site would render zero, which is worse.
+     */
+    public function netTransferSatang(): int
+    {
+        return $this->net_satang ?? (int) $this->amount_satang;
     }
 
     public function agent(): BelongsTo

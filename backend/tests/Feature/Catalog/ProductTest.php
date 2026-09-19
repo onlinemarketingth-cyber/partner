@@ -4,6 +4,7 @@ namespace Tests\Feature\Catalog;
 
 use App\Models\Brand;
 use App\Models\Company;
+use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -110,14 +111,24 @@ class ProductTest extends TestCase
         $response->assertJsonPath('data.effective_plan_type', 'binary');
     }
 
-    public function test_a_product_can_override_the_companys_plan_type(): void
+    /**
+     * REVERSED 2026-09-19. This test asserted the opposite until today:
+     * creating a company product with its own `commission_plan_type` was
+     * accepted and that value won. Owner, 2026-09-19: "ปิดช่องตั้งแผน
+     * ต่อสินค้า ... ถ้าเจตนาคือบริษัทเดียวแผนเดียว" — restoring the ruling
+     * ADR-006 Round 3/4 recorded on 2026-07-14. The old behaviour is kept
+     * here as the thing that must now be REFUSED rather than deleted from
+     * the suite, because a silently-accepted-then-ignored field is the exact
+     * failure the refusal exists to prevent.
+     */
+    public function test_a_company_product_may_not_carry_its_own_plan_type(): void
     {
         $company = Company::factory()->create(['commission_plan_type' => 'unilevel']);
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $brand = Brand::factory()->for($company)->create();
         $category = ProductCategory::factory()->for($company)->create();
 
-        $response = $this->actingAs($admin)
+        $this->actingAs($admin)
             ->postJson('/api/v1/products', [
                 'brand_id' => $brand->id,
                 'category_id' => $category->id,
@@ -125,10 +136,27 @@ class ProductTest extends TestCase
                 'price_satang' => 890000,
                 'commission_plan_type' => 'affiliate',
             ])
-            ->assertCreated();
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('commission_plan_type');
+    }
 
-        $response->assertJsonPath('data.commission_plan_type', 'affiliate');
-        $response->assertJsonPath('data.effective_plan_type', 'affiliate');
+    public function test_a_company_product_created_without_a_plan_type_reports_its_companys(): void
+    {
+        $company = Company::factory()->create(['commission_plan_type' => 'unilevel']);
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $brand = Brand::factory()->for($company)->create();
+        $category = ProductCategory::factory()->for($company)->create();
+
+        $this->actingAs($admin)
+            ->postJson('/api/v1/products', [
+                'brand_id' => $brand->id,
+                'category_id' => $category->id,
+                'name' => 'Ordinary product',
+                'price_satang' => 890000,
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.commission_plan_type', null)
+            ->assertJsonPath('data.effective_plan_type', 'unilevel');
     }
 
     public function test_commission_plan_type_rejects_an_invalid_value(): void
@@ -150,20 +178,34 @@ class ProductTest extends TestCase
             ->assertJsonValidationErrors('commission_plan_type');
     }
 
-    public function test_updating_a_product_can_set_and_then_clear_the_plan_type_override(): void
+    /**
+     * REVERSED 2026-09-19 — see the note on the create test above. Setting
+     * is refused; CLEARING an existing stray value is still allowed, and that
+     * half is the reason this test kept its shape rather than being deleted:
+     * a product that already carries one has to be tidiable from the screen.
+     */
+    public function test_updating_a_company_product_may_clear_a_plan_type_but_never_set_one(): void
     {
         $company = Company::factory()->create(['commission_plan_type' => 'unilevel']);
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
         $brand = Brand::factory()->for($company)->create();
         $category = ProductCategory::factory()->for($company)->create();
-        $product = \App\Models\Product::factory()->for($company)->create(['brand_id' => $brand->id, 'category_id' => $category->id]);
+        $product = Product::factory()->for($company)->create([
+            'brand_id' => $brand->id, 'category_id' => $category->id, 'commission_plan_type' => 'matrix',
+        ]);
+
+        // A stored value no longer decides anything — the company does.
+        $this->actingAs($admin)
+            ->getJson("/api/v1/products/{$product->id}")
+            ->assertOk()
+            ->assertJsonPath('data.effective_plan_type', 'unilevel');
 
         $this->actingAs($admin)
-            ->putJson("/api/v1/products/{$product->id}", ['commission_plan_type' => 'matrix'])
-            ->assertOk()
-            ->assertJsonPath('data.effective_plan_type', 'matrix');
+            ->putJson("/api/v1/products/{$product->id}", ['commission_plan_type' => 'binary'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('commission_plan_type');
 
-        // Explicit null clears the override back to "inherit company default".
+        // Explicit null tidies the stray value away.
         $this->actingAs($admin)
             ->putJson("/api/v1/products/{$product->id}", ['commission_plan_type' => null])
             ->assertOk()
@@ -178,7 +220,7 @@ class ProductTest extends TestCase
         $admin = User::factory()->companyAdmin()->create(['company_id' => $ownCompany->id]);
         $brand = Brand::factory()->for($otherCompany)->create();
         $category = ProductCategory::factory()->for($otherCompany)->create();
-        $foreignProduct = \App\Models\Product::factory()->for($otherCompany)->create(['brand_id' => $brand->id, 'category_id' => $category->id]);
+        $foreignProduct = Product::factory()->for($otherCompany)->create(['brand_id' => $brand->id, 'category_id' => $category->id]);
 
         // TenantScope filters the {product} route-model-binding query
         // itself (Company Admin is scoped to their own company_id), so a
@@ -186,7 +228,7 @@ class ProductTest extends TestCase
         // ::authorize() is ever reached — same convention as every other
         // cross-tenant lookup in this app (Section 5 rule 5).
         $this->actingAs($admin)
-            ->putJson("/api/v1/products/{$foreignProduct->id}", ['commission_plan_type' => 'affiliate'])
+            ->putJson("/api/v1/products/{$foreignProduct->id}", ['name' => 'ชื่อใหม่'])
             ->assertNotFound();
     }
 }

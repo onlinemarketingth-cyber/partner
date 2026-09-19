@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\Platform;
 
+use App\Enums\BinaryLeg;
+use App\Enums\CommissionPlanType;
 use App\Enums\IdDocumentType;
 use App\Enums\UserRole;
 use App\Models\User;
@@ -107,6 +109,31 @@ class UpdateUserRequest extends FormRequest
             // query walk and live in UserService::assertValidManager()
             // instead (Section 7 — business logic never in a Request).
             'manager_id' => ['sometimes', 'nullable', 'integer', 'exists:users,id'],
+            /*
+             * 2026-09-19 — THE COLUMN NOTHING COULD WRITE.
+             *
+             * `users.binary_leg` shipped with ADR-006 Round 4 and the human
+             * decision that placement is chosen by the referrer, left or
+             * right, never balanced automatically. The column, the enum, the
+             * volume table and the whole matching-cycle engine were built —
+             * and no Form Request, controller or screen ever accepted a
+             * value, so outside a test factory the column could only ever be
+             * null. A Binary company therefore credited every sale to nobody
+             * and paid zero for ever, with nothing anywhere reporting why.
+             *
+             * Accepted here beside manager_id because it is the same
+             * decision: manager_id says WHO recruited this agent, binary_leg
+             * says WHICH SIDE of that person they sit on. Prohibited unless
+             * the target's company actually runs Binary — on any other plan
+             * it would be a value that looks like a setting and governs
+             * nothing, which is the same trap the per-product plan type was.
+             */
+            'binary_leg' => [
+                'sometimes',
+                'nullable',
+                Rule::prohibitedIf(fn () => ! $this->targetCompanyRunsBinary()),
+                Rule::enum(BinaryLeg::class),
+            ],
             // TASK-044 Phase A — Company Admin editing an agent's bank
             // payout details (human-confirmed: both self-service AND
             // Admin may write these). All 3 optional/nullable, same as
@@ -191,5 +218,17 @@ class UpdateUserRequest extends FormRequest
                 $validator->errors()->add('role', SuperAdminGuard::LAST_ONE_MESSAGE);
             }
         });
+    }
+
+    /**
+     * ADR-006 Round 4 — binary_leg is only ever read by BinaryCommissionService,
+     * which only ever runs on a company whose plan type is Binary.
+     */
+    private function targetCompanyRunsBinary(): bool
+    {
+        $target = $this->route('user');
+
+        return $target instanceof User
+            && $target->company?->commission_plan_type === CommissionPlanType::Binary;
     }
 }

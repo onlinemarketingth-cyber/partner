@@ -147,7 +147,21 @@ interface WithdrawalRequest {
   /** Which of the two doors this came through. */
   source: 'agent_request' | 'company_payout'
   source_label: string
+  /** GROSS — what the agent earned. Never reduced by withholding. */
   amount_satang: number
+  /*
+   * 2026-09-19 — ภาษีหัก ณ ที่จ่าย, snapshot onto the request when it was
+   * opened. Null rate = no withholding applied, which is every request made
+   * before the setting existed.
+   *
+   * `net_transfer_satang` IS THE FIGURE TO TRANSFER, resolved by the server
+   * (a historical row with no net recorded reports its gross). This screen
+   * never subtracts anything itself: the number an admin reads here goes
+   * straight into a banking app, and two places computing it is one too many.
+   */
+  wht_rate_at_time: number | null
+  wht_satang: number
+  net_transfer_satang: number
   status: 'pending_review' | 'approved' | 'rejected' | 'cancelled' | 'transferred'
   status_label: string
   rejection_reason: string | null
@@ -670,6 +684,27 @@ const selectedTotalSatang = computed(() =>
 )
 const selectedCount = computed(() =>
   canSelectRequests.value ? selectedRequestRows.value.length : selectedAgentRows.value.length,
+)
+
+/*
+ * 2026-09-19 — the tax and the net across the ticked requests.
+ *
+ * Only meaningful on the request side (ขั้นที่ 3, "บันทึกว่าโอนแล้ว"), which is
+ * why both are 0 on the agent side: a payout being RAISED has no request row
+ * yet and therefore no snapshot rate, and inventing one here by applying the
+ * company's current rate would be a second implementation of the arithmetic
+ * the server already did — free to drift, and drifting on a number somebody
+ * is about to transfer.
+ */
+const selectedWithholdingSatang = computed(() =>
+  canSelectRequests.value
+    ? selectedRequestRows.value.reduce((sum, r) => sum + (r.wht_satang ?? 0), 0)
+    : 0,
+)
+const selectedNetTotalSatang = computed(() =>
+  canSelectRequests.value
+    ? selectedRequestRows.value.reduce((sum, r) => sum + (r.net_transfer_satang ?? r.amount_satang), 0)
+    : 0,
 )
 
 // ── The presses ─────────────────────────────────────────────────────────
@@ -1603,6 +1638,25 @@ watch(() => activeCompany.companyId, () => {
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
                   <p class="text-[17px] font-extrabold text-slate-900 tabular-nums">{{ formatSatang(r.amount_satang) }}</p>
+                  <!--
+                    2026-09-19 — what will actually leave the bank, beside the
+                    gross rather than instead of it.
+
+                    Both numbers, because they answer different questions an
+                    admin on this screen has at the same time: what this person
+                    earned (which is what the ledger will settle), and what to
+                    type into the banking app. Absent entirely when nothing is
+                    withheld — a zero tax badge on every row of every company
+                    that does not withhold is noise, and noise here is how a
+                    real deduction stops being read.
+                  -->
+                  <span
+                    v-if="r.wht_satang > 0"
+                    class="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-amber-50 text-amber-800 tabular-nums"
+                    :data-test="`payout-net-${r.id}`"
+                  >
+                    โอนจริง {{ formatSatang(r.net_transfer_satang) }}
+                  </span>
                   <span class="px-2 py-0.5 rounded-full text-[10.5px] font-extrabold bg-slate-100 text-slate-600">
                     {{ r.status_label }}
                   </span>
@@ -1827,6 +1881,24 @@ watch(() => activeCompany.companyId, () => {
             บันทึกว่าโอนแล้ว <b>{{ selectedCount }} ใบ</b> รวม
             <b class="tabular-nums">{{ formatSatang(selectedTotalSatang) }}</b>
             <template v-if="transferReference.trim()"> · อ้างอิง <b>{{ transferReference.trim() }}</b></template>
+          </p>
+          <!--
+            2026-09-19 — on the press that records a REAL TRANSFER, the net is
+            spelled out.
+
+            This is the last moment the figure can be checked against what
+            accounting actually sent, so when the two differ the confirmation
+            has to name both. Shown only when they differ: repeating the same
+            number under a second label would invite the reader to look for a
+            difference that is not there.
+          -->
+          <p
+            v-if="selectedWithholdingSatang > 0"
+            class="mt-1 text-[12.5px] text-emerald-50 tabular-nums"
+            data-test="payout-batch-net"
+          >
+            หักภาษี ณ ที่จ่ายรวม <b>{{ formatSatang(selectedWithholdingSatang) }}</b> ·
+            <b>ยอดที่โอนออกจริงรวม {{ formatSatang(selectedNetTotalSatang) }}</b>
           </p>
           <p class="mt-1 text-[12px] text-emerald-100">
             ขั้นนี้จะ <b>ปิดรายการค่าแนะนำจริง</b> และ <b>ส่งอีเมลแจ้งสมาชิก</b> ว่าเงินเข้าแล้ว —

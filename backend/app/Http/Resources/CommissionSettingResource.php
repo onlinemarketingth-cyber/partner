@@ -38,6 +38,22 @@ class CommissionSettingResource extends JsonResource
             // deduction can happen").
             'deepest_manager_chain' => $this['deepest_manager_chain'],
             /*
+             * 2026-09-19 — how many levels of leader override this company
+             * pays, and whether a skipped manager's level is inherited.
+             *
+             * NULLABLE, and the null must survive the wire. It is the one
+             * value on this endpoint whose null is a real answer — "as far as
+             * the chain goes", which is what every company does today — and
+             * coalescing it to a number here would print a cap nobody set,
+             * onto the very field an admin uses to set one.
+             *
+             * The compression flag is the opposite: a company either
+             * compresses or it does not, so it is always a boolean and never
+             * null, for the same reason commission_basis is never null above.
+             */
+            'max_override_depth' => $this['max_override_depth'],
+            'override_compression' => $this['override_compression'],
+            /*
              * 2026-09-15 — the company's own seat in its hierarchy, or null
              * when it has none. Null is the answer for most companies and a
              * real one: nobody has decided the company should take a leader's

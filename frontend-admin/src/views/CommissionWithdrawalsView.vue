@@ -32,7 +32,25 @@ interface WithdrawalRequest {
   id: number
   agent_id: number
   agent_name: string | null
+  /*
+   * GROSS — what the agent earned and what this payout draws from the ledger.
+   * Never reduced by withholding; see net_transfer_satang below.
+   */
   amount_satang: number
+  /*
+   * 2026-09-19 — ภาษีหัก ณ ที่จ่าย, snapshot onto the request when it was
+   * opened. `wht_rate_at_time` is null when no withholding applied, which is
+   * every request made before the setting existed.
+   *
+   * `net_transfer_satang` IS THE NUMBER TO TRANSFER. The server resolves it
+   * (a historical row with no net recorded reports its gross), so this screen
+   * never subtracts anything itself — an admin reading a figure off here is
+   * about to type it into a banking app, and two places computing it is one
+   * place too many.
+   */
+  wht_rate_at_time: number | null
+  wht_satang: number
+  net_transfer_satang: number
   status: WithdrawalStatus
   status_label: string
   rejection_reason: string | null
@@ -123,6 +141,22 @@ const kpis = computed(() => [
     label: `${heading.value} (ยอดรวม)`,
     value: formatSatang(requests.value.reduce((sum, r) => sum + r.amount_satang, 0)),
   },
+  /*
+   * 2026-09-19 — the total that will actually be transferred, shown only when
+   * some of these rows carry withholding.
+   *
+   * Conditional rather than always-on for the same reason the per-row line is:
+   * on a company that withholds nothing this tile would repeat the one beside
+   * it, and two identical numbers under two different labels is worse than
+   * one, because it invites the reader to look for a difference that is not
+   * there.
+   */
+  ...(requests.value.some((r) => r.wht_satang > 0)
+    ? [{
+        label: `${heading.value} (โอนจริงหลังหักภาษี)`,
+        value: formatSatang(requests.value.reduce((sum, r) => sum + r.net_transfer_satang, 0)),
+      }]
+    : []),
 ])
 
 function formatSatang(satang: number): string {
@@ -213,7 +247,19 @@ function reject(r: WithdrawalRequest): void {
 function markTransferred(r: WithdrawalRequest): void {
   // Optional on purpose (see MarkWithdrawalTransferredRequest): an empty
   // answer is a transfer with no reference worth recording, not a mistake.
-  const reference = window.prompt(`เลขอ้างอิงการโอน (ไม่บังคับ) — ${formatSatang(r.amount_satang)}`)
+  /*
+   * 2026-09-19 — the prompt names the NET, not the gross.
+   *
+   * This is the moment an admin is recording a transfer they are about to
+   * make (or just made) in their banking app, so the number in front of them
+   * has to be the one that actually leaves the account. Showing the gross
+   * here was correct while nothing was withheld and is a wrong instruction
+   * the moment something is.
+   */
+  const withheld = r.wht_satang > 0
+    ? ` (ยอดเต็ม ${formatSatang(r.amount_satang)} − ภาษี ${formatSatang(r.wht_satang)})`
+    : ''
+  const reference = window.prompt(`เลขอ้างอิงการโอน (ไม่บังคับ) — โอนจริง ${formatSatang(r.net_transfer_satang)}${withheld}`)
 
   if (reference === null) return
 
@@ -357,6 +403,27 @@ watch(() => activeCompany.companyId, () => {
               {{ r.status_label }}
             </span>
           </div>
+          <!--
+            2026-09-19 — the line that only appears when tax was withheld.
+
+            Shown nowhere on a request with no withholding, rather than as a
+            "0.00" row: a zero tax line on every request of every company that
+            does not withhold is noise, and noise on a payout screen is how a
+            real deduction stops being read.
+
+            The BIG number above stays the gross, because that is what the
+            agent earned and what the ledger says. This line names what leaves
+            the bank, which is the figure the admin is about to type.
+          -->
+          <p
+            v-if="r.wht_satang > 0"
+            class="mt-0.5 text-[12.5px] text-slate-600"
+            :data-test="`withdrawal-wht-${r.id}`"
+          >
+            หักภาษี ณ ที่จ่าย<span v-if="r.wht_rate_at_time !== null"> {{ (r.wht_rate_at_time / 100) }}%</span>
+            −{{ formatSatang(r.wht_satang) }} ·
+            <b class="text-slate-900">โอนจริง {{ formatSatang(r.net_transfer_satang) }}</b>
+          </p>
           <p class="text-sm text-slate-700 mt-0.5">{{ r.agent_name ?? '—' }}</p>
           <p class="text-xs text-slate-500 mt-0.5">
             ขอเมื่อ {{ formatDate(r.created_at) }}

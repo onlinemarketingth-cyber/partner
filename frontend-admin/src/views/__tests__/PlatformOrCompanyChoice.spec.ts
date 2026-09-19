@@ -284,14 +284,33 @@ describe('ProductEditView — whose product is this?', () => {
     expect(w.text()).toContain('สินค้ากลางต้องเลือกรูปแบบค่าแนะนำก่อนบันทึก')
   })
 
-  it('drops the "inherit from the company" option that has nothing to inherit from', async () => {
+  it('offers the plan-type control to a สินค้ากลาง only, and a readout to everyone else', async () => {
+    /*
+     * 2026-09-19 — REVERSED, and the reversal is the decision.
+     *
+     * This used to assert the select carried a "สืบทอดจากบริษัท" option
+     * for a company product and dropped it for a platform one — correct while
+     * a product could override its company's plan. Owner, 2026-09-19: "ปิด
+     * ช่องตั้งแผนต่อสินค้า ... ถ้าเจตนาคือบริษัทเดียวแผนเดียว". The backend now
+     * refuses the field on a company product, so a select there would be a
+     * control that saves nothing — and a DISABLED select would still read as
+     * "per-product setting, temporarily locked", which is the wrong idea.
+     * A company product gets a sentence and a link to where the decision
+     * actually lives; a สินค้ากลาง keeps the real control, because it sits
+     * under no company and has nothing to inherit from (ADR-040).
+     */
     asSuperAdmin()
     const w = await mountProductForm()
-    expect(w.text()).toContain('สืบทอดจากบริษัท (ค่าเริ่มต้น)')
+
+    expect(w.find('[data-test="plan-type-readonly"]').exists()).toBe(true)
+    expect(w.find('[data-test="plan-type-select"]').exists()).toBe(false)
+    expect(w.text()).toContain('ตั้งที่ระดับบริษัท ไม่ได้ตั้งรายสินค้า')
 
     await w.find('[data-test="owner-platform"]').setValue()
     await flushPromises()
 
+    expect(w.find('[data-test="plan-type-select"]').exists()).toBe(true)
+    expect(w.find('[data-test="plan-type-readonly"]').exists()).toBe(false)
     expect(w.text()).not.toContain('สืบทอดจากบริษัท (ค่าเริ่มต้น)')
   })
 

@@ -81,6 +81,29 @@ class PlatformReportService
                 return [
                     'company_id' => $company->id,
                     'company_name' => $company->name,
+                    /*
+                     * 2026-09-19 — WHAT CURRENCY THE TWO SATANG FIGURES
+                     * BELOW ARE IN.
+                     *
+                     * Every row here is one company, so every row has one
+                     * unambiguous currency and stating it costs nothing. It
+                     * is sent because the screen that renders this report
+                     * prints ฿ in front of both totals today, and once a
+                     * non-THB tenant exists that is a wrong label on a real
+                     * number.
+                     *
+                     * // TODO: CONFIRM (business rule) — a PLATFORM-WIDE
+                     * // total across these rows is not representable once
+                     * // tenants differ in currency, and nothing here
+                     * // converts (no exchange rate exists in this system,
+                     * // deliberately — BR-7). The report returns rows only,
+                     * // so it does not currently produce such a total; if
+                     * // one is ever wanted, what it should mean (a chosen
+                     * // reporting currency and a rate source somebody is
+                     * // accountable for) is the owner's decision, not one
+                     * // to infer here.
+                     */
+                    'currency_code' => $company->currencyCode(),
                     'agent_count' => $agentCount,
                     'pending_agent_approvals' => $pendingAgentApprovals,
                     'total_referrals' => $totalReferrals,

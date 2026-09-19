@@ -515,7 +515,70 @@ class CommissionService
         $depth = 0;
         $poolRemaining = $agentAmountSatang;
 
+        /*
+         * 2026-09-19 — HOW FAR UP, AND AT WHAT RATE PER STEP.
+         *
+         * `max_override_depth` NULL keeps the old behaviour exactly: the walk
+         * runs until the chain ends, stopped only by the 100-hop circuit
+         * breaker that guards against a corrupted manager_id loop and is not
+         * a business rule (see MAX_OVERRIDE_CHAIN_DEPTH).
+         *
+         * The rate is now resolved PER LEVEL and memoised, because a chain is
+         * walked once per sale but a level repeats across sales and the
+         * lookup is the same three-rung ladder every time. With no levelled
+         * rows configured every level resolves to the same catch-all row the
+         * flat walk used, so the amounts are byte-identical.
+         *
+         * A level is a HOP, counted whether or not that manager was eligible
+         * to be paid. Rolling a skipped manager's level onto the next one up
+         * is compression — a different feature, with its own switch, and
+         * doing it here by accident would change what every existing company
+         * pays.
+         */
+        $maxDepth = $referral->company?->max_override_depth;
+        /*
+         * 2026-09-19 — COMPRESSION: does a skipped manager spend their level?
+         *
+         * The certification gate below already skips a manager who passed
+         * nothing and walks on. This decides what the NEXT manager is then
+         * paid: level 2's rate (compressed) or level 3's (not).
+         *
+         * False is what the walk has always done, and with one flat rate the
+         * difference was invisible — every level paid the same number. Per
+         * level rates make it the gap between 3% and 1% for a real person.
+         */
+        $compress = (bool) ($referral->company?->override_compression ?? false);
+        $level = 1;
+        $ratePerLevel = [];
+        $ruleForLevel = function (int $level) use (&$ratePerLevel, $referral): ?CommissionOverrideRule {
+            if (! array_key_exists($level, $ratePerLevel)) {
+                /*
+                 * No `?? $overrideRule` fallback on purpose. $overrideRule is
+                 * whatever the ladder found FIRST, ignoring level — it exists
+                 * so the funding mode has one provable source, not so it can
+                 * stand in as a rate. Falling back to it would pay level 1's
+                 * rate at a level nobody priced, which is the opposite of
+                 * what pricing a level means.
+                 *
+                 * resolveOverrideRuleForLevel() already tries the levelled
+                 * row and then the catch-all at each rung, so a null here
+                 * means genuinely nothing reaches this level.
+                 */
+                $ratePerLevel[$level] = $this->resolveOverrideRuleForLevel(
+                    $referral->product,
+                    (int) $referral->company_id,
+                    $level,
+                );
+            }
+
+            return $ratePerLevel[$level];
+        };
+
         while ($manager !== null && $depth < self::MAX_OVERRIDE_CHAIN_DEPTH) {
+            if ($maxDepth !== null && ($compress ? $level : $depth + 1) > $maxDepth) {
+                break;
+            }
+
             $managerTier = $manager->highestPassedCertTier();
 
             /*
@@ -542,7 +605,20 @@ class CommissionService
             $isHouseAccount = $manager->isCommissionHouseAccount();
 
             if ($managerTier || $isHouseAccount) {
-                $amount = $this->overrideAmountFor($mode, $overrideRule, $saleValue, $agentAmountSatang);
+                $levelRule = $ruleForLevel($compress ? $level : $depth + 1);
+
+                if (! $levelRule) {
+                    // No rate reaches this level and no catch-all behind it:
+                    // nobody is paid here, and the walk continues rather than
+                    // stopping, because a level nobody priced is not a reason
+                    // to stop paying the levels above it that somebody did.
+                    $manager = $manager->manager;
+                    $depth++;
+
+                    continue;
+                }
+
+                $amount = $this->overrideAmountFor($mode, $levelRule, $saleValue, $agentAmountSatang);
 
                 if ($mode->deductsFromSeller()) {
                     $amount = min($amount, max(0, $poolRemaining));
@@ -563,9 +639,14 @@ class CommissionService
                 $rows[] = [
                     'manager' => $manager,
                     'tier' => $managerTier,
-                    'rule' => $overrideRule,
+                    'rule' => $levelRule,
                     'amount_satang' => $amount,
                 ];
+
+                // Only a PAID hop spends a compressed level. An unpriced
+                // level (the `continue` above) does not advance it either —
+                // nobody was paid there, so nothing was spent.
+                $level++;
             }
 
             $manager = $manager->manager;
@@ -795,6 +876,52 @@ class CommissionService
         }
 
         return $baseQuery()->whereNull('product_id')->whereNull('product_category_id')->first();
+    }
+
+    /**
+     * The leader rate for ONE LEVEL of the chain (2026-09-19).
+     *
+     * Precedence is scope FIRST, level second, and the order matters: at each
+     * rung of the existing product > category > company ladder, a row priced
+     * for this level wins, and a row with no level (the catch-all, which is
+     * every row that existed before levels did) serves the levels nobody has
+     * priced. Only when a rung offers neither does the search move up.
+     *
+     * Putting level outside the ladder instead would silently reverse
+     * TASK-214's contract — "a product-specific rate beats the company
+     * default" — the first time somebody added a company-wide level-2 rate.
+     *
+     * Returns null when the rung ladder is exhausted, which is the same
+     * "no rate configured, so no row, never a zero row" answer the flat
+     * resolver has always given.
+     */
+    private function resolveOverrideRuleForLevel(Product $product, int $companyId, int $level): ?CommissionOverrideRule
+    {
+        $baseQuery = $this->liveOverrideRules($companyId);
+
+        $rungs = [
+            fn () => $baseQuery()->where('product_id', $product->id),
+        ];
+
+        if ($product->category_id) {
+            $rungs[] = fn () => $baseQuery()->whereNull('product_id')->where('product_category_id', $product->category_id);
+        }
+
+        $rungs[] = fn () => $baseQuery()->whereNull('product_id')->whereNull('product_category_id');
+
+        foreach ($rungs as $rung) {
+            $levelled = $rung()->where('level', $level)->first();
+            if ($levelled) {
+                return $levelled;
+            }
+
+            $catchAll = $rung()->whereNull('level')->first();
+            if ($catchAll) {
+                return $catchAll;
+            }
+        }
+
+        return null;
     }
 
     /**

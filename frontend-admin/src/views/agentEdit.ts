@@ -37,6 +37,13 @@ export type IdDocumentTypeChoice = IdDocumentType | ''
 export interface AgentItem {
   id: number
   name: string
+  /**
+   * 2026-09-19 — which side of their upline this agent sits on, for a
+   * Binary company. Null everywhere else, and null on a Binary company that
+   * has not placed them yet — which, until the placement control existed,
+   * was every single row.
+   */
+  binary_leg?: 'left' | 'right' | null
   // TASK-128 — the edit modal binds these two, not `name`: `name` is a
   // DERIVED value (User::booted()'s saving() hook recomputes it from the
   // pair) and UpdateUserRequest has no `name` rule at all, so writing back

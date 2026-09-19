@@ -83,9 +83,24 @@ class UpdateProductRequest extends FormRequest
             'description' => $this->richTextRules(15000),
             'spec_description' => $this->richTextRules(15000), // ADR-008 — free-text spec narrative, additive alongside description
             'is_active' => ['sometimes', 'boolean'],
-            // ADR-011/TASK-027 — explicit null clears the override back
-            // to "inherit company default" (Product::effectivePlanType()).
-            'commission_plan_type' => ['sometimes', 'nullable', Rule::enum(CommissionPlanType::class)],
+            /*
+             * 2026-09-19 — settable on a PLATFORM product only.
+             *
+             * Product::effectivePlanType() returns the company's plan whenever
+             * a company is asking, so on a company-owned product this column
+             * can no longer change anything. Clearing it back to null is still
+             * allowed (and is how an existing stray value gets tidied away);
+             * setting it to a plan type is refused rather than saved and
+             * ignored. See StoreProductRequest for the full reasoning and
+             * `commission:audit-config` for finding rows that already carry
+             * one.
+             */
+            'commission_plan_type' => [
+                'sometimes',
+                'nullable',
+                Rule::prohibitedIf(fn () => ! $this->productIsPlatformOwned() && $this->input('commission_plan_type') !== null),
+                Rule::enum(CommissionPlanType::class),
+            ],
             // TASK-194 §3.1/§3.4 — only meaningful when effectivePlanType()
             // is Affiliate (ignored by CommissionService otherwise, same as
             // this task's whole branch); explicit null clears the override
@@ -129,5 +144,16 @@ class UpdateProductRequest extends FormRequest
         $product = $this->route('product');
         $this->validateSupplierTerms($validator, $product);
         $this->assertSellableSupplierTerms($validator, $product);
+    }
+
+    /**
+     * ADR-040 — a platform-owned product has no company to inherit a plan
+     * type from, so it is the one row that still carries its own.
+     */
+    private function productIsPlatformOwned(): bool
+    {
+        $product = $this->route('product');
+
+        return $product instanceof Product && $product->company_id === null;
     }
 }

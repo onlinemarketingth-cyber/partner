@@ -168,6 +168,17 @@ class CommissionWithdrawalRequestController extends Controller
         return response()->json([
             'available_satang' => $service->availableSatang($user),
             'min_withdrawal_satang' => $user->company?->min_withdrawal_satang,
+            /*
+             * 2026-09-19 — so the agent portal can show "จะได้รับจริง" beside
+             * the amount BEFORE the agent presses the button.
+             *
+             * The rate, not a computed net: the amount is not known until
+             * they type it, and sending a net for an amount they have not
+             * chosen would be a number that goes stale on every keystroke.
+             * Null means no withholding, and the screen must then show no tax
+             * line at all rather than a zero.
+             */
+            'wht_rate' => $user->company?->wht_rate,
             'payout_details_complete' => $user->hasCompletePayoutDetails(),
         ]);
     }

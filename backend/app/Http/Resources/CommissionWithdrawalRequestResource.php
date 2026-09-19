@@ -21,7 +21,24 @@ class CommissionWithdrawalRequestResource extends JsonResource
             'id' => $this->id,
             'agent_id' => $this->agent_id,
             'agent_name' => $this->whenLoaded('agent', fn () => $this->agent?->name),
+            // GROSS — what the agent earned, and what this payout draws from
+            // the ledger. Never reduced by withholding.
             'amount_satang' => (int) $this->amount_satang,
+            /*
+             * 2026-09-19 — ภาษีหัก ณ ที่จ่าย, three figures because they
+             * answer three questions and two of them cannot be recovered
+             * from the third: what was earned, what was withheld in the
+             * agent's name, and what the bank actually sends.
+             *
+             * `net_transfer_satang` comes off the model's accessor, never off
+             * the column: a row written before withholding existed has NULL
+             * there and its true net is its gross. THIS is the number the
+             * payout screen must show an admin to transfer, and the number an
+             * agent should be told to expect.
+             */
+            'wht_rate_at_time' => $this->wht_rate_at_time === null ? null : (int) $this->wht_rate_at_time,
+            'wht_satang' => (int) ($this->wht_satang ?? 0),
+            'net_transfer_satang' => $this->resource->netTransferSatang(),
             /*
              * 2026-09-15 — which of the two doors this came through.
              *

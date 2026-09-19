@@ -46,6 +46,13 @@ use Illuminate\Validation\ValidationException;
  */
 class CommissionWithdrawalService
 {
+    /**
+     * Basis points, the scale every rate in this system uses (500 = 5.00%).
+     * Named rather than inlined, and named the same as
+     * SupplierPayoutService::BASIS_POINT_SCALE — §7, no magic numbers.
+     */
+    private const BASIS_POINT_SCALE = 10000;
+
     public function __construct(private readonly NotificationService $notifier) {}
 
     /**
@@ -89,6 +96,51 @@ class CommissionWithdrawalService
             ->sum('allocated_satang');
 
         return max(0, $earned - $reserved);
+    }
+
+    /**
+     * ภาษีหัก ณ ที่จ่าย on one agent payout: the rate that applies and what
+     * it comes to, in satang.
+     *
+     * ── THE RATE IS THE COMPANY'S, AND NOTHING SUBSTITUTES FOR IT ──
+     *
+     * NULL rate = no withholding, and that is a real answer rather than a
+     * missing one — exactly the stance min_withdrawal_satang beside it takes.
+     * BR-7, and here it is also the law: which rate applies depends on how
+     * the payment is classified and on what kind of payee is receiving it, so
+     * nothing here invents one. A company that has not entered a rate gets
+     * the behaviour it has today, to the satang.
+     *
+     * ── intdiv(), NOT round() ──
+     *
+     * SupplierPayoutService::withholdingFor() truncates, and this matches it
+     * deliberately: the two flows withhold under the same obligation and must
+     * not disagree by a satang on the same arithmetic. Truncation also errs
+     * toward under-withholding by at most one satang rather than over —
+     * taking a satang more of somebody's money than the rate allows is the
+     * worse of the two mistakes.
+     *
+     * ── ONE MULTIPLY, ONE DIVIDE (BR-3) ──
+     *
+     * The whole gross is multiplied before the single division. There is no
+     * per-row loop here (unlike the supplier side, where different ledger
+     * rows can carry different rates) because an agent payout is one amount
+     * under one company rate.
+     *
+     * @return array{rate: ?int, satang: int}
+     */
+    private function withholdingFor(User $agent, int $grossSatang): array
+    {
+        $rate = $agent->company?->wht_rate;
+
+        if ($rate === null || $rate <= 0 || $grossSatang <= 0) {
+            return ['rate' => $rate, 'satang' => 0];
+        }
+
+        return [
+            'rate' => (int) $rate,
+            'satang' => intdiv($grossSatang * (int) $rate, self::BASIS_POINT_SCALE),
+        ];
     }
 
     /**
@@ -368,11 +420,30 @@ class CommissionWithdrawalService
 
             $byCompany = $source === WithdrawalSource::CompanyPayout;
 
+            /*
+             * ภาษีหัก ณ ที่จ่าย — computed HERE, at the moment the request is
+             * opened, and stored rather than derived later.
+             *
+             * Here and not at transfer time for the same reason the bank
+             * details beside it are snapshot here: an agent is quoted a
+             * figure when they ask and an admin approves a figure when they
+             * decide, and an owner editing the company rate in between must
+             * not silently change either. The transfer step records that
+             * money moved; it does not get to recompute how much.
+             */
+            $withholding = $this->withholdingFor($agent, $amountSatang);
+
             $request = CommissionWithdrawalRequest::create([
                 'company_id' => $agent->company_id,
                 'agent_id' => $agent->id,
                 'source' => $source,
+                // GROSS, deliberately — the tax does not shrink what the
+                // agent earned, only what the bank sends. See the wht_*
+                // migration.
                 'amount_satang' => $amountSatang,
+                'wht_rate_at_time' => $withholding['rate'],
+                'wht_satang' => $withholding['satang'],
+                'net_satang' => $amountSatang - $withholding['satang'],
                 /*
                  * A company payout starts DECIDED. The admin pressing
                  * "ตั้งจ่าย" is the approval — sending it to a review queue
@@ -410,6 +481,12 @@ class CommissionWithdrawalService
                 'old_values' => null,
                 'new_values' => [
                     'amount_satang' => $amountSatang,
+                    // §6 — the tax is money leaving in somebody else's name,
+                    // so the audit records the rate that was applied and what
+                    // it came to, not only the gross.
+                    'wht_rate_at_time' => $withholding['rate'],
+                    'wht_satang' => $withholding['satang'],
+                    'net_satang' => $amountSatang - $withholding['satang'],
                     'source' => $source->value,
                     'status' => $request->status->value,
                     'agent_user_id' => $agent->id,

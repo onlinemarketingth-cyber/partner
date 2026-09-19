@@ -176,6 +176,10 @@ class CommissionOverrideRuleService
             $mode,
             $data['product_id'] ?? null,
             $data['product_category_id'] ?? null,
+            // 2026-09-19 — which level this rate prices, so the guard sums
+            // the walk with THIS rate standing in at the right place rather
+            // than at every place.
+            isset($data['level']) ? (int) $data['level'] : null,
         );
 
         if ($refusal !== null) {

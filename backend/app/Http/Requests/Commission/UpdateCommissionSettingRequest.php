@@ -8,6 +8,7 @@ use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 /**
  * 2026-09-12 — the write half of GET/PUT /commission-settings.
@@ -50,6 +51,42 @@ class UpdateCommissionSettingRequest extends FormRequest
     /**
      * @return array<string, mixed>
      */
+    /**
+     * 2026-09-19 — the emptiness guard, for the one setting whose NULL means
+     * something.
+     *
+     * `required_without_all` treats an explicit null as absent, so a request
+     * saying "max_override_depth: null" (= remove the cap, a real edit) would
+     * be read as an empty body and refused. `has()` sees the key whatever its
+     * value, which is the same distinction the Controller uses to tell "leave
+     * the cap alone" from "clear it".
+     *
+     * The three settings above keep their own required_without_all rules:
+     * none of them has an unset state, so absence is the only thing null
+     * could mean there, and the messages they produce name the field the
+     * admin was actually editing.
+     */
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator) {
+            $supplied = [
+                'commission_basis', 'commission_plan_type', 'commission_override_mode',
+                'max_override_depth', 'override_compression',
+            ];
+
+            foreach ($supplied as $key) {
+                if ($this->has($key)) {
+                    return;
+                }
+            }
+
+            $validator->errors()->add(
+                'commission_basis',
+                'ต้องระบุอย่างน้อยหนึ่งอย่าง: ฐานการคำนวณ, แผนค่าแนะนำ, วิธีจ่ายหัวหน้าทีม, จำนวนชั้นที่จ่าย หรือการเลื่อนชั้นแทนคนที่ถูกข้าม',
+            );
+        });
+    }
+
     public function rules(): array
     {
         return [
@@ -62,7 +99,7 @@ class UpdateCommissionSettingRequest extends FormRequest
             // Either field alone is a valid request — step 2 switches the
             // plan and the basis with two separate controls — but a body
             // carrying neither is not. See the docblock.
-            'commission_basis' => ['required_without_all:commission_plan_type,commission_override_mode', Rule::enum(CommissionBasis::class)],
+            'commission_basis' => ['sometimes', Rule::enum(CommissionBasis::class)],
             /*
              * 2026-09-13 — where the team leader's share comes from. Its own
              * field rather than a flag on the rate, because it is a COMPANY
@@ -80,7 +117,27 @@ class UpdateCommissionSettingRequest extends FormRequest
              * The per-PRODUCT override is the nullable one, and it lives on
              * the products endpoint — different column, different question.
              */
-            'commission_plan_type' => ['required_without_all:commission_basis,commission_override_mode', Rule::enum(CommissionPlanType::class)],
+            'commission_plan_type' => ['sometimes', Rule::enum(CommissionPlanType::class)],
+            /*
+             * 2026-09-19 — how many hops up the chain a leader override
+             * reaches. Explicit null clears the cap back to "as far as the
+             * chain goes", which is what every company has today.
+             *
+             * Counted by the required_without_all group above, because that
+             * group exists so an EMPTY request cannot silently succeed and a
+             * depth-only save is not empty. It is not itself required by the
+             * group: absent means "leave the cap as it is", and an explicit
+             * null means "no cap" — two different instructions the controller
+             * tells apart with has(), not with validated().
+             */
+            'max_override_depth' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:100'],
+            /*
+             * 2026-09-19 — when the certification gate skips a manager, does
+             * the next one up inherit their level's rate? Boolean, never
+             * null: a company either compresses or it does not, and there is
+             * no third state to preserve.
+             */
+            'override_compression' => ['sometimes', 'boolean'],
         ];
     }
 }

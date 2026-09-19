@@ -10,6 +10,7 @@ use App\Models\CommissionLedger;
 use App\Models\CommissionOverrideRule;
 use App\Models\Company;
 use App\Models\User;
+use Illuminate\Support\Carbon;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -95,6 +96,22 @@ class CommissionSettingService
             'commission_plan_type' => $company?->commission_plan_type,
             // 2026-09-13 — where the leader's share comes from.
             'commission_override_mode' => $company?->commission_override_mode ?? CommissionOverrideMode::Additive,
+            /*
+             * 2026-09-19 — how far up the chain a leader override reaches,
+             * and whether a skipped manager's level is inherited.
+             *
+             * Both are WRITTEN through update() already; without them here the
+             * screen that sets them could not show what is currently set, so
+             * every visit would render an empty field over a live value and a
+             * save would look like it had done nothing.
+             *
+             * max_override_depth stays NULLABLE all the way to the client. It
+             * is the one setting on this endpoint whose null is a real answer
+             * ("as far as the chain goes"), and coalescing it to a number here
+             * would invent a cap nobody set — see update()'s own note.
+             */
+            'max_override_depth' => $company?->max_override_depth,
+            'override_compression' => (bool) ($company?->override_compression ?? false),
             /*
              * How many managers a sale can have above it, at worst. Sent so
              * step 4 can show the arithmetic BEFORE somebody picks a deduct
@@ -251,11 +268,19 @@ class CommissionSettingService
      *
      * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
      */
-    public function update(int $companyId, ?CommissionBasis $basis = null, ?CommissionPlanType $planType = null, ?CommissionOverrideMode $overrideMode = null, ?User $actor = null): array
+    public function update(int $companyId, ?CommissionBasis $basis = null, ?CommissionPlanType $planType = null, ?CommissionOverrideMode $overrideMode = null, ?User $actor = null, bool $depthSupplied = false, ?int $maxOverrideDepth = null, ?bool $compression = null): array
     {
         $company = Company::findOrFail($companyId);
 
         if ($basis !== null) {
+            $this->assertNotSettledByExistingSales(
+                $company,
+                'commission_basis',
+                ($company->commission_basis ?? CommissionBasis::Price)->value,
+                $basis->value,
+                'ฐานการคำนวณ',
+            );
+
             $this->applyChange(
                 $company,
                 'commission_basis',
@@ -267,6 +292,14 @@ class CommissionSettingService
         }
 
         if ($planType !== null) {
+            $this->assertNotSettledByExistingSales(
+                $company,
+                'commission_plan_type',
+                $company->commission_plan_type?->value,
+                $planType->value,
+                'แผนค่าแนะนำ',
+            );
+
             $this->applyChange(
                 $company,
                 'commission_plan_type',
@@ -275,6 +308,71 @@ class CommissionSettingService
                 'commission_plan_type.updated',
                 $actor,
             );
+        }
+
+        if ($depthSupplied) {
+            /*
+             * 2026-09-19 — how far up the chain a leader override reaches.
+             *
+             * Deliberately NOT guarded by assertNotSettledByExistingSales().
+             * Capping the depth changes who gets paid on the NEXT sale, the
+             * same as any rate change, and rate changes have never been
+             * frozen by past sales — only the two settings that change the
+             * MEANING of every row (what a percentage is a percentage OF, and
+             * which plan is being run) are.
+             *
+             * Written here rather than through applyChange() because null is
+             * a real value for this column ("no cap") and applyChange takes a
+             * non-null string: routing null through it would write an empty
+             * string, which the integer cast turns into 0 — a cap of zero
+             * levels, silently paying nobody.
+             *
+             * Audited either way (§6): a cap moves money away from people who
+             * were being paid yesterday.
+             */
+            $before = $company->max_override_depth;
+
+            if ($before !== $maxOverrideDepth) {
+                $company->update(['max_override_depth' => $maxOverrideDepth]);
+
+                if ($actor) {
+                    AuditLog::create([
+                        'company_id' => $company->id,
+                        'actor_user_id' => $actor->id,
+                        'action' => 'commission_max_override_depth.updated',
+                        'auditable_type' => Company::class,
+                        'auditable_id' => $company->id,
+                        'old_values' => ['max_override_depth' => $before],
+                        'new_values' => ['max_override_depth' => $maxOverrideDepth],
+                        'ip_address' => request()?->ip(),
+                    ]);
+                }
+            }
+        }
+
+        if ($compression !== null && (bool) $company->override_compression !== $compression) {
+            /*
+             * 2026-09-19 — turning compression on moves money from the levels
+             * below a skipped manager to the people above them. Not frozen by
+             * past sales for the same reason a rate change is not: it changes
+             * the NEXT sale, not the meaning of the rows already written.
+             * Audited because it moves money (§6).
+             */
+            $before = (bool) $company->override_compression;
+            $company->update(['override_compression' => $compression]);
+
+            if ($actor) {
+                AuditLog::create([
+                    'company_id' => $company->id,
+                    'actor_user_id' => $actor->id,
+                    'action' => 'commission_override_compression.updated',
+                    'auditable_type' => Company::class,
+                    'auditable_id' => $company->id,
+                    'old_values' => ['override_compression' => $before],
+                    'new_values' => ['override_compression' => $compression],
+                    'ip_address' => request()?->ip(),
+                ]);
+            }
         }
 
         if ($overrideMode !== null) {
@@ -318,6 +416,84 @@ class CommissionSettingService
      * blocking the switch on its behalf would refuse a change that cannot
      * touch it. Its own mode was checked when it was saved, by the same guard.
      */
+    /**
+     * 2026-09-19 — a company that has already paid somebody may not change
+     * WHAT it pays on, or WHO it pays.
+     *
+     * ═══ WHY THIS DID NOT EXIST, AND WHY IT HAD TO ═══
+     *
+     * Only `commission_override_mode` was ever guarded here. Basis and plan
+     * type went straight to applyChange() with no precondition at all, so a
+     * company mid-year could move from ราคาขาย to PV, or from Unilevel to
+     * Binary, with nothing between the click and the save. Owner, 2026-09-19:
+     * "ผมปรับความตั้งใจผมการ Setup ค่าคอม ครั้งเดียวใช้ทั้งบริษัท และไม่ควร
+     * เปลี่ยนหากมียอดขายเกิดขึ้นแล้ว".
+     *
+     * The audit log was the only thing watching, and an audit log explains a
+     * change after it has happened — it does not prevent one. What it would
+     * have been explaining is two eras of commission under one promise:
+     * BR-4 makes every row written before the switch permanently
+     * uncorrectable, so the company ends up owing one answer to "how am I
+     * paid" and holding two sets of rows that answer differently.
+     *
+     * ═══ WHY THE FIRST LEDGER ROW IS THE LINE ═══
+     *
+     * Not "has agents", not "has rules" — those are setup, and setup is
+     * exactly when these two settings are supposed to be chosen. The moment
+     * that cannot be taken back is the moment money was booked against the
+     * old answer. Before it, the screen is a setup form; after it, it is a
+     * promise already kept once.
+     *
+     * Reversal rows count deliberately: a company whose only rows are
+     * reversals still paid, and then unpaid, real people under the old rule.
+     *
+     * ═══ WHAT IT DELIBERATELY DOES NOT DO ═══
+     *
+     * It does not offer a force flag, and it does not offer a migration. A
+     * company that genuinely has to switch is having a conversation about
+     * money with its agents, not filling in a form — and whatever it decides
+     * about the rows already written is a business decision (BR-7) that no
+     * code here is entitled to make. Refusing is the honest stopping point.
+     *
+     * A no-op save (choosing the value already in place) is not a change and
+     * is never refused — the Form Request lets the screen re-send all three
+     * settings together, and refusing the two that did not move would make
+     * the third unsavable forever.
+     */
+    private function assertNotSettledByExistingSales(
+        Company $company,
+        string $column,
+        ?string $before,
+        string $after,
+        string $label,
+    ): void {
+        if ($before === $after) {
+            return;
+        }
+
+        $ledgerRows = CommissionLedger::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->count();
+
+        if ($ledgerRows === 0) {
+            return;
+        }
+
+        $firstAt = CommissionLedger::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->min('created_at');
+
+        throw ValidationException::withMessages([
+            $column => sprintf(
+                'เปลี่ยน%sไม่ได้แล้ว เพราะบริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว %s รายการ (รายการแรก %s) — '
+                .'ค่าแนะนำที่จ่ายไปแล้วแก้ย้อนหลังไม่ได้ ถ้าเปลี่ยนตอนนี้ ยอดก่อนและหลังจะคิดคนละกติกาโดยที่ไม่มีทางทำให้ตรงกันได้',
+                $label,
+                number_format($ledgerRows),
+                $firstAt ? Carbon::parse($firstAt)->format('d/m/Y') : '—',
+            ),
+        ]);
+    }
+
     private function assertModeFitsExistingRules(Company $company, CommissionOverrideMode $mode): void
     {
         if (! $mode->deductsFromSeller()) {

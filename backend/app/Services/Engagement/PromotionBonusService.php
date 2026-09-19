@@ -11,6 +11,7 @@ use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Models\Referral;
 use App\Models\User;
+use App\Services\Catalog\ProductPricingService;
 use App\Services\Commission\CommissionRateCalculator;
 use Illuminate\Support\Facades\DB;
 
@@ -40,6 +41,10 @@ use Illuminate\Support\Facades\DB;
  */
 class PromotionBonusService
 {
+    public function __construct(
+        private ProductPricingService $productPricingService,
+    ) {}
+
     /**
      * Evaluates every AgentPromotion in the referral's own company
      * against the referral that just reached Complete Payment (the only
@@ -103,8 +108,44 @@ class PromotionBonusService
         // convention as CommissionService/BinaryCommissionService/etc.
         // (basis points for percentage, satang for fixed_satang) — no
         // new calculation scheme invented here.
-        $productPriceSatang = $referral->product->price_satang;
-        $bonusAmountSatang = CommissionRateCalculator::compute($promotion->bonus_type, $promotion->bonus_value, $productPriceSatang);
+        //
+        // 2026-09-19 — THE BASE, AND WHY IT IS NOT `product->price_satang`.
+        //
+        // It used to read that column directly, which was wrong in two ways
+        // that only ever show up as a percentage bonus paying the wrong
+        // amount into an immutable ledger row (BR-4, uncorrectable
+        // afterwards):
+        //
+        //   1. It ignored an active price promotion. A product on a 20% deal
+        //      still paid its bonus on the undiscounted list price, so the
+        //      bonus was computed on a number no customer was ever charged.
+        //   2. It ignored ADR-040 entirely. For a PLATFORM-owned product,
+        //      `price_satang` is the platform's central price, not what the
+        //      selling company charges — the exact mistake CommissionService
+        //      calls out in its own resolution block and avoids. Two
+        //      companies selling the same shared product at different prices
+        //      were paying identical bonuses.
+        //
+        // ProductPricingService::effectivePriceSatang() answers both at once
+        // ("what does THIS company charge for this product right now,
+        // promotion included"), and it is the same service CommissionService
+        // resolves its own sale price through — one place, so the bonus and
+        // the commission on one sale can never disagree about the price.
+        //
+        // TODO: CONFIRM (business rule) — on a company whose
+        // commission_basis is 'pv', every OTHER payout on this sale is a
+        // percentage of PV, and a discount deliberately does not shrink it
+        // (CommissionBasisResolver). This bonus still prices off the sale
+        // price, so on a discounted sale it shrinks while the commission
+        // beside it does not. Whether a promotion bonus should follow the
+        // company's basis is a BR-7 decision the owner has not made; keeping
+        // the sale price preserves today's behaviour for every existing
+        // company until they do.
+        $baseSatang = $this->productPricingService->effectivePriceSatang(
+            $referral->product,
+            (int) $referral->company_id,
+        );
+        $bonusAmountSatang = CommissionRateCalculator::compute($promotion->bonus_type, $promotion->bonus_value, $baseSatang);
 
         $credit = AgentPromotionCredit::create([
             'company_id' => $referral->company_id,

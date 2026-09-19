@@ -6,6 +6,7 @@ use App\Enums\CommissionBasis;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Models\Concerns\HasTrackedLink;
+use App\Support\Money\SupportedCurrency;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -29,10 +30,27 @@ class Company extends Model
 
     protected $fillable = [
         'name',
+        /*
+         * 2026-09-19 — ISO 4217 alpha-3, the currency this tenant's money is
+         * denominated in. A LABEL, not a conversion: nothing in this system
+         * converts between currencies and no exchange rate exists anywhere.
+         * Read it through currencyCode(), never raw. See
+         * App\Support\Money\SupportedCurrency.
+         */
+        'currency_code',
         // 2026-08-27 — minimum an agent may ask to withdraw, in satang
         // (BR-3). NULL means no minimum, which is a real setting and not a
         // missing one — see the migration's own note.
         'min_withdrawal_satang',
+        /*
+         * 2026-09-19 — withholding tax on an AGENT payout, in basis points
+         * (300 = 3.00%). Same column name, scale and null-meaning as
+         * suppliers.wht_rate, because it is the same obligation pointed at a
+         * different kind of payee. NULL = no withholding, which is what every
+         * company does today; BR-7, and in this case the law — the owner
+         * supplies the rate, nothing here suggests one.
+         */
+        'wht_rate',
         'slug',
         'is_active',
         /*
@@ -60,6 +78,15 @@ class Company extends Model
          * the confusion while they wait to be dropped.
          */
         'commission_plan_type',
+        // 2026-09-19 — how many hops up the manager chain a leader override
+        // reaches. NULL = uncapped, which is what the walk did before this
+        // column existed. BR-7: no default is invented.
+        'max_override_depth',
+        // 2026-09-19 — when a manager is skipped by the certification gate,
+        // does the next one up inherit their LEVEL (true) or the one after
+        // it (false)? FALSE is what the walk has always done. See the
+        // migration for why this is a switch and not a decision.
+        'override_compression',
         // 2026-09-12 — the second half of "how does this company pay":
         // commission_plan_type says WHO is paid, this says what a
         // percentage is a percentage OF (the sale price, or the product's
@@ -121,7 +148,10 @@ class Company extends Model
             // BR-3 — satang, always an integer. Cast explicitly so a value
             // read back from MySQL is never a numeric string in comparisons.
             'min_withdrawal_satang' => 'integer',
+            'wht_rate' => 'integer',
             'commission_plan_type' => CommissionPlanType::class,
+            'max_override_depth' => 'integer',
+            'override_compression' => 'boolean',
             'commission_basis' => CommissionBasis::class,
             'commission_override_mode' => CommissionOverrideMode::class,
             // TASK-056 P2 bugfix — deliberately NOT in $fillable: only
@@ -188,6 +218,24 @@ class Company extends Model
         }
 
         return static::withTrashed()->find($companyId)?->isOperational() === true;
+    }
+
+    /**
+     * The currency this tenant's money is in — never read the raw column.
+     *
+     * A row written before the column existed reads back NULL, and a
+     * hand-edited or newer-deploy value reads back as something this build
+     * does not know. Both resolve to THB, which is what every amount in this
+     * system already meant before the column existed. Resolving to something
+     * else would relabel money that nobody re-denominated.
+     */
+    public function currencyCode(): string
+    {
+        $raw = $this->getAttributes()['currency_code'] ?? null;
+
+        return SupportedCurrency::isSupported($raw === null ? null : (string) $raw)
+            ? strtoupper((string) $raw)
+            : SupportedCurrency::DEFAULT;
     }
 
     /** @return HasMany<User, $this> */

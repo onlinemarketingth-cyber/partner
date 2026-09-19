@@ -4,6 +4,7 @@ namespace App\Services\Commission;
 
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionRateType;
+use App\Models\CommissionOverrideRule;
 use App\Models\Company;
 use App\Models\Product;
 use App\Models\Scopes\SharedOrTenantScope;
@@ -83,6 +84,7 @@ class OverrideDeductionGuard
         ?CommissionOverrideMode $assumingMode = null,
         ?int $productId = null,
         ?int $productCategoryId = null,
+        ?int $level = null,
     ): ?string {
         $mode = $assumingMode ?? $company->commission_override_mode ?? CommissionOverrideMode::Additive;
 
@@ -92,7 +94,18 @@ class OverrideDeductionGuard
             return null;
         }
 
-        $depth = $this->deepestChain($company);
+        /*
+         * 2026-09-19 — HOW MANY LEVELS ACTUALLY GET PAID.
+         *
+         * Was the raw deepest chain. A company that caps the walk
+         * (`max_override_depth`) pays that many levels however deep it
+         * recruits, so judging its rate against the full chain would refuse
+         * rates it can plainly afford — and the cap exists precisely so the
+         * rate stops shrinking as the organisation grows.
+         *
+         * NULL cap = the whole chain, which is the number this used before.
+         */
+        $depth = $this->payableLevels($company);
 
         if ($depth === 0) {
             // Nobody has a manager, so no override will ever be paid and no
@@ -114,22 +127,164 @@ class OverrideDeductionGuard
 
             $perManager = $this->perManagerSatang($mode, $rateType, $rateValue, $product, $company, $sellerCommission);
 
-            if ($perManager * $depth <= $sellerCommission) {
+            /*
+             * 2026-09-19 — A SUM, NOT A MULTIPLICATION.
+             *
+             * `$perManager * $depth` was right while one rate served every
+             * level. With per-level rates the levels cost different amounts,
+             * so the question is what the WHOLE walk takes out of the
+             * seller's commission: this rate at the level it prices, plus
+             * whatever every other level already resolves to.
+             *
+             * When no levelled rows exist the other levels all resolve to
+             * this same catch-all rate and the sum is $perManager * $depth
+             * again — identical arithmetic, identical refusals, which is what
+             * keeps every existing company's saves behaving as before.
+             */
+            $total = $this->projectedWalkCostSatang(
+                $company, $product, $mode, $sellerCommission, $depth, $perManager, $level,
+            );
+
+            if ($total <= $sellerCommission) {
                 continue;
             }
 
-            $maxPerManager = intdiv($sellerCommission, $depth);
+            // A single flat rate still has a single honest answer to "so what
+            // CAN I set", and that answer is what the old message gave. With
+            // levels priced separately there is no one number to suggest —
+            // the admin is choosing between several — so the message states
+            // the total instead of inventing a per-level ceiling.
+            if ($level === null && ! $this->hasLevelledRates($company)) {
+                return sprintf(
+                    'อัตรานี้หักเกินค่าแนะนำของผู้ขาย — "%s" จ่ายสมาชิก %s แต่สายงานลึกสุด %d ชั้น '
+                    .'จึงหักได้ไม่เกินชั้นละ %s (ตอนนี้ตั้งไว้ชั้นละ %s) · '
+                    .'แก้ได้ 3 ทาง: ลดอัตราหัวหน้าทีม, เพิ่มอัตราสมาชิกในขั้นที่ 3, หรือเปลี่ยนเป็น "บริษัทจ่ายเพิ่ม"',
+                    $product->effectiveName() ?? "#{$product->id}",
+                    $this->baht($sellerCommission),
+                    $depth,
+                    $this->baht(intdiv($sellerCommission, $depth)),
+                    $this->baht($perManager),
+                );
+            }
 
             return sprintf(
-                'อัตรานี้หักเกินค่าแนะนำของผู้ขาย — "%s" จ่ายสมาชิก %s แต่สายงานลึกสุด %d ชั้น '
-                .'จึงหักได้ไม่เกินชั้นละ %s (ตอนนี้ตั้งไว้ชั้นละ %s) · '
-                .'แก้ได้ 3 ทาง: ลดอัตราหัวหน้าทีม, เพิ่มอัตราสมาชิกในขั้นที่ 3, หรือเปลี่ยนเป็น "บริษัทจ่ายเพิ่ม"',
+                'อัตราทุกชั้นรวมกันหักเกินค่าแนะนำของผู้ขาย — "%s" จ่ายสมาชิก %s '
+                .'แต่ %d ชั้นรวมกันหัก %s · '
+                .'แก้ได้ 4 ทาง: ลดอัตราชั้นใดชั้นหนึ่ง, ลดจำนวนชั้นที่จ่าย, เพิ่มอัตราสมาชิกในขั้นที่ 3, หรือเปลี่ยนเป็น "บริษัทจ่ายเพิ่ม"',
                 $product->effectiveName() ?? "#{$product->id}",
                 $this->baht($sellerCommission),
                 $depth,
-                $this->baht($maxPerManager),
-                $this->baht($perManager),
+                $this->baht($total),
             );
+        }
+
+        return null;
+    }
+
+    /**
+     * How many levels of the chain actually receive an override.
+     *
+     * The deepest chain the company HAS, capped by the depth it chose to pay
+     * (`max_override_depth`). NULL there means uncapped, and then this is the
+     * raw chain depth — the number every rate on this screen was judged
+     * against before levels existed.
+     */
+    public function payableLevels(Company $company): int
+    {
+        $chain = $this->deepestChain($company);
+        $cap = $company->max_override_depth;
+
+        return $cap === null ? $chain : min($chain, $cap);
+    }
+
+    /**
+     * What one sale's whole leader walk takes out of the seller's commission,
+     * with the rate being saved standing in at the level(s) it prices.
+     *
+     * $candidateLevel null = the rate is the catch-all, so it stands in at
+     * every level that has no levelled row of its own. An integer = it prices
+     * exactly that level and the rest resolve as they already do.
+     *
+     * Only ever called on a deducting mode, so every level's amount comes out
+     * of the same pool and summing them is the right question.
+     */
+    private function projectedWalkCostSatang(
+        Company $company,
+        Product $product,
+        CommissionOverrideMode $mode,
+        int $sellerCommission,
+        int $depth,
+        int $candidatePerManager,
+        ?int $candidateLevel,
+    ): int {
+        $total = 0;
+
+        for ($level = 1; $level <= $depth; $level++) {
+            if ($candidateLevel === null || $candidateLevel === $level) {
+                $total += $candidatePerManager;
+
+                continue;
+            }
+
+            $existing = $this->liveRuleForLevel($company, $product, $level);
+
+            if ($existing === null) {
+                // Nothing reaches this level once the candidate is saved, so
+                // it costs nothing — CommissionService writes no row rather
+                // than a zero one.
+                continue;
+            }
+
+            $total += $this->perManagerSatang(
+                $mode, $existing->rate_type, (int) $existing->rate_value, $product, $company, $sellerCommission,
+            );
+        }
+
+        return $total;
+    }
+
+    /** Does this company price any level separately at all? */
+    private function hasLevelledRates(Company $company): bool
+    {
+        return CommissionOverrideRule::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->whereNotNull('level')
+            ->exists();
+    }
+
+    /**
+     * The rate that resolves at one level for one product, by the SAME ladder
+     * CommissionService walks — scope first, level inside each rung. Kept in
+     * step with resolveOverrideRuleForLevel() deliberately: a guard that
+     * measures a different number from the one that will be paid is worse
+     * than no guard, which is the warning perManagerSatang() already carries.
+     */
+    private function liveRuleForLevel(Company $company, Product $product, int $level): ?CommissionOverrideRule
+    {
+        $base = fn () => CommissionOverrideRule::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->where('effective_from', '<=', now())
+            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
+            ->orderByDesc('effective_from');
+
+        $rungs = [fn () => $base()->where('product_id', $product->id)];
+
+        if ($product->category_id) {
+            $rungs[] = fn () => $base()->whereNull('product_id')->where('product_category_id', $product->category_id);
+        }
+
+        $rungs[] = fn () => $base()->whereNull('product_id')->whereNull('product_category_id');
+
+        foreach ($rungs as $rung) {
+            $levelled = $rung()->where('level', $level)->first();
+            if ($levelled) {
+                return $levelled;
+            }
+
+            $catchAll = $rung()->whereNull('level')->first();
+            if ($catchAll) {
+                return $catchAll;
+            }
         }
 
         return null;

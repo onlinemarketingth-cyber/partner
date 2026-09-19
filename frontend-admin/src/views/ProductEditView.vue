@@ -2846,29 +2846,50 @@ function goToVideoSettings() {
               ใช้เฉพาะบริษัทที่คิดค่าแนะนำจาก PV ตั้งเป็นบาทเหมือนราคา — เว้นว่าง = ระบบคิดจากราคาขายแทน
             </p>
           </div>
-          <!-- ADR-011/TASK-027/034 — per-product plan-type override.
-               '' (default) = inherit the company's plan type; an
-               explicit value here overrides it for THIS product only.
-               effective_plan_type (read-only, server-resolved) is shown
-               alongside so the admin always sees which one actually
-               applies, never just the raw possibly-null override. -->
+          <!--
+               ═══ รูปแบบค่าแนะนำ — ของบริษัท ไม่ใช่ของสินค้า (2026-09-19) ═══
+
+               This was a per-product override (ADR-011/TASK-027): pick a plan
+               here and it beat the company's. Owner, 2026-09-19: "ปิดช่องตั้ง
+               แผนต่อสินค้า ... ถ้าเจตนาคือบริษัทเดียวแผนเดียว" — restoring
+               ADR-006 Round 3/4's own ruling. Product::effectivePlanType() now
+               returns the company's plan whenever a company is asking, and
+               Store/UpdateProductRequest refuse the field on a company product.
+
+               So the control is gone from a company product and a read-only
+               readout stands in its place. Leaving a disabled select there
+               would still read as "this is a per-product setting, just locked";
+               the sentence plus the link to where the decision actually lives
+               is what an admin needs instead.
+
+               A PLATFORM product keeps the real control: it sits under no
+               company, so its own column is the only answer available
+               (ADR-040) and effectivePlanType() throws without one.
+          -->
           <div class="sm:col-span-2">
-            <label class="text-sm font-bold text-slate-500">รูปแบบค่าแนะนำของสินค้านี้</label>
-            <select v-model="basicsForm.commission_plan_type" data-test="plan-type-select" :required="isPlatformProduct" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
-              <!-- "สืบทอดจากบริษัท" is not on offer for a platform product:
-                   there is no company to inherit from, and
-                   Product::effectivePlanType() throws rather than guess. -->
-              <option v-if="isPlatformProduct" value="" disabled>— เลือกรูปแบบค่าแนะนำ —</option>
-              <option v-else value="">สืบทอดจากบริษัท (ค่าเริ่มต้น)</option>
-              <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }}{{ isPlatformProduct ? '' : ' (กำหนดเฉพาะสินค้านี้)' }}</option>
-            </select>
-            <p v-if="isPlatformProduct" class="mt-1 text-xs text-amber-600">
-              สินค้ากลางต้องเลือกเอง เพราะไม่ได้อยู่ใต้บริษัทไหน จึงไม่มีค่าของบริษัทมาเติมให้อัตโนมัติ
-            </p>
-            <p v-if="product" class="mt-1 text-xs text-slate-400">
-              ค่าที่ใช้จริงตอนนี้: <span class="font-bold text-slate-600">{{ planTypeLabels[product.effective_plan_type] }}</span>
-              <RouterLink :to="{ name: 'commission-plan-settings' }" class="ml-1 text-brand-600 hover:underline">ตั้งค่าค่าแนะนำ →</RouterLink>
-            </p>
+            <label class="text-sm font-bold text-slate-500">รูปแบบค่าแนะนำ</label>
+
+            <template v-if="isPlatformProduct">
+              <select v-model="basicsForm.commission_plan_type" data-test="plan-type-select" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <option value="" disabled>— เลือกรูปแบบค่าแนะนำ —</option>
+                <option v-for="(label, pt) in planTypeLabels" :key="pt" :value="pt">{{ label }}</option>
+              </select>
+              <p class="mt-1 text-xs text-amber-600">
+                สินค้ากลางต้องเลือกเอง เพราะไม่ได้อยู่ใต้บริษัทไหน จึงไม่มีค่าของบริษัทมาเติมให้อัตโนมัติ —
+                เมื่อบริษัทใดเอาไปขาย จะใช้แผนของบริษัทนั้นแทน
+              </p>
+            </template>
+
+            <template v-else>
+              <p class="mt-1 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 text-sm" data-test="plan-type-readonly">
+                <span class="font-bold text-slate-700">{{ product ? planTypeLabels[product.effective_plan_type] : '—' }}</span>
+                <span class="text-slate-400"> · ตั้งที่ระดับบริษัท ไม่ได้ตั้งรายสินค้า</span>
+              </p>
+              <p class="mt-1 text-xs text-slate-400">
+                ทุกสินค้าของบริษัทนี้ใช้แผนเดียวกัน — ตัวแทนจะได้ตอบได้ครั้งเดียวว่าตัวเองได้เงินยังไง
+                <RouterLink :to="{ name: 'commission-plan-settings' }" class="ml-1 text-brand-600 hover:underline">เปลี่ยนแผนของบริษัท →</RouterLink>
+              </p>
+            </template>
           </div>
           <!-- ADR-026 §3.3 — per-product pipeline template override.
 

@@ -54,6 +54,7 @@ use App\Http\Controllers\Api\V1\CompanyPaymentGatewayController;
 use App\Http\Controllers\Api\V1\CompanyThemeController;
 use App\Http\Controllers\Api\V1\ComplianceReportController;
 use App\Http\Controllers\Api\V1\ConfigHealthReportController;
+use App\Http\Controllers\Api\V1\CurrencyController;
 use App\Http\Controllers\Api\V1\ExamAttemptController;
 use App\Http\Controllers\Api\V1\ExamController;
 use App\Http\Controllers\Api\V1\ExamQuestionController;
@@ -1436,6 +1437,14 @@ Route::prefix('v1')->group(function () {
          * before anything exists to list, and it must not be derived in the
          * browser (see the controller).
          */
+        /*
+         * 2026-09-19 — the currencies a tenant may be denominated in.
+         * A static reference list with no tenant data in it, so it is
+         * readable by any authenticated user: the admin console needs it for
+         * the picker, both frontends need it for formatting.
+         */
+        Route::get('/currencies', [CurrencyController::class, 'index']);
+
         // The per-company minimum. Registered BEFORE the
         // /commission-withdrawals/{id} route below so "settings" is never
         // parsed as a request id — Laravel matches in declaration order, and

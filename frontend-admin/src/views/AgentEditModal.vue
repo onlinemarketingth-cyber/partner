@@ -30,6 +30,7 @@
 import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { api, ApiError } from '@/api/client'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
@@ -51,6 +52,13 @@ import {
 interface CompanyOption {
   id: number
   name: string
+  /**
+   * 2026-09-19 — CompanyResource has always sent it. Declared here so the
+   * modal can ask "does this person's company run Binary" from the list it
+   * was already handed, instead of firing a second request to find out
+   * whether to show one control.
+   */
+  commission_plan_type?: string
 }
 // TASK-058/061 — the "grant cert without exam" panel in section 5.
 interface CertTierOption {
@@ -171,6 +179,7 @@ interface AgentEditForm {
   // UpdateUserRequest for why it was read-only before.
   phone: string
   role: 'agent' | 'company_admin'
+  binary_leg: 'left' | 'right' | null
   manager_id: number | null
   is_team_leader: boolean
   bank_name: string
@@ -185,12 +194,14 @@ function blankEditForm(): AgentEditForm {
     phone: '',
     role: 'agent',
     manager_id: null,
+    binary_leg: null,
     is_team_leader: false,
     bank_name: '',
     bank_account_holder_name: '',
   }
 }
 
+const activeCompany = useActiveCompanyStore()
 const editForm = ref<AgentEditForm>(blankEditForm())
 /**
  * The agent exactly as the API last described them. Never bound to an
@@ -279,6 +290,28 @@ const canBeCompanyAdmin = computed(() => editOriginal.value.role === 'company_ad
  */
 const uplineIsHouseAccount = computed(() => agent.value?.manager_is_commission_house_account === true)
 const uplineIsEditable = computed(() => !editForm.value.is_team_leader && !uplineIsHouseAccount.value)
+/**
+ * 2026-09-19 — does the person being edited belong to a company that runs
+ * Binary? Only then does a left/right placement mean anything, and only then
+ * will UpdateUserRequest accept one.
+ *
+ * Read from the company list the active-company store already holds rather
+ * than fetched: a Super Admin editing across companies needs the SUBJECT's
+ * company, not the one selected in the header, so the subject's own
+ * company.id leads and the header is the fallback for a Company Admin whose
+ * rows carry no nested company.
+ */
+const subjectCompanyRunsBinary = computed(() => {
+  const id = agent.value?.company?.id ?? activeCompany.companyId
+  if (!id) return false
+
+  // The host's own list first — this modal is given `companies` by every
+  // screen that opens it, and the store's copy is only loaded once something
+  // asks it to. Falling through to the store keeps the rarer callers working.
+  const known = [...(props.companies ?? []), ...activeCompany.companies]
+
+  return known.find((c) => c.id === id)?.commission_plan_type === 'binary'
+})
 const uplineIsVisible = computed(() => uplineIsEditable.value || uplineIsHouseAccount.value)
 /** This row IS the company's seat — nothing in this modal applies to it. */
 const subjectIsHouseAccount = computed(() => agent.value?.is_commission_house_account === true)
@@ -362,6 +395,7 @@ function applySubject(subject: AgentItem): void {
     phone: subject.phone ?? '',
     role: subject.role,
     manager_id: subject.manager_id ?? null,
+    binary_leg: (subject.binary_leg as 'left' | 'right' | null) ?? null,
     is_team_leader: subject.is_team_leader ?? false,
     bank_name: subject.bank_name ?? '',
     bank_account_holder_name: subject.bank_account_holder_name ?? '',
@@ -586,6 +620,10 @@ function buildUserPatch(): Record<string, unknown> {
   // invisible structural edit the admin never confirmed. The value already on
   // file is deliberately left untouched (not nulled): see uplineIsEditable.
   if (uplineIsEditable.value && form.manager_id !== original.manager_id) patch.manager_id = form.manager_id
+  // Only ever sent on a Binary company — UpdateUserRequest refuses it
+  // anywhere else, deliberately, so a stale value cannot ride along after a
+  // company changes plan.
+  if (subjectCompanyRunsBinary.value && form.binary_leg !== original.binary_leg) patch.binary_leg = form.binary_leg
   if (form.is_team_leader !== original.is_team_leader) patch.is_team_leader = form.is_team_leader
   if (form.bank_name.trim() !== original.bank_name.trim()) patch.bank_name = trimmedOrNull(form.bank_name)
   if (form.bank_account_holder_name.trim() !== original.bank_account_holder_name.trim()) {
@@ -693,6 +731,7 @@ const EDIT_FIELD_NAMES = [
   'phone',
   'role',
   'manager_id',
+  'binary_leg',
   'is_team_leader',
   'bank_name',
   'bank_account_number',
@@ -1275,6 +1314,43 @@ watch(
                   {{ editFieldErrors.manager_id }}
                 </p>
               </div>
+            </div>
+
+            <!--
+                 ═══ ขาซ้าย / ขาขวา — Binary เท่านั้น (2026-09-19) ═══
+
+                 `users.binary_leg` shipped with the Binary engine in ADR-006
+                 Round 4 and no screen ever wrote it, so the column could only
+                 be null outside a test. A Binary company credited every sale
+                 to nobody and paid zero for ever, silently. This is the
+                 missing control.
+
+                 It sits directly under the upline because it is the second
+                 half of the same sentence: the upline says who recruited this
+                 person, the leg says which side of them they sit on. Hidden
+                 entirely on any other plan — UpdateUserRequest refuses the
+                 field there, and a control that cannot be saved is worse than
+                 none.
+            -->
+            <div v-if="subjectCompanyRunsBinary" class="mt-3" data-test="binary-leg-field">
+              <label class="text-sm font-bold text-slate-500">ขาในผัง Binary</label>
+              <select
+                v-model="editForm.binary_leg"
+                :disabled="editIsReadOnly"
+                data-test="binary-leg-select"
+                class="mt-1 w-full px-3 py-2 rounded-lg border text-sm bg-white disabled:bg-slate-50 disabled:text-slate-400"
+                :class="inputBorderClass('binary_leg')"
+              >
+                <option :value="null">ยังไม่ได้เลือกขา</option>
+                <option value="left">ขาซ้าย</option>
+                <option value="right">ขาขวา</option>
+              </select>
+              <p class="text-[11px] text-slate-500 mt-1">
+                ยอดขายของคนนี้และลูกทีมทั้งสายจะไปรวมที่ขานี้ของหัวหน้าทุกคนเหนือขึ้นไป — ยังไม่เลือก = ยอดไม่เข้าขาไหนเลย
+              </p>
+              <p v-if="editFieldErrors.binary_leg" class="text-[11px] text-rose-600 mt-1">
+                {{ editFieldErrors.binary_leg }}
+              </p>
             </div>
 
             <!-- ADR-025 §1 — a CAPABILITY, not a fourth role: `role` above

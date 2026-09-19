@@ -34,6 +34,13 @@ export interface CompanyOption {
   id: number
   name: string
   /**
+   * 2026-09-19 — CompanyResource has always sent it; declaring it here is
+   * what lets a screen ask "does this company run Binary" without a second
+   * request. AgentEditModal uses it to decide whether a left/right placement
+   * control means anything for the person being edited.
+   */
+  commission_plan_type?: string
+  /**
    * TASK-208 regression fix — ThemeSettingsView loads a company's theme from
    * GET /public/theme/{slug}, which is a SLUG route, not an id route. The
    * local list this store replaced carried the slug; dropping it here made

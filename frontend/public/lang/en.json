@@ -110,7 +110,10 @@
     "blocked_cta": "Go to profile",
     "go": "Request a withdrawal",
     "none_available": "Nothing available to withdraw right now — a request may still be open, or this round was already scheduled for payout.",
-    "below_minimum": "Below your company's minimum withdrawal."
+    "below_minimum": "Below your company's minimum withdrawal.",
+    "wht_notice": "Withholding tax of {rate}% applies — you will receive about {net}",
+    "wht_line": "Withholding tax {rate}% −{tax}",
+    "wht_net": "You receive {net}"
   },
   "payout": {
     "incomplete_title": "Payout details incomplete",

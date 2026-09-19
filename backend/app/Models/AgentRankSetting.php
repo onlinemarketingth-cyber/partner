@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\AgentRankRecalculationFrequency;
+use App\Enums\AgentRankVolumeScope;
 use App\Models\Scopes\TenantScope;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -25,6 +26,7 @@ class AgentRankSetting extends Model
     protected $fillable = [
         'company_id',
         'trailing_window_days',
+        'volume_scope',
         'recalculation_frequency',
         'last_recalculated_at',
     ];
@@ -33,9 +35,29 @@ class AgentRankSetting extends Model
     {
         return [
             'trailing_window_days' => 'integer',
+            'volume_scope' => AgentRankVolumeScope::class,
             'recalculation_frequency' => AgentRankRecalculationFrequency::class,
             'last_recalculated_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Whose sales count toward a rank — never read the raw column.
+     *
+     * A row written before the column existed reads back NULL rather than
+     * the column default, and a hand-edited or half-migrated value reads
+     * back as an unrecognised string that the cast would throw on. Both
+     * resolve here to Personal, which is what the code did before the
+     * column existed — the fail-safe answer is the old behaviour, not an
+     * exception on a scheduled job nobody is watching.
+     */
+    public function volumeScope(): AgentRankVolumeScope
+    {
+        $raw = $this->getAttributes()['volume_scope'] ?? null;
+
+        return $raw === null
+            ? AgentRankVolumeScope::default()
+            : (AgentRankVolumeScope::tryFrom((string) $raw) ?? AgentRankVolumeScope::default());
     }
 
     /** @return BelongsTo<Company, $this> */

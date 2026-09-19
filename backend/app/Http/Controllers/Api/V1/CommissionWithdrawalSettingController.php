@@ -36,6 +36,10 @@ class CommissionWithdrawalSettingController extends Controller
             // null means NO minimum — a real setting. The UI must render an
             // empty field, never a zero it then saves back as a floor.
             'min_withdrawal_satang' => $company?->min_withdrawal_satang,
+            // Basis points, null = no withholding. Same "null is a real
+            // setting" rule as the minimum above: the UI must render an
+            // empty field, never a zero it then saves back as a rate.
+            'wht_rate' => $company?->wht_rate,
         ]);
     }
 
@@ -63,9 +67,47 @@ class CommissionWithdrawalSettingController extends Controller
             'ip_address' => $request->ip(),
         ]);
 
+        /*
+         * 2026-09-19 — the withholding rate, saved and audited SEPARATELY.
+         *
+         * `has()`, not `validated(...) !== null`: absent means the caller
+         * never mentioned it (the screen that saves only the minimum), and an
+         * explicit null means "no withholding" — two different instructions,
+         * and collapsing them would let a save of the minimum silently clear
+         * a tax rate.
+         *
+         * Its own audit row rather than extra keys on the one above, because
+         * the two settings answer to different people: the minimum is an
+         * operations decision, the rate is a filing obligation, and whoever
+         * later asks "when did we start withholding 3%" should find one row
+         * that says exactly that.
+         */
+        if ($request->has('wht_rate')) {
+            $oldRate = $company->wht_rate;
+            $newRate = $request->validated('wht_rate');
+
+            if ($oldRate !== $newRate) {
+                $company->update(['wht_rate' => $newRate]);
+
+                AuditLog::create([
+                    'company_id' => $company->id,
+                    'actor_user_id' => $request->user()->id,
+                    'action' => 'settings.commission_withholding_tax_updated',
+                    'auditable_type' => Company::class,
+                    'auditable_id' => $company->id,
+                    'old_values' => ['wht_rate' => $oldRate],
+                    'new_values' => ['wht_rate' => $newRate],
+                    'ip_address' => $request->ip(),
+                ]);
+            }
+        }
+
+        $fresh = $company->fresh();
+
         return response()->json([
             'company_id' => $company->id,
-            'min_withdrawal_satang' => $company->fresh()->min_withdrawal_satang,
+            'min_withdrawal_satang' => $fresh->min_withdrawal_satang,
+            'wht_rate' => $fresh->wht_rate,
         ]);
     }
 
