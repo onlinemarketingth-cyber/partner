@@ -56,12 +56,19 @@ class CommissionSettingResource extends JsonResource
             /*
              * 2026-09-21 — may the plan and the basis still be changed?
              *
-             * `{ locked, ledger_rows, first_ledger_at }` rather than a bare
-             * boolean, because the screen has to SAY WHY. "เปลี่ยนไม่ได้" with
-             * no reason reads as a bug or a permission problem; naming the
-             * number of settled rows and the date of the first one is the
-             * difference between a rule and an obstruction — and it is the
-             * same pair of facts the server's own refusal quotes.
+             * `{ locked, paid_orders, ledger_rows, first_sale_at }` rather
+             * than a bare boolean, because the screen has to SAY WHY.
+             * "เปลี่ยนไม่ได้" with no reason reads as a bug or a permission
+             * problem; naming what was sold and when is the difference
+             * between a rule and an obstruction — and it is the same set of
+             * facts the server's own refusal quotes.
+             *
+             * BOTH counts, not one total. Owner's ruling 2026-09-21: a paid
+             * order locks the plan even when no commission has been booked
+             * against it yet. A single number could not tell those apart, and
+             * a screen saying "มีค่าแนะนำลงบัญชีแล้ว 0 รายการ" over fourteen
+             * paid orders is what sent the owner looking for a bug in the
+             * lock.
              *
              * Always present, `locked: false` when nothing has been paid yet,
              * so the screen never has to tell "not locked" from "not told".

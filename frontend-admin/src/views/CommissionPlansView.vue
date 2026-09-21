@@ -2240,11 +2240,13 @@ interface LeaderWarning {
  * ═══════════════════════════════════════════════════════════════════════ */
 interface PlanLock {
   locked: boolean
+  /** Orders that reached ชำระเงินแล้ว, including ones later refunded. */
+  paid_orders: number
   ledger_rows: number
-  first_ledger_at: string | null
+  first_sale_at: string | null
 }
 
-const UNLOCKED: PlanLock = { locked: false, ledger_rows: 0, first_ledger_at: null }
+const UNLOCKED: PlanLock = { locked: false, paid_orders: 0, ledger_rows: 0, first_sale_at: null }
 const planLock = ref<PlanLock>(UNLOCKED)
 
 /** Short-hand for the many places that only care whether it is shut. */
@@ -2252,18 +2254,32 @@ const planLockedBySales = computed(() => planLock.value.locked === true)
 
 /**
  * The sentence that replaces "มีผลกับการขายครั้งถัดไปเท่านั้น" once the
- * company has paid anybody.
+ * company has sold anything.
  *
- * Names the count and the date, because "เปลี่ยนไม่ได้" alone reads as a bug
- * or a permission problem. It is the same pair of facts the server's refusal
- * quotes — from the same query — so an admin who sees both cannot find them
- * disagreeing.
+ * ── WHY IT NAMES BOTH NUMBERS ──
+ *
+ * 2026-09-21, owner: "คือมันมี Order ไง". The first version of this line
+ * counted only ledger rows, and on a company with fourteen paid orders and no
+ * commission booked it said nothing at all — the lock stayed open and the
+ * owner went looking for a bug in the query.
+ *
+ * So the reader has to be able to recognise their own situation: orders
+ * alone, commission alone, or both. A single total would hide exactly the
+ * case that caused the confusion.
  */
 const planLockNote = computed(() => {
-  const rows = planLock.value.ledger_rows.toLocaleString('th-TH')
-  const since = planLock.value.first_ledger_at ? formatDate(planLock.value.first_ledger_at) : '—'
+  const lock = planLock.value
+  const orders = lock.paid_orders.toLocaleString('th-TH')
+  const rows = lock.ledger_rows.toLocaleString('th-TH')
+  const since = lock.first_sale_at ? formatDate(lock.first_sale_at) : '—'
 
-  return `เปลี่ยนแผนและฐานการคำนวณไม่ได้แล้ว — บริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว ${rows} รายการ (รายการแรก ${since})`
+  const what = lock.paid_orders > 0 && lock.ledger_rows > 0
+    ? `บริษัทนี้ขายไปแล้ว ${orders} ออเดอร์ และมีค่าแนะนำลงบัญชีแล้ว ${rows} รายการ`
+    : lock.paid_orders > 0
+      ? `บริษัทนี้มีออเดอร์ที่ชำระเงินแล้ว ${orders} รายการ`
+      : `บริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว ${rows} รายการ`
+
+  return `เปลี่ยนแผนและฐานการคำนวณไม่ได้แล้ว — ${what} (รายการแรก ${since})`
 })
 
 const EMPTY_LEADER_WARNING: LeaderWarning = { total: 0, leaders: [] }

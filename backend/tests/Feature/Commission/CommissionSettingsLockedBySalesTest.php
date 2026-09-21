@@ -6,10 +6,15 @@ use App\Enums\CommissionBasis;
 use App\Enums\CommissionEarnedVia;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
+use App\Enums\OrderStatus;
+use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\Company;
+use App\Models\Order;
+use App\Models\Referral;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Tests\TestCase;
 
 /**
@@ -48,6 +53,33 @@ class CommissionSettingsLockedBySalesTest extends TestCase
             'agent_id' => $agent->id,
             'created_at' => now()->subMonth(),
         ]);
+
+        return $company;
+    }
+
+    /**
+     * A paid order and nothing else — no commission booked against it.
+     *
+     * The state the owner was in when they caught this (2026-09-21): fourteen
+     * orders marked ชำระเงินแล้ว, an empty ledger, and a screen still offering
+     * to switch the plan.
+     */
+    private function withOnePaidOrder(Company $company, array $attributes = []): Company
+    {
+        // Built from a referral inside the company so client/agent/product all
+        // belong to it too — an order whose own company_id disagreed with its
+        // referral's would pass this count while being a fixture no code path
+        // can produce.
+        $client = Client::factory()->create(['company_id' => $company->id]);
+        $referral = Referral::factory()->create([
+            'client_id' => $client->id,
+            'company_id' => $company->id,
+        ]);
+
+        Order::factory()->paid()->create(array_merge([
+            'referral_id' => $referral->id,
+            'paid_at' => now()->subMonth(),
+        ], $attributes));
 
         return $company;
     }
@@ -111,6 +143,142 @@ class CommissionSettingsLockedBySalesTest extends TestCase
         $message = $response->json('errors.commission_basis.0');
         $this->assertStringContainsString('1 รายการ', $message);
         $this->assertStringContainsString(now()->subMonth()->format('d/m/Y'), $message);
+    }
+
+    // ── A PAID ORDER IS A SALE, EVEN WITH NO COMMISSION BOOKED ──────────────
+
+    /**
+     * 2026-09-21 — the owner caught this against their own production data.
+     *
+     * "คือมันมี Order ไง คุณไม่ได้เช็คจาก id company ในการ Lock แผนเหรอครับ".
+     * The company_id filter was right; what was wrong was the table. This
+     * counted `commission_ledger` alone, so a company with fourteen orders
+     * marked ชำระเงินแล้ว and an empty ledger was told it could still switch
+     * plans.
+     *
+     * The ledger-only reading allowed the exact sequence the guard exists to
+     * prevent: sell under plan A, switch to plan B, then pay that earlier sale
+     * under B when whatever stopped the commission firing is fixed.
+     */
+    public function test_a_paid_order_locks_the_plan_even_with_an_empty_ledger(): void
+    {
+        $company = $this->withOnePaidOrder($this->company());
+
+        $this->assertSame(0, CommissionLedger::withoutGlobalScopes()->where('company_id', $company->id)->count());
+
+        $this->save($company, ['commission_plan_type' => CommissionPlanType::Binary->value])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('commission_plan_type');
+
+        $this->assertSame(CommissionPlanType::Unilevel, $company->fresh()->commission_plan_type);
+    }
+
+    public function test_a_paid_order_locks_the_basis_too(): void
+    {
+        $company = $this->withOnePaidOrder($this->company());
+
+        $this->save($company, ['commission_basis' => CommissionBasis::PointValue->value])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('commission_basis');
+    }
+
+    public function test_a_refunded_order_still_counts_as_having_sold(): void
+    {
+        // Refunded is reachable only FROM Paid (OrderStatus), so the money
+        // arrived and went back. Same reasoning as the reversal ledger row:
+        // the promise was made under the old rule.
+        $company = $this->withOnePaidOrder($this->company(), [
+            'status' => OrderStatus::Refunded->value,
+            'refunded_at' => now(),
+        ]);
+
+        $this->save($company, ['commission_plan_type' => CommissionPlanType::Matrix->value])
+            ->assertStatus(422);
+    }
+
+    public function test_an_unpaid_order_does_not_lock_anything(): void
+    {
+        /*
+         * THE EDGE THAT WOULD LOCK A COMPANY OUT OF ITS OWN SETUP. Nobody has
+         * paid for a pending or awaiting-verification order, and it may yet be
+         * cancelled — a cart somebody abandoned must not freeze the plan.
+         */
+        $company = $this->company();
+        $this->withOnePaidOrder($company, ['status' => OrderStatus::Pending->value, 'paid_at' => null]);
+        $this->withOnePaidOrder($company, ['status' => OrderStatus::AwaitingVerification->value, 'paid_at' => null]);
+        $this->withOnePaidOrder($company, ['status' => OrderStatus::Cancelled->value, 'paid_at' => null]);
+
+        $this->save($company, ['commission_plan_type' => CommissionPlanType::Binary->value])->assertOk();
+
+        $this->assertSame(CommissionPlanType::Binary, $company->fresh()->commission_plan_type);
+    }
+
+    public function test_the_refusal_names_the_orders_when_no_commission_was_booked(): void
+    {
+        /*
+         * The sentence is the whole fix. "มีค่าแนะนำที่ลงบัญชีไปแล้ว 0 รายการ"
+         * over a company with paid orders is what sent the owner looking for a
+         * bug in the lock, so the refusal has to describe the situation the
+         * reader is actually in.
+         */
+        $company = $this->withOnePaidOrder($this->company());
+
+        $message = (string) $this->save($company, ['commission_plan_type' => CommissionPlanType::Binary->value])
+            ->assertStatus(422)
+            ->json('errors.commission_plan_type.0');
+
+        $this->assertStringContainsString('ออเดอร์ที่ชำระเงินแล้ว 1 รายการ', $message);
+        $this->assertStringNotContainsString('0 รายการ', $message);
+    }
+
+    public function test_the_read_reports_the_order_count_separately_from_the_ledger(): void
+    {
+        // Two numbers, not one total: a screen holding only a sum could not
+        // tell "sold but nothing booked" from "booked", which is the
+        // distinction that caused the confusion in the first place.
+        $company = $this->withOnePaidOrder($this->company());
+
+        $this->read($company)
+            ->assertOk()
+            ->assertJsonPath('data.plan_locked_by_sales.locked', true)
+            ->assertJsonPath('data.plan_locked_by_sales.paid_orders', 1)
+            ->assertJsonPath('data.plan_locked_by_sales.ledger_rows', 0);
+    }
+
+    public function test_the_first_sale_date_is_the_order_when_the_order_came_first(): void
+    {
+        /*
+         * The banner says "since when", and the honest answer is when this
+         * company first sold anything — not when a commission row happened to
+         * follow, which can be days later or never.
+         */
+        $company = $this->company();
+        $this->withOnePaidOrder($company, ['paid_at' => now()->subYear()]);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        CommissionLedger::factory()->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+            'created_at' => now()->subDay(),
+        ]);
+
+        $firstAt = $this->read($company)->json('data.plan_locked_by_sales.first_sale_at');
+
+        $this->assertSame(
+            now()->subYear()->startOfDay()->toDateString(),
+            Carbon::parse($firstAt)->startOfDay()->toDateString(),
+        );
+    }
+
+    public function test_another_companys_orders_do_not_lock_this_one(): void
+    {
+        // BR-6 on the new query too — the same isolation the ledger count has.
+        $busy = $this->withOnePaidOrder($this->company());
+        $quiet = $this->company();
+
+        $this->save($quiet, ['commission_basis' => CommissionBasis::PointValue->value])->assertOk();
+
+        $this->read($quiet)->assertJsonPath('data.plan_locked_by_sales.locked', false);
+        $this->read($busy)->assertJsonPath('data.plan_locked_by_sales.locked', true);
     }
 
     // ── The edges that would lock somebody out ──────────────────────────────
@@ -201,8 +369,9 @@ class CommissionSettingsLockedBySalesTest extends TestCase
         $this->read($this->company())
             ->assertOk()
             ->assertJsonPath('data.plan_locked_by_sales.locked', false)
+            ->assertJsonPath('data.plan_locked_by_sales.paid_orders', 0)
             ->assertJsonPath('data.plan_locked_by_sales.ledger_rows', 0)
-            ->assertJsonPath('data.plan_locked_by_sales.first_ledger_at', null);
+            ->assertJsonPath('data.plan_locked_by_sales.first_sale_at', null);
     }
 
     public function test_the_settings_read_reports_the_lock_with_the_same_facts_the_refusal_quotes(): void
@@ -221,7 +390,7 @@ class CommissionSettingsLockedBySalesTest extends TestCase
             ->assertJsonPath('data.plan_locked_by_sales.ledger_rows', 1);
 
         $this->assertNotNull(
-            $this->read($company)->json('data.plan_locked_by_sales.first_ledger_at'),
+            $this->read($company)->json('data.plan_locked_by_sales.first_sale_at'),
             'the screen formats the date itself — an admin reads Buddhist years — so it needs the timestamp, not a pre-formatted string',
         );
     }

@@ -5,12 +5,15 @@ namespace App\Services\Commission;
 use App\Enums\CommissionBasis;
 use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
+use App\Enums\OrderStatus;
 use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Models\CommissionOverrideRule;
 use App\Models\Company;
+use App\Models\Order;
 use App\Models\User;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -85,7 +88,7 @@ class CommissionSettingService
      * placeholder — the screen refuses to render step 2 in that state
      * anyway — rather than picking one tenant's settings to speak for all.
      *
-     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, plan_locked_by_sales: array{locked: bool, ledger_rows: int, first_ledger_at: string|null}, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
+     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, plan_locked_by_sales: array{locked: bool, paid_orders: int, ledger_rows: int, first_sale_at: string|null}, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
      */
     public function forCompany(?int $companyId): array
     {
@@ -493,43 +496,136 @@ class CommissionSettingService
      * expressions of one rule, free to drift, discovered at a payout. So the
      * count lives here and both callers ask it.
      *
-     * `locked` is the answer to "may the plan or the basis change", and it is
-     * deliberately the same condition the refusal uses: one row is enough.
-     * A single sale means money has been calculated under one set of rules,
-     * and BR-4 makes that row uncorrectable.
+     * ── WHAT COUNTS AS "HAS SOLD" — OWNER'S RULING, 2026-09-21 ──
      *
-     * @return array{locked: bool, ledger_rows: int, first_ledger_at: string|null}
+     * A PAID ORDER, or a commission row. Either one alone is enough.
+     *
+     * This shipped counting only `commission_ledger`, and the owner caught it
+     * against their own production data: SWS had fourteen orders marked
+     * ชำระเงินแล้ว and the screen still offered to switch the plan. "คือมันมี
+     * Order ไง".
+     *
+     * The ledger-only reading had a defensible argument — nothing is booked,
+     * so nothing can be contradicted — and it is the wrong one, for a reason
+     * the fourteen orders demonstrate. A paid order whose commission has NOT
+     * fired yet is not a sale that pays nothing; it is a sale whose payout is
+     * still outstanding, for a fixable reason (no matching rate, an
+     * uncertified seller, an order with no referral attached). The moment
+     * that reason is fixed, the payout is computed under WHATEVER PLAN IS IN
+     * FORCE THEN. So the ledger-only rule quietly allowed the one sequence
+     * this guard exists to prevent: sell under plan A, switch to plan B, pay
+     * the earlier sale under B.
+     *
+     * Refunded orders count too, and for the same reason reversal rows do:
+     * Refunded is reachable only from Paid (OrderStatus), so the money
+     * arrived and went back — the promise was still made under the old rule.
+     *
+     * Pending and AwaitingVerification do NOT count. Nobody has paid, the
+     * order may yet be cancelled, and a company would otherwise be locked out
+     * of its own setup by a cart somebody abandoned.
+     *
+     * `locked` is the answer to "may the plan or the basis change", and one
+     * of either kind is enough — a single sale means money has been promised
+     * under one set of rules.
+     *
+     * @return array{locked: bool, paid_orders: int, ledger_rows: int, first_sale_at: string|null}
      */
     private function settledSalesSummary(?Company $company): array
     {
+        $none = ['locked' => false, 'paid_orders' => 0, 'ledger_rows' => 0, 'first_sale_at' => null];
+
         if ($company === null) {
             // A Super Admin on "ทุกบริษัท" is not asking about any company, so
             // nothing is locked — and step 2 refuses to render in that state
             // anyway. Reporting a lock here would put a refusal banner over a
             // screen that is not offering the choice.
-            return ['locked' => false, 'ledger_rows' => 0, 'first_ledger_at' => null];
+            return $none;
         }
+
+        /*
+         * withoutGlobalScopes on both: this runs for a Super Admin acting on a
+         * company that is not their own active one, and TenantScope would
+         * silently answer 0 — which reads as "never sold anything" and unlocks
+         * the very screen this is guarding.
+         */
+        $paidOrders = Order::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->whereIn('status', [OrderStatus::Paid->value, OrderStatus::Refunded->value])
+            ->count();
 
         $ledgerRows = CommissionLedger::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->count();
 
-        if ($ledgerRows === 0) {
-            return ['locked' => false, 'ledger_rows' => 0, 'first_ledger_at' => null];
+        if ($paidOrders === 0 && $ledgerRows === 0) {
+            return $none;
         }
 
-        $firstAt = CommissionLedger::withoutGlobalScopes()
+        /*
+         * The earliest of the two, because the banner says "since when" and
+         * the honest answer is when this company first sold anything — which
+         * is the order, not the commission row that may have followed it days
+         * later or never.
+         *
+         * COALESCE(paid_at, created_at): paid_at is nullable and older rows
+         * predate it. Falling back to created_at names a date that is at
+         * worst early, where a NULL would drop the row out of the MIN
+         * entirely and report a first sale later than the real one.
+         */
+        $firstOrderAt = Order::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->whereIn('status', [OrderStatus::Paid->value, OrderStatus::Refunded->value])
+            ->min(DB::raw('COALESCE(paid_at, created_at)'));
+
+        $firstLedgerAt = CommissionLedger::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->min('created_at');
 
+        $candidates = array_values(array_filter([$firstOrderAt, $firstLedgerAt]));
+        $firstAt = $candidates === [] ? null : min(array_map(
+            static fn (string $raw): Carbon => Carbon::parse($raw),
+            $candidates,
+        ));
+
         return [
             'locked' => true,
+            'paid_orders' => $paidOrders,
             'ledger_rows' => $ledgerRows,
             // ISO, not the d/m/Y the refusal prints: the screen formats dates
             // in the reader's own calendar (the admin runs on Buddhist years),
             // and a pre-formatted string would arrive already wrong there.
-            'first_ledger_at' => $firstAt ? Carbon::parse($firstAt)->toIso8601String() : null,
+            'first_sale_at' => $firstAt?->toIso8601String(),
         ];
+    }
+
+    /**
+     * How the refusal and the banner describe what is holding the lock.
+     *
+     * Three shapes rather than one, because "มีค่าแนะนำลงบัญชีแล้ว 0 รายการ"
+     * over fourteen paid orders is the sentence that sent the owner looking
+     * for a bug in the lock. The reader has to be able to recognise their own
+     * situation in it.
+     *
+     * @param  array{locked: bool, paid_orders: int, ledger_rows: int, first_sale_at: string|null}  $settled
+     */
+    private function settledSalesReason(array $settled): string
+    {
+        $orders = number_format($settled['paid_orders']);
+        $rows = number_format($settled['ledger_rows']);
+
+        if ($settled['paid_orders'] > 0 && $settled['ledger_rows'] > 0) {
+            return "บริษัทนี้ขายไปแล้ว {$orders} ออเดอร์ และมีค่าแนะนำลงบัญชีแล้ว {$rows} รายการ";
+        }
+
+        if ($settled['paid_orders'] > 0) {
+            // The state the owner was actually in. Naming it explicitly stops
+            // the screen implying the orders do not count.
+            return "บริษัทนี้มีออเดอร์ที่ชำระเงินแล้ว {$orders} รายการ (ค่าแนะนำจะคิดตามแผนที่ตั้งไว้ตอนขาย)";
+        }
+
+        // Possible without any order: a renewal commission, or a promotion
+        // bonus written straight to the ledger.
+        return "บริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว {$rows} รายการ";
     }
 
     private function assertNotSettledByExistingSales(
@@ -551,11 +647,11 @@ class CommissionSettingService
 
         throw ValidationException::withMessages([
             $column => sprintf(
-                'เปลี่ยน%sไม่ได้แล้ว เพราะบริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว %s รายการ (รายการแรก %s) — '
+                'เปลี่ยน%sไม่ได้แล้ว เพราะ%s (รายการแรก %s) — '
                 .'ค่าแนะนำที่จ่ายไปแล้วแก้ย้อนหลังไม่ได้ ถ้าเปลี่ยนตอนนี้ ยอดก่อนและหลังจะคิดคนละกติกาโดยที่ไม่มีทางทำให้ตรงกันได้',
                 $label,
-                number_format($settled['ledger_rows']),
-                $settled['first_ledger_at'] ? Carbon::parse($settled['first_ledger_at'])->format('d/m/Y') : '—',
+                $this->settledSalesReason($settled),
+                $settled['first_sale_at'] ? Carbon::parse($settled['first_sale_at'])->format('d/m/Y') : '—',
             ),
         ]);
     }
