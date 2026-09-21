@@ -129,12 +129,8 @@ function mockApi(lock: Record<string, unknown> | undefined) {
 
 const UNLOCKED = { locked: false, paid_orders: 0, ledger_rows: 0, first_sale_at: null }
 
-/**
- * Step 2, looking at a plan the company does NOT run — which is the only
- * state in which the switch is on offer, and therefore the only state in
- * which taking it away is visible.
- */
-async function browsingAnotherPlan() {
+/** Step 2, looking at whatever plan the company runs. */
+async function atStepTwo() {
   const wrapper = mount(CommissionPlansView, {
     global: {
       stubs: {
@@ -154,6 +150,20 @@ async function browsingAnotherPlan() {
   await flushPromises()
   await wrapper.get('[data-test="step-tab-2"]').trigger('click')
   await flushPromises()
+
+  return wrapper
+}
+
+/**
+ * …and then pressing another plan's chip.
+ *
+ * Only reaches that view while UNLOCKED — once the company has sold, the
+ * chips are dead by the owner's ruling, and a locked screen stays pinned to
+ * the plan it runs. Tests that call this on a locked fixture are asserting
+ * that the press did nothing, which is the point.
+ */
+async function browsingAnotherPlan() {
+  const wrapper = await atStepTwo()
   await wrapper.get('[data-test="plan-chip-binary"]').trigger('click')
   await flushPromises()
 
@@ -205,13 +215,20 @@ describe('nothing sold yet', () => {
 // ── Once it has sold, the control is gone before the press ──────────────────
 
 describe('locked by sales', () => {
-  it('takes the switch away and says so in its place', async () => {
+  it('never offers the switch, and the chip press that used to reach it does nothing', async () => {
+    /*
+     * Two guards in one, and they are deliberately not the same guard: the
+     * chips are dead (owner's ruling), AND the "ใช้แผนนี้" button is gone
+     * from the branch that renders it. Either alone would be one tidy-up away
+     * from putting the switch back in front of somebody.
+     */
     mockApi({ locked: true, paid_orders: 14, ledger_rows: 0, first_sale_at: '2026-08-22T11:27:00+07:00' })
 
     const wrapper = await browsingAnotherPlan()
 
     expect(wrapper.find('[data-test="use-this-plan"]').exists()).toBe(false)
-    expect(wrapper.get('[data-test="plan-locked-badge"]').text()).toContain('เปลี่ยนไม่ได้แล้ว')
+    // The press was refused, so the screen is still on the company's own plan.
+    expect(wrapper.get('[data-test="plan-explainer"]').text()).toContain('Unilevel')
   })
 
   it('names the orders when no commission has been booked against them', async () => {
@@ -221,7 +238,7 @@ describe('locked by sales', () => {
      */
     mockApi({ locked: true, paid_orders: 14, ledger_rows: 0, first_sale_at: '2026-08-22T11:27:00+07:00' })
 
-    const wrapper = await browsingAnotherPlan()
+    const wrapper = await atStepTwo()
     const note = wrapper.get('[data-test="plan-locked-note"]').text()
 
     expect(note).toContain('ออเดอร์ที่ชำระเงินแล้ว 14 รายการ')
@@ -232,7 +249,7 @@ describe('locked by sales', () => {
   it('names both when there are orders and commission rows', async () => {
     mockApi({ locked: true, paid_orders: 14, ledger_rows: 3, first_sale_at: '2026-08-22T11:27:00+07:00' })
 
-    const note = (await browsingAnotherPlan()).get('[data-test="plan-locked-note"]').text()
+    const note = (await atStepTwo()).get('[data-test="plan-locked-note"]').text()
 
     expect(note).toContain('14 ออเดอร์')
     expect(note).toContain('3 รายการ')
@@ -243,10 +260,62 @@ describe('locked by sales', () => {
     // written straight to the ledger.
     mockApi({ locked: true, paid_orders: 0, ledger_rows: 2, first_sale_at: '2026-08-22T11:27:00+07:00' })
 
-    const note = (await browsingAnotherPlan()).get('[data-test="plan-locked-note"]').text()
+    const note = (await atStepTwo()).get('[data-test="plan-locked-note"]').text()
 
     expect(note).toContain('ค่าแนะนำที่ลงบัญชีไปแล้ว 2 รายการ')
     expect(note).not.toContain('ออเดอร์')
+  })
+
+  it('makes the other plan chips unpressable, with a padlock on each', async () => {
+    /*
+     * OWNER'S RULING, second pass: "หากมีออเดอร์ ค่าคอมแล้ว กดไม่ได้เลย".
+     *
+     * The chips only ever moved the view — nothing was saved by pressing one
+     * — and that was the argument for leaving them live. It lost because the
+     * owner read the row of live buttons as "the plan can still be changed"
+     * twice in one day, on the screen whose job was to say it could not.
+     */
+    mockApi({ locked: true, paid_orders: 14, ledger_rows: 13, first_sale_at: '2026-08-22T11:27:00+07:00' })
+
+    const wrapper = await atStepTwo()
+
+    expect(wrapper.get('[data-test="plan-chip-matrix"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-test="plan-chip-generation"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="plan-chip-lock-matrix"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="plan-chips-locked-hint"]').text()).toContain('กดไม่ได้แล้ว')
+    expect(wrapper.find('[data-test="plan-chips-hint"]').exists()).toBe(false)
+  })
+
+  it("leaves the company's own chip pressable, so a jump to another plan is not a dead end", async () => {
+    /*
+     * NOT a softening of the ruling — it is the way back. A product may carry
+     * its own plan type, so step 3's "ไปขั้นที่ 2 ตั้งโครงสร้าง" link can land
+     * the admin on a chip the company does not run. With every chip dead they
+     * would be stranded there.
+     */
+    mockApi({ locked: true, paid_orders: 14, ledger_rows: 13, first_sale_at: '2026-08-22T11:27:00+07:00' })
+
+    const wrapper = await atStepTwo()
+    const own = wrapper.get('[data-test="plan-chip-unilevel"]')
+
+    expect(own.attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="plan-chip-lock-unilevel"]').exists()).toBe(false)
+
+    await own.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="plan-explainer"]').text()).toContain('Unilevel')
+  })
+
+  it('leaves every chip pressable while nothing has been sold', async () => {
+    // The lock must not cost a company that has not sold anything the ability
+    // to compare the six plans before choosing one.
+    mockApi(UNLOCKED)
+
+    const wrapper = await browsingAnotherPlan()
+
+    expect(wrapper.get('[data-test="plan-chip-matrix"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="plan-chip-lock-matrix"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="plan-chips-hint"]').exists()).toBe(true)
   })
 
   it('locks the basis buttons too, because the same rule governs them', async () => {
@@ -255,7 +324,7 @@ describe('locked by sales', () => {
     // server refuses both — so both have to be off the screen.
     mockApi({ locked: true, paid_orders: 14, ledger_rows: 0, first_sale_at: '2026-08-22T11:27:00+07:00' })
 
-    const wrapper = await browsingAnotherPlan()
+    const wrapper = await atStepTwo()
 
     expect(wrapper.get('[data-test="basis-option-pv"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-test="basis-option-price"]').attributes('disabled')).toBeDefined()

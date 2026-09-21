@@ -3854,6 +3854,32 @@ function viewPlan(pt: CommissionPlanType): void {
   }
 }
 
+/**
+ * May this chip be pressed at all?
+ *
+ * ── OWNER'S RULING, 2026-09-21 (second pass) ──
+ *
+ * "หากมีออเดอร์ ค่าคอมแล้ว กดไม่ได้เลย".
+ *
+ * The first pass left every chip clickable and argued that browsing is not
+ * changing — pressing one only moves the VIEW, nothing is saved, and the
+ * admin keeps the ability to compare plans. That argument is sound and it
+ * lost anyway, for a reason worth recording: the owner read a row of live
+ * buttons as "the plan can still be changed" TWICE, on a screen whose whole
+ * job that day was to say it could not. A control that is technically
+ * harmless and repeatedly misread is not harmless.
+ *
+ * THE COMPANY'S OWN CHIP STAYS PRESSABLE, and that is not a softening of the
+ * ruling — it is the way back. A product may carry its own plan type, so
+ * step 3's "ไปขั้นที่ 2 ตั้งโครงสร้าง" link can legitimately land the admin
+ * on a chip the company does not run (rowStructureGap reads
+ * product.effective_plan_type, not the company's). With every chip dead they
+ * would be stranded there with no way to return to their own plan.
+ */
+function planChipDisabled(pt: CommissionPlanType): boolean {
+  return planLockedBySales.value && pt !== companyPlanType.value
+}
+
 /* ═══════════════════════════════════════════════════════════════════════
  * PRESSING A BOX IN THE DIAGRAM (owner, 2026-09-21)
  *
@@ -5277,16 +5303,24 @@ watch(companyPlanType, (pt) => {
                   v-for="pt in planChipOrder"
                   :key="pt"
                   type="button"
+                  :disabled="planChipDisabled(pt)"
                   class="inline-flex items-center gap-2 text-[13.5px] rounded-full px-9 py-2.5 border transition-colors"
                   :class="pt === companyPlanType
                     ? 'font-extrabold text-white bg-brand-600 border-brand-600'
-                    : pt === viewingPlanType
-                      ? 'font-bold text-slate-700 bg-white border-slate-300'
-                      : 'font-semibold text-slate-400 bg-slate-50 border border-dashed border-slate-200 hover:text-slate-600'"
+                    : planChipDisabled(pt)
+                      ? 'font-semibold text-slate-300 bg-slate-50 border border-dashed border-slate-200 cursor-not-allowed'
+                      : pt === viewingPlanType
+                        ? 'font-bold text-slate-700 bg-white border-slate-300'
+                        : 'font-semibold text-slate-400 bg-slate-50 border border-dashed border-slate-200 hover:text-slate-600'"
                   :data-test="`plan-chip-${pt}`"
                   @click="viewPlan(pt)"
                 >
                   <Icon v-if="pt === companyPlanType" name="check" :size="14" />
+                  <!-- The padlock is the whole point of the owner's ruling:
+                       a chip that answers a press with nothing reads as a
+                       broken button, and one that is merely faded reads as
+                       "not selected". -->
+                  <Icon v-else-if="planChipDisabled(pt)" name="lock" :size="13" :data-test="`plan-chip-lock-${pt}`" />
                   {{ planTypeLabels[pt] }}
                   <span
                     v-if="productPlanTypeCounts[pt]"
@@ -5297,7 +5331,12 @@ watch(companyPlanType, (pt) => {
                   </span>
                 </button>
               </div>
-              <p class="text-[12.5px] text-slate-500">แผนที่จางคือแผนที่บริษัทนี้ไม่ได้ใช้ — กดดูรายละเอียดได้ แต่ยังไม่มีผลจนกว่าจะสลับมาใช้</p>
+              <p v-if="planLockedBySales" class="text-[12.5px] text-slate-500" data-test="plan-chips-locked-hint">
+                แผนอื่นกดไม่ได้แล้ว — บริษัทนี้ขายไปแล้ว จึงเปลี่ยนแผนไม่ได้
+              </p>
+              <p v-else class="text-[12.5px] text-slate-500" data-test="plan-chips-hint">
+                แผนที่จางคือแผนที่บริษัทนี้ไม่ได้ใช้ — กดดูรายละเอียดได้ แต่ยังไม่มีผลจนกว่าจะสลับมาใช้
+              </p>
 
               <div class="flex flex-wrap items-start gap-3.5 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-4" data-test="plan-explainer">
                 <div class="flex-1 min-w-0">
