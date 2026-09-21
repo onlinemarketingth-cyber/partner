@@ -267,18 +267,57 @@ describe('the level ladder (Unilevel)', () => {
     expect(wrapper.find('[data-test="step4-level-ladder"]').exists()).toBe(false)
   })
 
-  it('labels every leader rate with its level, including the catch-all', async () => {
-    /*
-     * A badge only on the levelled rows would leave an admin reading the
-     * unlabelled ones as level 1 — the opposite of what null means, and the
-     * difference between paying one person and paying the whole chain.
-     */
+  /**
+   * 2026-09-21 — THIS TEST IS AN INVERSION. It used to be
+   * `labels every leader rate with its level, including the catch-all` and
+   * asserted that BOTH a levelled row and the catch-all appear in step 4.
+   *
+   * The owner compared the shipped screen with the prototype they had approved
+   * and asked why they differed. The per-level ladder moved to step 2, beside
+   * the diagram that shows what it pays — which is what they asked for
+   * originally — so step 4 now lists the catch-all alone.
+   *
+   * The badge itself is unchanged and still appears on every row step 4 does
+   * list: under a plan with no ladder (Matrix, Binary, …) the levelled rows
+   * have nowhere else to go and stay here.
+   */
+  it('leaves the levelled rows to step 2 and keeps only the catch-all in step 4', async () => {
     mockApi({ leaderRates: [leaderRate(1, 1, 500), leaderRate(2, null, 100)] })
 
     const wrapper = await mountStep4()
 
-    expect(wrapper.get('[data-test="leader-rule-level-1"]').text()).toBe('ชั้นที่ 1')
+    expect(wrapper.find('[data-test="leader-rule-level-1"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="leader-rule-level-2"]').text()).toBe('ทุกชั้น')
+  })
+
+  it('still lists a levelled row in step 4 under a plan that has no ladder', async () => {
+    // Matrix has its own per-level table and no step-2 ladder, so a
+    // company-wide levelled leader rate has nowhere else to be shown. Hiding
+    // it here would make a live rate invisible on every screen.
+    mockApi({ planType: 'matrix', leaderRates: [leaderRate(1, 1, 500)] })
+
+    const wrapper = await mountStep4()
+
+    expect(wrapper.get('[data-test="leader-rule-level-1"]').text()).toBe('ชั้นที่ 1')
+  })
+
+  it('treats a row whose level key is absent as the catch-all, not as level 0', async () => {
+    /*
+     * A payload written before the `level` column — a cached response, an
+     * older deploy mid-rollout — arrives with the key MISSING, so `level` is
+     * `undefined`. Compared with `=== null` such a row read as levelled and
+     * rendered as "ชั้นที่ 0": a catch-all rate, which pays the whole chain,
+     * shown and filtered as a rung that pays nobody — and therefore visible on
+     * neither screen.
+     */
+    const legacy = leaderRate(5, null, 250) as Record<string, unknown>
+    delete legacy.level
+
+    mockApi({ leaderRates: [legacy as ReturnType<typeof leaderRate>] })
+
+    const wrapper = await mountStep4()
+
+    expect(wrapper.get('[data-test="leader-rule-level-5"]').text()).toBe('ทุกชั้น')
   })
 
   it('warns about a level nobody priced, when there is no catch-all to cover it', async () => {

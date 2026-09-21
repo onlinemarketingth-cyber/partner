@@ -29,25 +29,79 @@
  * shape as CommissionRateCalculator::compute). A teaching example that rounds
  * differently from the ledger teaches the wrong thing.
  *
- * ── WHAT IT DELIBERATELY IS NOT ──
+ * ── 2026-09-21: IT IS NOW ALSO THE PLACE THE RATES ARE SET ──
  *
- * The per-level rate rows are part of the EXAMPLE, not a settings form.
- * Unilevel has no per-level rate table in the backend today — it resolves one
- * rate and pays it to every manager up an uncapped chain — so a real editor
- * here would be a form with nowhere to save. Showing the two side by side as a
- * sandbox is the point: it is how the case for building that table gets made,
- * and the toggle labels which of the two the system actually does today.
+ * The paragraph that used to sit here said the per-level rows were "part of
+ * the EXAMPLE, not a settings form", because Unilevel had no per-level rate
+ * table in the backend and an editor would have been a form with nowhere to
+ * save. That table shipped on 2026-09-19
+ * (commission_override_rules.level), and leaving this as a sandbox turned out
+ * to be the wrong half of the owner's request: they asked for a chart AND
+ * "Setup ค่าคอมในแต่ละชั้นพร้อมตัวอย่าง" — the setting and its consequence in
+ * one place — and what they got was a picture behind a button with the real
+ * setting two steps away.
+ *
+ * So this component now has two modes, and the props decide which:
+ *
+ *   SANDBOX (no `seed`, no `liveLevelRates`) — unchanged. Invented numbers,
+ *   nothing saved, the shape of a plan the company does NOT run. This is what
+ *   the five chips the admin is only browsing still get.
+ *
+ *   LIVE (`seed` and/or `liveLevelRates` given) — the figures are the
+ *   company's own: a real product's price and PV, the real default agent rate,
+ *   the real per-level leader rates. The rows become read-only here and the
+ *   parent renders the editor through the `rates` slot, because persistence
+ *   belongs to the screen that owns the API, not to a design-system component.
+ *
+ * The header sentence changes with the mode. A card that says "ตัวเลขสมมติ
+ * ทั้งหมด" over the company's real rates is worse than no card.
  */
 import { computed, ref, watch } from 'vue'
 
 type PlanType = 'unilevel' | 'binary' | 'matrix' | 'stairstep_breakaway' | 'generation' | 'affiliate'
 type Basis = 'price' | 'pv'
 
-const props = defineProps<{
+/**
+ * The company's own numbers, in satang and percent, or null where the company
+ * has not set one.
+ *
+ * Satang in, because BR-3 keeps money an integer everywhere it travels; the
+ * one division by 100 happens as it lands in the baht-denominated inputs.
+ */
+export interface PlanShapeSeed {
+  priceSatang: number | null
+  pvSatang: number | null
+  sellerRatePct: number | null
+  productName: string | null
+}
+
+const props = withDefaults(defineProps<{
   planType: PlanType
   /** The company's real basis, so the example speaks in the units they chose. */
   basis: Basis
-}>()
+  /**
+   * Real values to start from. Null keeps the invented sandbox numbers — which
+   * is correct for a plan the company does not run, and for a company with no
+   * sellable product yet.
+   */
+  seed?: PlanShapeSeed | null
+  /**
+   * The company's actual per-level leader rates, as percentages, level 1
+   * first. Null means "no live ladder" and the sandbox rows stay editable.
+   * An EMPTY array is a real answer — the company runs Unilevel and has
+   * priced no level yet — and renders as such rather than as absence.
+   */
+  liveLevelRates?: number[] | null
+  /** Open on mount. Step 2 passes true; a plan being browsed does not. */
+  defaultOpen?: boolean
+}>(), {
+  seed: null,
+  liveLevelRates: null,
+  defaultOpen: false,
+})
+
+/** True when any figure on screen belongs to the company rather than to nobody. */
+const isLive = computed(() => props.seed !== null || props.liveLevelRates !== null)
 
 /* ── money: integer satang, one round at the multiply (BR-3) ────────────── */
 const S = (baht: number) => Math.round((Number(baht) || 0) * 100)
@@ -95,12 +149,64 @@ const rankAt = (i: number): Rank => RANKS[Math.min(Math.max(i, 0), RANKS.length 
 const ssSeller = ref(0)
 const ssManager = ref(2)
 
-/* Collapsed by default: step 2 is a decision screen, not a playground — the
-   example opens when the admin asks for it, and stays open while they compare
-   plans, because closing it on every chip click would be the same as not
-   having it. */
-const open = ref(false)
+/*
+ * 2026-09-21 — the default is now the caller's to choose, and step 2 chooses
+ * OPEN.
+ *
+ * It was collapsed, with a comment arguing that step 2 is "a decision screen,
+ * not a playground". That reasoning does not survive contact with what the
+ * screen is for: the decision IS the numbers, and a decision aid nobody opens
+ * is a decision aid nobody has. The owner asked for a chart and got a button
+ * saying ดูตัวอย่าง.
+ *
+ * Still never re-collapses when the plan chip changes — closing it on every
+ * click would be the same as not having it.
+ */
+const open = ref(props.defaultOpen)
 watch(() => props.planType, () => { /* keep whatever the admin chose */ })
+
+/*
+ * ── SEEDING ──────────────────────────────────────────────────────────────
+ *
+ * The company's own figures replace the invented ones as soon as they arrive,
+ * and again whenever they change (a different product adopted, the default
+ * agent rate edited on step 3). A field the company has NOT set keeps the
+ * sandbox value rather than collapsing to zero: a chart drawn at 0% teaches
+ * that this plan pays nobody, which is a claim about the plan rather than
+ * about the missing setting.
+ *
+ * `immediate` because the seed usually arrives before the first paint, and a
+ * first frame of invented numbers over a live card is exactly the flicker
+ * that makes somebody doubt the figure they are reading.
+ */
+watch(() => props.seed, (next) => {
+  if (!next) return
+
+  if (next.priceSatang !== null) price.value = next.priceSatang / 100
+  if (next.pvSatang !== null) pv.value = next.pvSatang / 100
+  if (next.sellerRatePct !== null) sellerRate.value = next.sellerRatePct
+}, { immediate: true, deep: true })
+
+/*
+ * The live ladder, mirrored into the sandbox array the whole model already
+ * reads from. Mirrored rather than branched on in twenty places: every
+ * computed below — the diagram, the rows, the total — keeps its single source,
+ * and the only thing `liveLevelRates` changes is where that source got filled
+ * from and whether the rows are editable here.
+ *
+ * An empty live ladder falls back to ONE level at 0%, because the diagram
+ * needs at least one rung to draw and a company that has priced nothing is
+ * exactly who most needs to see that nobody above the seller is being paid.
+ */
+watch(() => props.liveLevelRates, (next) => {
+  if (next === null || next === undefined) return
+
+  uniMode.value = 'level'
+  uniLevels.value = next.length > 0 ? [...next] : [0]
+}, { immediate: true, deep: true })
+
+/** In live mode the rows are read-only here — the parent owns the editor. */
+const levelsAreLive = computed(() => props.planType === 'unilevel' && props.liveLevelRates !== null)
 
 /* ── derived ────────────────────────────────────────────────────────────── */
 const saleSatang = computed(() =>
@@ -379,9 +485,19 @@ function labelClass(tone?: Label['tone']) {
       @click="open = !open"
     >
       <span class="min-w-0">
-        <span class="block text-[15px] font-extrabold text-slate-900">ผังแผนนี้ และตัวอย่างว่าใครได้เท่าไร</span>
-        <span class="mt-0.5 block text-[12.5px] text-slate-500">
-          ตัวเลขสมมติทั้งหมด ไม่ใช่ค่าที่บริษัทตั้งไว้ และไม่มีอะไรถูกบันทึก
+        <span class="block text-[15px] font-extrabold text-slate-900">
+          {{ isLive ? 'เงินจะไหลแบบนี้ ด้วยค่าที่คุณตั้งไว้ตอนนี้' : 'ผังแผนนี้ และตัวอย่างว่าใครได้เท่าไร' }}
+        </span>
+        <!-- The sentence changes with the mode. A card that says "ตัวเลขสมมติ
+             ทั้งหมด" over the company's real rates is worse than no card. -->
+        <span class="mt-0.5 block text-[12.5px] text-slate-500" data-test="plan-shape-subtitle">
+          <template v-if="isLive">
+            ใช้ค่าจริงของบริษัท<template v-if="seed?.productName"> · ตัวอย่างจากสินค้า “{{ seed.productName }}”</template>
+            · ปรับตัวเลขด้านล่างเพื่อลองดูได้ ไม่กระทบค่าที่บันทึกไว้
+          </template>
+          <template v-else>
+            ตัวเลขสมมติทั้งหมด ไม่ใช่ค่าที่บริษัทตั้งไว้ และไม่มีอะไรถูกบันทึก
+          </template>
         </span>
       </span>
       <span class="shrink-0 text-[12.5px] font-bold text-brand-600">{{ open ? 'ซ่อน' : 'ดูตัวอย่าง' }}</span>
@@ -454,7 +570,19 @@ function labelClass(tone?: Label['tone']) {
         <!-- ตัวเลข -->
         <div class="min-w-0">
           <!-- per-plan knobs -->
-          <div v-if="planType === 'unilevel'" class="mb-3 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+          <!--
+            2026-09-21 — the labels used to read "(ระบบตอนนี้)" and "(ที่เสนอ)",
+            written when per-level rates did not exist in the backend. They do
+            now (commission_override_rules.level, 2026-09-19), so the second
+            label was telling the admin that a thing they can actually save is
+            only a proposal.
+
+            Hidden entirely in live mode: there the ladder IS whatever the
+            company has saved, and a toggle offering to pretend otherwise would
+            invite somebody to "switch" their plan by pressing a button that
+            saves nothing.
+          -->
+          <div v-if="planType === 'unilevel' && !levelsAreLive" class="mb-3 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
             <button
               v-for="m in (['flat', 'level'] as const)"
               :key="m"
@@ -463,7 +591,7 @@ function labelClass(tone?: Label['tone']) {
               :class="uniMode === m ? 'bg-white font-extrabold text-slate-900 shadow-sm' : 'font-semibold text-slate-500'"
               :data-test="`uni-mode-${m}`"
               @click="uniMode = m"
-            >{{ m === 'flat' ? 'อัตราเดียวทุกชั้น (ระบบตอนนี้)' : 'อัตราทีละชั้น (ที่เสนอ)' }}</button>
+            >{{ m === 'flat' ? 'อัตราเดียวทุกชั้น' : 'อัตราทีละชั้น' }}</button>
           </div>
 
           <label v-if="flatShown" class="mb-3 block">
@@ -516,8 +644,25 @@ function labelClass(tone?: Label['tone']) {
             </div>
           </div>
 
+          <!--
+            ═══ THE EDITOR GOES HERE, AND IT BELONGS TO THE PARENT ═══
+
+            In live mode the screen renders the real per-level rate form into
+            this slot — right of the diagram, exactly where the prototype put
+            it, so a rate and its consequence are read in one glance.
+
+            The form is NOT built into this component. Persistence means an
+            endpoint, an Ability and an error surface, and a design-system
+            component that owned those would be a second door onto
+            commission_override_rules — the thing every other rate control on
+            this screen is careful not to be.
+
+            The sandbox rows below stay for the plans being browsed.
+          -->
+          <slot v-if="levelsAreLive" name="rates" :base-satang="baseSatang" :format="fmt" :at="at" />
+
           <!-- per-level example rows -->
-          <div v-if="levelList">
+          <div v-else-if="levelList">
             <p class="text-[12.5px] font-bold text-slate-600">{{ flatShown ? 'สายลึกกี่ชั้น' : 'อัตราแต่ละ' + levelList.word }}</p>
             <div class="mt-1.5 space-y-1.5">
               <div v-for="(r, i) in levelList.arr" :key="i" class="grid grid-cols-[1fr_84px_110px] items-center gap-2">

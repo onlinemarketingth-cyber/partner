@@ -1436,8 +1436,25 @@ const hasCompanyWideLeaderRate = computed<boolean>(() =>
  * company ends up with a rate nobody can see that starts paying next month.
  * The row itself says its dates.
  */
-const companyLeaderRules = computed<CommissionOverrideRuleItem[]>(() =>
-  byCompany(commissionOverrideRules.value).filter((r) => !r.product && !r.product_category))
+/*
+ * 2026-09-21 — the CATCH-ALL rows only, for step 4's box 4.3.
+ *
+ * The levelled company-wide rows moved to step 2, where they are edited
+ * beside the diagram that shows what they pay. Leaving them listed here as
+ * well would be two doors onto one set of rows — the thing this screen keeps
+ * removing everywhere else — and worse than a duplicate list: the two forms
+ * have different shapes (a ladder you save as a whole, versus one row at a
+ * time), so the same rate would be editable under two different sets of
+ * rules.
+ *
+ * Under a plan that has no ladder (anything but Unilevel) there is nothing in
+ * step 2 to hold them, so they stay here and this filter lets them through.
+ */
+const companyLeaderRules = computed<CommissionOverrideRuleItem[]>(() => {
+  const rows = byCompany(commissionOverrideRules.value).filter((r) => !r.product && !r.product_category)
+
+  return companyPlanType.value === 'unilevel' ? rows.filter(isCatchAllLevel) : rows
+})
 
 const categoryLeaderRules = computed<CommissionOverrideRuleItem[]>(() =>
   byCompany(commissionOverrideRules.value).filter((r) => !r.product && !!r.product_category))
@@ -1470,7 +1487,26 @@ function leaderRowLabel(r: CommissionOverrideRuleItem): string {
  * difference between paying one person and paying the whole chain.
  */
 function leaderLevelLabel(r: CommissionOverrideRuleItem): string {
-  return r.level === null ? 'ทุกชั้น' : `ชั้นที่ ${r.level}`
+  return isCatchAllLevel(r) ? 'ทุกชั้น' : `ชั้นที่ ${r.level}`
+}
+
+/**
+ * 2026-09-21 — "this rate applies at EVERY level", answered once.
+ *
+ * `== null`, not `=== null`, and the difference is not style. A row whose
+ * payload predates the `level` column — a cached response, an older deploy
+ * mid-rollout, any client that has not been reloaded — arrives with the key
+ * ABSENT, so `r.level` is `undefined`. Compared with `=== null` that row reads
+ * as LEVELLED, and `level ?? 0` then prints it as "ชั้นที่ 0": a catch-all
+ * rate, which pays the whole chain, displayed and treated as a rung that
+ * pays nobody.
+ *
+ * It also made the row disappear from step 4's box 4.3 while not appearing in
+ * step 2's ladder either — a live rate visible on neither screen, which is how
+ * somebody concludes their rates were deleted.
+ */
+function isCatchAllLevel(r: CommissionOverrideRuleItem): boolean {
+  return r.level === null || r.level === undefined
 }
 
 /**
@@ -1491,8 +1527,21 @@ const leaderRateGroups = computed(() => [
     scope: 'company' as RuleScope,
     number: '4.3',
     title: 'ค่าเริ่มต้นทั้งบริษัท',
-    hint: 'ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้ — ตั้งอันนี้อันเดียวก็ครอบคลุมทั้งบริษัท',
-    empty: 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าแนะนำเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
+    /*
+     * 2026-09-21 — the hint names where the levelled rates went.
+     *
+     * Under Unilevel this box now lists only the catch-all ("ทุกชั้น") rows;
+     * the per-level ladder is edited on step 2 beside the diagram. An admin
+     * who set 10/5/3 there and then found this box apparently empty would
+     * reasonably conclude their rates had been lost, so the box says where
+     * they are rather than leaving the reader to work it out.
+     */
+    hint: levelLadderApplies.value
+      ? 'ใช้กับทุกชั้นที่ยังไม่ได้ตั้งอัตราเฉพาะชั้น — อัตราแยกรายชั้น (10/5/3) ตั้งที่ขั้นที่ 2 ข้างแผนภูมิ'
+      : 'ใช้กับสินค้าทุกตัวที่ไม่ได้ตั้งอัตราเฉพาะไว้ — ตั้งอันนี้อันเดียวก็ครอบคลุมทั้งบริษัท',
+    empty: levelLadderApplies.value
+      ? 'ยังไม่ได้ตั้งอัตราแบบใช้ทุกชั้น — ชั้นที่ตั้งอัตราไว้เฉพาะ (ที่ขั้นที่ 2) ยังจ่ายตามปกติ'
+      : 'ยังไม่ได้ตั้ง — หัวหน้าทีมจะได้ค่าแนะนำเฉพาะสินค้า/หมวดหมู่ที่ตั้งไว้ข้างล่างเท่านั้น',
     rows: companyLeaderRules.value,
   },
   {
@@ -2573,6 +2622,87 @@ async function setOverrideCompression(next: boolean): Promise<void> {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-21 — STEP 2's CHART SHOWS THIS COMPANY'S OWN NUMBERS.
+ *
+ * Owner, comparing the shipped screen with the prototype they had approved:
+ * "ทำไม UI ที่คุยกับไว้ ... กับที่ร่างให้ผมถึงไม่เหมือนกัน". The prototype let
+ * them turn real knobs and watch the money move; what shipped was a collapsed
+ * card whose own subtitle said its numbers were invented.
+ *
+ * So the chart is seeded from the company's real configuration:
+ *
+ *   price / PV — a product this company actually sells. The FIRST sellable
+ *     one by id, deliberately not "the most expensive" or an average: the
+ *     chart names which product it used, and a figure the admin can go and
+ *     look at beats a representative number nobody can trace.
+ *   seller rate — the company-wide default agent rate (ค่าเริ่มต้นทั้งบริษัท),
+ *     the same row step 3 edits.
+ *
+ * Nulls travel as nulls. A company with no sellable product or no default
+ * rate keeps the component's sandbox figure for that one field, because a
+ * chart drawn at 0% teaches that the plan pays nobody — a claim about the
+ * plan rather than about the missing setting.
+ * ═══════════════════════════════════════════════════════════════════════ */
+const planShapeSeedProduct = computed<ProductOption | null>(() => {
+  const sellable = sellableProducts.value
+
+  return [...sellable].sort((a, b) => a.id - b.id)[0] ?? null
+})
+
+const planShapeSeed = computed(() => {
+  /*
+   * NULL while browsing a plan this company does not run.
+   *
+   * The chips exist so somebody can see the SHAPE of a plan they are
+   * considering, and the card says which mode it is in. Seeding an unrelated
+   * plan with this company's price and agent rate would put "ใช้ค่าจริงของ
+   * บริษัท" over a payout structure they have not adopted — a sentence that is
+   * half true in the worst way, because the money it draws is nobody's.
+   */
+  if (viewingPlanType.value !== companyPlanType.value) return null
+
+  const product = planShapeSeedProduct.value
+  const rule = companyDefaultRules.value[0] ?? null
+
+  /*
+   * Only a PERCENTAGE rate can be drawn as "x% of the base". A company whose
+   * default is a fixed satang amount gets null here and keeps the sandbox
+   * percentage — the alternative is inventing a percentage that the fixed
+   * amount happens to equal for this one product, which would move the moment
+   * anybody looked at a different product.
+   */
+  const sellerRatePct = rule && rule.rate_type === 'percentage' ? rule.rate_value / 100 : null
+
+  return {
+    priceSatang: product?.effective_price_satang ?? product?.price_satang ?? null,
+    pvSatang: product?.pv_satang ?? null,
+    sellerRatePct,
+    productName: product?.name ?? null,
+  }
+})
+
+/**
+ * The live ladder handed to the chart, or null when there is nothing live to
+ * show.
+ *
+ * Null — not an empty array — whenever the admin is BROWSING a plan the
+ * company does not run, or the plan is not Unilevel. The chart then falls back
+ * to its sandbox, which is correct: those chips exist so somebody can see the
+ * shape of a plan they are considering, and dressing an unrelated plan in this
+ * company's rates would be a lie in both directions.
+ *
+ * An EMPTY array is a real answer and renders as one: the company runs
+ * Unilevel and has priced no level yet, which is exactly the state that most
+ * needs a picture of nobody being paid.
+ */
+const liveLevelRates = computed<number[] | null>(() => {
+  if (viewingPlanType.value !== 'unilevel') return null
+  if (companyPlanType.value !== 'unilevel') return null
+
+  return levelLadderDraft.value.map((row) => row.percent)
+})
+
 /**
  * The per-level rates a company has actually priced, lowest level first.
  *
@@ -2583,7 +2713,7 @@ async function setOverrideCompression(next: boolean): Promise<void> {
  */
 const levelledOverrideRules = computed<CommissionOverrideRuleItem[]>(() =>
   byCompany(commissionOverrideRules.value)
-    .filter((r) => r.level !== null && r.product === null && r.product_category === null)
+    .filter((r) => !isCatchAllLevel(r) && r.product === null && r.product_category === null)
     .sort((a, b) => (a.level ?? 0) - (b.level ?? 0)),
 )
 
@@ -2596,9 +2726,182 @@ const levelledOverrideRules = computed<CommissionOverrideRuleItem[]>(() =>
  * nothing else on this screen would say so: the box lists the rows that exist,
  * and a missing level has no row to look at.
  */
+/* ═══════════════════════════════════════════════════════════════════════
+ * THE LADDER EDITOR THAT SITS BESIDE THE CHART (step 2).
+ *
+ * A DRAFT, not a live binding to the rows. Typing 5 into level 2 must move
+ * the diagram immediately — that is the whole point of putting them side by
+ * side — and it must NOT save on every keystroke, because each save is an
+ * audited write to a table that decides what people are paid.
+ *
+ * So the draft is the single source the chart reads (see liveLevelRates), and
+ * `saveLevelLadder` is the one place it becomes rows. Reverting is leaving
+ * the step without pressing บันทึก.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface LevelLadderRow {
+  /** The existing rule this row came from, or null for a level just added. */
+  id: number | null
+  level: number
+  percent: number
+}
+
+const levelLadderDraft = ref<LevelLadderRow[]>([])
+const levelLadderSaving = ref(false)
+const levelLadderMessage = ref('')
+/** Set while syncing from the server so the watcher does not fight the user. */
+const levelLadderDirty = ref(false)
+
+/**
+ * Rebuild the draft from what the server actually holds.
+ *
+ * Skipped while the admin has unsaved edits: a background reload (switching
+ * tabs re-fetches this list) must not silently discard a rate somebody is
+ * halfway through typing.
+ */
+function syncLevelLadderDraft(): void {
+  if (levelLadderDirty.value) return
+
+  levelLadderDraft.value = levelledOverrideRules.value.map((r) => ({
+    id: r.id,
+    level: r.level ?? 0,
+    // Stored as basis points; shown and typed as a percentage. One inverse,
+    // here, so nothing downstream has to remember which unit it holds.
+    percent: r.rate_value / 100,
+  }))
+}
+
+watch(levelledOverrideRules, syncLevelLadderDraft, { immediate: true, deep: true })
+
+function setLevelPercent(index: number, raw: string | number): void {
+  const row = levelLadderDraft.value[index]
+  if (!row) return
+
+  const parsed = Number(raw)
+  row.percent = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  levelLadderDirty.value = true
+  levelLadderMessage.value = ''
+}
+
+/**
+ * Add the next rung down.
+ *
+ * Seeded from the deepest level's current rate rather than from 0 — a ladder
+ * is quoted descending (10/5/3) and starting the new rung at the one above it
+ * is one keystroke from every shape somebody actually wants. Zero would draw a
+ * rung that pays nobody and read as a bug.
+ */
+function addLevelRung(): void {
+  const rows = levelLadderDraft.value
+  const deepest = rows[rows.length - 1]
+
+  if (rows.length >= MAX_PRICEABLE_LEVEL) return
+
+  rows.push({ id: null, level: (deepest?.level ?? 0) + 1, percent: deepest?.percent ?? 0 })
+  levelLadderDirty.value = true
+  levelLadderMessage.value = ''
+}
+
+function removeLevelRung(): void {
+  if (levelLadderDraft.value.length === 0) return
+
+  levelLadderDraft.value.pop()
+  levelLadderDirty.value = true
+  levelLadderMessage.value = ''
+}
+
+/**
+ * Write the draft back: update what moved, create what is new, delete what the
+ * admin removed.
+ *
+ * Sequential rather than Promise.all, deliberately. OverrideDeductionGuard
+ * judges each rate against the TOTAL the whole ladder would pay out
+ * (projectedWalkCostSatang), so two rows saved concurrently can each look
+ * affordable alone and be refused together — or worse, both land and take the
+ * seller's commission past what it can fund. One at a time means the guard
+ * sees each row against the state the previous one left.
+ *
+ * Deletions go FIRST for the same reason: a ladder being shortened must free
+ * its budget before the remaining rungs are re-priced upward.
+ */
+async function saveLevelLadder(): Promise<void> {
+  if (!effectiveCompanyId.value || levelLadderSaving.value || !canEditCommissionConfig.value) return
+
+  const draft = levelLadderDraft.value
+  const invalid = draft.find((row) => !Number.isFinite(row.percent) || row.percent < 0 || row.percent > 100)
+
+  if (invalid) {
+    levelLadderMessage.value = `อัตราของชั้นที่ ${invalid.level} ต้องอยู่ระหว่าง 0–100%`
+
+    return
+  }
+
+  levelLadderSaving.value = true
+  levelLadderMessage.value = ''
+
+  const keptIds = new Set(draft.map((row) => row.id).filter((id): id is number => id !== null))
+  const removed = levelledOverrideRules.value.filter((r) => !keptIds.has(r.id))
+
+  try {
+    for (const rule of removed) {
+      await commissionApi.delete(`/commission-override-rules/${rule.id}`)
+    }
+
+    for (const row of draft) {
+      const body = {
+        product_id: null,
+        product_category_id: null,
+        level: row.level,
+        rate_type: 'percentage' as RateType,
+        // Percent → basis points, rounded once. 2.5% is 250, and 2.555%
+        // typed by a human is 256, never 255.5.
+        rate_value: Math.round(row.percent * 100),
+        // Never sent alongside a level — the server refuses the pair, because
+        // one walk up one chain has one funding model. See the step-4 form.
+        override_mode: null,
+        effective_from: todayIso(),
+        effective_to: null,
+      }
+
+      if (row.id === null) {
+        await commissionApi.post('/commission-override-rules', withCompanyBody(body))
+      } else {
+        await commissionApi.put(`/commission-override-rules/${row.id}`, body)
+      }
+    }
+
+    levelLadderDirty.value = false
+    levelLadderMessage.value = draft.length === 0
+      ? 'บันทึกแล้ว — ไม่จ่ายหัวหน้าทีมตามชั้น'
+      : `บันทึกแล้ว — จ่าย ${draft.length} ชั้น`
+
+    await loadRulesTabData()
+    void loadResolution()
+  } catch (e) {
+    levelLadderMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    levelLadderSaving.value = false
+  }
+}
+
+/**
+ * How many rungs of the draft ladder the depth cap would never reach.
+ *
+ * Zero when there is no cap, which is what every company has today. The two
+ * settings live on different steps — the cap with the other company-wide
+ * payout settings, the rungs beside the diagram that shows what they pay —
+ * and this is the one place their disagreement becomes visible.
+ */
+const ladderRungsBeyondCap = computed<number>(() => {
+  const cap = Number(maxOverrideDepth.value)
+
+  if (!Number.isFinite(cap) || cap <= 0) return 0
+
+  return Math.max(0, levelLadderDraft.value.length - cap)
+})
+
 const levelGaps = computed<number[]>(() => {
   if (!levelledOverrideRules.value.length) return []
-  if (hasCompanyWideLeaderRate.value && companyLeaderRules.value.some((r) => r.level === null)) return []
+  if (hasCompanyWideLeaderRate.value && companyLeaderRules.value.some(isCatchAllLevel)) return []
 
   const priced = new Set(levelledOverrideRules.value.map((r) => r.level as number))
   const deepest = Math.max(...priced)
@@ -4930,11 +5233,121 @@ watch(companyPlanType, (pt) => {
                 basis decides what number the percentages are a percentage
                 OF. Placed above the basis card it would have to guess one.
 
-                Collapsed by default — an admin who already knows the plan
-                they run should not have to scroll past a sandbox to reach
-                the PV table below.
+                2026-09-21 — OPEN by default, seeded with this company's own
+                numbers, and carrying the real per-level rate form.
+
+                The comment that used to sit here defended collapsing it:
+                "an admin who already knows the plan they run should not have
+                to scroll past a sandbox". That was the wrong trade. The
+                owner's request was a chart AND "Setup ค่าคอมในแต่ละชั้นพร้อม
+                ตัวอย่าง" — the setting and its consequence together — and
+                collapsing it, seeding it with invented numbers and moving the
+                real form to step 4 took all three apart.
               -->
-              <PlanShapePreview :plan-type="viewingPlanType" :basis="commissionBasis" />
+              <PlanShapePreview
+                :plan-type="viewingPlanType"
+                :basis="commissionBasis"
+                :seed="planShapeSeed"
+                :live-level-rates="liveLevelRates"
+                default-open
+              >
+                <!--
+                  THE REAL LADDER, right of the diagram. Every keystroke moves
+                  the chart; nothing is written until บันทึก, because each save
+                  is an audited write to the table that decides what people are
+                  paid.
+                -->
+                <template #rates="{ baseSatang, format, at: rateOf }">
+                  <div data-test="level-ladder-editor">
+                    <div class="flex flex-wrap items-baseline justify-between gap-2">
+                      <p class="text-[12.5px] font-bold text-slate-600">อัตราหัวหน้าทีมแต่ละชั้น</p>
+                      <span v-if="levelLadderDirty" class="text-[11.5px] font-bold text-amber-700" data-test="level-ladder-dirty">
+                        ยังไม่ได้บันทึก
+                      </span>
+                    </div>
+
+                    <p v-if="!levelLadderDraft.length" class="mt-1.5 text-[12px] text-slate-500" data-test="level-ladder-empty">
+                      ยังไม่ได้ตั้งอัตราตามชั้น — ตอนนี้หัวหน้าทีมยังไม่ได้ส่วนแบ่งตามชั้น
+                      <span v-if="hasCompanyWideLeaderRate">(แต่ยังมีอัตราแบบใช้ทุกชั้นอยู่ ดูข้อ 4.3)</span>
+                    </p>
+
+                    <div v-else class="mt-1.5 space-y-1.5">
+                      <div
+                        v-for="(row, i) in levelLadderDraft"
+                        :key="`ladder-${row.id ?? `new-${i}`}`"
+                        class="grid grid-cols-[1fr_84px_110px] items-center gap-2"
+                      >
+                        <span class="text-[13px] text-slate-600">
+                          ชั้น {{ row.level }}
+                          <span v-if="row.level === 1" class="text-[11px] text-slate-400">· หัวหน้าโดยตรง</span>
+                        </span>
+                        <input
+                          :value="row.percent"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.5"
+                          :disabled="!canEditCommissionConfig || levelLadderSaving"
+                          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm text-right disabled:opacity-60"
+                          :aria-label="`อัตราชั้นที่ ${row.level}`"
+                          :data-test="`ladder-rate-${row.level}`"
+                          @input="setLevelPercent(i, ($event.target as HTMLInputElement).value)"
+                        />
+                        <span class="text-right font-mono text-[13px] font-bold text-emerald-700">
+                          {{ format(rateOf(baseSatang, row.percent)) }} บาท
+                        </span>
+                      </div>
+                    </div>
+
+                    <div v-if="canEditCommissionConfig" class="mt-2.5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="levelLadderSaving || levelLadderDraft.length >= MAX_PRICEABLE_LEVEL"
+                        data-test="ladder-add"
+                        @click="addLevelRung"
+                      >+ เพิ่มชั้น</button>
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="levelLadderSaving || !levelLadderDraft.length"
+                        data-test="ladder-remove"
+                        @click="removeLevelRung"
+                      >− ลดชั้น</button>
+                      <button
+                        type="button"
+                        class="btn-primary ml-auto"
+                        :disabled="levelLadderSaving || !levelLadderDirty"
+                        data-test="ladder-save"
+                        @click="saveLevelLadder"
+                      >{{ levelLadderSaving ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+                    </div>
+
+                    <p v-if="levelLadderMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="ladder-message">
+                      {{ levelLadderMessage }}
+                    </p>
+
+                    <!--
+                      The one contradiction these two screens could hide from
+                      each other: the cap lives on step 4, the rungs live here,
+                      and a ladder deeper than the cap means the bottom rungs
+                      are priced and never paid. Nothing else would say so —
+                      the rows look saved, because they are.
+                    -->
+                    <p
+                      v-if="ladderRungsBeyondCap > 0"
+                      class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[12px] font-bold text-amber-800"
+                      data-test="ladder-beyond-cap"
+                    >
+                      ตั้งไว้ {{ levelLadderDraft.length }} ชั้น แต่ขั้นที่ 4 จำกัดการจ่ายไว้ที่ {{ maxOverrideDepth }} ชั้น —
+                      อีก {{ ladderRungsBeyondCap }} ชั้นล่างสุดจะไม่ได้เงิน
+                    </p>
+                    <p v-if="!canEditCommissionConfig" class="mt-1.5 text-[12px] text-slate-400">
+                      ดูได้อย่างเดียว — การแก้อัตราค่าแนะนำเป็นสิทธิ์ของผู้ดูแลระบบ
+                    </p>
+                  </div>
+                </template>
+              </PlanShapePreview>
 
               <!--
                 ═══ THE PV TABLE ═══
@@ -6529,10 +6942,22 @@ watch(companyPlanType, (pt) => {
                                  only on the levelled rows would leave an admin
                                  reading the unlabelled ones as level 1, which
                                  is the opposite of what null means. -->
+                            <!--
+                              Shown when the plan HAS a ladder (so the
+                              catch-all is labelled and cannot be misread as
+                              level 1), and on any row that carries a level
+                              whatever the plan — a levelled row under Matrix
+                              has nowhere else to be shown, and an unlabelled
+                              one would be indistinguishable from a rate that
+                              pays the whole chain.
+
+                              Absent on a catch-all under a plan with no chain
+                              walk, where "ทุกชั้น" would be noise on every row.
+                            -->
                             <span
-                              v-if="levelLadderApplies"
+                              v-if="levelLadderApplies || !isCatchAllLevel(r)"
                               class="mr-2 px-2 py-0.5 rounded-md text-[11px] align-middle"
-                              :class="r.level === null ? 'bg-slate-100 text-slate-500' : 'bg-indigo-100 text-indigo-700'"
+                              :class="isCatchAllLevel(r) ? 'bg-slate-100 text-slate-500' : 'bg-indigo-100 text-indigo-700'"
                               :data-test="`leader-rule-level-${r.id}`"
                             >{{ leaderLevelLabel(r) }}</span>
                             {{ leaderRowLabel(r) }}
