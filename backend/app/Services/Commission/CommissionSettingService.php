@@ -85,7 +85,7 @@ class CommissionSettingService
      * placeholder — the screen refuses to render step 2 in that state
      * anyway — rather than picking one tenant's settings to speak for all.
      *
-     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
+     * @return array{commission_basis: CommissionBasis, commission_plan_type: CommissionPlanType|null, commission_override_mode: CommissionOverrideMode, deepest_manager_chain: int, plan_locked_by_sales: array{locked: bool, ledger_rows: int, first_ledger_at: string|null}, commission_house_account: array{id: int, name: string, agents_under: int, earned_satang: int}|null, leaders_missing_certification: array{total: int, leaders: list<array{id: int, name: string, agents_under: int}>}}
      */
     public function forCompany(?int $companyId): array
     {
@@ -121,6 +121,23 @@ class CommissionSettingService
              * is a real and common answer, not a missing one.
              */
             'deepest_manager_chain' => $company === null ? 0 : $this->deductionGuard->deepestChain($company),
+            /*
+             * 2026-09-21 — CAN THE PLAN AND THE BASIS STILL BE CHANGED AT ALL?
+             *
+             * Owner: "ที่เราเคยสรุปกันไว้ไม่ใช่เหรอว่าหากมีการขายเกิดขึ้นแล้ว
+             * การ Setup เปลี่ยนแผนค่าแนะนำจะทำไม่ได้". They are right, and the
+             * refusal has existed since 2026-09-19
+             * (assertNotSettledByExistingSales below) — but only as a refusal.
+             * The screen had no way to know, so it kept offering the switch
+             * with a banner saying the change "มีผลกับการขายครั้งถัดไปเท่านั้น",
+             * and the admin learned otherwise only after pressing.
+             *
+             * A refusal that arrives after the press is a bug in the screen,
+             * not a safety feature. So the same fact the guard uses is now
+             * READ here: same helper, same two queries, so the sentence on
+             * screen and the sentence in the error can never drift apart.
+             */
+            'plan_locked_by_sales' => $this->settledSalesSummary($company),
             /*
              * 2026-09-15 — the company's own seat in its hierarchy, or null.
              *
@@ -460,6 +477,61 @@ class CommissionSettingService
      * settings together, and refusing the two that did not move would make
      * the third unsavable forever.
      */
+    /**
+     * Has this company paid anything yet, and since when?
+     *
+     * ── WHY THIS IS SHARED WITH THE READ ──
+     *
+     * 2026-09-21. The refusal below and the banner on step 2 are two
+     * statements about the same fact, and for two days only the refusal
+     * existed: the screen went on offering the switch under a banner reading
+     * "การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น", and the admin found out
+     * otherwise by pressing the button.
+     *
+     * Fixing that by counting ledger rows a second time in the read would
+     * have created the failure mode this whole file keeps removing — two
+     * expressions of one rule, free to drift, discovered at a payout. So the
+     * count lives here and both callers ask it.
+     *
+     * `locked` is the answer to "may the plan or the basis change", and it is
+     * deliberately the same condition the refusal uses: one row is enough.
+     * A single sale means money has been calculated under one set of rules,
+     * and BR-4 makes that row uncorrectable.
+     *
+     * @return array{locked: bool, ledger_rows: int, first_ledger_at: string|null}
+     */
+    private function settledSalesSummary(?Company $company): array
+    {
+        if ($company === null) {
+            // A Super Admin on "ทุกบริษัท" is not asking about any company, so
+            // nothing is locked — and step 2 refuses to render in that state
+            // anyway. Reporting a lock here would put a refusal banner over a
+            // screen that is not offering the choice.
+            return ['locked' => false, 'ledger_rows' => 0, 'first_ledger_at' => null];
+        }
+
+        $ledgerRows = CommissionLedger::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->count();
+
+        if ($ledgerRows === 0) {
+            return ['locked' => false, 'ledger_rows' => 0, 'first_ledger_at' => null];
+        }
+
+        $firstAt = CommissionLedger::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->min('created_at');
+
+        return [
+            'locked' => true,
+            'ledger_rows' => $ledgerRows,
+            // ISO, not the d/m/Y the refusal prints: the screen formats dates
+            // in the reader's own calendar (the admin runs on Buddhist years),
+            // and a pre-formatted string would arrive already wrong there.
+            'first_ledger_at' => $firstAt ? Carbon::parse($firstAt)->toIso8601String() : null,
+        ];
+    }
+
     private function assertNotSettledByExistingSales(
         Company $company,
         string $column,
@@ -471,25 +543,19 @@ class CommissionSettingService
             return;
         }
 
-        $ledgerRows = CommissionLedger::withoutGlobalScopes()
-            ->where('company_id', $company->id)
-            ->count();
+        $settled = $this->settledSalesSummary($company);
 
-        if ($ledgerRows === 0) {
+        if (! $settled['locked']) {
             return;
         }
-
-        $firstAt = CommissionLedger::withoutGlobalScopes()
-            ->where('company_id', $company->id)
-            ->min('created_at');
 
         throw ValidationException::withMessages([
             $column => sprintf(
                 'เปลี่ยน%sไม่ได้แล้ว เพราะบริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว %s รายการ (รายการแรก %s) — '
                 .'ค่าแนะนำที่จ่ายไปแล้วแก้ย้อนหลังไม่ได้ ถ้าเปลี่ยนตอนนี้ ยอดก่อนและหลังจะคิดคนละกติกาโดยที่ไม่มีทางทำให้ตรงกันได้',
                 $label,
-                number_format($ledgerRows),
-                $firstAt ? Carbon::parse($firstAt)->format('d/m/Y') : '—',
+                number_format($settled['ledger_rows']),
+                $settled['first_ledger_at'] ? Carbon::parse($settled['first_ledger_at'])->format('d/m/Y') : '—',
             ),
         ]);
     }

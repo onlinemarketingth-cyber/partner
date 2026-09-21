@@ -176,4 +176,89 @@ class CommissionSettingsLockedBySalesTest extends TestCase
         $this->save($company, ['commission_plan_type' => CommissionPlanType::Matrix->value])
             ->assertStatus(422);
     }
+
+    // ── The screen is told BEFORE the press ─────────────────────────────────
+
+    /**
+     * 2026-09-21 — the refusal existed for two days with nothing on screen
+     * saying so.
+     *
+     * Owner: "ที่เราเคยสรุปกันไว้ไม่ใช่เหรอว่าหากมีการขายเกิดขึ้นแล้ว การ Setup
+     * เปลี่ยนแผนค่าแนะนำจะทำไม่ได้". It was, and the server enforced it — but
+     * step 2 went on offering the switch under a banner reading "การสลับแผนมี
+     * ผลกับการขายครั้งถัดไปเท่านั้น", and the admin found out by pressing.
+     *
+     * A rule the screen cannot see is a rule the screen will contradict.
+     */
+    private function read(Company $company)
+    {
+        return $this->actingAs(User::factory()->superAdmin()->create())
+            ->getJson("/api/v1/commission-settings?company_id={$company->id}");
+    }
+
+    public function test_the_settings_read_says_nothing_is_locked_before_the_first_sale(): void
+    {
+        $this->read($this->company())
+            ->assertOk()
+            ->assertJsonPath('data.plan_locked_by_sales.locked', false)
+            ->assertJsonPath('data.plan_locked_by_sales.ledger_rows', 0)
+            ->assertJsonPath('data.plan_locked_by_sales.first_ledger_at', null);
+    }
+
+    public function test_the_settings_read_reports_the_lock_with_the_same_facts_the_refusal_quotes(): void
+    {
+        /*
+         * The count and the date are the whole point. "เปลี่ยนไม่ได้" with no
+         * reason reads as a bug or a permission problem; naming how many rows
+         * were settled and when the first one was is the difference between a
+         * rule and an obstruction.
+         */
+        $company = $this->withOneSale($this->company());
+
+        $this->read($company)
+            ->assertOk()
+            ->assertJsonPath('data.plan_locked_by_sales.locked', true)
+            ->assertJsonPath('data.plan_locked_by_sales.ledger_rows', 1);
+
+        $this->assertNotNull(
+            $this->read($company)->json('data.plan_locked_by_sales.first_ledger_at'),
+            'the screen formats the date itself — an admin reads Buddhist years — so it needs the timestamp, not a pre-formatted string',
+        );
+    }
+
+    public function test_the_read_and_the_refusal_agree_on_the_row_count(): void
+    {
+        /*
+         * THE REASON THEY SHARE ONE HELPER. Two expressions of one rule are
+         * free to drift, and this pair would drift silently: the banner would
+         * say "3 รายการ" over a refusal that said something else, and nobody
+         * would notice until an admin quoted one at the other.
+         */
+        $company = $this->company();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        CommissionLedger::factory()->count(3)->create([
+            'company_id' => $company->id,
+            'agent_id' => $agent->id,
+        ]);
+
+        $reported = $this->read($company)->json('data.plan_locked_by_sales.ledger_rows');
+
+        $refusal = (string) $this->save($company, ['commission_plan_type' => CommissionPlanType::Matrix->value])
+            ->assertStatus(422)
+            ->json('errors.commission_plan_type.0');
+
+        $this->assertSame(3, $reported);
+        $this->assertStringContainsString("{$reported} รายการ", $refusal);
+    }
+
+    public function test_another_companys_sales_do_not_lock_this_ones_screen(): void
+    {
+        // BR-6, on the read side too. The count is per company, and a shared
+        // banner would refuse a switch this company is entitled to make.
+        $busy = $this->withOneSale($this->company());
+        $quiet = $this->company();
+
+        $this->read($quiet)->assertJsonPath('data.plan_locked_by_sales.locked', false);
+        $this->read($busy)->assertJsonPath('data.plan_locked_by_sales.locked', true);
+    }
 }

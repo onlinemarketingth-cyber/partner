@@ -78,7 +78,7 @@
  *     control that most needs to explain itself would be the one that cannot.
  *   - A READ-ONLY viewer is never gated. See `stepReachable`.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 // TASK-208 / ADR-038 — one company scope, chosen in the header.
 import { useActiveCompanyStore } from '@/stores/activeCompany'
@@ -1767,6 +1767,7 @@ async function loadCompanySettings(): Promise<void> {
     deepestManagerChain.value = 0
     maxOverrideDepth.value = ''
     overrideCompression.value = false
+    planLock.value = UNLOCKED
     houseAccount.value = null
     uncertifiedLeaders.value = EMPTY_LEADER_WARNING
 
@@ -1781,6 +1782,7 @@ async function loadCompanySettings(): Promise<void> {
         deepest_manager_chain?: number
         max_override_depth?: number | null
         override_compression?: boolean
+        plan_locked_by_sales?: PlanLock
         commission_house_account?: HouseAccount | null
         leaders_missing_certification?: LeaderWarning
       }
@@ -1793,6 +1795,7 @@ async function loadCompanySettings(): Promise<void> {
     // for it, never a 0 that a later save would send back as "pay nobody".
     maxOverrideDepth.value = r.data.max_override_depth ?? ''
     overrideCompression.value = r.data.override_compression === true
+    planLock.value = r.data.plan_locked_by_sales ?? UNLOCKED
     // Server-computed and never inferred here: the screen shows the maximum
     // leader rate from this number, and a guess would print a ceiling the
     // save-time refusal then disagrees with.
@@ -1815,6 +1818,14 @@ async function loadCompanySettings(): Promise<void> {
     // overrideModeUnknown already puts the whole card into its loud state.
     maxOverrideDepth.value = ''
     overrideCompression.value = false
+    /*
+     * Cleared, NOT left as "locked". A read that failed knows nothing, and a
+     * lock banner over a company whose ledger nobody counted would refuse a
+     * change the admin is entitled to make — the exact mirror of the bug this
+     * field exists to fix. overrideModeUnknown already puts the card into its
+     * loud state.
+     */
+    planLock.value = UNLOCKED
     houseAccount.value = null
     /*
      * Cleared, never left stale. A warning naming people is a warning an
@@ -2208,6 +2219,52 @@ interface LeaderWarning {
   total: number
   leaders: Array<{ id: number; name: string; agents_under: number }>
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 2026-09-21 — MAY THE PLAN AND THE BASIS STILL BE CHANGED?
+ *
+ * Owner: "ที่เราเคยสรุปกันไว้ไม่ใช่เหรอว่าหากมีการขายเกิดขึ้นแล้ว การ Setup
+ * เปลี่ยนแผนค่าแนะนำจะทำไม่ได้". It was, and the server has refused since
+ * 2026-09-19 — but only as a refusal. This screen had no way to know, so it
+ * went on offering the switch under a banner promising the change was mild,
+ * and the admin learned otherwise by pressing.
+ *
+ * A refusal that lands after the press is a defect in the screen, not a
+ * safety feature. The endpoint now reports the same two facts the refusal
+ * quotes, and everything below is about saying them BEFORE the button.
+ *
+ * `locked: false` is the honest default for every state where the screen does
+ * not know: no company chosen, a failed read. A lock banner over an uncounted
+ * ledger would refuse a change the admin is entitled to make, which is the
+ * same bug pointed the other way.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface PlanLock {
+  locked: boolean
+  ledger_rows: number
+  first_ledger_at: string | null
+}
+
+const UNLOCKED: PlanLock = { locked: false, ledger_rows: 0, first_ledger_at: null }
+const planLock = ref<PlanLock>(UNLOCKED)
+
+/** Short-hand for the many places that only care whether it is shut. */
+const planLockedBySales = computed(() => planLock.value.locked === true)
+
+/**
+ * The sentence that replaces "มีผลกับการขายครั้งถัดไปเท่านั้น" once the
+ * company has paid anybody.
+ *
+ * Names the count and the date, because "เปลี่ยนไม่ได้" alone reads as a bug
+ * or a permission problem. It is the same pair of facts the server's refusal
+ * quotes — from the same query — so an admin who sees both cannot find them
+ * disagreeing.
+ */
+const planLockNote = computed(() => {
+  const rows = planLock.value.ledger_rows.toLocaleString('th-TH')
+  const since = planLock.value.first_ledger_at ? formatDate(planLock.value.first_ledger_at) : '—'
+
+  return `เปลี่ยนแผนและฐานการคำนวณไม่ได้แล้ว — บริษัทนี้มีค่าแนะนำที่ลงบัญชีไปแล้ว ${rows} รายการ (รายการแรก ${since})`
+})
 
 const EMPTY_LEADER_WARNING: LeaderWarning = { total: 0, leaders: [] }
 const uncertifiedLeaders = ref<LeaderWarning>(EMPTY_LEADER_WARNING)
@@ -3781,6 +3838,137 @@ function viewPlan(pt: CommissionPlanType): void {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+ * PRESSING A BOX IN THE DIAGRAM (owner, 2026-09-21)
+ *
+ * "สามารถคลิ๊กที่ฝั่งในแต่ละตำแหน่งเพื่อพาไป setup ค่าคอมได้สะดวก".
+ *
+ * PlanShapePreview names a destination — `seller-rate`, `level:2`,
+ * `rank-ladder` — and knows nothing else. THIS is the half that knows where
+ * things are, because "where" is a fact about this screen's four steps and
+ * nothing about the shape of a compensation plan.
+ *
+ * Why a `data-test` selector rather than a template ref: the destinations sit
+ * inside `v-if`ed step panels and a slot, so most of them do not exist in the
+ * DOM at the moment the box is pressed — a ref would be null for exactly the
+ * jumps that cross a step, which is all the interesting ones. The step is
+ * switched first, and the element is looked up on the next tick, once it is
+ * real.
+ * ═══════════════════════════════════════════════════════════════════════ */
+interface FocusDestination {
+  step: Step
+  selector: string
+  /** Said out loud when the destination is not on screen to be jumped to. */
+  missing: string
+}
+
+/** Why a jump did nothing, shown beside the chart. Empty when there is nothing to say. */
+const planJumpNote = ref('')
+
+/**
+ * How long the highlight stays. Long enough to find with the eye after a
+ * smooth scroll, short enough that it is gone before the admin starts typing
+ * into the field it is drawn around.
+ */
+const FOCUS_FLASH_MS = 1800
+
+function focusDestinationFor(target: string): FocusDestination | null {
+  /*
+   * `level:N` is the Nth RUNG AS DRAWN, not a level number — see the note in
+   * PlanShapePreview. The draft is the same list the chart was drawn from and
+   * the same list the inputs below it render, so the index resolves against
+   * it, and a ladder of levels 1,3,7 lands on the right box.
+   */
+  const rung = /^level:(\d+)$/.exec(target)
+  if (rung) {
+    const row = levelLadderDraft.value[Number(rung[1]) - 1]
+
+    return row
+      ? { step: 2, selector: `[data-test="ladder-rate-${row.level}"]`, missing: '' }
+      : null
+  }
+
+  switch (target) {
+    /*
+     * The seller's own rate is NOT on this step. It is the company-wide
+     * default on step 3.1, which is the one destination that crosses a step
+     * boundary — and the reason this jump is worth having at all: an admin
+     * looking at the box labelled คนขาย has no way of guessing that the
+     * number in it was set two steps away.
+     */
+    case 'seller-rate':
+      return { step: 3, selector: '[data-test="step3-company-default"]', missing: 'ตั้งค่าเริ่มต้นทั้งบริษัทอยู่ในขั้นที่ 3 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'binary':
+      return { step: 2, selector: '[data-test="plan-structure-binary"]', missing: '' }
+    case 'matrix-levels':
+      return { step: 2, selector: '[data-test="plan-structure-matrix"]', missing: '' }
+    case 'rank-ladder':
+      return { step: 2, selector: '[data-test="plan-structure-ranks"]', missing: '' }
+    case 'generation':
+      return { step: 2, selector: '[data-test="plan-structure-generation"]', missing: '' }
+    case 'affiliate':
+      return { step: 2, selector: '[data-test="plan-structure-affiliate"]', missing: '' }
+    default:
+      return null
+  }
+}
+
+/** Cleared on the next jump so two flashes never run over each other. */
+let focusFlashTimer: ReturnType<typeof setTimeout> | null = null
+
+async function focusPlanControl(target: string): Promise<void> {
+  const dest = focusDestinationFor(target)
+  if (!dest) return
+
+  /*
+   * goToStep is the gate (it refuses an unreachable step), so a jump into a
+   * locked step must not leave the admin staring at an unchanged screen with
+   * no idea why. Say it where they are already looking.
+   */
+  if (!stepReachable.value[dest.step]) {
+    if (dest.missing) planJumpNote.value = dest.missing
+
+    return
+  }
+
+  planJumpNote.value = ''
+  goToStep(dest.step)
+
+  // Two ticks: one for the step panel to render, one for anything the panel
+  // renders conditionally inside itself (the ladder rows live in a slot).
+  await nextTick()
+  await nextTick()
+
+  const el = document.querySelector<HTMLElement>(dest.selector)
+  if (!el) return
+
+  /*
+   * main.css turns CSS animation off under prefers-reduced-motion, but a
+   * scrollIntoView called from script is not CSS and ignores it. Asked here
+   * so the one piece of motion this screen initiates obeys the same setting
+   * as the rest.
+   */
+  const stillness = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+  el.scrollIntoView({ behavior: stillness ? 'auto' : 'smooth', block: 'center' })
+
+  /*
+   * Focus the control, not merely the region. An input that is scrolled to
+   * but not focused asks the admin to click the thing they just clicked —
+   * and a keyboard user who pressed Enter on the box would be left with focus
+   * back at the top of the document.
+   *
+   * A region that holds no single control gets tabindex="-1" so it can hold
+   * focus itself: that is what makes a screen reader announce the destination
+   * rather than silently scrolling under the reader's cursor.
+   */
+  if (!el.matches('input, select, textarea, button')) el.setAttribute('tabindex', '-1')
+  el.focus({ preventScroll: true })
+
+  if (focusFlashTimer) clearTimeout(focusFlashTimer)
+  el.classList.add('plan-focus-flash')
+  focusFlashTimer = setTimeout(() => el.classList.remove('plan-focus-flash'), FOCUS_FLASH_MS)
+}
+
 // ── Step 3: which layer a product's rate actually comes from ──
 /** The company-wide default rows that are live today (step 3.1). */
 const companyDefaultRules = computed<CommissionRuleItem[]>(() => {
@@ -5119,8 +5307,18 @@ watch(companyPlanType, (pt) => {
                   that re-saves the status quo is just a way to be unsure
                   whether you pressed it.
                 -->
+                <!--
+                  2026-09-21 — gone entirely once the company has paid
+                  somebody, rather than disabled.
+
+                  A greyed button invites hovering, clicking and wondering; it
+                  also leaves the reader to guess whether the problem is their
+                  permissions. The lock banner directly below says the actual
+                  reason with the actual numbers, which is the thing a disabled
+                  button cannot do.
+                -->
                 <button
-                  v-if="canEditCommissionConfig && viewingPlanType !== companyPlanType"
+                  v-if="canEditCommissionConfig && viewingPlanType !== companyPlanType && !planLockedBySales"
                   type="button"
                   class="btn-primary shrink-0 h-9"
                   :disabled="planSwitching"
@@ -5129,6 +5327,13 @@ watch(companyPlanType, (pt) => {
                 >
                   {{ planSwitching ? 'กำลังเปลี่ยน…' : `ใช้แผน ${planTypeLabels[viewingPlanType]}` }}
                 </button>
+                <span
+                  v-else-if="viewingPlanType !== companyPlanType && planLockedBySales"
+                  class="shrink-0 text-[12.5px] font-extrabold text-slate-400"
+                  data-test="plan-locked-badge"
+                >
+                  เปลี่ยนไม่ได้แล้ว
+                </span>
                 <span
                   v-else-if="viewingPlanType === companyPlanType"
                   class="shrink-0 text-[12.5px] font-extrabold text-brand-600"
@@ -5140,10 +5345,36 @@ watch(companyPlanType, (pt) => {
 
               <p v-if="planSwitchError" class="text-[12.5px] font-bold text-rose-600" data-test="plan-switch-error">{{ planSwitchError }}</p>
 
-              <div class="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5">
-                <Icon name="alert" :size="15" class="shrink-0 mt-0.5 text-amber-700" />
-                <span class="text-[12.5px] font-bold text-amber-800">
-                  การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+              <!--
+                2026-09-21 — THE BANNER THAT WAS WRONG.
+
+                It read "การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น" — true while
+                nothing had been paid, and an invitation to press a button the
+                server refuses once something has. Two sentences now, and the
+                screen knows which one applies before the admin finds out the
+                hard way.
+              -->
+              <div
+                class="flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5"
+                :class="planLockedBySales ? 'border-slate-300 bg-slate-100' : 'border-amber-200 bg-amber-50'"
+                :data-test="planLockedBySales ? 'plan-locked-note' : 'plan-switch-note'"
+              >
+                <Icon
+                  :name="planLockedBySales ? 'lock' : 'alert'"
+                  :size="15"
+                  class="shrink-0 mt-0.5"
+                  :class="planLockedBySales ? 'text-slate-500' : 'text-amber-700'"
+                />
+                <span class="text-[12.5px] font-bold" :class="planLockedBySales ? 'text-slate-600' : 'text-amber-800'">
+                  <template v-if="planLockedBySales">
+                    {{ planLockNote }} — ค่าแนะนำที่จ่ายไปแล้วแก้ย้อนหลังไม่ได้
+                    ถ้าเปลี่ยนตอนนี้ ยอดก่อนและหลังจะคิดคนละกติกาโดยไม่มีทางทำให้ตรงกัน ·
+                    ยังกดดูแผนอื่นเพื่อเปรียบเทียบได้ตามปกติ
+                  </template>
+                  <template v-else>
+                    การสลับแผนมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม ·
+                    <b>เปลี่ยนได้จนกว่าจะมีค่าแนะนำลงบัญชีรายการแรก</b>
+                  </template>
                 </span>
               </div>
 
@@ -5192,10 +5423,10 @@ watch(companyPlanType, (pt) => {
                     class="text-left rounded-xl border px-4 py-3.5 transition-colors"
                     :class="!basisUnknown && b === commissionBasis
                       ? 'border-brand-600 bg-brand-50'
-                      : canEditCommissionConfig && !basisUnknown
+                      : canEditCommissionConfig && !basisUnknown && !planLockedBySales
                         ? 'border-slate-200 bg-white hover:border-slate-300'
                         : 'border-slate-200 bg-slate-50 cursor-default'"
-                    :disabled="!canEditCommissionConfig || basisSaving || basisUnknown"
+                    :disabled="!canEditCommissionConfig || basisSaving || basisUnknown || planLockedBySales"
                     :data-test="`basis-option-${b}`"
                     @click="setCommissionBasis(b)"
                   >
@@ -5217,8 +5448,14 @@ watch(companyPlanType, (pt) => {
                 <p v-if="!canEditCommissionConfig" class="mt-2 text-[12.5px] text-slate-400">
                   เปลี่ยนได้เฉพาะผู้ดูแลระบบ — ติดต่อผู้ดูแลระบบหากต้องการแก้ไข
                 </p>
-                <p class="mt-2 text-[12.5px] text-slate-400">
-                  การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม
+                <!-- Same correction as the plan banner above: the old
+                     sentence was true only before the first paid row. -->
+                <p v-if="planLockedBySales" class="mt-2 text-[12.5px] font-bold text-slate-600" data-test="basis-locked-note">
+                  {{ planLockNote }}
+                </p>
+                <p v-else class="mt-2 text-[12.5px] text-slate-400" data-test="basis-switch-note">
+                  การเปลี่ยนฐานมีผลกับการขายครั้งถัดไปเท่านั้น — ค่าแนะนำที่ลงบัญชีไปแล้วไม่เปลี่ยนตาม ·
+                  <b>เปลี่ยนได้จนกว่าจะมีค่าแนะนำลงบัญชีรายการแรก</b>
                 </p>
               </div>
 
@@ -5250,6 +5487,7 @@ watch(companyPlanType, (pt) => {
                 :seed="planShapeSeed"
                 :live-level-rates="liveLevelRates"
                 default-open
+                @focus-target="focusPlanControl"
               >
                 <!--
                   THE REAL LADDER, right of the diagram. Every keystroke moves
@@ -5348,6 +5586,15 @@ watch(companyPlanType, (pt) => {
                   </div>
                 </template>
               </PlanShapePreview>
+
+              <!--
+                The one case a press can do nothing: the box points at step 3
+                and step 3 is still locked. Silence there would read as a dead
+                control on the one chart the admin was told to press.
+              -->
+              <p v-if="planJumpNote" class="text-[12.5px] font-bold text-amber-700" data-test="plan-jump-note">
+                {{ planJumpNote }}
+              </p>
 
               <!--
                 ═══ THE PV TABLE ═══

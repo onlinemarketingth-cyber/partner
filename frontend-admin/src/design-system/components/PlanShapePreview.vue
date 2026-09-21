@@ -56,7 +56,7 @@
  * The header sentence changes with the mode. A card that says "ตัวเลขสมมติ
  * ทั้งหมด" over the company's real rates is worse than no card.
  */
-import { computed, ref, watch } from 'vue'
+import { computed, getCurrentInstance, ref, watch } from 'vue'
 
 type PlanType = 'unilevel' | 'binary' | 'matrix' | 'stairstep_breakaway' | 'generation' | 'affiliate'
 type Basis = 'price' | 'pv'
@@ -100,8 +100,60 @@ const props = withDefaults(defineProps<{
   defaultOpen: false,
 })
 
+/**
+ * 2026-09-21 — the boxes in the diagram are also the way INTO the setting.
+ *
+ * Owner: "สามารถคลิ๊กที่ฝั่งในแต่ละตำแหน่งเพื่อพาไป setup ค่าคอมได้สะดวก".
+ *
+ * The component names a DESTINATION and nothing else — `seller-rate`,
+ * `level:2`, `rank-ladder`. It does not know which step owns that control, it
+ * does not scroll anything, and it never navigates: the screen that renders
+ * the controls is the only thing that can say where they are, and a
+ * design-system component that hardcoded a step number would be wrong the
+ * first time the steps are reordered.
+ *
+ * `level:N` is the Nth RUNG OF THE LADDER AS DRAWN, counting from the top,
+ * not a `commission_override_rules.level`. The diagram is drawn from
+ * `liveLevelRates`, which is a list in order — it carries no row ids and no
+ * level numbers — so the index is the only thing this component honestly
+ * knows. The parent maps rung → its own row, which is also what keeps this
+ * working on a ladder whose levels are not 1,2,3.
+ */
+const emit = defineEmits<{ 'focus-target': [target: string] }>()
+
 /** True when any figure on screen belongs to the company rather than to nobody. */
 const isLive = computed(() => props.seed !== null || props.liveLevelRates !== null)
+
+/*
+ * Nothing is clickable unless somebody is listening.
+ *
+ * A box that looks pressable and does nothing is worse than a box that looks
+ * like a picture, and this component is used in two places today: step 2,
+ * which wires the jump, and any future caller that wants the chart alone. The
+ * affordance follows the listener rather than a prop, so a caller cannot
+ * forget to turn one of the two off.
+ */
+const listenerBound = computed(() => Boolean(getCurrentInstance()?.vnode.props?.onFocusTarget))
+
+/**
+ * And only over the company's OWN plan. In sandbox mode every figure is
+ * invented, so "ไปตั้งค่าอัตรานี้" would point at a setting that has nothing
+ * to do with the box that was pressed.
+ */
+const nodesClickable = computed(() => isLive.value && listenerBound.value)
+
+/** Which box currently holds keyboard focus — SVG has no :focus-visible we can style. */
+const focusedNode = ref<number | null>(null)
+
+function canPress(n: Node): boolean {
+  return nodesClickable.value && typeof n.focus === 'string'
+}
+
+function press(n: Node): void {
+  if (!canPress(n) || !n.focus) return
+
+  emit('focus-target', n.focus)
+}
 
 /* ── money: integer satang, one round at the multiply (BR-3) ────────────── */
 const S = (baht: number) => Math.round((Number(baht) || 0) * 100)
@@ -214,7 +266,27 @@ const saleSatang = computed(() =>
 const baseSatang = computed(() => (props.basis === 'pv' ? S(pv.value) : saleSatang.value))
 
 interface Row { who: string; rate: string; amount?: number; text?: string; tone?: 'self' | 'muted' | 'plain'; note?: string }
-interface Node { x: number; y: number; w: number; h: number; title: string; sub?: string; kind?: 'self' | 'plain' | 'ghost' }
+interface Node {
+  x: number; y: number; w: number; h: number
+  title: string; sub?: string
+  kind?: 'self' | 'plain' | 'ghost'
+  /**
+   * Where pressing this box should take the reader, named for the CONTROL and
+   * never for the step that happens to hold it today. Omitted on a box that
+   * stands for a person rather than a setting (a matrix seat, a binary leg's
+   * running total) — there is nothing to open, and inventing a nearby
+   * destination would teach that the box and the setting are the same thing.
+   */
+  focus?: string
+  /**
+   * What the reader is told they are about to open, in their own words. Read
+   * out by screen readers and, on a box whose own text does not already say
+   * it, printed under the title — which is the whole point on the ghost row:
+   * "ยังไม่ถึงขั้น" explains why the money stopped but not where the rule that
+   * decides it lives.
+   */
+  focusLabel?: string
+}
 interface Edge { x1: number; y1: number; x2: number; y2: number; muted?: boolean }
 interface Label { x: number; y: number; text: string; tone?: 'money' | 'quiet' | 'bad'; anchor?: 'start' | 'middle' | 'end' }
 interface Shape { w: number; h: number; nodes: Node[]; edges: Edge[]; labels: Label[]; alt: string }
@@ -241,6 +313,8 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
         title: i === 0 ? 'คนขาย' : `ชั้น ${i}`,
         sub: i === 0 ? 'ปิดการขาย' : i === 1 ? 'หัวหน้าโดยตรง' : 'หัวหน้าเหนือขึ้นไป',
         kind: i === 0 ? 'self' : 'plain',
+        focus: i === 0 ? 'seller-rate' : `level:${i}`,
+        focusLabel: i === 0 ? 'อัตราของคนขาย' : `อัตราของชั้นที่ ${i}`,
       })
       if (i > 0) {
         const levelRate = rates[i - 1] ?? 0
@@ -281,7 +355,9 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
       shape: {
         w: 470, h: 250,
         nodes: [
-          { x: 140, y: 16, w: 190, h: 46, title: 'คนรับค่าคอม', sub: 'จับคู่ซ้าย-ขวา', kind: 'self' },
+          { x: 140, y: 16, w: 190, h: 46, title: 'คนรับค่าคอม', sub: 'จับคู่ซ้าย-ขวา', kind: 'self', focus: 'binary', focusLabel: 'อัตราจับคู่และเพดานต่อรอบ' },
+          // The two legs are running totals of other people's sales, not
+          // settings — there is no "ขาซ้าย" to open.
           { x: 20, y: 150, w: 170, h: 46, title: 'ขาซ้าย', sub: `${fmt(L)} หน่วย`, kind: 'plain' },
           { x: 280, y: 150, w: 170, h: 46, title: 'ขาขวา', sub: `${fmt(R)} หน่วย`, kind: 'plain' },
         ],
@@ -313,14 +389,16 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     const gap = 12
     const cw = Math.min(120, (430 - (w - 1) * gap) / w)
     const x0 = (470 - (w * cw + (w - 1) * gap)) / 2
-    const nodes: Node[] = [{ x: 160, y: 16, w: 150, h: 42, title: 'ชั้นบนสุด', kind: 'plain' }]
+    const nodes: Node[] = [{ x: 160, y: 16, w: 150, h: 42, title: 'ชั้นบนสุด', kind: 'plain', focus: 'matrix-levels', focusLabel: 'อัตราตามชั้นของผัง' }]
     const edges: Edge[] = []
     for (let i = 0; i < w; i++) {
       const x = x0 + i * (cw + gap)
+      // A seat, not a rate. What a seat is paid depends on its DEPTH, and the
+      // seats drawn here are all on the same one.
       nodes.push({ x, y: 118, w: cw, h: 42, title: `ช่อง ${i + 1}`, sub: i === w - 1 ? 'ช่องสุดท้าย' : undefined, kind: 'plain' })
       edges.push({ x1: x + cw / 2, y1: 118, x2: 235, y2: 58, muted: true })
     }
-    nodes.push({ x: 160, y: 210, w: 150, h: 46, title: 'คนขาย', sub: 'อยู่ชั้นล่าง', kind: 'self' })
+    nodes.push({ x: 160, y: 210, w: 150, h: 46, title: 'คนขาย', sub: 'อยู่ชั้นล่าง', kind: 'self', focus: 'seller-rate', focusLabel: 'อัตราของคนขาย' })
     edges.push({ x1: 235, y1: 210, x2: 235, y2: 182, muted: true })
     edges.push({ x1: 235, y1: 182, x2: x0 + cw / 2, y2: 182, muted: true })
     edges.push({ x1: x0 + cw / 2, y1: 182, x2: x0 + cw / 2, y2: 160 })
@@ -350,12 +428,12 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     const nodes: Node[] = [], labels: Label[] = []
     RANKS.forEach((r, i) => {
       const x = 20 + i * 10, y = 196 - i * 56
-      nodes.push({ x, y, w: 150, h: 44, title: r.name, sub: `${r.rate}% · ยอด ${r.threshold / 1000}k`, kind: 'plain' })
+      nodes.push({ x, y, w: 150, h: 44, title: r.name, sub: `${r.rate}% · ยอด ${r.threshold / 1000}k`, kind: 'plain', focus: 'rank-ladder', focusLabel: 'บันไดขั้นและเกณฑ์ยอด' })
       if (r.breakaway) labels.push({ x: x + 158, y: y + 27, tone: 'bad', text: 'ตัดสาย' })
     })
     labels.push({ x: 20, y: 252, tone: 'quiet', text: 'บันไดขั้น — ยอดถึงเกณฑ์แล้วเลื่อนขั้นเอง' })
-    nodes.push({ x: 300, y: 190, w: 150, h: 46, title: 'คนขาย', sub: sr.name, kind: 'self' })
-    nodes.push({ x: 300, y: 60, w: 150, h: 46, title: 'หัวหน้า', sub: mr.name, kind: 'plain' })
+    nodes.push({ x: 300, y: 190, w: 150, h: 46, title: 'คนขาย', sub: sr.name, kind: 'self', focus: 'rank-ladder', focusLabel: 'ขั้นของคนขายและอัตราของขั้นนั้น' })
+    nodes.push({ x: 300, y: 60, w: 150, h: 46, title: 'หัวหน้า', sub: mr.name, kind: 'plain', focus: 'rank-ladder', focusLabel: 'ขั้นของหัวหน้าและอัตราของขั้นนั้น' })
     labels.push(blocked
       ? { x: 250, y: 152, tone: 'bad', text: 'ตัดสายแล้ว = 0' }
       : { x: 250, y: 152, tone: diff > 0 ? 'money' : 'quiet', text: `ส่วนต่าง ${diff}% = ${fmt(mgrAmount)}` })
@@ -391,7 +469,29 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
       const c = chain[i]
       if (!c) continue
       const y = 12 + (chain.length - 1 - i) * (40 + gap)
-      nodes.push({ x: 130, y, w: 190, h: 40, title: c.name, sub: c.breakaway ? 'ถึงขั้นตัดสาย' : 'ยังไม่ถึงขั้น', kind: c.self ? 'self' : c.breakaway ? 'plain' : 'ghost' })
+      /*
+       * Three boxes, three destinations.
+       *
+       * The seller's own rate is a rate; a breakaway leader is paid by the
+       * generation table; and the GHOST — the one that reads "ยังไม่ถึงขั้น" —
+       * is the box somebody actually wants to press, because it is the only
+       * thing on the chart that explains why a real person got nothing. It
+       * does not belong to the generation table at all: whether that person
+       * counts is decided by the rank ladder, so that is where it points, and
+       * the box says so rather than leaving the reader to press and find out.
+       */
+      nodes.push({
+        x: 130, y, w: 190, h: 40,
+        title: c.name,
+        sub: c.breakaway ? 'ถึงขั้นตัดสาย' : 'ยังไม่ถึงขั้น',
+        kind: c.self ? 'self' : c.breakaway ? 'plain' : 'ghost',
+        focus: c.self ? 'seller-rate' : c.breakaway ? 'generation' : 'rank-ladder',
+        focusLabel: c.self
+          ? 'อัตราของคนขาย'
+          : c.breakaway
+            ? 'อัตราของแต่ละรุ่น'
+            : 'เกณฑ์ขั้นตัดสาย',
+      })
       if (i > 0) edges.push({ x1: 225, y1: y + 40 + gap, x2: 225, y2: y + 44, muted: !c.breakaway })
     }
     for (let i = 1; i < chain.length; i++) {
@@ -429,8 +529,8 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     shape: {
       w: 470, h: 212,
       nodes: [
-        { x: 140, y: 142, w: 190, h: 46, title: 'คนขาย', sub: `${fmt(sellerFinal)} บาท`, kind: 'self' },
-        { x: 140, y: 22, w: 190, h: 46, title: 'ผู้แนะนำ', sub: `${fmt(mgr)} บาท`, kind: 'plain' },
+        { x: 140, y: 142, w: 190, h: 46, title: 'คนขาย', sub: `${fmt(sellerFinal)} บาท`, kind: 'self', focus: 'seller-rate', focusLabel: 'อัตราของคนขาย' },
+        { x: 140, y: 22, w: 190, h: 46, title: 'ผู้แนะนำ', sub: `${fmt(mgr)} บาท`, kind: 'plain', focus: 'affiliate', focusLabel: 'อัตราของผู้แนะนำ' },
       ],
       edges: [{ x1: 235, y1: 142, x2: 235, y2: 74 }],
       labels: [
@@ -552,8 +652,41 @@ function labelClass(tone?: Label['tone']) {
               stroke-width="2"
               :marker-end="e.muted ? undefined : 'url(#psp-arrow)'"
             />
-            <g v-for="(n, i) in model.shape.nodes" :key="`n${i}`">
-              <rect :x="n.x" :y="n.y" :width="n.w" :height="n.h" rx="9" stroke-width="1.5" :class="nodeClass(n.kind)" />
+            <!--
+              A pressable box is a BUTTON, not a rect with a click handler.
+
+              role + tabindex + Enter/Space + a visible ring are not polish
+              here: this screen is used on a tablet and with a keyboard, and an
+              SVG shape that only answers to a mouse would put the one
+              convenient route to every rate behind a pointing device. The ring
+              is drawn rather than styled because SVG gives us no
+              :focus-visible we can rely on across the browsers this admin runs.
+            -->
+            <g
+              v-for="(n, i) in model.shape.nodes"
+              :key="`n${i}`"
+              :role="canPress(n) ? 'button' : undefined"
+              :tabindex="canPress(n) ? 0 : undefined"
+              :aria-label="canPress(n) ? `${n.title} — ไปตั้งค่า${n.focusLabel ? ' ' + n.focusLabel : ''}` : undefined"
+              :class="canPress(n) ? 'cursor-pointer outline-none' : undefined"
+              :data-test="canPress(n) ? `plan-node-${n.focus}` : undefined"
+              @click="press(n)"
+              @keydown.enter.prevent="press(n)"
+              @keydown.space.prevent="press(n)"
+              @focus="focusedNode = i"
+              @blur="focusedNode = null"
+            >
+              <rect
+                v-if="focusedNode === i && canPress(n)"
+                :x="n.x - 4" :y="n.y - 4" :width="n.w + 8" :height="n.h + 8"
+                rx="13" fill="none" stroke-width="2.5"
+                class="stroke-brand-500"
+                data-test="plan-node-focus-ring"
+              />
+              <rect
+                :x="n.x" :y="n.y" :width="n.w" :height="n.h" rx="9" stroke-width="1.5"
+                :class="[nodeClass(n.kind), canPress(n) ? 'transition-colors hover:stroke-brand-600' : '']"
+              />
               <text :x="n.x + n.w / 2" :y="n.sub ? n.y + n.h / 2 - 3 : n.y + n.h / 2 + 4" text-anchor="middle" class="fill-slate-900 text-[12.5px] font-bold">{{ n.title }}</text>
               <text v-if="n.sub" :x="n.x + n.w / 2" :y="n.y + n.h / 2 + 13" text-anchor="middle" class="fill-slate-400 text-[11px]">{{ n.sub }}</text>
             </g>
@@ -565,6 +698,18 @@ function labelClass(tone?: Label['tone']) {
             >{{ l.text }}</text>
           </svg>
           <figcaption class="mt-2 text-[12px] leading-relaxed text-slate-500">{{ model.caption }}</figcaption>
+          <!--
+            Two sentences, and which one shows is the honest answer to "why
+            does pressing do nothing". A picture that is inert on five chips
+            and live on the sixth, with no line saying which, reads as a bug
+            in the five.
+          -->
+          <p v-if="nodesClickable" class="mt-1.5 text-[12px] font-bold text-brand-700" data-test="plan-node-hint">
+            กดที่กล่องในผังเพื่อไปยังที่ตั้งค่าของกล่องนั้นได้
+          </p>
+          <p v-else-if="listenerBound" class="mt-1.5 text-[12px] text-slate-400" data-test="plan-node-hint-inert">
+            กดกล่องในผังไม่ได้ — นี่เป็นแผนที่บริษัทยังไม่ได้ใช้ ตัวเลขทั้งหมดเป็นตัวอย่าง
+          </p>
         </figure>
 
         <!-- ตัวเลข -->

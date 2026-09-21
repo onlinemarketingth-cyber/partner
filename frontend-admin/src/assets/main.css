@@ -124,6 +124,34 @@
   transform: translateX(100%);
 }
 
+/*
+ * "Here is the thing you just pressed" — the landing mark for a jump from a
+ * diagram box to the control it stands for (CommissionPlansView, step 2).
+ *
+ * A ring rather than a background: the destinations are a number input, a
+ * whole settings card and a fieldset, and a background wash on the first two
+ * fights the field's own border while a ring reads the same on all three. It
+ * is removed on a timer, so it must never be something the control's normal
+ * appearance depends on.
+ *
+ * Duplicated into frontend/src/assets/main.css only if that app ever grows
+ * the same jump — right now it does not, and an unused rule there would be a
+ * rule nobody knows is dead.
+ */
+.plan-focus-flash {
+  animation: plan-focus-flash 1.8s ease-out;
+  border-radius: 0.75rem;
+}
+@keyframes plan-focus-flash {
+  0%,
+  60% {
+    box-shadow: 0 0 0 3px theme('colors.brand.500');
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
 /* Respect the user's OS-level motion preference — accessibility, not
    optional polish. Overrides every transition/animation above (and the
    sk-shimmer keyframe in LoadingSkeleton.vue) uniformly. */

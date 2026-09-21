@@ -54,6 +54,20 @@ class CommissionSettingResource extends JsonResource
             'max_override_depth' => $this['max_override_depth'],
             'override_compression' => $this['override_compression'],
             /*
+             * 2026-09-21 — may the plan and the basis still be changed?
+             *
+             * `{ locked, ledger_rows, first_ledger_at }` rather than a bare
+             * boolean, because the screen has to SAY WHY. "เปลี่ยนไม่ได้" with
+             * no reason reads as a bug or a permission problem; naming the
+             * number of settled rows and the date of the first one is the
+             * difference between a rule and an obstruction — and it is the
+             * same pair of facts the server's own refusal quotes.
+             *
+             * Always present, `locked: false` when nothing has been paid yet,
+             * so the screen never has to tell "not locked" from "not told".
+             */
+            'plan_locked_by_sales' => $this['plan_locked_by_sales'],
+            /*
              * 2026-09-15 — the company's own seat in its hierarchy, or null
              * when it has none. Null is the answer for most companies and a
              * real one: nobody has decided the company should take a leader's
