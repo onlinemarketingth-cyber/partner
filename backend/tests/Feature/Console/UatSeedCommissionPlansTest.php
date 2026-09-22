@@ -4,8 +4,12 @@ namespace Tests\Feature\Console;
 
 use App\Console\Commands\UatSeedCommissionPlansCommand as Seed;
 use App\Enums\CommissionEarnedVia;
+use App\Enums\IdDocumentType;
+use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\Company;
+use App\Models\Order;
+use App\Models\Referral;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -248,18 +252,59 @@ class UatSeedCommissionPlansTest extends TestCase
     public function test_re_running_the_seeder_does_not_duplicate_anything(): void
     {
         /*
-         * QA will re-run this. If a second run doubled the ledger, every
-         * expected figure on the sheet would be wrong from the second run
-         * onward — and it would look like a commission bug, not a seeder one.
+         * ── THIS TEST EXISTED AND COULD NOT FAIL ──
+         *
+         * 2026-09-22. It compared `payouts()` before and after, and
+         * `payouts()` is a map keyed by "name · earned_via" — so a second,
+         * identical set of ledger rows OVERWROTE the first set's keys and the
+         * map came out unchanged. The assertion held while production was
+         * doubling: ฿1,900 became ฿3,800 on the owner's screen and this test
+         * stayed green.
+         *
+         * A test whose subject is duplication must therefore count. Rows, the
+         * sum, the referrals and the orders — because each of those is a
+         * separate way for a re-run to leave a mark, and the sum alone would
+         * miss a row that duplicated at zero.
          */
         $company = $this->seedPlan('unilevel');
-        $first = $this->payouts($company);
+
+        $rows = fn (): array => [
+            'ledger' => CommissionLedger::withoutGlobalScopes()->where('company_id', $company->id)->count(),
+            'satang' => (int) CommissionLedger::withoutGlobalScopes()->where('company_id', $company->id)->sum('amount_satang'),
+            'referrals' => Referral::withoutGlobalScopes()->where('company_id', $company->id)->count(),
+            'orders' => Order::withoutGlobalScopes()->where('company_id', $company->id)->count(),
+            'clients' => Client::withoutGlobalScopes()->where('company_id', $company->id)->count(),
+            'agents' => User::withoutGlobalScopes()->where('company_id', $company->id)->count(),
+        ];
+
+        $before = $rows();
+        $this->assertSame(['ledger' => 4, 'satang' => 190_000, 'referrals' => 1, 'orders' => 1, 'clients' => 1, 'agents' => 4], $before);
 
         $this->seedPlan('unilevel');
+        $this->seedPlan('unilevel');
 
-        $this->assertSame($first, $this->payouts($company));
+        $this->assertSame($before, $rows());
         $this->assertSame(1, Company::withoutGlobalScopes()
             ->where('slug', 'like', Seed::SLUG_PREFIX.'%')->count());
+    }
+
+    public function test_re_running_every_plan_leaves_the_ledger_exactly_as_it_was(): void
+    {
+        // The same property across all six, because each plan reaches `sell()`
+        // by its own path and only Unilevel was ever checked.
+        $this->artisan('uat:seed-commission-plans', ['--force' => true])->assertSuccessful();
+
+        $before = CommissionLedger::withoutGlobalScopes()
+            ->selectRaw('company_id, count(*) as rows_count, sum(amount_satang) as satang')
+            ->groupBy('company_id')->orderBy('company_id')->get()->toArray();
+
+        $this->artisan('uat:seed-commission-plans', ['--force' => true])->assertSuccessful();
+
+        $after = CommissionLedger::withoutGlobalScopes()
+            ->selectRaw('company_id, count(*) as rows_count, sum(amount_satang) as satang')
+            ->groupBy('company_id')->orderBy('company_id')->get()->toArray();
+
+        $this->assertSame($before, $after);
     }
 
     public function test_it_creates_no_company_outside_the_uat_prefix(): void
@@ -296,6 +341,76 @@ class UatSeedCommissionPlansTest extends TestCase
                 password_verify('password', $agent->password),
                 'a UAT agent accepts a guessable password',
             );
+        }
+    }
+
+    // ── The payout queue can reach them ─────────────────────────────────────
+
+    public function test_every_uat_agent_is_ready_to_be_paid_out(): void
+    {
+        /*
+         * 2026-09-22 — the owner opened the payout screen for the Unilevel
+         * tenant and found all four agents under "มีค่าแนะนำ แต่ตั้งจ่ายไม่ได้".
+         * The screen was right: it refuses to queue money for somebody with no
+         * account to send it to and no verified identity. The FIXTURE was
+         * unfinished, and a UAT tenant that cannot reach the payout queue
+         * leaves the second half of the money path untested.
+         *
+         * `hasCompletePayoutDetails()` is the one definition the whole payout
+         * flow gates on, so this asserts through it rather than listing the
+         * five columns again and drifting from it.
+         */
+        $company = $this->seedPlan('unilevel');
+
+        $agents = User::withoutGlobalScopes()->where('company_id', $company->id)->get();
+
+        $this->assertCount(4, $agents);
+        foreach ($agents as $agent) {
+            $this->assertTrue(
+                $agent->hasCompletePayoutDetails(),
+                "{$agent->name} cannot be paid out — the payout queue will hide them",
+            );
+        }
+    }
+
+    public function test_the_fabricated_identity_cannot_be_mistaken_for_a_real_one(): void
+    {
+        /*
+         * national_id is encrypted and mirrored into national_id_hash, a
+         * DETERMINISTIC blind index the user search matches on. A plausible
+         * 13-digit Thai ID invented for a test account could hash to the same
+         * value as a real person's — on a production database.
+         *
+         * So the document is a UAT-prefixed passport, and this test is what
+         * stops somebody "tidying" it into a realistic Thai ID later.
+         */
+        $company = $this->seedPlan('unilevel');
+
+        foreach (User::withoutGlobalScopes()->where('company_id', $company->id)->get() as $agent) {
+            $this->assertSame(IdDocumentType::Passport, $agent->id_document_type);
+            $this->assertStringStartsWith('UAT', (string) $agent->national_id);
+            $this->assertStringStartsWith('UAT', (string) $agent->bank_account_number);
+        }
+    }
+
+    public function test_exactly_one_tenant_withholds_tax_so_both_cases_are_visible(): void
+    {
+        /*
+         * Withholding is orthogonal to the plan, so covering it means either
+         * twelve tenants or one deliberate pairing. Five withhold nothing and
+         * Affiliate withholds 3% — which is what lets QA compare gross against
+         * net side by side instead of taking one screen's word for it.
+         */
+        $this->artisan('uat:seed-commission-plans', ['--force' => true])->assertSuccessful();
+
+        $rates = Company::withoutGlobalScopes()
+            ->where('slug', 'like', Seed::SLUG_PREFIX.'%')
+            ->pluck('wht_rate', 'slug')
+            ->all();
+
+        $this->assertSame(Seed::WHT_RATE_BP, $rates[Seed::SLUG_PREFIX.'affiliate']);
+        foreach (['unilevel', 'binary', 'matrix', 'stairstep-breakaway', 'generation'] as $plan) {
+            $this->assertNull($rates[Seed::SLUG_PREFIX.$plan], "{$plan} should not withhold");
         }
     }
 

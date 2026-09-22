@@ -6,6 +6,7 @@ use App\Enums\BinaryCycleFrequency;
 use App\Enums\BinaryLeg;
 use App\Enums\CommissionBasis;
 use App\Enums\CommissionRateType;
+use App\Enums\IdDocumentType;
 use App\Enums\MatrixSpilloverRule;
 use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
@@ -25,6 +26,7 @@ use App\Models\CommissionRule;
 use App\Models\Company;
 use App\Models\PipelineTemplate;
 use App\Models\Product;
+use App\Models\Referral;
 use App\Models\User;
 use App\Models\UserCertification;
 use App\Services\Commission\MatrixCommissionService;
@@ -117,6 +119,13 @@ class UatSeedCommissionPlansCommand extends Command
     public const BINARY_MATCHED_RATE_BP = 1_000;
 
     public const AFFILIATE_RATE_BP = 300;
+
+    /**
+     * Withholding tax, basis points, on the one tenant that withholds.
+     * 3% is the rate Thai law applies to service fees; it is still a fixture
+     * here, and the owner's real figure is outstanding (BR-7).
+     */
+    public const WHT_RATE_BP = 300;
 
     /**
      * The stairstep ladder. `rate_value` is the rank's OWN rate; a manager is
@@ -251,9 +260,19 @@ class UatSeedCommissionPlansCommand extends Command
          * re-run against an already-seeded company would be refused by the
          * guard it is trying to help QA test.
          */
+        /*
+         * Withholding tax on exactly ONE tenant, and Affiliate draws it.
+         *
+         * Same reasoning as the PV basis above: the deduction is orthogonal to
+         * the plan, so covering it means either twelve companies or one
+         * deliberate pairing. Five tenants withhold nothing and one withholds
+         * 3%, which is what lets QA see the difference between gross and net
+         * side by side instead of taking one screen's word for it.
+         */
         $company->forceFill([
             'commission_plan_type' => $plan,
             'commission_basis' => $basis->value,
+            'wht_rate' => $plan === 'affiliate' ? self::WHT_RATE_BP : null,
         ])->save();
 
         $templates->provision($company);
@@ -439,7 +458,53 @@ class UatSeedCommissionPlansCommand extends Command
             ['company_id' => $company->id, 'passed_at' => now()],
         );
 
+        $this->makePayoutReady($user);
+
         return $user->fresh();
+    }
+
+    /**
+     * Fills in what `User::hasCompletePayoutDetails()` asks for, so the payout
+     * queue has somebody to offer.
+     *
+     * ── WHY THIS WAS MISSING, AND WHY IT IS HERE NOW ──
+     *
+     * 2026-09-22. The first version of this command stopped at the commission
+     * ledger, because that was the question: does each plan split correctly.
+     * It does. But the owner opened the payout screen next and found all four
+     * Unilevel agents sitting under "มีค่าแนะนำ แต่ตั้งจ่ายไม่ได้" — which is
+     * the screen behaving CORRECTLY (it refuses to queue money for somebody
+     * with no account to send it to and no verified identity) over a fixture
+     * that had simply never been finished.
+     *
+     * A UAT tenant that cannot reach the payout queue leaves the second half
+     * of the money path untested, so the fixture is finished here instead.
+     *
+     * ── WHY A PASSPORT AND NOT A THAI NATIONAL ID ──
+     *
+     * `national_id` is encrypted and mirrored into `national_id_hash`, a
+     * DETERMINISTIC blind index the user search matches on. A plausible
+     * 13-digit Thai ID invented for a test account could hash to the same
+     * value as a real person's — on a production database. A UAT-prefixed
+     * passport number cannot be mistaken for a Thai ID, cannot collide with
+     * one, and is honest about being fabricated.
+     */
+    private function makePayoutReady(User $user): void
+    {
+        if (filled($user->bank_account_number) && filled($user->national_id)) {
+            return; // already done on an earlier run
+        }
+
+        // Unique per user, and unmistakably not a real document or account.
+        $tag = 'UAT'.str_pad((string) $user->id, 9, '0', STR_PAD_LEFT);
+
+        $user->forceFill([
+            'bank_name' => 'ธนาคารทดสอบ UAT',
+            'bank_account_number' => $tag,
+            'bank_account_holder_name' => $user->name,
+            'national_id' => $tag,
+            'id_document_type' => IdDocumentType::Passport,
+        ])->save();
     }
 
     private function rank(Company $company, string $key): AgentRank
@@ -498,16 +563,43 @@ class UatSeedCommissionPlansCommand extends Command
                 'phone' => '0800000000',
             ]);
 
+        /*
+         * ── THE IDEMPOTENCY CHECK, AND WHY IT IS HERE AND NOT BELOW ──
+         *
+         * 2026-09-22 — the owner re-ran the seeder and every figure doubled:
+         * ฿1,900 became ฿3,800, four ledger rows became eight. The screen was
+         * reporting the truth; the command had sold twice.
+         *
+         * The check that was here looked at the referral it had JUST created,
+         * which is a new row at the entry stage every single time — it could
+         * never be true. The question has to be asked of the client BEFORE
+         * creating anything: has this UAT customer already bought this
+         * product? ReferralService::create() has no "find or create" mode and
+         * should not: a real customer buying the same package twice is a
+         * second sale, and that is correct for everyone except a fixture.
+         *
+         * BR-4 makes the surplus rows permanent — they cannot be edited or
+         * deleted — so a re-run is not a cosmetic mistake. Every figure on the
+         * QA sheet would be wrong from the second run onward, and it would
+         * read as a commission bug rather than a seeder one.
+         */
+        $alreadySold = Referral::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->where('client_id', $client->id)
+            ->where('product_id', $product->id)
+            ->where('current_stage', PipelineStage::CompletePayment->value)
+            ->exists();
+
+        if ($alreadySold) {
+            return;
+        }
+
         $referral = $referrals->create([
             'client_id' => $client->id,
             'product_id' => $product->id,
             'branch' => 'UAT',
             'preferred_time' => now()->addDay(),
         ], $seller);
-
-        if ($referral->current_stage === PipelineStage::CompletePayment) {
-            return; // already closed by an earlier run
-        }
 
         $order = $orders->createForReferral($referral, PaymentMethod::BankTransfer);
 
