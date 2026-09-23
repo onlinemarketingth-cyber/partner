@@ -36,6 +36,11 @@ function seed(binary: PlanShapeSeed['binary']): PlanShapeSeed {
     sellerRatePct: 10,
     productName: 'UAT Package',
     binary,
+    // The other plans' seeds are exercised in PlanShapePlanSeeds.spec.ts.
+    matrix: null,
+    generation: null,
+    ranks: null,
+    affiliate: null,
   }
 }
 
@@ -130,13 +135,13 @@ describe('the two knobs that stay what-ifs, and saying so', () => {
   it('names which figures are the company\'s and which are not', async () => {
     const w = await open({ matchedRatePct: 10, payoutCapSatang: null, carryOverUnmatched: true })
 
-    expect(w.get('[data-test="bin-seed-note"]').text()).toContain('ยอดสองขาเป็นตัวเลขลองเล่น')
+    expect(w.get('[data-test="seed-source-note"]').text()).toContain('ยอดสองขาเป็นตัวเลขลองเล่น')
   })
 
   it('says nothing of the sort when there is nothing seeded to distinguish', async () => {
     const w = await open(null)
 
-    expect(w.find('[data-test="bin-seed-note"]').exists()).toBe(false)
+    expect(w.find('[data-test="seed-source-note"]').exists()).toBe(false)
   })
 
   it('still lets the legs be edited, because that is what they are for', async () => {

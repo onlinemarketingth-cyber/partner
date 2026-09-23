@@ -2770,12 +2770,90 @@ const planShapeSeed = computed(() => {
       }
     : null
 
+  /*
+   * 2026-09-23 (later the same day) — the other four plans, for the same
+   * reason and found the same way.
+   *
+   * Owner opened the Matrix chart beside the Matrix payout screen: the chart
+   * said ฿1,400 and the ledger said ฿1,260. The chart was drawing a matrix
+   * three levels deep at 5/3/2% — its own constants — against a company that
+   * runs two levels at 5/3/1%. Width 3 and the first two rates happened to
+   * match, which is what made the fourth row look as real as the others.
+   *
+   * Binary was fixed hours earlier; Matrix, Generation, Stairstep and
+   * Affiliate had the identical defect, so they are all fed from here now.
+   */
+  const pct = (rateType: RateType, value: number): number | null =>
+    rateType === 'percentage' ? value / 100 : null
+
+  /** Percentages in `order`, or null if ANY of them is a fixed amount. */
+  const allPct = <T,>(rows: T[], key: (r: T) => number, type: (r: T) => RateType, order: (r: T) => number): number[] | null => {
+    const sorted = [...rows].sort((a, b) => order(a) - order(b))
+
+    if (sorted.some((r) => type(r) !== 'percentage')) return null
+
+    return sorted.map((r) => key(r) / 100)
+  }
+
+  const matrix = viewingPlanType.value === 'matrix' && matrixSettings.value
+    ? {
+        width: matrixSettings.value.width,
+        depth: matrixSettings.value.depth,
+        levelRatesPct: allPct(byCompany(matrixLevelRates.value), (r) => r.rate_value, (r) => r.rate_type, (r) => r.level),
+      }
+    : null
+
+  const generation = viewingPlanType.value === 'generation' && generationSettings.value
+    ? {
+        maxDepth: generationSettings.value.max_generation_depth,
+        generationRatesPct: allPct(byCompany(generationRules.value), (r) => r.rate_value, (r) => r.rate_type, (r) => r.generation_number),
+      }
+    : null
+
+  /*
+   * An empty ladder is passed through as an empty ARRAY, not null: a company
+   * running Stairstep with no ranks configured pays no override at all, and
+   * the chart drawing three invented rungs over that would hide the
+   * misconfiguration. Null is reserved for "this chart cannot draw it" — a
+   * ladder priced in fixed amounts.
+   */
+  const companyRanks = byCompany(agentRanks.value)
+  const ranks = viewingPlanType.value === 'stairstep_breakaway'
+    ? (companyRanks.some((r) => r.rate_type !== 'percentage')
+        ? null
+        : [...companyRanks]
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((r) => ({
+              name: r.name,
+              thresholdSatang: r.volume_threshold,
+              ratePct: r.rate_value / 100,
+              breakaway: r.is_breakaway_rank,
+            })))
+    : null
+
+  /*
+   * Affiliate's rate is the company-wide override rule — the same row step
+   * 4.3 lists — and its mode follows the same resolution the engine uses:
+   * the rule's own mode when it has one, otherwise the company default.
+   */
+  const affiliateRule = companyLeaderRules.value[0] ?? null
+  const affiliate = viewingPlanType.value === 'affiliate' && affiliateRule
+    ? {
+        ratePct: pct(affiliateRule.rate_type, affiliateRule.rate_value),
+        mode: affiliateRule.override_mode ?? overrideMode.value,
+      }
+    : null
+
   return {
     priceSatang: product?.effective_price_satang ?? product?.price_satang ?? null,
     pvSatang: product?.pv_satang ?? null,
     sellerRatePct,
     productName: product?.name ?? null,
     binary,
+    matrix,
+    generation,
+    ranks,
+    affiliate,
   }
 })
 

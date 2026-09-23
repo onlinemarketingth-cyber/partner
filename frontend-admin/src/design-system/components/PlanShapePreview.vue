@@ -79,6 +79,62 @@ export interface PlanShapeSeed {
    * rather than three nullable fields.
    */
   binary: PlanShapeBinarySeed | null
+  /** Matrix width/depth and the priced levels. Null: no settings row. */
+  matrix: PlanShapeMatrixSeed | null
+  /** Generation cap and the priced generations. Null: no settings row. */
+  generation: PlanShapeGenerationSeed | null
+  /**
+   * The company's rank ladder, lowest first. Null means no ladder (or one
+   * this chart cannot draw — see PlanShapeRank); an EMPTY array is a real
+   * answer, "this company has configured no ranks", and the sandbox ladder
+   * would be a lie about a plan that currently pays nobody.
+   */
+  ranks: PlanShapeRank[] | null
+  /** Affiliate's one-hop rate and where the money comes from. */
+  affiliate: PlanShapeAffiliateSeed | null
+}
+
+/**
+ * ── WHY EVERY RATE LIST IS ALL-OR-NOTHING ──
+ *
+ * A level priced as a FIXED amount per sale cannot be drawn as "x% of the
+ * base": the percentage it happens to equal moves the moment the price does.
+ * Rather than draw a list with a hole in it — where level 2 silently becomes
+ * level 3 and the reader cannot tell — the parent sends null for the whole
+ * list and the sandbox numbers stay, under a card that then does not claim
+ * they are the company's. Same rule already governs sellerRatePct.
+ */
+export interface PlanShapeMatrixSeed {
+  width: number
+  depth: number
+  /** Percentages, level 1 first. Null when any level is a fixed amount. */
+  levelRatesPct: number[] | null
+}
+
+export interface PlanShapeGenerationSeed {
+  maxDepth: number
+  /** Percentages, generation 1 first. Null when any is a fixed amount. */
+  generationRatesPct: number[] | null
+}
+
+/** One rung of the company's real ladder. */
+export interface PlanShapeRank {
+  name: string
+  thresholdSatang: number
+  ratePct: number
+  breakaway: boolean
+}
+
+export interface PlanShapeAffiliateSeed {
+  /** Null when the introducer is paid a fixed amount. */
+  ratePct: number | null
+  /**
+   * Where the introducer's share comes from — the company's step 4.1 answer,
+   * carried whole rather than flattened to a boolean. The two deduct modes
+   * are 33x apart on the same inputs, which is the entire reason the real
+   * enum spells the base into the name.
+   */
+  mode: 'additive' | 'deduct_from_sale' | 'deduct_from_commission'
 }
 
 /**
@@ -234,6 +290,46 @@ const binCap = ref<number | '' | null>(5000)
 const binCarry = ref(true)
 
 /** The cap in satang, or null for ไม่จำกัด — the server's own two states. */
+/**
+ * WHICH KNOBS ON THIS PLAN ARE THE COMPANY'S, said where the knobs are.
+ *
+ * The card's subtitle claims the whole chart uses the company's figures, and
+ * on every plan below that is only partly true: some of these controls are
+ * genuinely what-ifs, because the thing they represent has no company-level
+ * value to read. Naming both halves in one line is what stops somebody
+ * reading an invented number as configuration — which is exactly how a ฿5,000
+ * cap belonging to nobody, and a matrix a level deeper than the real one,
+ * went unnoticed.
+ *
+ * Deliberately NOT behind an ⓘ (CLAUDE.md §7): the rule is for explanations
+ * of what a control does. This is a correction to a claim the card already
+ * made out loud, and hiding it would leave the claim standing for exactly the
+ * person being misled by it.
+ */
+const seedSourceNote = computed<string | null>(() => {
+  const s = props.seed
+
+  if (!s) return null
+
+  if (props.planType === 'binary' && s.binary) {
+    return 'อัตราจับคู่ เพดาน และการยกยอด มาจากค่าที่บริษัทตั้งไว้จริง · ยอดสองขาเป็นตัวเลขลองเล่น — ระบบเก็บยอดขาแยกรายคน ไม่มียอดรวมระดับบริษัทให้ดึงมา'
+  }
+  if (props.planType === 'matrix' && s.matrix) {
+    return 'ผังกว้าง ผังลึก และอัตราแต่ละชั้น มาจากค่าที่บริษัทตั้งไว้จริง'
+  }
+  if (props.planType === 'generation' && s.generation) {
+    return 'จำนวนรุ่นสูงสุด และอัตราแต่ละรุ่น มาจากค่าที่บริษัทตั้งไว้จริง · สายตัวอย่างว่าใครตัดสายบ้าง เป็นโครงสมมติ — ระบบไม่มีสายงานมาตรฐานให้ดึงมา'
+  }
+  if (props.planType === 'stairstep_breakaway' && s.ranks) {
+    return 'บันไดขั้นทั้งหมด — ชื่อ อัตรา เกณฑ์ยอด และขั้นตัดสาย — มาจากค่าที่บริษัทตั้งไว้จริง · ขั้นของคนขายและหัวหน้าเลือกเองเพื่อลองดู'
+  }
+  if (props.planType === 'affiliate' && s.affiliate) {
+    return 'อัตราผู้แนะนำ และโหมดว่าเงินมาจากไหน มาจากค่าที่บริษัทตั้งไว้จริง'
+  }
+
+  return null
+})
+
 const binCapSatang = computed<number | null>(() => {
   const raw = binCap.value
 
@@ -246,22 +342,52 @@ const binCapSatang = computed<number | null>(() => {
 
 const mxWidth = ref(3)
 const mxLevels = ref<number[]>([5, 3, 2])
+/**
+ * NULL means "as deep as the priced levels go" — the sandbox's old behaviour,
+ * where adding a rung also made the matrix one deeper.
+ *
+ * A real company sets the two independently, and can price a level deeper
+ * than its own matrix reaches: those rungs earn nothing, which the chart now
+ * has to be able to say. Kept nullable so an unseeded chart behaves exactly
+ * as it did before this existed.
+ */
+const mxDepth = ref<number | null>(null)
+const mxEffectiveDepth = computed(() => mxDepth.value ?? mxLevels.value.length)
 
 const genLevels = ref<number[]>([5, 3, 2])
+/** Same shape, same reason: a priced generation past the cap is never paid. */
+const genMaxDepth = ref<number | null>(null)
+const genEffectiveDepth = computed(() => genMaxDepth.value ?? genLevels.value.length)
 
 const afRate = ref(3)
-const afMode = ref<'additive' | 'deductive'>('additive')
+/**
+ * The real enum, not a boolean.
+ *
+ * This used to be 'additive' | 'deductive', where 'deductive' meant "a % of
+ * the seller's own commission". The company setting has THREE answers and
+ * the two deduct ones differ by 33x on the same inputs — collapsing them
+ * would make the chart draw the wrong one for any company on the other.
+ */
+const afMode = ref<'additive' | 'deduct_from_sale' | 'deduct_from_commission'>('additive')
+const AF_MODE_LABELS: Record<typeof afMode.value, string> = {
+  additive: 'บริษัทจ่ายเพิ่ม',
+  deduct_from_sale: 'หักจากคนขาย (คิดจากยอดขาย)',
+  deduct_from_commission: 'หักจากคนขาย (คิดจากค่าคอม)',
+}
 
-const RANKS = [
+type Rank = { name: string; threshold: number; rate: number; breakaway: boolean }
+/** The sandbox ladder, replaced wholesale when the company's own arrives. */
+const ranks = ref<Rank[]>([
   { name: 'เริ่มต้น', threshold: 0, rate: 5, breakaway: false },
   { name: 'ผู้นำ', threshold: 200000, rate: 10, breakaway: false },
   { name: 'ผู้จัดการ', threshold: 500000, rate: 15, breakaway: true },
-]
+])
 /* noUncheckedIndexedAccess is on: the two selects can only ever hold a valid
-   index, but the compiler cannot know that, so clamp instead of asserting. */
-type Rank = { name: string; threshold: number; rate: number; breakaway: boolean }
+   index, but the compiler cannot know that, so clamp instead of asserting.
+   The clamp also carries the seeded case, where a company's ladder can be
+   shorter than the sandbox's and leave a select pointing past the end. */
 const FALLBACK_RANK: Rank = { name: 'ไม่มีขั้น', threshold: 0, rate: 0, breakaway: false }
-const rankAt = (i: number): Rank => RANKS[Math.min(Math.max(i, 0), RANKS.length - 1)] ?? FALLBACK_RANK
+const rankAt = (i: number): Rank => ranks.value[Math.min(Math.max(i, 0), ranks.value.length - 1)] ?? FALLBACK_RANK
 
 const ssSeller = ref(0)
 const ssManager = ref(2)
@@ -314,6 +440,47 @@ watch(() => props.seed, (next) => {
     if (next.binary.matchedRatePct !== null) binRate.value = next.binary.matchedRatePct
     binCap.value = next.binary.payoutCapSatang === null ? '' : next.binary.payoutCapSatang / 100
     binCarry.value = next.binary.carryOverUnmatched
+  }
+
+  if (next.matrix) {
+    mxWidth.value = next.matrix.width
+    // Applied even when it is SHALLOWER than the priced levels — that gap is
+    // the finding, not a mistake to paper over.
+    mxDepth.value = next.matrix.depth
+    if (next.matrix.levelRatesPct !== null && next.matrix.levelRatesPct.length > 0) {
+      mxLevels.value = [...next.matrix.levelRatesPct]
+    }
+  }
+
+  if (next.generation) {
+    genMaxDepth.value = next.generation.maxDepth
+    if (next.generation.generationRatesPct !== null && next.generation.generationRatesPct.length > 0) {
+      genLevels.value = [...next.generation.generationRatesPct]
+    }
+  }
+
+  /*
+   * An EMPTY ladder is kept, unlike every other field here. A company that
+   * runs Stairstep and has configured no ranks pays nobody an override, and
+   * drawing the sandbox's three invented rungs over that would hide exactly
+   * the misconfiguration this card exists to reveal.
+   */
+  if (next.ranks !== null) {
+    ranks.value = next.ranks.map((r) => ({
+      name: r.name,
+      threshold: r.thresholdSatang / 100,
+      rate: r.ratePct,
+      breakaway: r.breakaway,
+    }))
+
+    const last = Math.max(ranks.value.length - 1, 0)
+    ssSeller.value = Math.min(ssSeller.value, last)
+    ssManager.value = Math.min(ssManager.value, last)
+  }
+
+  if (next.affiliate) {
+    if (next.affiliate.ratePct !== null) afRate.value = next.affiliate.ratePct
+    afMode.value = next.affiliate.mode
   }
 }, { immediate: true, deep: true })
 
@@ -473,10 +640,27 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
 
   if (props.planType === 'matrix') {
     const rows: Row[] = [{ who: 'คนขาย', rate: `${sellerRate.value}%`, amount: at(b, sellerRate.value), tone: 'self' }]
-    mxLevels.value.forEach((r, i) => rows.push({ who: `ขึ้นไป ${i + 1} ชั้นในผัง`, rate: `${r}%`, amount: at(b, r) }))
+    /*
+     * A LEVEL PRICED BELOW THE MATRIX'S OWN FLOOR EARNS NOTHING, and the
+     * chart now says so instead of quietly paying it.
+     *
+     * MatrixCommissionService walks `while ($level <= $settings->depth)`, so
+     * a company with three priced levels and a depth of two pays two. Drawing
+     * all three was the chart's largest single error: on the UAT tenant it
+     * showed ฿1,400 against a real ฿1,260, and the extra row looked exactly
+     * like the ones that are real.
+     */
+    const depth = mxEffectiveDepth.value
+    mxLevels.value.forEach((r, i) => {
+      const level = i + 1
+
+      rows.push(level <= depth
+        ? { who: `ขึ้นไป ${level} ชั้นในผัง`, rate: `${r}%`, amount: at(b, r) }
+        : { who: `ขึ้นไป ${level} ชั้นในผัง`, rate: `${r}%`, text: '0', tone: 'muted', note: `ตั้งอัตราไว้ แต่ผังลึกแค่ ${depth} ชั้น จึงไม่ได้จ่าย` })
+    })
     const w = Math.max(2, Math.min(5, Number(mxWidth.value) || 3))
     let seats = 0, p = 1
-    for (let k = 0; k < mxLevels.value.length; k++) { p *= w; seats += p }
+    for (let k = 0; k < depth; k++) { p *= w; seats += p }
     const gap = 12
     const cw = Math.min(120, (430 - (w - 1) * gap) / w)
     const x0 = (470 - (w * cw + (w - 1) * gap)) / 2
@@ -499,7 +683,7 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
         w: 470, h: 300, nodes, edges,
         labels: [
           { x: 243, y: 176, tone: 'money', text: 'เงินเดินขึ้นตามผัง จ่ายตามอัตราของชั้นนั้น' },
-          { x: 235, y: 284, anchor: 'middle', tone: 'quiet', text: `ผังกว้าง ${w} ลึก ${mxLevels.value.length} → รับได้สูงสุด ${seats.toLocaleString('th-TH')} คน · คนที่ ${w + 1} ล้นลงชั้นถัดไปอัตโนมัติ` },
+          { x: 235, y: 284, anchor: 'middle', tone: 'quiet', text: `ผังกว้าง ${w} ลึก ${depth} → รับได้สูงสุด ${seats.toLocaleString('th-TH')} คน · คนที่ ${w + 1} ล้นลงชั้นถัดไปอัตโนมัติ` },
         ],
         alt: 'ผัง Matrix กว้างจำกัดลึกจำกัด คนล้นลงชั้นถัดไป',
       },
@@ -517,7 +701,7 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     else if (diff <= 0) rows.push({ who: `หัวหน้า — ขั้น ${mr.name}`, rate: `ส่วนต่าง ${diff}%`, text: '0', tone: 'muted', note: 'อัตราไม่สูงกว่าลูกทีม' })
     else rows.push({ who: `หัวหน้า — ขั้น ${mr.name}`, rate: `ส่วนต่าง ${diff}%`, amount: mgrAmount })
     const nodes: Node[] = [], labels: Label[] = []
-    RANKS.forEach((r, i) => {
+    ranks.value.forEach((r, i) => {
       const x = 20 + i * 10, y = 196 - i * 56
       nodes.push({ x, y, w: 150, h: 44, title: r.name, sub: `${r.rate}% · ยอด ${r.threshold / 1000}k`, kind: 'plain', focus: 'rank-ladder', focusLabel: 'บันไดขั้นและเกณฑ์ยอด' })
       if (r.breakaway) labels.push({ x: x + 158, y: y + 27, tone: 'bad', text: 'ตัดสาย' })
@@ -549,9 +733,25 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     ]
     const reached = chain.filter((c, i) => i > 0 && c.breakaway).length
     const rows: Row[] = [{ who: 'คนขาย', rate: `${sellerRate.value}%`, amount: at(b, sellerRate.value), tone: 'self' }]
+    /*
+     * Two separate reasons a generation earns nothing, and they are not the
+     * same finding: nobody in this example chain has broken away that far, or
+     * the company's own cap stops before this generation. The second one is
+     * a configuration somebody can act on — a rate priced past
+     * max_generation_depth is money they believe they are paying and are not
+     * — so it says which.
+     */
+    const genDepth = genEffectiveDepth.value
     genLevels.value.forEach((r, i) => {
-      if (i < reached) rows.push({ who: `รุ่นที่ ${i + 1} (คนที่ถึงขั้นตัดสาย)`, rate: `${r}%`, amount: at(b, r) })
-      else rows.push({ who: `รุ่นที่ ${i + 1}`, rate: `${r}%`, text: '0', tone: 'muted', note: 'ไม่มีใครถึงขั้นตัดสายในสายตัวอย่างนี้' })
+      const generation = i + 1
+
+      if (generation > genDepth) {
+        rows.push({ who: `รุ่นที่ ${generation}`, rate: `${r}%`, text: '0', tone: 'muted', note: `ตั้งอัตราไว้ แต่จำกัดไว้ ${genDepth} รุ่น จึงไม่ได้จ่าย` })
+      } else if (i < reached) {
+        rows.push({ who: `รุ่นที่ ${generation} (คนที่ถึงขั้นตัดสาย)`, rate: `${r}%`, amount: at(b, r) })
+      } else {
+        rows.push({ who: `รุ่นที่ ${generation}`, rate: `${r}%`, text: '0', tone: 'muted', note: 'ไม่มีใครถึงขั้นตัดสายในสายตัวอย่างนี้' })
+      }
     })
     const gap = 24
     const nodes: Node[] = [], edges: Edge[] = [], labels: Label[] = []
@@ -604,16 +804,27 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     }
   }
 
-  // affiliate
+  /*
+   * ── AFFILIATE, WITH THE THIRD MODE THE COMPANY CAN ACTUALLY BE ON ──
+   *
+   * The introducer's share is priced against the SALE under two of the three
+   * modes and against the SELLER'S OWN COMMISSION under the third — on these
+   * inputs, 3% of ฿10,000 against 3% of ฿1,000, which is the 33x the real
+   * enum's case names exist to keep apart. Whether the seller is charged for
+   * it is a separate axis: DeductFromSale pays the introducer the same amount
+   * as Additive and takes it out of the seller instead of adding to the bill.
+   */
+  const deducts = afMode.value !== 'additive'
   const sellerFull = at(b, sellerRate.value)
-  const mgr = afMode.value === 'additive' ? at(b, afRate.value) : at(sellerFull, afRate.value)
-  const sellerFinal = afMode.value === 'additive' ? sellerFull : sellerFull - mgr
+  const mgr = afMode.value === 'deduct_from_commission' ? at(sellerFull, afRate.value) : at(b, afRate.value)
+  const sellerFinal = deducts ? sellerFull - mgr : sellerFull
+  const mgrBaseLabel = afMode.value === 'deduct_from_commission' ? 'ของค่าคอมคนขาย' : 'ของยอดขาย'
   return {
     rows: [
-      { who: afMode.value === 'additive' ? 'คนขาย' : 'คนขาย (หลังถูกหัก)', rate: `${sellerRate.value}%`, amount: sellerFinal, tone: 'self' },
+      { who: deducts ? 'คนขาย (หลังถูกหัก)' : 'คนขาย', rate: `${sellerRate.value}%`, amount: sellerFinal, tone: 'self' },
       {
-        who: afMode.value === 'additive' ? 'ผู้แนะนำ (บริษัทจ่ายเพิ่ม)' : 'ผู้แนะนำ (หักจากคนขาย)',
-        rate: afMode.value === 'additive' ? `${afRate.value}% ของยอด` : `${afRate.value}% ของค่าคอมคนขาย`,
+        who: deducts ? 'ผู้แนะนำ (หักจากคนขาย)' : 'ผู้แนะนำ (บริษัทจ่ายเพิ่ม)',
+        rate: `${afRate.value}% ${mgrBaseLabel}`,
         amount: mgr,
       },
     ],
@@ -625,14 +836,16 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
       ],
       edges: [{ x1: 235, y1: 142, x2: 235, y2: 74 }],
       labels: [
-        { x: 245, y: 112, tone: 'money', text: `${afMode.value === 'additive' ? 'บริษัทจ่ายเพิ่ม' : 'หักจากค่าคอมคนขาย'} ${afRate.value}%` },
+        { x: 245, y: 112, tone: 'money', text: `${AF_MODE_LABELS[afMode.value]} ${afRate.value}% ${mgrBaseLabel}` },
         { x: 235, y: 204, anchor: 'middle', tone: 'quiet', text: 'จบแค่หนึ่งชั้น ไม่เดินขึ้นต่อ' },
       ],
       alt: 'ผังพันธมิตร จ่ายผู้แนะนำโดยตรงหนึ่งชั้นเท่านั้น',
     },
     caption: afMode.value === 'additive'
       ? 'บริษัทจ่ายผู้แนะนำเพิ่มจากกระเป๋าตัวเอง ค่าคอมคนขายไม่ลด — ยอดจ่ายออกรวมจึงสูงขึ้น'
-      : 'ผู้แนะนำได้ส่วนแบ่งจากค่าคอมของคนขายเอง บริษัทจ่ายออกเท่าเดิม แต่คนขายได้น้อยลง',
+      : afMode.value === 'deduct_from_sale'
+        ? 'ผู้แนะนำได้เท่ากับโหมดบริษัทจ่ายเพิ่มทุกบาท แต่เงินนั้นหักออกจากค่าคอมของคนขาย — บริษัทจ่ายออกเท่าเดิม'
+        : 'ผู้แนะนำได้ส่วนแบ่งจากค่าคอมของคนขายเอง บริษัทจ่ายออกเท่าเดิม แต่คนขายได้น้อยลง',
   }
 })
 
@@ -849,18 +1062,6 @@ function labelClass(tone?: Label['tone']) {
             <label class="flex items-center gap-2 text-[12.5px] font-semibold text-slate-600 sm:col-span-2">
               <input v-model="binCarry" type="checkbox" data-test="bin-carry" class="h-4 w-4"> ยกยอดที่เหลือไปรอบหน้า
             </label>
-            <!--
-              WHICH OF THESE FIVE IS THE COMPANY'S, said where the boxes are.
-              The card's subtitle claims the whole chart is real, and on this
-              plan two of the boxes cannot be: there is no company-level leg
-              total to read, only a per-agent running balance. One line, at
-              the controls it describes — an ⓘ would hide the correction from
-              exactly the person already misreading the numbers.
-            -->
-            <p v-if="seed?.binary" class="text-[12px] text-slate-500 sm:col-span-2" data-test="bin-seed-note">
-              อัตราจับคู่ เพดาน และการยกยอด มาจากค่าที่บริษัทตั้งไว้จริง ·
-              <b>ยอดสองขาเป็นตัวเลขลองเล่น</b> — ระบบเก็บยอดขาแยกรายคน ไม่มียอดรวมระดับบริษัทให้ดึงมา
-            </p>
           </div>
 
           <label v-if="planType === 'matrix'" class="mb-3 block">
@@ -871,26 +1072,30 @@ function labelClass(tone?: Label['tone']) {
           <div v-if="planType === 'stairstep_breakaway'" class="mb-3 grid gap-3 sm:grid-cols-2">
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">ขั้นของคนขาย</span>
               <select v-model.number="ssSeller" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" data-test="ss-seller-rank">
-                <option v-for="(r, i) in RANKS" :key="i" :value="i">{{ r.name }} — {{ r.rate }}%{{ r.breakaway ? ' (ตัดสาย)' : '' }}</option>
+                <option v-for="(r, i) in ranks" :key="i" :value="i">{{ r.name }} — {{ r.rate }}%{{ r.breakaway ? ' (ตัดสาย)' : '' }}</option>
               </select></label>
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">ขั้นของหัวหน้า</span>
               <select v-model.number="ssManager" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                <option v-for="(r, i) in RANKS" :key="i" :value="i">{{ r.name }} — {{ r.rate }}%{{ r.breakaway ? ' (ตัดสาย)' : '' }}</option>
+                <option v-for="(r, i) in ranks" :key="i" :value="i">{{ r.name }} — {{ r.rate }}%{{ r.breakaway ? ' (ตัดสาย)' : '' }}</option>
               </select></label>
           </div>
 
           <div v-if="planType === 'affiliate'" class="mb-3 space-y-3">
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">อัตราผู้แนะนำ (%)</span>
-              <input v-model.number="afRate" type="number" min="0" max="100" step="0.5" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
-            <div class="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+              <input v-model.number="afRate" type="number" min="0" max="100" step="0.5" data-test="af-rate" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
+            <!-- Three, matching the real enum. Wraps rather than squeezing:
+                 the two deduct labels have to carry their base, because that
+                 is the whole difference between them. -->
+            <div class="inline-flex flex-wrap rounded-xl border border-slate-200 bg-slate-50 p-1 gap-1">
               <button
-                v-for="m in (['additive', 'deductive'] as const)"
+                v-for="m in (['additive', 'deduct_from_sale', 'deduct_from_commission'] as const)"
                 :key="m"
                 type="button"
                 class="rounded-lg px-3 py-1.5 text-[12.5px]"
                 :class="afMode === m ? 'bg-white font-extrabold text-slate-900 shadow-sm' : 'font-semibold text-slate-500'"
+                :data-test="`af-mode-${m}`"
                 @click="afMode = m"
-              >{{ m === 'additive' ? 'บริษัทจ่ายเพิ่ม' : 'หักจากคนขาย' }}</button>
+              >{{ AF_MODE_LABELS[m] }}</button>
             </div>
           </div>
 
@@ -909,6 +1114,10 @@ function labelClass(tone?: Label['tone']) {
 
             The sandbox rows below stay for the plans being browsed.
           -->
+          <p v-if="seedSourceNote" class="mb-3 text-[12px] leading-relaxed text-slate-500" data-test="seed-source-note">
+            {{ seedSourceNote }}
+          </p>
+
           <slot v-if="levelsAreLive" name="rates" :base-satang="baseSatang" :format="fmt" :at="at" />
 
           <!-- per-level example rows -->

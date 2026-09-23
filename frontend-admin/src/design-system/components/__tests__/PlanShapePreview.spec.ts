@@ -96,7 +96,9 @@ describe('the example an admin uses to choose a plan', () => {
     // Additive: company pays the manager on top — 990 + 297 = 1,287.
     expect(w.get('[data-test="plan-shape-total"]').text()).toContain('1,287')
 
-    await w.findAll('button').filter(b => b.text() === 'หักจากคนขาย')[0]?.trigger('click')
+    // The toggle carries THREE modes now, and the two deduct ones are 33x
+    // apart, so each label has to name its own base.
+    await w.get('[data-test="af-mode-deduct_from_commission"]').trigger('click')
     // Deductive: the manager's 3% comes out of the seller's own 990, so the
     // company's outlay is unchanged and only the split moves.
     const total = w.get('[data-test="plan-shape-total"]').text()
