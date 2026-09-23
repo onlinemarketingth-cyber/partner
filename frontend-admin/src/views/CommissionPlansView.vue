@@ -2747,11 +2747,35 @@ const planShapeSeed = computed(() => {
    */
   const sellerRatePct = rule && rule.rate_type === 'percentage' ? rule.rate_value / 100 : null
 
+  /*
+   * 2026-09-23 — the Binary knobs, which the card had been claiming as the
+   * company's while drawing its own constants.
+   *
+   * Owner found it by reading the chart (matched ฿30,000 → ฿3,000) against the
+   * UAT payout screen (฿1,000) and asking which was right. Both were: the
+   * chart was drawing a ฿5,000 cap and two leg totals belonging to no company
+   * on earth. Price and seller rate had always been real, which is what made
+   * the rest look sourced too.
+   *
+   * Passed as one object so that "no settings row" and "a settings row that
+   * says ไม่จำกัด" stay different answers — see PlanShapeBinarySeed.
+   */
+  const binary = viewingPlanType.value === 'binary' && binarySettings.value
+    ? {
+        matchedRatePct: binarySettings.value.matched_rate_type === 'percentage'
+          ? binarySettings.value.matched_rate_value / 100
+          : null,
+        payoutCapSatang: binarySettings.value.payout_cap_satang,
+        carryOverUnmatched: binarySettings.value.carry_over_unmatched,
+      }
+    : null
+
   return {
     priceSatang: product?.effective_price_satang ?? product?.price_satang ?? null,
     pvSatang: product?.pv_satang ?? null,
     sellerRatePct,
     productName: product?.name ?? null,
+    binary,
   }
 })
 

@@ -116,9 +116,29 @@ class UatSeedCommissionPlansCommand extends Command
     /** Unilevel leader ladder, level 1 first. */
     public const LEVEL_RATES_BP = [1 => 500, 2 => 300, 3 => 100];
 
-    public const MATRIX_LEVEL_RATES_BP = [1 => 500, 2 => 300];
+    /**
+     * ONE RATE DEEPER THAN THE PLAN PAYS — deliberately (2026-09-23).
+     *
+     * Priced levels used to stop exactly where `depth` stops, and that made
+     * the two indistinguishable: an engine ignoring the depth setting
+     * entirely still paid nobody at level 3, because nobody had priced level
+     * 3. The fixture proved "no rate there", never "the cap held".
+     *
+     * Level 3 is now priced at 1% and the matrix is still two deep, so the
+     * ฿0 at ชั้นเหนือสุด can only be the setting. It also puts a real
+     * question in front of QA: a rate configured below the plan's own floor
+     * is money somebody thinks they are paying and is not.
+     */
+    public const MATRIX_LEVEL_RATES_BP = [1 => 500, 2 => 300, 3 => 100];
 
-    public const GENERATION_RATES_BP = [1 => 500, 2 => 300];
+    public const MATRIX_WIDTH = 3;
+
+    public const MATRIX_DEPTH = 2;
+
+    /** Same trick, same reason: a third generation is priced and never paid. */
+    public const GENERATION_RATES_BP = [1 => 500, 2 => 300, 3 => 100];
+
+    public const GENERATION_MAX_DEPTH = 2;
 
     public const BINARY_MATCHED_RATE_BP = 1_000;
 
@@ -167,11 +187,27 @@ class UatSeedCommissionPlansCommand extends Command
     /**
      * The stairstep ladder. `rate_value` is the rank's OWN rate; a manager is
      * paid the difference between their rank and their downline's.
+     *
+     * ── WHY THE GAPS ARE UNEVEN (2026-09-23) ──
+     *
+     * They used to be 5 / 10 / 15, which made every differential exactly 5%
+     * and every row on the QA sheet exactly ฿500. Three identical figures
+     * cannot tell you which person earned which — a transposed row, a walk
+     * that paid the wrong manager, or an engine that skipped one and
+     * double-paid another all print the same three numbers. 5 / 12 / 20 makes
+     * the two differentials 7% and 8%, so ฿700 and ฿800 name their own payee.
+     *
+     * `director` exists for one reason: to give the breakaway cut something to
+     * stop in front of. A rank ABOVE the breakaway rank, priced higher, would
+     * earn 25 − 20 = 5% if the walk ran past a breakaway downline — so ฿0
+     * there is the assertion, and without this rank the plan's single most
+     * distinctive rule has nothing to prove it.
      */
     public const RANKS = [
         ['key' => 'starter', 'name' => 'UAT ขั้นเริ่มต้น', 'sort' => 1, 'threshold' => 0, 'rate_bp' => 500, 'breakaway' => false],
-        ['key' => 'leader', 'name' => 'UAT ขั้นผู้นำ', 'sort' => 2, 'threshold' => 5_000_000, 'rate_bp' => 1_000, 'breakaway' => false],
-        ['key' => 'manager', 'name' => 'UAT ขั้นผู้จัดการ', 'sort' => 3, 'threshold' => 20_000_000, 'rate_bp' => 1_500, 'breakaway' => true],
+        ['key' => 'leader', 'name' => 'UAT ขั้นผู้นำ', 'sort' => 2, 'threshold' => 5_000_000, 'rate_bp' => 1_200, 'breakaway' => false],
+        ['key' => 'manager', 'name' => 'UAT ขั้นผู้จัดการ', 'sort' => 3, 'threshold' => 20_000_000, 'rate_bp' => 2_000, 'breakaway' => true],
+        ['key' => 'director', 'name' => 'UAT ขั้นผู้อำนวยการ', 'sort' => 4, 'threshold' => 50_000_000, 'rate_bp' => 2_500, 'breakaway' => false],
     ];
 
     /** @var array<int, array{plan: string, name: string}> */
@@ -678,14 +714,24 @@ class UatSeedCommissionPlansCommand extends Command
             $this->overrideRule($company, $bp, $level);
         }
 
-        $l3 = $this->agent($company, 'l3', 'UAT หัวหน้าชั้น 3');
+        /*
+         * A FOURTH LEADER, ABOVE THE DEEPEST PRICED LEVEL (2026-09-23).
+         *
+         * Three levels with three rates cannot show what the ladder does when
+         * it RUNS OUT: an engine that fell back to the nearest rate, or to the
+         * company-wide one, or that wrote a ฿0 row, would all look identical
+         * on a three-deep chain. ชั้น 4 is priced nowhere, so the only correct
+         * outcome is no row at all — and that is a thing QA can see.
+         */
+        $l4 = $this->agent($company, 'l4', 'UAT หัวหน้าชั้น 4');
+        $l3 = $this->agent($company, 'l3', 'UAT หัวหน้าชั้น 3', $l4);
         $l2 = $this->agent($company, 'l2', 'UAT หัวหน้าชั้น 2', $l3);
         $l1 = $this->agent($company, 'l1', 'UAT หัวหน้าชั้น 1', $l2);
         $seller = $this->agent($company, 'seller', 'UAT ผู้ขาย', $l1);
 
         $this->sell($company, $product, $seller, $referrals, $orders, 'UAT ลูกค้า Unilevel');
 
-        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · ชั้น1 5% = ฿500 · ชั้น2 3% = ฿300 · ชั้น3 1% = ฿100 (รวม 4 แถว)'];
+        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · ชั้น1 5% = ฿500 · ชั้น2 3% = ฿300 · ชั้น3 1% = ฿100 · ชั้น4 ไม่มีแถว (ไม่ได้ตั้งอัตราไว้) — รวม 4 แถว ฿1,900'];
     }
 
     /** @return array{expected: string} */
@@ -703,18 +749,42 @@ class UatSeedCommissionPlansCommand extends Command
         $left = $this->agent($company, 'left', 'UAT ขาซ้าย', $sponsor, BinaryLeg::Left);
         $right = $this->agent($company, 'right', 'UAT ขาขวา', $sponsor, BinaryLeg::Right);
 
-        $this->sell($company, $product, $left, $referrals, $orders, 'UAT ลูกค้า ขาซ้าย');
+        /*
+         * THE LEGS ARE DELIBERATELY UNEQUAL (2026-09-23).
+         *
+         * Owner: "แบบนี้ พิสูจน์ Logic ก็ไม่ได้".
+         *
+         * They used to be one sale each — ฿10,000 against ฿10,000 — and that
+         * fixture cannot fail. Binary pays on min(left, right), but when the
+         * two legs are equal, min() and max() and "just take the left one"
+         * all return the same ฿10,000 and print the same ฿1,000. The one rule
+         * this whole plan exists for was the one thing the test could not see.
+         *
+         * Two sales on the left against one on the right makes the legs
+         * ฿20,000 and ฿10,000, so:
+         *
+         *   · the sponsor earns ฿1,000 under min() and ฿2,000 under max();
+         *   · ฿10,000 is left stranded on the strong leg, which is the first
+         *     time carry_over_unmatched has anything to carry — until now
+         *     that column read 0 whether the feature worked or not.
+         *
+         * Two clients, not one: sell() refuses a second closed sale of the
+         * same product to the same client, which is the guard that stopped
+         * this command double-paying on a re-run.
+         */
+        $this->sell($company, $product, $left, $referrals, $orders, 'UAT ลูกค้า ขาซ้าย 1');
+        $this->sell($company, $product, $left, $referrals, $orders, 'UAT ลูกค้า ขาซ้าย 2');
         $this->sell($company, $product, $right, $referrals, $orders, 'UAT ลูกค้า ขาขวา');
 
-        return ['expected' => 'ตอนขาย: ผู้ขายซ้าย/ขวา ได้คนละ 10% = ฿1,000 (2 แถว) · ผู้สนับสนุนยังไม่ได้อะไร — ต้องรันรอบจับคู่ก่อน แล้วจึงได้ 10% ของ ฿10,000 ที่จับคู่ได้ = ฿1,000'];
+        return ['expected' => 'ตอนขาย: ขาซ้ายขาย 2 ดีล ได้ ฿2,000 (2 แถว) · ขาขวาขาย 1 ดีล ได้ ฿1,000 · ผู้สนับสนุนยังไม่ได้อะไร — ต้องรันรอบจับคู่ก่อน แล้วจึงได้ 10% ของขาที่น้อยกว่า min(฿20,000, ฿10,000) = ฿1,000 และยกไป รอบหน้า ซ้าย ฿10,000 / ขวา ฿0'];
     }
 
     /** @return array{expected: string} */
     private function seedMatrix(Company $company, Product $product, ReferralService $referrals, OrderService $orders, MatrixCommissionService $matrix): array
     {
         $this->upsert(CommissionMatrixSetting::class, $company, [
-            'width' => 3,
-            'depth' => 2,
+            'width' => self::MATRIX_WIDTH,
+            'depth' => self::MATRIX_DEPTH,
             'spillover_rule' => MatrixSpilloverRule::Breadth,
         ]);
 
@@ -734,7 +804,17 @@ class UatSeedCommissionPlansCommand extends Command
             $existing ? $existing->update($attributes) : CommissionMatrixLevelRate::create($attributes);
         }
 
-        $top = $this->agent($company, 'top', 'UAT ชั้นบนสุด');
+        /*
+         * FOUR DEEP AGAINST A DEPTH OF TWO (2026-09-23).
+         *
+         * The tree used to be exactly as deep as the plan pays, so "stops at
+         * depth 2" was never tested — an engine with no cap at all, or one
+         * capped at 5, produced the identical three rows. ชั้นเหนือสุด sits at
+         * level 3 with a real placement above a real placement, and earns
+         * nothing because the setting says two.
+         */
+        $apex = $this->agent($company, 'apex', 'UAT ชั้นเหนือสุด');
+        $top = $this->agent($company, 'top', 'UAT ชั้นบนสุด', $apex);
         $mid = $this->agent($company, 'mid', 'UAT ชั้นกลาง', $top);
         $seller = $this->agent($company, 'seller', 'UAT ผู้ขาย', $mid);
 
@@ -744,12 +824,13 @@ class UatSeedCommissionPlansCommand extends Command
          * can disagree in production: an agent with a manager and no placement
          * is paid nothing by this plan, silently.
          */
+        $matrix->place($top, $apex);
         $matrix->place($mid, $top);
         $matrix->place($seller, $mid);
 
         $this->sell($company, $product, $seller, $referrals, $orders, 'UAT ลูกค้า Matrix');
 
-        return ['expected' => 'บริษัทนี้คิดจาก PV ฿7,000 (ไม่ใช่ราคา ฿10,000) · ผู้ขาย 10% = ฿700 · ชั้นกลาง 5% = ฿350 · ชั้นบนสุด 3% = ฿210 (รวม 3 แถว)'];
+        return ['expected' => 'บริษัทนี้คิดจาก PV ฿7,000 (ไม่ใช่ราคา ฿10,000) · ผู้ขาย 10% = ฿700 · ชั้นกลาง 5% = ฿350 · ชั้นบนสุด 3% = ฿210 · ชั้นเหนือสุด ไม่มีแถว (ผังลึก 2 ชั้น) — รวม 3 แถว ฿1,260'];
     }
 
     /** @return array{expected: string} */
@@ -760,25 +841,40 @@ class UatSeedCommissionPlansCommand extends Command
         $starter = $this->rank($company, 'starter');
         $leader = $this->rank($company, 'leader');
         $manager = $this->rank($company, 'manager');
+        $director = $this->rank($company, 'director');
 
-        $top = $this->agent($company, 'top', 'UAT ผู้จัดการ (ตัดสาย)');
+        /*
+         * ONE PERSON ABOVE THE BREAKAWAY (2026-09-23).
+         *
+         * The chain used to end at the breakaway rank, so the break itself
+         * never had to do anything: the walk ran out of people at exactly the
+         * moment it was supposed to stop, and an engine that ignored
+         * is_breakaway_rank entirely would have printed the same rows.
+         *
+         * ผู้อำนวยการ sits above, on a HIGHER rank, so the walk running past a
+         * breakaway downline would pay them 25 − 20 = 5% = ฿500. ฿0 there is
+         * the assertion.
+         */
+        $director_agent = $this->agent($company, 'director', 'UAT ผู้อำนวยการ');
+        $top = $this->agent($company, 'top', 'UAT ผู้จัดการ (ตัดสาย)', $director_agent);
         $mid = $this->agent($company, 'mid', 'UAT ผู้นำ', $top);
         $seller = $this->agent($company, 'seller', 'UAT ผู้ขาย', $mid);
 
+        $this->placeOnRank($director_agent, $director);
         $this->placeOnRank($top, $manager);
         $this->placeOnRank($mid, $leader);
         $this->placeOnRank($seller, $starter);
 
         $this->sell($company, $product, $seller, $referrals, $orders, 'UAT ลูกค้า Stairstep');
 
-        return ['expected' => 'ผู้ขาย (ขั้นเริ่มต้น 5%) = ฿500 · ผู้นำได้ส่วนต่าง 10%−5% = ฿500 · ผู้จัดการได้ส่วนต่าง 15%−10% = ฿500 (รวม 3 แถว)'];
+        return ['expected' => 'ผู้ขาย (ขั้นเริ่มต้น 5%) = ฿500 · ผู้นำได้ส่วนต่าง 12%−5% = ฿700 · ผู้จัดการได้ส่วนต่าง 20%−12% = ฿800 · ผู้อำนวยการ ไม่มีแถว (ใต้เขาเป็นขั้นตัดสาย) — รวม 3 แถว ฿2,000'];
     }
 
     /** @return array{expected: string} */
     private function seedGeneration(Company $company, Product $product, ReferralService $referrals, OrderService $orders): array
     {
         $this->upsert(CommissionGenerationSetting::class, $company, [
-            'max_generation_depth' => count(self::GENERATION_RATES_BP),
+            'max_generation_depth' => self::GENERATION_MAX_DEPTH,
         ]);
 
         foreach (self::GENERATION_RATES_BP as $generation => $bp) {
@@ -807,12 +903,24 @@ class UatSeedCommissionPlansCommand extends Command
         // and the two who have not are skipped WITHOUT consuming a
         // generation. That asymmetry is the whole plan, and it is invisible
         // on any settings screen.
-        $g4 = $this->agent($company, 'up4', 'UAT หัวหน้า ง (ตัดสาย)');
+        /*
+         * A THIRD BREAKAWAY, ONE GENERATION PAST THE CAP (2026-09-23).
+         *
+         * The chain used to hold exactly two breakaway ancestors, which is
+         * exactly what max_generation_depth allows — so the cap never bound,
+         * and an engine that ignored the setting produced identical rows.
+         * หัวหน้า จ has broken away like ข and ง, and earns nothing purely
+         * because they are the third: the only difference between จ and ง is
+         * the setting, which is what makes ฿0 here mean something.
+         */
+        $g5 = $this->agent($company, 'up5', 'UAT หัวหน้า จ (ตัดสาย)');
+        $g4 = $this->agent($company, 'up4', 'UAT หัวหน้า ง (ตัดสาย)', $g5);
         $g3 = $this->agent($company, 'up3', 'UAT หัวหน้า ค', $g4);
         $g2 = $this->agent($company, 'up2', 'UAT หัวหน้า ข (ตัดสาย)', $g3);
         $g1 = $this->agent($company, 'up1', 'UAT หัวหน้า ก', $g2);
         $seller = $this->agent($company, 'seller', 'UAT ผู้ขาย', $g1);
 
+        $this->placeOnRank($g5, $breakaway);
         $this->placeOnRank($g4, $breakaway);
         $this->placeOnRank($g3, $starter);
         $this->placeOnRank($g2, $breakaway);
@@ -821,7 +929,7 @@ class UatSeedCommissionPlansCommand extends Command
 
         $this->sell($company, $product, $seller, $referrals, $orders, 'UAT ลูกค้า Generation');
 
-        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · หัวหน้า ข (รุ่นที่ 1) 5% = ฿500 · หัวหน้า ง (รุ่นที่ 2) 3% = ฿300 · หัวหน้า ก และ ค ถูกข้าม ได้ ฿0 (รวม 3 แถว)'];
+        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · หัวหน้า ข (รุ่นที่ 1) 5% = ฿500 · หัวหน้า ง (รุ่นที่ 2) 3% = ฿300 · ก และ ค ถูกข้ามเพราะยังไม่ตัดสาย · จ ตัดสายแล้วแต่เกิน 2 รุ่น จึงไม่ได้ — รวม 3 แถว ฿1,800'];
     }
 
     /** @return array{expected: string} */
@@ -836,12 +944,25 @@ class UatSeedCommissionPlansCommand extends Command
         // ladder to price.
         $this->overrideRule($company, self::AFFILIATE_RATE_BP, null);
 
-        $introducer = $this->agent($company, 'introducer', 'UAT ผู้แนะนำ');
+        /*
+         * SOMEBODY ABOVE THE INTRODUCER (2026-09-23).
+         *
+         * "Exactly one hop" was previously true of a chain that had only one
+         * hop in it — the walk stopped because it ran out of people, not
+         * because the plan told it to. An engine that walked the whole upline
+         * the way Unilevel does would have printed the same two rows.
+         *
+         * ผู้แนะนำชั้นบน is certified, has the same company-wide rate available
+         * to them, and earns nothing. That ฿0 is the only thing separating
+         * Affiliate from Unilevel on this fixture.
+         */
+        $upper = $this->agent($company, 'upper', 'UAT ผู้แนะนำชั้นบน');
+        $introducer = $this->agent($company, 'introducer', 'UAT ผู้แนะนำ', $upper);
         $seller = $this->agent($company, 'seller', 'UAT ผู้ขาย', $introducer);
 
         $this->sell($company, $product, $seller, $referrals, $orders, 'UAT ลูกค้า Affiliate');
 
-        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · ผู้แนะนำ 3% = ฿300 (บริษัทจ่ายเพิ่ม ไม่หักจากผู้ขาย) (รวม 2 แถว)'];
+        return ['expected' => 'ผู้ขาย 10% = ฿1,000 · ผู้แนะนำ 3% = ฿300 (บริษัทจ่ายเพิ่ม ไม่หักจากผู้ขาย) · ผู้แนะนำชั้นบน ไม่มีแถว (จ่ายขึ้นชั้นเดียว) — รวม 2 แถว ฿1,300'];
     }
 
     /* ── small helpers ──────────────────────────────────────────────────── */

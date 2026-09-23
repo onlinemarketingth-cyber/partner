@@ -73,6 +73,43 @@ export interface PlanShapeSeed {
   pvSatang: number | null
   sellerRatePct: number | null
   productName: string | null
+  /**
+   * The company's Binary settings row, or null when it has none (and on
+   * every other plan). See PlanShapeBinarySeed for why this is one object
+   * rather than three nullable fields.
+   */
+  binary: PlanShapeBinarySeed | null
+}
+
+/**
+ * 2026-09-23 — the Binary knobs the card CLAIMED were the company's.
+ *
+ * Owner, reading the Binary chart against the UAT payout screen: "ทำไมผลลัพธ์
+ * ถึงขึ้นแบบในรูปที่ 2 รูปที่ 3". The card's own subtitle says ใช้ค่าจริงของ
+ * บริษัท, and on Binary that was half true — price and seller rate came from
+ * the company, while the matched rate, the cap and the carry-over were the
+ * sandbox constants below, identical on every company that opened the screen.
+ * The ฿5,000 cap belonged to no company at all, and the 10% matched rate
+ * happening to equal the real one is what made the whole card look sourced.
+ *
+ * ── WHY ONE OBJECT AND NOT THREE NULLABLE FIELDS ──
+ *
+ * `payoutCapSatang: null` is a REAL answer — "no cap" — so the seed rule used
+ * by every other field here ("null keeps the sandbox value") cannot express
+ * it. The presence of this object is the question "does the company have a
+ * Binary settings row at all", and the nulls inside it are answers.
+ */
+export interface PlanShapeBinarySeed {
+  /**
+   * Null when the company prices the match as a FIXED amount per cycle: the
+   * chart can only draw "x% of the matched volume", and inventing the
+   * percentage that a fixed amount happens to equal for one leg total would
+   * move the moment anybody changed a leg. Same treatment as sellerRatePct.
+   */
+  matchedRatePct: number | null
+  /** Null is the answer "ไม่จำกัด", not a missing value. */
+  payoutCapSatang: number | null
+  carryOverUnmatched: boolean
 }
 
 const props = withDefaults(defineProps<{
@@ -173,11 +210,39 @@ const uniMode = ref<'flat' | 'level'>('flat')
 const uniFlat = ref(3)
 const uniLevels = ref<number[]>([5, 3, 1])
 
+/*
+ * The two leg totals stay invented, and that is not an oversight: there is no
+ * company-level "left volume" to read. binary_leg_volumes is one running
+ * balance PER AGENT, so the honest thing for a chart drawing one generic
+ * person is a pair of what-if boxes — labelled as such under the inputs.
+ */
 const binLeft = ref(50000)
 const binRight = ref(30000)
 const binRate = ref(10)
-const binCap = ref<number | null>(5000)
+/**
+ * Empty means ไม่จำกัด, and empty is now a STARTING state, not just a
+ * cleared one — a company whose payout_cap_satang is null seeds it that way.
+ *
+ * `v-model.number` leaves a cleared input as `''`, so the ref genuinely holds
+ * three shapes and the type says so. The old reading (`=== null ? null :
+ * S(value)`) sent `''` through `Number('')` → 0 and relied on a `cap > 0`
+ * test further down to come out right; it did, but by a second rule in
+ * another place, which is not something to leave under a value the seeding
+ * now produces on load.
+ */
+const binCap = ref<number | '' | null>(5000)
 const binCarry = ref(true)
+
+/** The cap in satang, or null for ไม่จำกัด — the server's own two states. */
+const binCapSatang = computed<number | null>(() => {
+  const raw = binCap.value
+
+  if (raw === null || raw === undefined || raw === '') return null
+
+  const n = Number(raw)
+
+  return Number.isFinite(n) ? S(n) : null
+})
 
 const mxWidth = ref(3)
 const mxLevels = ref<number[]>([5, 3, 2])
@@ -237,6 +302,19 @@ watch(() => props.seed, (next) => {
   if (next.priceSatang !== null) price.value = next.priceSatang / 100
   if (next.pvSatang !== null) pv.value = next.pvSatang / 100
   if (next.sellerRatePct !== null) sellerRate.value = next.sellerRatePct
+
+  /*
+   * The cap and the carry-over are applied UNCONDITIONALLY once the row
+   * exists, unlike every field above. Both have a legitimate "off" value —
+   * ไม่จำกัด and ไม่ยกยอด — and keeping the sandbox's ฿5,000 / ticked box
+   * because the company's answer was falsy would draw the opposite of what
+   * the company configured, which is the exact bug this seeding fixes.
+   */
+  if (next.binary) {
+    if (next.binary.matchedRatePct !== null) binRate.value = next.binary.matchedRatePct
+    binCap.value = next.binary.payoutCapSatang === null ? '' : next.binary.payoutCapSatang / 100
+    binCarry.value = next.binary.carryOverUnmatched
+  }
 }, { immediate: true, deep: true })
 
 /*
@@ -337,7 +415,7 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
     const L = S(binLeft.value), R = S(binRight.value)
     const matched = Math.min(L, R)
     const raw = at(matched, binRate.value)
-    const cap = binCap.value === null || binCap.value === undefined ? null : S(binCap.value)
+    const cap = binCapSatang.value
     const paid = cap !== null && cap > 0 ? Math.min(raw, cap) : raw
     const cL = binCarry.value ? L - matched : 0
     const cR = binCarry.value ? R - matched : 0
@@ -371,7 +449,20 @@ const model = computed<{ rows: Row[]; shape: Shape; caption: string; totalNote?:
           { x: 235, y: 100, anchor: 'middle', tone: 'money', text: `จับคู่ได้ ${fmt(matched)} → จ่าย ${fmt(paid)} บาท` },
           { x: 20, y: 218, tone: 'quiet', text: `ยกไปรอบหน้า ${fmt(cL)}` },
           { x: 450, y: 218, anchor: 'end', tone: 'quiet', text: `ยกไปรอบหน้า ${fmt(cR)}` },
-          { x: 235, y: 238, anchor: 'middle', tone: 'bad', text: 'ยังไม่มีหน้าจอให้เลือกว่าใครอยู่ขาไหน' },
+          /*
+           * 2026-09-23 — this line used to read, in red, "ยังไม่มีหน้าจอให้
+           * เลือกว่าใครอยู่ขาไหน". True when the chart was drawn; false since
+           * 2026-09-19, when AgentEditModal gained the ขาในผัง Binary select.
+           * The warning was simply never deleted, so the diagram kept raising
+           * an alarm about a gap that had been closed — which is how a screen
+           * teaches people to ignore its red text.
+           *
+           * Quiet, not bad: where the control lives is an instruction, not a
+           * fault. It stays on the diagram rather than moving into a caption
+           * because "ขาซ้าย / ขาขวา" is exactly what somebody is looking at
+           * when the question occurs to them.
+           */
+          { x: 235, y: 238, anchor: 'middle', tone: 'quiet', text: 'ตั้งขาของแต่ละคนที่ จัดการผู้ใช้ระบบ → แก้ไขตัวแทน' },
         ],
         alt: 'ผัง Binary สองขาซ้ายขวา จ่ายจากยอดขาที่น้อยกว่า',
       },
@@ -746,16 +837,30 @@ function labelClass(tone?: Label['tone']) {
 
           <div v-if="planType === 'binary'" class="mb-3 grid gap-3 sm:grid-cols-2">
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">ยอดขาซ้าย</span>
-              <input v-model.number="binLeft" type="number" min="0" step="1000" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
+              <input v-model.number="binLeft" type="number" min="0" step="1000" data-test="bin-left" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">ยอดขาขวา</span>
-              <input v-model.number="binRight" type="number" min="0" step="1000" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
+              <input v-model.number="binRight" type="number" min="0" step="1000" data-test="bin-right" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
             <label class="block"><span class="block text-[12px] font-bold text-slate-500">อัตราจับคู่ (%)</span>
-              <input v-model.number="binRate" type="number" min="0" max="100" step="0.5" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
-            <label class="block"><span class="block text-[12px] font-bold text-slate-500">เพดานต่อรอบ (บาท)</span>
-              <input v-model.number="binCap" type="number" min="0" step="500" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
+              <input v-model.number="binRate" type="number" min="0" max="100" step="0.5" data-test="bin-rate" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
+            <!-- Label matches the real form's word for word: the same box on
+                 two screens must not disagree about what empty means. -->
+            <label class="block"><span class="block text-[12px] font-bold text-slate-500">เพดานต่อรอบ (บาท, ว่าง = ไม่จำกัด)</span>
+              <input v-model.number="binCap" type="number" min="0" step="500" data-test="bin-cap" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></label>
             <label class="flex items-center gap-2 text-[12.5px] font-semibold text-slate-600 sm:col-span-2">
-              <input v-model="binCarry" type="checkbox" class="h-4 w-4"> ยกยอดที่เหลือไปรอบหน้า
+              <input v-model="binCarry" type="checkbox" data-test="bin-carry" class="h-4 w-4"> ยกยอดที่เหลือไปรอบหน้า
             </label>
+            <!--
+              WHICH OF THESE FIVE IS THE COMPANY'S, said where the boxes are.
+              The card's subtitle claims the whole chart is real, and on this
+              plan two of the boxes cannot be: there is no company-level leg
+              total to read, only a per-agent running balance. One line, at
+              the controls it describes — an ⓘ would hide the correction from
+              exactly the person already misreading the numbers.
+            -->
+            <p v-if="seed?.binary" class="text-[12px] text-slate-500 sm:col-span-2" data-test="bin-seed-note">
+              อัตราจับคู่ เพดาน และการยกยอด มาจากค่าที่บริษัทตั้งไว้จริง ·
+              <b>ยอดสองขาเป็นตัวเลขลองเล่น</b> — ระบบเก็บยอดขาแยกรายคน ไม่มียอดรวมระดับบริษัทให้ดึงมา
+            </p>
           </div>
 
           <label v-if="planType === 'matrix'" class="mb-3 block">

@@ -56,17 +56,54 @@ class UatSeedCommissionPlansTest extends TestCase
         return $company;
     }
 
-    /** @return array<string, int> name => amount_satang, so a failure names the person */
+    /**
+     * name · earned_via => TOTAL satang, so a failure names the person.
+     *
+     * SUMMED, not mapped. This used to be a mapWithKeys, where two rows
+     * sharing a key silently overwrote each other and the map came out
+     * looking like one row — the same shape of blindness that once let a
+     * duplicate-seeding bug through a test written to catch it. Binary now
+     * seeds an agent with two sales, so that collapse is no longer
+     * hypothetical: the old helper would have reported ฿1,000 for somebody
+     * who was paid ฿2,000.
+     *
+     * @return array<string, int>
+     */
     private function payouts(Company $company): array
     {
-        return CommissionLedger::withoutGlobalScopes()
+        $totals = [];
+
+        foreach (CommissionLedger::withoutGlobalScopes()->where('company_id', $company->id)->with('agent')->get() as $row) {
+            $key = ($row->agent?->name ?? '—').' · '.$row->earned_via->value;
+            $totals[$key] = ($totals[$key] ?? 0) + (int) $row->amount_satang;
+        }
+
+        return $totals;
+    }
+
+    /**
+     * Assert that a named agent has NO ledger row — the half of every plan
+     * the old fixtures could not state.
+     *
+     * Each plan has a rule about where it STOPS, and a chain that ends where
+     * the rule would have stopped it anyway proves nothing: the walk simply
+     * ran out of people. So every plan below now seeds one person past that
+     * edge, and this is how their silence is checked. A ฿0 row would also be
+     * wrong — nothing in this codebase writes one (BR-4 precedent) — so the
+     * assertion is absence, not zero.
+     */
+    private function assertPaidNothing(Company $company, string $name): void
+    {
+        $agent = User::withoutGlobalScopes()
             ->where('company_id', $company->id)
-            ->with('agent')
-            ->get()
-            ->mapWithKeys(fn (CommissionLedger $row): array => [
-                ($row->agent?->name ?? '—').' · '.$row->earned_via->value => $row->amount_satang,
-            ])
-            ->all();
+            ->firstWhere('name', $name);
+
+        $this->assertNotNull($agent, "the fixture must actually create {$name}, or this asserts nothing");
+
+        $this->assertSame(0, CommissionLedger::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->where('agent_id', $agent->id)
+            ->count(), "{$name} must have no ledger row at all");
     }
 
     // ── Unilevel ────────────────────────────────────────────────────────────
@@ -92,6 +129,22 @@ class UatSeedCommissionPlansTest extends TestCase
         ], $this->payouts($company));
     }
 
+    public function test_unilevel_writes_no_row_for_a_level_nobody_priced(): void
+    {
+        /*
+         * Three levels, three rates, and a chain exactly three deep proved
+         * nothing about what happens when the ladder RUNS OUT: an engine that
+         * fell back to the nearest rate, or to a company-wide one, or that
+         * wrote a ฿0 row, would each have produced the same four rows.
+         *
+         * ชั้น 4 is a real, certified leader in the chain with no level-4 rate
+         * anywhere. Absence is the correct answer — not zero.
+         */
+        $company = $this->seedPlan('unilevel');
+
+        $this->assertPaidNothing($company, 'UAT หัวหน้าชั้น 4');
+    }
+
     // ── Binary ──────────────────────────────────────────────────────────────
 
     public function test_binary_pays_the_two_sellers_now_and_the_sponsor_only_after_a_cycle(): void
@@ -107,35 +160,68 @@ class UatSeedCommissionPlansTest extends TestCase
          */
         $company = $this->seedPlan('binary');
 
+        // Left sold twice, right once: 2 x 100,000 and 1 x 100,000.
         $this->assertEquals([
-            'UAT ขาซ้าย · direct' => 100_000,
+            'UAT ขาซ้าย · direct' => 200_000,
             'UAT ขาขวา · direct' => 100_000,
         ], $this->payouts($company));
 
-        // The volume IS there, waiting for the cycle: ฿10,000 on each leg.
+        // The volume IS there, waiting for the cycle — and the two legs are
+        // DIFFERENT, which is what makes the next test able to fail.
         $this->assertDatabaseHas('binary_leg_volumes', [
             'company_id' => $company->id,
-            'left_volume_satang' => Seed::PRICE_SATANG,
+            'left_volume_satang' => 2 * Seed::PRICE_SATANG,
             'right_volume_satang' => Seed::PRICE_SATANG,
         ]);
     }
 
-    public function test_the_binary_cycle_then_pays_the_sponsor_ten_percent_of_the_matched_leg(): void
+    public function test_the_binary_cycle_pays_on_the_weaker_leg_and_carries_the_rest(): void
     {
         /*
-         * matched = min(left, right) = min(1,000,000, 1,000,000) = 1,000,000
-         * 10% of that = 100,000 satang = ฿1,000.00, no cap configured.
+         * THE ASSERTION THE OLD FIXTURE COULD NOT MAKE.
+         *
+         * Owner, 2026-09-23: "แบบนี้ พิสูจน์ Logic ก็ไม่ได้". Both legs used to
+         * hold ฿10,000, and on equal legs min(), max() and "take the left one"
+         * all return the same number — so this test passed under every rule
+         * including the wrong ones.
+         *
+         *   left  2 x 1,000,000 = 2,000,000
+         *   right 1 x 1,000,000 = 1,000,000
+         *   matched = min(2,000,000, 1,000,000) = 1,000,000   → 10% = 100,000
+         *                                                       (max() → 200,000)
+         *   carried = 2,000,000 − 1,000,000 = 1,000,000 on the left, 0 on the right
+         *
+         * The carry-over is half the point: until the legs differed, that
+         * column read 0 whether carry_over_unmatched worked or not.
          */
         $company = $this->seedPlan('binary');
 
         $this->artisan('commissions:run-binary-cycles')->assertSuccessful();
 
-        $sponsor = User::withoutGlobalScopes()->firstWhere('name', 'UAT ผู้สนับสนุน');
+        $sponsor = User::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->firstWhere('name', 'UAT ผู้สนับสนุน');
 
         $this->assertSame(100_000, (int) CommissionLedger::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->where('agent_id', $sponsor->id)
-            ->sum('amount_satang'));
+            ->sum('amount_satang'), 'paid on the weaker leg, not the stronger one');
+
+        $this->assertDatabaseHas('binary_matching_cycles', [
+            'company_id' => $company->id,
+            'agent_id' => $sponsor->id,
+            'matched_volume_satang' => Seed::PRICE_SATANG,
+            'unmatched_carried_satang' => Seed::PRICE_SATANG,
+        ]);
+
+        // And the carried volume is really still on the leg, ready for the
+        // next cycle — not merely reported in the snapshot.
+        $this->assertDatabaseHas('binary_leg_volumes', [
+            'company_id' => $company->id,
+            'agent_id' => $sponsor->id,
+            'left_volume_satang' => Seed::PRICE_SATANG,
+            'right_volume_satang' => 0,
+        ]);
     }
 
     // ── Matrix ──────────────────────────────────────────────────────────────
@@ -162,28 +248,64 @@ class UatSeedCommissionPlansTest extends TestCase
         ], $this->payouts($company));
     }
 
+    public function test_matrix_stops_at_the_configured_depth(): void
+    {
+        /*
+         * The tree used to be exactly as deep as the plan pays, so "depth 2"
+         * was never enforced by anything the test could see — an engine with
+         * no cap, or capped at five, produced the identical three rows.
+         *
+         * ชั้นเหนือสุด has a real placement at level 3 above two real
+         * placements. Nothing is owed there only because the setting says 2.
+         */
+        $company = $this->seedPlan('matrix');
+
+        $this->assertPaidNothing($company, 'UAT ชั้นเหนือสุด');
+    }
+
     // ── Stairstep ───────────────────────────────────────────────────────────
 
     public function test_stairstep_pays_each_manager_only_the_difference_between_the_ranks(): void
     {
         /*
-         * Ranks: starter 5%, leader 10%, manager 15% (breakaway).
-         * Seller is starter, their manager is leader, theirs is manager.
+         * Ranks: starter 5%, leader 12%, manager 20% (breakaway), director 25%.
+         * Seller is starter, above them leader, then manager, then director.
          *
-         *   seller, from commission_rules at the starter rate  5%  → 50,000
-         *   leader  gets 10% − 5%  =  5%                           → 50,000
-         *   manager gets 15% − 10% =  5%                           → 50,000
+         *   seller, from commission_rules at the starter rate  5%  →  50,000
+         *   leader   gets 12% − 5%  =  7%                          →  70,000
+         *   manager  gets 20% − 12% =  8%                          →  80,000
+         *   director gets NOTHING — the walk stops below them
          *
-         * All three equal by construction, so a transposed row would be
-         * invisible — which is why the assertion is keyed by NAME.
+         * The gaps used to be 5 / 10 / 15, making all three rows exactly
+         * ฿500: three identical figures cannot say which person earned
+         * which, so a transposed row, a double-pay or a skipped manager all
+         * printed the same test-passing result. Uneven gaps give every row
+         * its own number.
          */
         $company = $this->seedPlan('stairstep_breakaway');
 
         $this->assertEquals([
             'UAT ผู้ขาย · direct' => 50_000,
-            'UAT ผู้นำ · stairstep_override' => 50_000,
-            'UAT ผู้จัดการ (ตัดสาย) · stairstep_override' => 50_000,
+            'UAT ผู้นำ · stairstep_override' => 70_000,
+            'UAT ผู้จัดการ (ตัดสาย) · stairstep_override' => 80_000,
         ], $this->payouts($company));
+    }
+
+    public function test_stairstep_stops_dead_above_a_breakaway_rank(): void
+    {
+        /*
+         * The chain used to END at the breakaway rank, so the break never had
+         * to do anything — the walk ran out of people at exactly the moment it
+         * was supposed to stop, and an engine ignoring is_breakaway_rank
+         * entirely would have passed.
+         *
+         * ผู้อำนวยการ is one rank HIGHER (25%) than the breakaway manager
+         * (20%), so a walk that ran past would owe them 5% = ฿500. Nothing is
+         * the answer only if the break is real.
+         */
+        $company = $this->seedPlan('stairstep_breakaway');
+
+        $this->assertPaidNothing($company, 'UAT ผู้อำนวยการ');
     }
 
     public function test_both_rank_plans_arrive_with_the_company_level_rank_form_filled_in(): void
@@ -278,6 +400,22 @@ class UatSeedCommissionPlansTest extends TestCase
         ], $this->payouts($company));
     }
 
+    public function test_generation_stops_counting_once_the_depth_is_spent(): void
+    {
+        /*
+         * The chain used to hold exactly two breakaway ancestors — exactly
+         * what max_generation_depth allows — so the cap never bound and an
+         * engine ignoring the setting produced identical rows.
+         *
+         * จ has broken away just like ข and ง. The ONLY thing separating จ
+         * from ง is being third, which is what makes this zero mean the cap
+         * rather than the rank.
+         */
+        $company = $this->seedPlan('generation');
+
+        $this->assertPaidNothing($company, 'UAT หัวหน้า จ (ตัดสาย)');
+    }
+
     // ── Affiliate ───────────────────────────────────────────────────────────
 
     public function test_affiliate_pays_exactly_one_hop_up_and_does_not_reduce_the_seller(): void
@@ -295,6 +433,23 @@ class UatSeedCommissionPlansTest extends TestCase
             'UAT ผู้ขาย · direct' => 100_000,
             'UAT ผู้แนะนำ · override' => 30_000,
         ], $this->payouts($company));
+    }
+
+    public function test_affiliate_really_stops_after_one_hop(): void
+    {
+        /*
+         * "Exactly one hop" was true of a chain that HAD only one hop: the
+         * walk stopped because it ran out of people, not because the plan
+         * said so, and a Unilevel-style walk of the whole upline would have
+         * printed the same two rows.
+         *
+         * ผู้แนะนำชั้นบน is certified and the company-wide override rate
+         * applies to them as much as to anyone. Their silence is the only
+         * thing distinguishing this plan from Unilevel on this fixture.
+         */
+        $company = $this->seedPlan('affiliate');
+
+        $this->assertPaidNothing($company, 'UAT ผู้แนะนำชั้นบน');
     }
 
     // ── The properties every tenant must hold ───────────────────────────────
@@ -345,7 +500,11 @@ class UatSeedCommissionPlansTest extends TestCase
         ];
 
         $before = $rows();
-        $this->assertSame(['ledger' => 4, 'satang' => 190_000, 'referrals' => 1, 'orders' => 1, 'clients' => 1, 'agents' => 4], $before);
+        // Five agents now: ชั้น 4 was added to prove an unpriced level earns
+        // nothing, and is counted here precisely BECAUSE they earn nothing —
+        // a person the seeder creates twice is a duplicate whether or not
+        // they were ever paid.
+        $this->assertSame(['ledger' => 4, 'satang' => 190_000, 'referrals' => 1, 'orders' => 1, 'clients' => 1, 'agents' => 5], $before);
 
         $this->seedPlan('unilevel');
         $this->seedPlan('unilevel');
@@ -431,7 +590,10 @@ class UatSeedCommissionPlansTest extends TestCase
 
         $agents = User::withoutGlobalScopes()->where('company_id', $company->id)->get();
 
-        $this->assertCount(4, $agents);
+        // Five since ชั้น 4 joined the chain. The one who earns nothing needs
+        // payout details as much as the others: QA has to be able to see them
+        // sitting in the queue with a balance of zero rather than missing.
+        $this->assertCount(5, $agents);
         foreach ($agents as $agent) {
             $this->assertTrue(
                 $agent->hasCompletePayoutDetails(),
