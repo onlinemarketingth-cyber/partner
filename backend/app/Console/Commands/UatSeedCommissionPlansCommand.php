@@ -2,6 +2,8 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\AgentRankRecalculationFrequency;
+use App\Enums\AgentRankVolumeScope;
 use App\Enums\BinaryCycleFrequency;
 use App\Enums\BinaryLeg;
 use App\Enums\CommissionBasis;
@@ -12,7 +14,9 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PipelineStage;
 use App\Enums\UserRole;
+use App\Models\AffiliateAttributionSetting;
 use App\Models\AgentRank;
+use App\Models\AgentRankSetting;
 use App\Models\CertTier;
 use App\Models\Client;
 use App\Models\CommissionBinarySetting;
@@ -126,6 +130,39 @@ class UatSeedCommissionPlansCommand extends Command
      * here, and the owner's real figure is outstanding (BR-7).
      */
     public const WHT_RATE_BP = 300;
+
+    /**
+     * The company-level half of a rank plan — the three fields the Stairstep
+     * form on ขั้นที่ 2 asks for, and which this command used to leave empty.
+     *
+     * Owner, 2026-09-22: "ผมไปดูค่าที่ setup ค่าคอม ของแผน stairstep ทำไมถึง
+     * ไม่เหมือนกัน". The ladder was seeded, the settings row was not, so the
+     * form above the ladder rendered blank and the UAT sheet described a
+     * screen nobody could see filled in.
+     *
+     * `volume_scope` is deliberately the platform default (Personal): this
+     * command seeds what the system does out of the box, and which scope a
+     * real company promises its agents is theirs to decide (BR-7). It has no
+     * effect on the seeded payout either way — every UAT agent is placed on
+     * their rank by hand (see placeOnRank), so the recalculation job that
+     * reads these three fields never runs during UAT. They exist so the form
+     * QA is told to check has values in it.
+     */
+    public const RANK_TRAILING_WINDOW_DAYS = 90;
+
+    public const RANK_RECALCULATION_FREQUENCY = AgentRankRecalculationFrequency::Monthly;
+
+    public const RANK_VOLUME_SCOPE = AgentRankVolumeScope::Personal;
+
+    /**
+     * The Affiliate structure form had the SAME hole as the rank form: the
+     * override rule was seeded, the one settings row behind
+     * "หน้าต่างนับเครดิต (วัน)" was not, so that screen also rendered empty.
+     * The differential flag stays off because no differential calculation
+     * exists yet (see the migration's own note) — seeding it on would put a
+     * switch QA is asked to verify in front of code that ignores it.
+     */
+    public const AFFILIATE_ATTRIBUTION_WINDOW_DAYS = 30;
 
     /**
      * The stairstep ladder. `rate_value` is the rank's OWN rate; a manager is
@@ -535,6 +572,21 @@ class UatSeedCommissionPlansCommand extends Command
         return AgentRank::create($attributes);
     }
 
+    /**
+     * The one settings row a rank plan needs, written for BOTH tenants that
+     * run ranks — Stairstep and Generation. Generation is built on top of
+     * Stairstep's ranks (it counts breakaway legs), so it renders the same
+     * form and would show the same three empty boxes.
+     */
+    private function rankSettings(Company $company): void
+    {
+        $this->upsert(AgentRankSetting::class, $company, [
+            'trailing_window_days' => self::RANK_TRAILING_WINDOW_DAYS,
+            'recalculation_frequency' => self::RANK_RECALCULATION_FREQUENCY,
+            'volume_scope' => self::RANK_VOLUME_SCOPE,
+        ]);
+    }
+
     /** `current_rank_id` is not fillable — it is the engine's to move, not a request's. */
     private function placeOnRank(User $user, AgentRank $rank): void
     {
@@ -703,6 +755,8 @@ class UatSeedCommissionPlansCommand extends Command
     /** @return array{expected: string} */
     private function seedStairstep(Company $company, Product $product, ReferralService $referrals, OrderService $orders): array
     {
+        $this->rankSettings($company);
+
         $starter = $this->rank($company, 'starter');
         $leader = $this->rank($company, 'leader');
         $manager = $this->rank($company, 'manager');
@@ -743,6 +797,8 @@ class UatSeedCommissionPlansCommand extends Command
             $existing ? $existing->update($attributes) : CommissionGenerationRule::create($attributes);
         }
 
+        $this->rankSettings($company);
+
         $starter = $this->rank($company, 'starter');
         $breakaway = $this->rank($company, 'manager');
 
@@ -771,6 +827,11 @@ class UatSeedCommissionPlansCommand extends Command
     /** @return array{expected: string} */
     private function seedAffiliate(Company $company, Product $product, ReferralService $referrals, OrderService $orders): array
     {
+        $this->upsert(AffiliateAttributionSetting::class, $company, [
+            'attribution_window_days' => self::AFFILIATE_ATTRIBUTION_WINDOW_DAYS,
+            'new_vs_returning_rate_differential_enabled' => false,
+        ]);
+
         // Company-wide, no level: Affiliate pays exactly one hop up and has no
         // ladder to price.
         $this->overrideRule($company, self::AFFILIATE_RATE_BP, null);

@@ -777,14 +777,15 @@ class CommissionService
      * + the manager's payout, so the caller can decide the agent's own
      * row's final amount (deductive mode) BEFORE that immutable row
      * (BR-4) is created. Same fail-safe as Unilevel's recordOverrides():
-     * no manager, manager has no passed cert tier, or no matching rule
-     * for that tier all return null — never a $0 row. Unlike
+     * no manager, an uncertified manager who is not the company's own
+     * house account, or no matching rule all return null — never a $0
+     * row. Unlike
      * recordOverrides(), this only ever looks at ONE level (the selling
      * agent's own manager) — TASK-194 §3.3 is explicit the Affiliate
      * override writes exactly two ledger rows (agent + manager), not a
      * walked chain.
      *
-     * @return array{manager: User, managerTier: CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
+     * @return array{manager: User, managerTier: ?CertTier, rule: CommissionOverrideRule, amount_satang: int}|null
      */
     private function resolveAffiliateOverride(User $sellingAgent, Product $product, int $companyId, CommissionOverrideMode $mode, int $commissionBaseSatang, int $agentAmountSatang): ?array
     {
@@ -796,7 +797,33 @@ class CommissionService
 
         $managerTier = $manager->highestPassedCertTier();
 
-        if (! $managerTier) {
+        /*
+         * 2026-09-23 — THE SAME EXEMPTION UNILEVEL ALREADY HAD, and the
+         * reason this plan needed one too.
+         *
+         * Owner: "ที่ผมอยากได้คือ ผู้แนะนำ = บริษัท ทำให้ setup ได้".
+         *
+         * Turning on step 4.2 seats the company at the top of the tree and
+         * attaches every agent who has no upline to it, so the company IS
+         * the ผู้แนะนำ of anyone who joined without one. Under Unilevel that
+         * works. Under Affiliate it silently did not: the line below used to
+         * read `if (! $managerTier) return null;`, and the seat holds no
+         * certification and never will — it cannot sit an exam. So the one
+         * case the seat exists for (a seller with no human introducer, whose
+         * only upline IS the company) was exactly the case this refused, and
+         * it refused it with no error, no zero row and no screen: the card
+         * said "บริษัทรับด้วย" and the company was paid nothing, forever.
+         *
+         * NARROW ON PURPOSE, worded exactly as resolveUnilevelOverrides():
+         * `isCommissionHouseAccount()`, never `isCompanyAdmin()`. An ordinary
+         * company admin who never certified stays skipped — widening it to a
+         * role would start paying real people who never qualified.
+         *
+         * `$managerTier` is therefore nullable from here on, and the ledger
+         * row records NULL rather than a qualification the company never
+         * earned (see createOverrideLedgerRow's note on the same column).
+         */
+        if (! $managerTier && ! $manager->isCommissionHouseAccount()) {
             return null;
         }
 

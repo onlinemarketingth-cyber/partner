@@ -145,6 +145,124 @@ class CommissionHouseAccountTest extends TestCase
         $this->assertSame(CommissionEarnedVia::Override, $row->earned_via);
     }
 
+    // ── The company as the ผู้แนะนำ under Affiliate ────────────────────
+    //
+    // 2026-09-23, owner: "ที่ผมอยากได้คือ ผู้แนะนำ = บริษัท ทำให้ setup ได้".
+    //
+    // Everything above this line is Unilevel. Affiliate reaches its payee
+    // through a SECOND resolver — one hop, resolved before the seller's own
+    // row is written — and that resolver had no house-account exemption: it
+    // refused any payee without a passed cert tier, which the seat can never
+    // hold. So the single case the seat exists for (a seller whose only
+    // upline is the company) was the case Affiliate refused, silently.
+    //
+    // The owner's answer on which payout mode this should use was "setup
+    // ได้" — the mode stays a choice on step 4.1, so all three are pinned
+    // here rather than one being made the blessed path.
+
+    public function test_under_affiliate_the_company_is_the_introducer_when_the_seller_joined_without_one(): void
+    {
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::Additive);
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->amountFor($house), 'the company is paid the introducer rate');
+        $this->assertSame(100000, $this->directAmount($world), 'and additive leaves the seller whole');
+    }
+
+    public function test_the_affiliate_row_the_company_is_paid_on_claims_no_certification(): void
+    {
+        // Same reasoning as the Unilevel row above: the column is nullable and
+        // null is the honest answer for an entity that never sat an exam. It
+        // is asserted again here because this row is written through a
+        // different resolver, and a `CertTier` type that was merely widened to
+        // `?CertTier` would pass type checks while carrying whatever the old
+        // code happened to put there.
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::Additive);
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $row = CommissionLedger::withoutGlobalScopes()->where('agent_id', $house->id)->sole();
+
+        $this->assertNull($row->cert_tier_id_at_time);
+        $this->assertSame(CommissionEarnedVia::Override, $row->earned_via);
+    }
+
+    public function test_a_deduct_mode_takes_the_companys_affiliate_share_out_of_the_seller(): void
+    {
+        // หักจากผู้ขาย, priced off the SALE: the company keeps 3% of the deal
+        // out of the seller's 10%. This is the arrangement the owner was
+        // weighing — a deal with no human introducer still earns the company
+        // something, and it costs the company nothing new.
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::DeductFromSale);
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->amountFor($house), '3% of the 1,000,000 sale');
+        $this->assertSame(70000, $this->directAmount($world), 'and the seller funds it out of their own 100,000');
+    }
+
+    public function test_the_other_deduct_mode_prices_the_company_off_the_sellers_commission_instead(): void
+    {
+        /*
+         * The two deduct modes are 10x apart on these inputs and that is the
+         * whole reason the enum spells the base into the case name: 3% of the
+         * SALE is 30,000; 3% of the seller's own 100,000 commission is 3,000.
+         * Pinned so a company that picks the wrong one on step 4.1 finds out
+         * from the screen's own example rather than from a payout.
+         */
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::DeductFromCommission);
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $this->assertSame(3000, $this->amountFor($house), '3% of the seller commission, not of the sale');
+        $this->assertSame(97000, $this->directAmount($world));
+    }
+
+    public function test_affiliate_still_skips_an_uncertified_human_introducer(): void
+    {
+        /*
+         * THE TEST THAT KEEPS THE FIX NARROW.
+         *
+         * The exemption is written against isCommissionHouseAccount(), never
+         * isCompanyAdmin() and never "has no tier". Widened by one word it
+         * would start paying every real person who never qualified — the gate
+         * ADR-035 exists to hold. The company seat is created here too, and
+         * gets nothing, because Affiliate walks exactly one hop and the hop
+         * lands on the human.
+         */
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::Additive);
+        $introducer = $this->leaderAbove($world);
+        UserCertification::query()->withoutGlobalScopes()->where('user_id', $introducer->id)->delete();
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $this->assertSame(0, $this->amountFor($introducer), 'an uncertified human is still skipped');
+        $this->assertSame(0, $this->amountFor($house), 'and Affiliate does not walk past them to the company');
+        $this->assertSame(100000, $this->directAmount($world), 'so nobody is charged for an override nobody was paid');
+    }
+
+    public function test_affiliate_pays_a_real_introducer_and_stops_below_the_company(): void
+    {
+        // The difference from Unilevel worth stating out loud: there, the seat
+        // sits above the leader and BOTH are paid. Affiliate writes exactly
+        // two rows — seller and one hop — so a company with real introducers
+        // in place is paid by this plan only on the sellers who have none.
+        $world = $this->affiliateWorld(agentRate: 1000, introducerRate: 300, mode: CommissionOverrideMode::Additive);
+        $introducer = $this->leaderAbove($world);
+        $house = $this->houseAccounts()->create($world['company']);
+
+        $this->sell($world);
+
+        $this->assertSame(30000, $this->amountFor($introducer));
+        $this->assertSame(0, $this->amountFor($house));
+    }
+
     // ── Wiring the seat in and out ────────────────────────────────────
 
     public function test_creating_the_seat_attaches_every_agent_who_had_no_upline(): void
@@ -711,6 +829,28 @@ class CommissionHouseAccountTest extends TestCase
         ]);
 
         return compact('company', 'referral', 'agent', 'product');
+    }
+
+    /**
+     * The same fixture on the Affiliate plan, with the payout mode passed in.
+     *
+     * A separate builder rather than a flag on world(): Affiliate resolves its
+     * mode through its own path (rule → product → company), so a shared helper
+     * that set the plan and hoped for the best would be testing which default
+     * happened to win rather than the mode the caller asked for. Product and
+     * rule modes are left null here on purpose, which is what makes step 4.1's
+     * company-wide setting the thing under test.
+     */
+    private function affiliateWorld(int $agentRate, int $introducerRate, CommissionOverrideMode $mode): array
+    {
+        $world = $this->world(agentRate: $agentRate, leaderRate: $introducerRate);
+
+        $world['company']->forceFill([
+            'commission_plan_type' => CommissionPlanType::Affiliate,
+            'commission_override_mode' => $mode,
+        ])->save();
+
+        return $world;
     }
 
     /** A certified human leader directly above the seller. */

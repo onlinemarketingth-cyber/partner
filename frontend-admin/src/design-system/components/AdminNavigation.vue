@@ -525,7 +525,26 @@ const activeSubMenus = computed(() => {
 
 <template>
   <div class="sticky top-0 z-50 font-sans select-none">
-    <nav class="bg-white/90 backdrop-blur-xl border-b border-slate-200 px-4 sm:px-6 py-2 shadow-sm">
+    <!--
+      ═══ relative z-10: THE ROW THAT OPENS MENUS HAS TO PAINT OVER THE ONE
+          THAT DOES NOT ═══
+
+      2026-09-22, owner: "เมนูเปลี่ยนบริษัท อยู่ใต้ Z-index sub menu".
+
+      Both this row and the sub-menu row below carry `backdrop-blur-xl`, and
+      a backdrop-filter CREATES A STACKING CONTEXT. That is the whole bug:
+      the company switcher's dropdown is `z-[60]`, but that 60 only competes
+      INSIDE this nav's own context, and this nav — having no z-index of its
+      own — was ordered against its sibling by DOM position alone. The
+      sub-menu row comes later in the DOM, so it painted on top of the
+      dropdown and sliced the search box off it.
+
+      Raising the number on the dropdown would have done nothing, which is
+      the trap: the fix has to be on the CONTEXT, not on the thing inside it.
+      The two rows never overlap in layout, so ordering this one above costs
+      nothing visually.
+    -->
+    <nav class="relative z-10 bg-white/90 backdrop-blur-xl border-b border-slate-200 px-4 sm:px-6 py-2 shadow-sm">
       <div class="w-full max-w-none mx-auto flex items-center justify-between gap-4 min-w-0">
         <div class="flex items-center gap-4 min-w-0">
           <RouterLink :to="{ name: 'home' }" class="flex items-center gap-2 shrink-0">
@@ -663,7 +682,10 @@ const activeSubMenus = computed(() => {
          (`bg-brand-50/60 text-brand-600 font-bold`) but on an exact
          `route.name` match per sub-item instead of the pillar-level
          "any of" check row 1 uses. -->
-    <div v-if="activeSubMenus" class="hidden lg:block bg-slate-50/80 backdrop-blur-xl border-b border-slate-200 px-4 sm:px-6">
+    <!-- relative z-0, stated rather than left to DOM order: this row is the
+         one that must stay UNDER any menu the row above opens. See the note
+         on the <nav> for why a bare `z-[60]` on the dropdown cannot do it. -->
+    <div v-if="activeSubMenus" class="relative z-0 hidden lg:block bg-slate-50/80 backdrop-blur-xl border-b border-slate-200 px-4 sm:px-6">
       <div class="w-full max-w-none mx-auto flex items-center gap-1 overflow-x-auto py-1.5 pl-[2.75rem]">
         <RouterLink
           v-for="sub in activeSubMenus"

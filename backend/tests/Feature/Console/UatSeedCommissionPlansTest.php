@@ -5,6 +5,8 @@ namespace Tests\Feature\Console;
 use App\Console\Commands\UatSeedCommissionPlansCommand as Seed;
 use App\Enums\CommissionEarnedVia;
 use App\Enums\IdDocumentType;
+use App\Models\AffiliateAttributionSetting;
+use App\Models\AgentRankSetting;
 use App\Models\Client;
 use App\Models\CommissionLedger;
 use App\Models\Company;
@@ -182,6 +184,71 @@ class UatSeedCommissionPlansTest extends TestCase
             'UAT ผู้นำ · stairstep_override' => 50_000,
             'UAT ผู้จัดการ (ตัดสาย) · stairstep_override' => 50_000,
         ], $this->payouts($company));
+    }
+
+    public function test_both_rank_plans_arrive_with_the_company_level_rank_form_filled_in(): void
+    {
+        /*
+         * Owner, 2026-09-22: "ผมไปดูค่าที่ setup ค่าคอม ของแผน stairstep
+         * ทำไมถึงไม่เหมือนกัน".
+         *
+         * The ladder was seeded; the ONE settings row above it was not, so
+         * the three boxes at the top of ขั้นที่ 2 rendered empty and the UAT
+         * sheet described a screen that did not exist. A missing row is
+         * invisible on the payout assertions above — every UAT agent is
+         * placed on their rank by hand, so nothing this command checks would
+         * ever have noticed. Hence a test of its own.
+         *
+         * Generation is included because it is built on Stairstep's ranks and
+         * renders the same form; seeding only Stairstep would half-fix it.
+         */
+        foreach (['stairstep_breakaway', 'generation'] as $plan) {
+            $company = $this->seedPlan($plan);
+
+            $settings = AgentRankSetting::withoutGlobalScopes()
+                ->where('company_id', $company->id)
+                ->get();
+
+            // The table is unique on company_id; more than one row means the
+            // upsert idiom regressed into an insert.
+            $this->assertCount(1, $settings, "{$plan} should have exactly one rank settings row");
+
+            $row = $settings->first();
+            $this->assertSame(Seed::RANK_TRAILING_WINDOW_DAYS, $row->trailing_window_days);
+            $this->assertSame(Seed::RANK_RECALCULATION_FREQUENCY, $row->recalculation_frequency);
+            $this->assertSame(Seed::RANK_VOLUME_SCOPE, $row->volumeScope());
+        }
+    }
+
+    public function test_the_affiliate_structure_form_arrives_filled_in_too(): void
+    {
+        // Found while fixing the rank form: Affiliate had the same hole —
+        // the override rule was seeded, the settings row behind
+        // "หน้าต่างนับเครดิต (วัน)" was not, so QA was told to check a field
+        // that could only ever be blank.
+        $company = $this->seedPlan('affiliate');
+
+        $row = AffiliateAttributionSetting::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->sole();
+
+        $this->assertSame(Seed::AFFILIATE_ATTRIBUTION_WINDOW_DAYS, $row->attribution_window_days);
+        // Off on purpose: no differential calculation exists behind it yet.
+        $this->assertFalse($row->new_vs_returning_rate_differential_enabled);
+    }
+
+    public function test_the_four_plans_that_do_not_use_ranks_get_no_rank_settings(): void
+    {
+        // The form only exists on the two rank screens. A row on a Binary or
+        // Affiliate tenant would be configuration QA is asked to check on a
+        // screen that never shows it.
+        foreach (['unilevel', 'binary', 'matrix', 'affiliate'] as $plan) {
+            $company = $this->seedPlan($plan);
+
+            $this->assertSame(0, AgentRankSetting::withoutGlobalScopes()
+                ->where('company_id', $company->id)
+                ->count(), "{$plan} should carry no rank settings");
+        }
     }
 
     // ── Generation ──────────────────────────────────────────────────────────
