@@ -235,6 +235,52 @@ const listenerBound = computed(() => Boolean(getCurrentInstance()?.vnode.props?.
  */
 const nodesClickable = computed(() => isLive.value && listenerBound.value)
 
+/**
+ * THE WAY OUT OF THE SANDBOX (owner, 2026-09-24).
+ *
+ * The owner opened this card on a Stairstep company, used the ขั้นของคนขาย
+ * dropdown, and reported the plan's percentages as hardcoded: "คุณบอกว่า UI
+ * set ค่าได้ แต่นี่มัน Fix เลยนิครับ ใน Dropdown list".
+ *
+ * They read the screen correctly. On this card the ladder IS fixed — it is
+ * the company's saved ladder, shown read-only, and the dropdown only picks
+ * WHICH rung to run the example at. The editor is a separate block further
+ * down step 2, below a PV table, and nothing up here pointed at it.
+ *
+ * Worse, the one plan where that guess WOULD have worked is Unilevel, whose
+ * rate ladder really is editable inside this card through the `rates` slot.
+ * So an admin learns "the preview is where I edit" on the default plan and
+ * carries it into five plans where it is false.
+ *
+ * The jump already existed — press a box in the diagram — but only for a box
+ * that happens to carry a note, which is discoverable only by trying. This
+ * is the same destination said out loud, in the header, where somebody
+ * looking for the settings is already looking.
+ *
+ * Unilevel is in the list too, since its form moved out of this card with
+ * the rest of them.
+ */
+const structureJump = computed<{ target: string; label: string } | null>(() => {
+  if (!nodesClickable.value) return null
+
+  switch (props.planType) {
+    case 'unilevel':
+      return { target: 'unilevel-levels', label: 'ไปตั้งอัตราตามชั้น' }
+    case 'binary':
+      return { target: 'binary', label: 'ไปตั้งค่า Binary' }
+    case 'matrix':
+      return { target: 'matrix-levels', label: 'ไปตั้งอัตราตาม Level' }
+    case 'stairstep_breakaway':
+      return { target: 'rank-ladder', label: 'ไปแก้บันไดอันดับ' }
+    case 'generation':
+      return { target: 'generation', label: 'ไปตั้งอัตราตาม Generation' }
+    case 'affiliate':
+      return { target: 'affiliate', label: 'ไปตั้งค่าพันธมิตร' }
+    default:
+      return null
+  }
+})
+
 /** Which box currently holds keyboard focus — SVG has no :focus-visible we can style. */
 const focusedNode = ref<number | null>(null)
 
@@ -885,16 +931,24 @@ function labelClass(tone?: Label['tone']) {
 
 <template>
   <div class="rounded-2xl border border-slate-200 bg-white" data-test="plan-shape-preview">
-    <button
-      type="button"
-      class="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
-      :aria-expanded="open"
-      data-test="plan-shape-toggle"
-      @click="open = !open"
-    >
-      <span class="min-w-0">
+    <!-- The jump is a sibling of the toggle, not a child: a button inside a
+         button is invalid HTML and browsers resolve it by dropping one. -->
+    <div class="flex w-full items-start gap-2 px-4 py-3.5">
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+        :aria-expanded="open"
+        data-test="plan-shape-toggle"
+        @click="open = !open"
+      >
+        <span class="min-w-0">
         <span class="block text-[15px] font-extrabold text-slate-900">
           {{ isLive ? 'เงินจะไหลแบบนี้ ด้วยค่าที่คุณตั้งไว้ตอนนี้' : 'ผังแผนนี้ และตัวอย่างว่าใครได้เท่าไร' }}
+          <!-- On the title line, not in the caption. The caption already said
+               "ไม่กระทบค่าที่บันทึกไว้" and was read past. -->
+          <span class="ml-1.5 whitespace-nowrap rounded-md bg-slate-100 px-1.5 py-0.5 align-middle text-[11px] font-bold text-slate-500" data-test="plan-shape-sandbox-badge">
+            ทดลอง · ไม่บันทึก
+          </span>
         </span>
         <!-- The sentence changes with the mode. A card that says "ตัวเลขสมมติ
              ทั้งหมด" over the company's real rates is worse than no card. -->
@@ -907,9 +961,20 @@ function labelClass(tone?: Label['tone']) {
             ตัวเลขสมมติทั้งหมด ไม่ใช่ค่าที่บริษัทตั้งไว้ และไม่มีอะไรถูกบันทึก
           </template>
         </span>
-      </span>
-      <span class="shrink-0 text-[12.5px] font-bold text-brand-600">{{ open ? 'ซ่อน' : 'ดูตัวอย่าง' }}</span>
-    </button>
+        </span>
+        <span class="shrink-0 text-[12.5px] font-bold text-brand-600">{{ open ? 'ซ่อน' : 'ดูตัวอย่าง' }}</span>
+      </button>
+
+      <button
+        v-if="structureJump"
+        type="button"
+        class="mt-0.5 shrink-0 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-[12.5px] font-bold text-brand-700 hover:bg-brand-100"
+        data-test="plan-shape-structure-jump"
+        @click="emit('focus-target', structureJump.target)"
+      >
+        {{ structureJump.label }} →
+      </button>
+    </div>
 
     <div v-if="open" class="border-t border-slate-200 px-4 py-4">
       <!-- sandbox inputs -->
@@ -1122,7 +1187,15 @@ function labelClass(tone?: Label['tone']) {
             {{ seedSourceNote }}
           </p>
 
-          <slot v-if="levelsAreLive" name="rates" :base-satang="baseSatang" :format="fmt" :at="at" />
+          <!--
+            A `rates` slot used to render step 2's real Unilevel rate form
+            right here, and it is why the owner read the Stairstep card's
+            read-only ladder as this card's settings (2026-09-24): on the
+            default plan the card genuinely WAS the editor. The form moved out
+            to [data-test="plan-structure-unilevel"], beside every other
+            plan's structure, and the slot is removed rather than left empty
+            so it cannot quietly come back.
+          -->
 
           <!-- per-level example rows -->
           <div v-else-if="levelList">

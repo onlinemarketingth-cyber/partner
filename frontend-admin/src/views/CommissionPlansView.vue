@@ -2723,6 +2723,37 @@ const planShapeSeedProduct = computed<ProductOption | null>(() => {
   return [...sellable].sort((a, b) => a.id - b.id)[0] ?? null
 })
 
+/**
+ * WHAT THE UNILEVEL LADDER'S BAHT COLUMN IS PRICED AGAINST (2026-09-24).
+ *
+ * That column used to come from PlanShapePreview's slot props, because the
+ * form lived inside the card — so it followed the SANDBOX price box, and an
+ * admin nudging the demo watched the baht beside a saved rate move with it.
+ * Harmless while the form was visibly part of a sandbox; wrong now that it
+ * is a settings form of its own.
+ *
+ * It prices against the example product instead, and mirrors the server's
+ * own fallback: on the PV basis a product with no PV is measured by its
+ * price (CommissionBasisResolver), which is also the case
+ * CommissionReadinessService raises `point_value_missing` about — so the
+ * figure here matches what would really be paid rather than showing ฿0 for
+ * a gap that is reported elsewhere.
+ */
+const ladderBaseSatang = computed<number>(() => {
+  const seed = planShapeSeed.value
+
+  if (!seed) return 0
+
+  return commissionBasis.value === 'pv'
+    ? (seed.pvSatang ?? seed.priceSatang ?? 0)
+    : (seed.priceSatang ?? 0)
+})
+
+/** percent → satang. Basis points, one round at the multiply — BR-3, same as the backend. */
+function ladderAmountSatang(percent: number): number {
+  return Math.round((ladderBaseSatang.value * ((Number(percent) || 0) * 100)) / 10000)
+}
+
 const planShapeSeed = computed(() => {
   /*
    * NULL while browsing a plan this company does not run.
@@ -4055,6 +4086,13 @@ function focusDestinationFor(target: string): FocusDestination | null {
      */
     case 'seller-rate':
       return { step: 3, selector: '[data-test="step3-company-default"]', missing: 'ตั้งค่าเริ่มต้นทั้งบริษัทอยู่ในขั้นที่ 3 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    /*
+     * 2026-09-24 — Unilevel joined the others. Its rate form used to live
+     * inside PlanShapePreview, so "jump to the settings" had nowhere to go:
+     * the settings were the thing you were already looking at.
+     */
+    case 'unilevel-levels':
+      return { step: 2, selector: '[data-test="plan-structure-unilevel"]', missing: '' }
     case 'binary':
       return { step: 2, selector: '[data-test="plan-structure-binary"]', missing: '' }
     case 'matrix-levels':
@@ -5629,142 +5667,6 @@ watch(companyPlanType, (pt) => {
                 </p>
               </div>
 
-              <!--
-                ═══ ผังและตัวอย่างของแผน (owner, 2026-09-19) ═══
-
-                Owner, on this screen: "มันดูไม่ง่ายเลยในการ Setup ในแต่ละแผน
-                ผมอยากได้แบบแผนภูมิ ที่เป็นตัวอย่างในแต่ละแบบ".
-
-                It sits HERE, below both choices, because the example needs
-                both of them: the plan decides who is in the picture, the
-                basis decides what number the percentages are a percentage
-                OF. Placed above the basis card it would have to guess one.
-
-                2026-09-21 — OPEN by default, seeded with this company's own
-                numbers, and carrying the real per-level rate form.
-
-                The comment that used to sit here defended collapsing it:
-                "an admin who already knows the plan they run should not have
-                to scroll past a sandbox". That was the wrong trade. The
-                owner's request was a chart AND "Setup ค่าคอมในแต่ละชั้นพร้อม
-                ตัวอย่าง" — the setting and its consequence together — and
-                collapsing it, seeding it with invented numbers and moving the
-                real form to step 4 took all three apart.
-              -->
-              <PlanShapePreview
-                :plan-type="viewingPlanType"
-                :basis="commissionBasis"
-                :seed="planShapeSeed"
-                :live-level-rates="liveLevelRates"
-                default-open
-                @focus-target="focusPlanControl"
-              >
-                <!--
-                  THE REAL LADDER, right of the diagram. Every keystroke moves
-                  the chart; nothing is written until บันทึก, because each save
-                  is an audited write to the table that decides what people are
-                  paid.
-                -->
-                <template #rates="{ baseSatang, format, at: rateOf }">
-                  <div data-test="level-ladder-editor">
-                    <div class="flex flex-wrap items-baseline justify-between gap-2">
-                      <p class="text-[12.5px] font-bold text-slate-600">อัตราหัวหน้าทีมแต่ละชั้น</p>
-                      <span v-if="levelLadderDirty" class="text-[11.5px] font-bold text-amber-700" data-test="level-ladder-dirty">
-                        ยังไม่ได้บันทึก
-                      </span>
-                    </div>
-
-                    <p v-if="!levelLadderDraft.length" class="mt-1.5 text-[12px] text-slate-500" data-test="level-ladder-empty">
-                      ยังไม่ได้ตั้งอัตราตามชั้น — ตอนนี้หัวหน้าทีมยังไม่ได้ส่วนแบ่งตามชั้น
-                      <span v-if="hasCompanyWideLeaderRate">(แต่ยังมีอัตราแบบใช้ทุกชั้นอยู่ ดูข้อ 4.3)</span>
-                    </p>
-
-                    <div v-else class="mt-1.5 space-y-1.5">
-                      <div
-                        v-for="(row, i) in levelLadderDraft"
-                        :key="`ladder-${row.id ?? `new-${i}`}`"
-                        class="grid grid-cols-[1fr_84px_110px] items-center gap-2"
-                      >
-                        <span class="text-[13px] text-slate-600">
-                          ชั้น {{ row.level }}
-                          <span v-if="row.level === 1" class="text-[11px] text-slate-400">· หัวหน้าโดยตรง</span>
-                        </span>
-                        <input
-                          :value="row.percent"
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.5"
-                          :disabled="!canEditCommissionConfig || levelLadderSaving"
-                          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm text-right disabled:opacity-60"
-                          :aria-label="`อัตราชั้นที่ ${row.level}`"
-                          :data-test="`ladder-rate-${row.level}`"
-                          @input="setLevelPercent(i, ($event.target as HTMLInputElement).value)"
-                        />
-                        <span class="text-right font-mono text-[13px] font-bold text-emerald-700">
-                          {{ format(rateOf(baseSatang, row.percent)) }} บาท
-                        </span>
-                      </div>
-                    </div>
-
-                    <div v-if="canEditCommissionConfig" class="mt-2.5 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
-                        :disabled="levelLadderSaving || levelLadderDraft.length >= MAX_PRICEABLE_LEVEL"
-                        data-test="ladder-add"
-                        @click="addLevelRung"
-                      >+ เพิ่มชั้น</button>
-                      <button
-                        type="button"
-                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
-                        :disabled="levelLadderSaving || !levelLadderDraft.length"
-                        data-test="ladder-remove"
-                        @click="removeLevelRung"
-                      >− ลดชั้น</button>
-                      <button
-                        type="button"
-                        class="btn-primary ml-auto"
-                        :disabled="levelLadderSaving || !levelLadderDirty"
-                        data-test="ladder-save"
-                        @click="saveLevelLadder"
-                      >{{ levelLadderSaving ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
-                    </div>
-
-                    <p v-if="levelLadderMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="ladder-message">
-                      {{ levelLadderMessage }}
-                    </p>
-
-                    <!--
-                      The one contradiction these two screens could hide from
-                      each other: the cap lives on step 4, the rungs live here,
-                      and a ladder deeper than the cap means the bottom rungs
-                      are priced and never paid. Nothing else would say so —
-                      the rows look saved, because they are.
-                    -->
-                    <p
-                      v-if="ladderRungsBeyondCap > 0"
-                      class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[12px] font-bold text-amber-800"
-                      data-test="ladder-beyond-cap"
-                    >
-                      ตั้งไว้ {{ levelLadderDraft.length }} ชั้น แต่ขั้นที่ 4 จำกัดการจ่ายไว้ที่ {{ maxOverrideDepth }} ชั้น —
-                      อีก {{ ladderRungsBeyondCap }} ชั้นล่างสุดจะไม่ได้เงิน
-                    </p>
-                    <p v-if="!canEditCommissionConfig" class="mt-1.5 text-[12px] text-slate-400">
-                      ดูได้อย่างเดียว — การแก้อัตราค่าแนะนำเป็นสิทธิ์ของผู้ดูแลระบบ
-                    </p>
-                  </div>
-                </template>
-              </PlanShapePreview>
-
-              <!--
-                The one case a press can do nothing: the box points at step 3
-                and step 3 is still locked. Silence there would read as a dead
-                control on the one chart the admin was told to press.
-              -->
-              <p v-if="planJumpNote" class="text-[12.5px] font-bold text-amber-700" data-test="plan-jump-note">
-                {{ planJumpNote }}
-              </p>
 
               <!--
                 ═══ THE PV TABLE ═══
@@ -5871,8 +5773,141 @@ watch(companyPlanType, (pt) => {
                 The wizard is gone, so these forms are once again the only
                 editors of those refs and the guard had nothing left to guard.
               -->
-              <div v-if="viewingPlanType === 'unilevel'" class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12.5px] text-slate-500">
-                Unilevel ไม่มีค่าตั้งระดับบริษัทให้กรอกในขั้นนี้ — ทุกอย่างมาจากอัตราในขั้นที่ 3 และอัตราหัวหน้าทีมในขั้นที่ 4
+              <!--
+                ═══ UNILEVEL EDITS ITS LADDER HERE, NOT IN THE EXAMPLE (owner, 2026-09-24) ═══
+
+                This form used to render INSIDE PlanShapePreview, through a
+                `rates` slot, and it was the reason the owner misread the
+                Stairstep card. On Unilevel the preview really was the editor,
+                so "the settings are in the example card" was a lesson the
+                default plan taught and five other plans then broke.
+
+                Out here it is the same shape as every other plan: the
+                structure is filled in on this step, and the example below
+                shows what it pays. The slot is gone from the component so it
+                cannot be reintroduced by accident.
+
+                ONE BEHAVIOUR CHANGED, deliberately. The baht column used to
+                follow the sandbox's price box, so an admin nudging the demo
+                watched the figures beside a SAVED rate move. It now prices
+                against the example product's real price (or PV), which is a
+                number that only changes when the catalogue does.
+              -->
+              <div v-if="viewingPlanType === 'unilevel'" class="pt-2 border-t border-slate-100" data-test="plan-structure-unilevel">
+                <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">อัตราหัวหน้าทีมแต่ละชั้นของแผน Unilevel</h3>
+                <!--
+                  BROWSING IS NOT EDITING.
+                  Inside the preview this form was gated on `levelsAreLive`,
+                  which is false while an admin is merely looking at the
+                  Unilevel chip on a company that runs something else. Moving
+                  it out would have quietly handed them a live editor for
+                  commission_override_rules — a table Unilevel AND Affiliate
+                  are both paid from — on a plan the company does not run.
+                  The gate moved with the form.
+                -->
+                <p
+                  v-if="companyPlanType !== 'unilevel'"
+                  class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[12.5px] text-slate-500"
+                  data-test="unilevel-browse-only"
+                >
+                  กำลังดูแผน Unilevel แต่บริษัทนี้ยังไม่ได้ใช้ — กด “ใช้แผนนี้” ด้านบนก่อน จึงจะตั้งอัตราตามชั้นได้
+                </p>
+                <div v-else class="p-4 rounded-xl bg-white/95 border border-slate-200">
+                  <div data-test="level-ladder-editor">
+                    <div class="flex flex-wrap items-baseline justify-between gap-2">
+                      <!-- The heading above already names the form, so this
+                           line spends itself on the one thing the baht column
+                           cannot say for itself: what it is a percentage OF. -->
+                      <p class="text-[12.5px] text-slate-500" data-test="ladder-base-note">
+                        ช่องบาทคิดจาก{{ commissionBasis === 'pv' ? 'PV' : 'ราคาขาย' }}ของสินค้าตัวอย่าง<template v-if="planShapeSeed?.productName"> “{{ planShapeSeed.productName }}”</template>
+                        {{ formatSatang(ladderBaseSatang) }}
+                      </p>
+                      <span v-if="levelLadderDirty" class="text-[11.5px] font-bold text-amber-700" data-test="level-ladder-dirty">
+                        ยังไม่ได้บันทึก
+                      </span>
+                    </div>
+
+                    <p v-if="!levelLadderDraft.length" class="mt-1.5 text-[12px] text-slate-500" data-test="level-ladder-empty">
+                      ยังไม่ได้ตั้งอัตราตามชั้น — ตอนนี้หัวหน้าทีมยังไม่ได้ส่วนแบ่งตามชั้น
+                      <span v-if="hasCompanyWideLeaderRate">(แต่ยังมีอัตราแบบใช้ทุกชั้นอยู่ ดูข้อ 4.3)</span>
+                    </p>
+
+                    <div v-else class="mt-1.5 space-y-1.5">
+                      <div
+                        v-for="(row, i) in levelLadderDraft"
+                        :key="`ladder-${row.id ?? `new-${i}`}`"
+                        class="grid grid-cols-[1fr_84px_110px] items-center gap-2"
+                      >
+                        <span class="text-[13px] text-slate-600">
+                          ชั้น {{ row.level }}
+                          <span v-if="row.level === 1" class="text-[11px] text-slate-400">· หัวหน้าโดยตรง</span>
+                        </span>
+                        <input
+                          :value="row.percent"
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.5"
+                          :disabled="!canEditCommissionConfig || levelLadderSaving"
+                          class="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 text-sm text-right disabled:opacity-60"
+                          :aria-label="`อัตราชั้นที่ ${row.level}`"
+                          :data-test="`ladder-rate-${row.level}`"
+                          @input="setLevelPercent(i, ($event.target as HTMLInputElement).value)"
+                        />
+                        <span class="text-right font-mono text-[13px] font-bold text-emerald-700">
+                          {{ formatSatang(ladderAmountSatang(row.percent)) }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div v-if="canEditCommissionConfig" class="mt-2.5 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="levelLadderSaving || levelLadderDraft.length >= MAX_PRICEABLE_LEVEL"
+                        data-test="ladder-add"
+                        @click="addLevelRung"
+                      >+ เพิ่มชั้น</button>
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-[12.5px] font-bold text-slate-600 transition-colors hover:border-brand-600 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="levelLadderSaving || !levelLadderDraft.length"
+                        data-test="ladder-remove"
+                        @click="removeLevelRung"
+                      >− ลดชั้น</button>
+                      <button
+                        type="button"
+                        class="btn-primary ml-auto"
+                        :disabled="levelLadderSaving || !levelLadderDirty"
+                        data-test="ladder-save"
+                        @click="saveLevelLadder"
+                      >{{ levelLadderSaving ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+                    </div>
+
+                    <p v-if="levelLadderMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="ladder-message">
+                      {{ levelLadderMessage }}
+                    </p>
+
+                    <!--
+                      The one contradiction these two screens could hide from
+                      each other: the cap lives on step 4, the rungs live here,
+                      and a ladder deeper than the cap means the bottom rungs
+                      are priced and never paid. Nothing else would say so —
+                      the rows look saved, because they are.
+                    -->
+                    <p
+                      v-if="ladderRungsBeyondCap > 0"
+                      class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[12px] font-bold text-amber-800"
+                      data-test="ladder-beyond-cap"
+                    >
+                      ตั้งไว้ {{ levelLadderDraft.length }} ชั้น แต่ขั้นที่ 4 จำกัดการจ่ายไว้ที่ {{ maxOverrideDepth }} ชั้น —
+                      อีก {{ ladderRungsBeyondCap }} ชั้นล่างสุดจะไม่ได้เงิน
+                    </p>
+                    <p v-if="!canEditCommissionConfig" class="mt-1.5 text-[12px] text-slate-400">
+                      ดูได้อย่างเดียว — การแก้อัตราค่าแนะนำเป็นสิทธิ์ของผู้ดูแลระบบ
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <!-- ═══════════ Binary ═══════════ -->
@@ -6157,6 +6192,69 @@ watch(companyPlanType, (pt) => {
                   </div>
                 </form>
               </div>
+
+              <!--
+                ═══ THE EXAMPLE COMES LAST (owner, 2026-09-24) ═══
+
+                It used to sit directly under the basis card, ABOVE every
+                control it draws. The owner hit the consequence on a
+                Stairstep company: they met the card first, read its
+                read-only ladder as the plan's settings, and reported the
+                percentages as hardcoded — "คุณบอกว่า UI set ค่าได้ แต่นี่มัน
+                Fix เลยนิครับ ใน Dropdown list".
+
+                The old comment here argued the example belongs under the
+                two CHOICES it needs — plan and basis — and that much is
+                still true. What it missed is that the example also needs
+                the STRUCTURE, which is edited below, so placing it after
+                the choices put it before two thirds of its own inputs.
+
+                Now it closes the step: choose the plan, choose the basis,
+                fill in the structure, then see what all of it pays. An
+                admin who scrolls this far has already passed every form,
+                so a read-only summary here cannot be mistaken for one.
+                The jump button in its header is the way back up.
+              -->
+              <!--
+                ═══ ผังและตัวอย่างของแผน (owner, 2026-09-19) ═══
+
+                Owner, on this screen: "มันดูไม่ง่ายเลยในการ Setup ในแต่ละแผน
+                ผมอยากได้แบบแผนภูมิ ที่เป็นตัวอย่างในแต่ละแบบ".
+
+                It sits HERE, below both choices, because the example needs
+                both of them: the plan decides who is in the picture, the
+                basis decides what number the percentages are a percentage
+                OF. Placed above the basis card it would have to guess one.
+
+                2026-09-21 — OPEN by default, seeded with this company's own
+                numbers, and carrying the real per-level rate form.
+
+                The comment that used to sit here defended collapsing it:
+                "an admin who already knows the plan they run should not have
+                to scroll past a sandbox". That was the wrong trade. The
+                owner's request was a chart AND "Setup ค่าคอมในแต่ละชั้นพร้อม
+                ตัวอย่าง" — the setting and its consequence together — and
+                collapsing it, seeding it with invented numbers and moving the
+                real form to step 4 took all three apart.
+              -->
+              <PlanShapePreview
+                :plan-type="viewingPlanType"
+                :basis="commissionBasis"
+                :seed="planShapeSeed"
+                :live-level-rates="liveLevelRates"
+                default-open
+                @focus-target="focusPlanControl"
+              >
+              </PlanShapePreview>
+
+              <!--
+                The one case a press can do nothing: the box points at step 3
+                and step 3 is still locked. Silence there would read as a dead
+                control on the one chart the admin was told to press.
+              -->
+              <p v-if="planJumpNote" class="text-[12.5px] font-bold text-amber-700" data-test="plan-jump-note">
+                {{ planJumpNote }}
+              </p>
             </template>
           </section>
 
