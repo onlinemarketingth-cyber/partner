@@ -2811,14 +2811,27 @@ const planShapeSeed = computed(() => {
     : null
 
   /*
-   * An empty ladder is passed through as an empty ARRAY, not null: a company
-   * running Stairstep with no ranks configured pays no override at all, and
-   * the chart drawing three invented rungs over that would hide the
-   * misconfiguration. Null is reserved for "this chart cannot draw it" — a
-   * ladder priced in fixed amounts.
+   * AN EMPTY LADDER IS SENT AS NULL, and the first version of this got it
+   * wrong (2026-09-23, same day, found on the UAT Stairstep screen).
+   *
+   * It passed `[]` through as a real answer, reasoning that a company running
+   * Stairstep with no ranks pays no override and the chart should say so. The
+   * reasoning is sound and the premise is false: THIS SCREEN LOADS EACH
+   * PLAN'S DATA LAZILY (see loadTab), so `agentRanks` is `[]` for every
+   * moment before the ranks tab is fetched — and "not fetched yet" is
+   * indistinguishable from "none configured" at this line.
+   *
+   * The result on screen was a chart reporting บริษัทจ่ายออกรวม ฿0 for a
+   * company whose ledger had just paid ฿2,000, with two empty dropdowns and
+   * the words ไม่มีขั้น under both boxes. A chart that understates a payout is
+   * worse than one that falls back to its sandbox.
+   *
+   * The genuinely-empty case is not lost: the บันไดอันดับ list below renders
+   * its own EmptyState, and CommissionReadinessService says the plan pays
+   * nobody. Both of those know the data arrived; this computed does not.
    */
   const companyRanks = byCompany(agentRanks.value)
-  const ranks = viewingPlanType.value === 'stairstep_breakaway'
+  const ranks = viewingPlanType.value === 'stairstep_breakaway' && companyRanks.length > 0
     ? (companyRanks.some((r) => r.rate_type !== 'percentage')
         ? null
         : [...companyRanks]

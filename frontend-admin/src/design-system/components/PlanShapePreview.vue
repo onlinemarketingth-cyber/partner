@@ -320,7 +320,9 @@ const seedSourceNote = computed<string | null>(() => {
   if (props.planType === 'generation' && s.generation) {
     return 'จำนวนรุ่นสูงสุด และอัตราแต่ละรุ่น มาจากค่าที่บริษัทตั้งไว้จริง · สายตัวอย่างว่าใครตัดสายบ้าง เป็นโครงสมมติ — ระบบไม่มีสายงานมาตรฐานให้ดึงมา'
   }
-  if (props.planType === 'stairstep_breakaway' && s.ranks) {
+  // `s.ranks.length`, not just `s.ranks` — an empty ARRAY is truthy, and the
+  // note would then claim a sandbox ladder was the company's own.
+  if (props.planType === 'stairstep_breakaway' && s.ranks && s.ranks.length > 0) {
     return 'บันไดขั้นทั้งหมด — ชื่อ อัตรา เกณฑ์ยอด และขั้นตัดสาย — มาจากค่าที่บริษัทตั้งไว้จริง · ขั้นของคนขายและหัวหน้าเลือกเองเพื่อลองดู'
   }
   if (props.planType === 'affiliate' && s.affiliate) {
@@ -460,12 +462,14 @@ watch(() => props.seed, (next) => {
   }
 
   /*
-   * An EMPTY ladder is kept, unlike every other field here. A company that
-   * runs Stairstep and has configured no ranks pays nobody an override, and
-   * drawing the sandbox's three invented rungs over that would hide exactly
-   * the misconfiguration this card exists to reveal.
+   * An empty array never arrives here any more — the parent sends null when
+   * it cannot tell "no ranks configured" from "the ranks tab has not been
+   * fetched yet", which on that lazily-loaded screen is most of the time.
+   * The guard stays because this component cannot make that distinction
+   * either, and an empty ladder draws a chart that reports ฿0 for a company
+   * that pays.
    */
-  if (next.ranks !== null) {
+  if (next.ranks !== null && next.ranks.length > 0) {
     ranks.value = next.ranks.map((r) => ({
       name: r.name,
       threshold: r.thresholdSatang / 100,

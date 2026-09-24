@@ -198,17 +198,29 @@ describe('Stairstep draws the company\'s own ladder', () => {
     expect(w.get('[data-test="plan-shape-rows"]').text()).toContain('ตัดสายแล้ว')
   })
 
-  it('draws an empty ladder as empty rather than inventing three rungs', async () => {
+  it('falls back to the sandbox rather than drawing a company with no ranks', async () => {
     /*
-     * The one field here where an empty array is honoured instead of falling
-     * back. A company on Stairstep with no ranks configured pays no override
-     * at all — drawing the sandbox's เริ่มต้น / ผู้นำ / ผู้จัดการ over that
-     * would hide the misconfiguration this card exists to surface.
+     * THE BUG THIS FILE'S FIRST VERSION SHIPPED.
+     *
+     * It asserted the opposite — that an empty array draws an empty ladder —
+     * on the reasoning that a Stairstep company with no ranks pays no
+     * override and the chart should say so. Sound reasoning, false premise:
+     * the screen loads each plan's data lazily, so `agentRanks` is `[]` for
+     * every moment before the ranks tab is fetched, and this component cannot
+     * tell that from "none configured".
+     *
+     * What the owner saw: บริษัทจ่ายออกรวม ฿0 on a company whose ledger had
+     * just paid ฿2,000, both rank dropdowns empty, ไม่มีขั้น under both boxes.
+     * The parent now sends null instead, and the honest empty-ladder signal
+     * stays where it can be made correctly — the ladder list's own EmptyState
+     * and the readiness banner, both of which know the data arrived.
      */
     const w = await open('stairstep_breakaway', { ranks: [] })
 
-    expect(w.get('[data-test="plan-shape-rows"]').text()).toContain('ไม่มีขั้น')
-    expect(w.get('[data-test="ss-seller-rank"]').findAll('option')).toHaveLength(0)
+    expect(w.get('[data-test="ss-seller-rank"]').findAll('option').length).toBeGreaterThan(0)
+    expect(rows(w)[0]).toBe('คนขาย — ขั้น เริ่มต้น | 500')
+    // And it must NOT claim the sandbox ladder is the company's.
+    expect(w.find('[data-test="seed-source-note"]').exists()).toBe(false)
   })
 
   it('keeps the sandbox ladder when the ranks are priced as fixed amounts', async () => {
@@ -262,7 +274,7 @@ describe('saying which figures are the company\'s', () => {
   it.each([
     ['matrix', { matrix: { width: 3, depth: 2, levelRatesPct: [5, 3] } }, 'ผังกว้าง ผังลึก และอัตราแต่ละชั้น'],
     ['generation', { generation: { maxDepth: 2, generationRatesPct: [5, 3] } }, 'จำนวนรุ่นสูงสุด และอัตราแต่ละรุ่น'],
-    ['stairstep_breakaway', { ranks: [] }, 'บันไดขั้นทั้งหมด'],
+    ['stairstep_breakaway', { ranks: [{ name: 'ขั้นเดียว', thresholdSatang: 0, ratePct: 5, breakaway: false }] }, 'บันไดขั้นทั้งหมด'],
     ['affiliate', { affiliate: { ratePct: 3, mode: 'additive' as const } }, 'อัตราผู้แนะนำ และโหมด'],
   ])('%s names its own seeded fields', async (plan, over, expected) => {
     const w = await open(plan as PlanType, over)
