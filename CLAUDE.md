@@ -56,7 +56,15 @@ This split is chosen specifically to support future mobile apps — business log
 
 **BR-1 (Access Gate):** An agent must pass the **Basic** certification before gaining access to SWS Referral submission and selling features. If not yet passed, the system must block access — enforced at both API and UI level.
 
-**BR-2 (Tiered Commission):** Commission rate depends on the agent's cert tier × the package sold. Actual rates live in the **`commission_rules` config table** — never hardcode numbers.
+**BR-2 (Commission Rate):** Actual rates live in **config tables** — never hardcode numbers.
+
+> **Amended twice. Read both, because the original sentence is now wrong in two ways.**
+>
+> **ADR-035 (2026-08-18):** cert tier no longer sets the rate. Research plus a human decision: neither insurance brokerage nor MLM comp plans tie RATE to certification level. Cert tier is BR-1's access gate — *can this agent sell at all* — never a rate multiplier. One rate per product/category/company scope, full stop.
+>
+> **ADR-043 (2026-09-24):** on **`stairstep_breakaway`** a ranked agent's own rate comes from their **`agent_ranks`** rung, not from `commission_rules`. That table remains the rate for agents who hold no rank yet, and the source of every renewal rate, on that plan and on the other five. The reason is arithmetic: while the seller was paid a flat rate and their managers were paid the DIFFERENCE between rank rates, promoting the seller cost the chain seven points and paid the promoted agent nothing (5 + (20−12) = 13%, where the plan guarantees 20%).
+>
+> "Higher commission for better results" is Stairstep's job — that is ADR-035's own phrasing, and ADR-043 is it being carried out.
 
 **BR-3 (Money Storage):** All monetary amounts are stored as **integers in satang (THB cents)**. `float`/`double` are strictly forbidden for money (to avoid rounding errors). Divide by 100 only at the UI display layer.
 

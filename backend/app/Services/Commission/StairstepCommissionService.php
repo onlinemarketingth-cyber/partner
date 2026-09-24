@@ -266,14 +266,37 @@ class StairstepCommissionService
      *     create a cycle on the write path, but a restored backup or a
      *     manual UPDATE can still hold one, and this runs unattended.
      *
-     * // TODO: CONFIRM (business rule) — does a leg that has reached a
-     * // breakaway rank stop counting toward its former upline's GROUP
-     * // volume? Many published Stairstep plans say yes, and that is the
-     * // other half of what "breakaway" means: payDifferentialOverride()
-     * // already stops PAYING past a breakaway leg. Today the whole subtree
-     * // counts, because excluding a leg changes who reaches which rank and
-     * // that is the owner's decision (BR-7), not one to infer from the
-     * // payout rule.
+     * ═══ A BROKEN-AWAY LEG STOPS COUNTING (owner decision, 2026-09-24) ═══
+     *
+     * This carried a `TODO: CONFIRM` until the owner answered it: a leg whose
+     * holder has reached a breakaway rank no longer contributes to its former
+     * upline's group volume. That is the other half of what "breakaway"
+     * means — payDifferentialOverride() already stops PAYING past such a leg,
+     * and leaving it counting would let a large broken-away organisation hold
+     * its former upline at the top rung forever without that person doing
+     * anything at all.
+     *
+     * The cut fires on the CHILD, exactly as it does in the payout walk: the
+     * pair (breakaway child, their manager) is where the tie is severed, so
+     * the child keeps every satang of their own subtree and the manager above
+     * them receives none of it.
+     *
+     * ═══ THE RANKS THIS READS ARE LAST RUN'S ═══
+     *
+     * Rank assignment depends on group volume, which now depends on ranks.
+     * That circle is broken the same way the rest of this Service breaks it:
+     * `current_rank_id` is a periodic snapshot, so the exclusion uses the
+     * ranks as they stand when the sweep BEGINS. One pass, deterministic, no
+     * iteration to convergence — and a newly-broken-away leg stops counting
+     * from the following run rather than the same one.
+     *
+     * ═══ THIS ALSO MOVES GENERATION ═══
+     *
+     * recalculateRanks() sweeps every company that has agent_rank_settings,
+     * not every Stairstep company, and GenerationCommissionService draws its
+     * generation boundaries at whoever holds a breakaway rank. So a company
+     * on Generation with group scope feels this too: fewer people reach the
+     * breakaway rung, and its generations begin in different places.
      *
      * @param  array<int, int>  $personal
      * @return array<int, int>
@@ -288,17 +311,28 @@ class StairstepCommissionService
             ->mapWithKeys(fn ($managerId, $id) => [(int) $id => $managerId === null ? null : (int) $managerId])
             ->all();
 
+        $breakawayHolders = $this->breakawayHolders($companyId);
+
         $group = $personal;
 
         foreach ($personal as $sellerId => $volumeSatang) {
             $visited = [$sellerId => true];
+            $childId = (int) $sellerId;
             $ancestorId = $managerOf[$sellerId] ?? null;
             $depth = 0;
 
             while ($ancestorId !== null && $depth < self::MAX_CHAIN_DEPTH && ! isset($visited[$ancestorId])) {
+                // The tie is cut between a breakaway holder and the manager
+                // ABOVE them — so the seller's own volume, and everything
+                // below a breakaway leg, still reaches that leg's holder.
+                if (isset($breakawayHolders[$childId])) {
+                    break;
+                }
+
                 $visited[$ancestorId] = true;
                 $group[$ancestorId] = ($group[$ancestorId] ?? 0) + $volumeSatang;
 
+                $childId = $ancestorId;
                 $ancestorId = $managerOf[$ancestorId] ?? null;
                 $depth++;
             }
@@ -451,6 +485,43 @@ class StairstepCommissionService
             $manager = $manager->manager;
             $depth++;
         }
+    }
+
+    /**
+     * Everyone in the company who currently holds a rank flagged as a
+     * breakaway rung, as an id-keyed set.
+     *
+     * A join rather than `whereHas`, for the same reason every query in this
+     * Service names its company out loud: this runs unattended with no
+     * authenticated user, where TenantScope narrows nothing, and a rank set
+     * that silently spanned tenants would move money in every one of them.
+     *
+     * ═══ NO SOFT-DELETE FILTER, BECAUSE ONE WOULD BE DEAD ═══
+     *
+     * A first draft had `whereNull('users.deleted_at')` here and a comment
+     * justifying it. Mutating the filter away left every test green, and
+     * chasing that led to the actual rule: `$managerOf` above is built with
+     * SoftDeletes ON, so a deactivated agent has no entry in it. For an
+     * ANCESTOR that means they can never be walked to; for a SELLER — whose
+     * sales personalVolumesSatang() still counts, since it reads
+     * `referrals.agent_id` and never asks about the user — it means
+     * `$managerOf[$sellerId] ?? null` is null and the walk never starts.
+     *
+     * Either way a deactivated agent's volume stops with them before this set
+     * is ever consulted, so filtering here decides nothing. It is left out
+     * rather than kept as a condition no test can reach.
+     *
+     * @return array<int, true>
+     */
+    private function breakawayHolders(int $companyId): array
+    {
+        return DB::table('users')
+            ->join('agent_ranks', 'agent_ranks.id', '=', 'users.current_rank_id')
+            ->where('users.company_id', $companyId)
+            ->where('agent_ranks.is_breakaway_rank', true)
+            ->pluck('users.id')
+            ->mapWithKeys(fn ($id) => [(int) $id => true])
+            ->all();
     }
 
     /**

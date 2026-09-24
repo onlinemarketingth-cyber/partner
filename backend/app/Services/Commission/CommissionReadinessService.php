@@ -781,9 +781,12 @@ class CommissionReadinessService
              */
             $issues[] = [
                 'code' => 'stairstep_unranked_agents',
+                // ADR-043 added the second half of each sentence: an
+                // un-ranked agent's OWN share now differs too, because the
+                // rank ladder cannot price a rank they do not hold.
                 'label' => $entryRank !== null
-                    ? "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น — ระบบจะคิดให้เท่ากับขั้นเกณฑ์ ฿0 ไปก่อน จนกว่ารอบคำนวณอันดับถัดไปจะทำงาน"
-                    : "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น และบริษัทนี้ไม่มีขั้นเกณฑ์ ฿0 — ดีลของพวกเขาจะไม่จ่ายส่วนต่างให้หัวหน้าเลย",
+                    ? "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น — ส่วนของหัวหน้าจะคิดเท่ากับขั้นเกณฑ์ ฿0 ไปก่อน และตัวพวกเขาเองจะได้ตามอัตราตัวแทนผู้ขาย จนกว่ารอบคำนวณอันดับถัดไปจะทำงาน"
+                    : "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น และบริษัทนี้ไม่มีขั้นเกณฑ์ ฿0 — ดีลของพวกเขาจะไม่จ่ายส่วนต่างให้หัวหน้าเลย ส่วนตัวพวกเขาเองยังได้ตามอัตราตัวแทนผู้ขาย",
                 'count' => $unranked,
             ];
         }
@@ -807,6 +810,20 @@ class CommissionReadinessService
      * chain — but ONLY while the seller's rate equals the bottom rung. Set
      * them differently and every sale quietly costs (seller − bottom rung)
      * more or less than the number the owner thought they were capping at.
+     *
+     * ═══ NARROWED BY ADR-043 (owner choice ค, 2026-09-24) ═══
+     *
+     * A ranked seller is now paid their RANK's rate, so for them the
+     * telescoping closes by construction and commission_rules does not
+     * enter into it. The gap survives in exactly one place: an agent who
+     * holds NO rank yet — every recruit, until the scheduled recalculation
+     * first runs — is still paid the flat rate, and their sales are the
+     * ones whose chain total drifts off the top rung.
+     *
+     * So this is no longer "every sale is mispriced"; it is "the first
+     * sales of every new agent are". Narrower, still real, and worth
+     * saying precisely: an admin who reads the old wording after ADR-043
+     * would go hunting for a problem that is not there on most sales.
      *
      * Reported rather than enforced, which is the whole of choice 1ก: the
      * two values legitimately answer different questions (commission_rules
@@ -866,14 +883,14 @@ class CommissionReadinessService
 
             return [
                 'code' => 'stairstep_seller_rate_mismatch',
-                'label' => "อัตราผู้ขาย {$sellerPct}% ไม่เท่ากับขั้นต่ำสุด {$entryPct}% — ยอดจ่ายรวมของสายจะเป็น {$resultPct}% แทนที่จะเท่ากับอัตราขั้นสูงสุด {$topPct}%",
+                'label' => "อัตราตัวแทนผู้ขาย {$sellerPct}% ใช้กับคนที่ยังไม่มีขั้นเท่านั้น และไม่เท่ากับขั้นต่ำสุด {$entryPct}% — ดีลแรก ๆ ของตัวแทนใหม่จะทำให้ยอดจ่ายรวมเป็น {$resultPct}% แทนที่จะเป็น {$topPct}% ตามอัตราขั้นสูงสุด",
                 'count' => $mismatched->count(),
             ];
         }
 
         return [
             'code' => 'stairstep_seller_rate_mismatch',
-            'label' => "อัตราผู้ขาย {$mismatched->count()} รายการไม่เท่ากับขั้นต่ำสุด {$entryPct}% — ยอดจ่ายรวมของสายจะไม่เท่ากับอัตราขั้นสูงสุดตามที่แผนนี้ตั้งใจ",
+            'label' => "อัตราตัวแทนผู้ขาย {$mismatched->count()} รายการไม่เท่ากับขั้นต่ำสุด {$entryPct}% — อัตราพวกนี้ใช้กับคนที่ยังไม่มีขั้นเท่านั้น ดีลของพวกเขาจะทำให้ยอดจ่ายรวมไม่ตรงกับอัตราขั้นสูงสุด",
             'count' => $mismatched->count(),
         ];
     }

@@ -217,7 +217,32 @@ class CommissionService
 
         $commissionBaseSatang = $saleValue->baseSatang;
 
-        $amountSatang = $this->computeAmount($rule->rate_type, $rule->rate_value, $commissionBaseSatang);
+        /*
+         * ADR-011/TASK-027 — which plan this SALE runs under. Resolved here
+         * rather than below because the seller's own rate now depends on it
+         * (ADR-043): only Stairstep reads the rank ladder. It is the same
+         * pure product+company lookup either way — nothing between here and
+         * its old position could have changed the answer.
+         */
+        $effectivePlanType = $referral->product->effectivePlanType($referral->company);
+
+        /*
+         * ═══ THE SELLER'S OWN RATE (owner choice ค, 2026-09-24 — ADR-043) ═══
+         *
+         * On Stairstep it is their RANK's rate; everywhere else, and for a
+         * Stairstep seller who holds no rank yet, it is the flat
+         * commission_rules rate resolved above. See SellerRate for the 13%
+         * arithmetic that forced the change and why the fallback exists.
+         *
+         * $rule is still resolved and still required — the renewal schedule
+         * at the bottom of this method reads it, and requiring it keeps the
+         * readiness banner's red state meaning exactly what it means today
+         * ("a deal closing right now pays nobody"). On Stairstep its rate is
+         * simply not what a ranked agent is paid.
+         */
+        $sellerRate = $this->resolveSellerRate($agent, $effectivePlanType, $rule);
+
+        $amountSatang = $this->computeAmount($sellerRate->rateType, $sellerRate->rateValue, $commissionBaseSatang);
 
         // ADR-011/TASK-029/030/031 fix: recordOverrides() (Unilevel),
         // Binary's volume-crediting, Matrix's per-level override payout,
@@ -237,7 +262,9 @@ class CommissionService
         // the product look up its own company is what keeps a shared product
         // from silently resolving the wrong plan (BR-2, into an immutable
         // ledger row — BR-4).
-        $effectivePlanType = $referral->product->effectivePlanType($referral->company);
+        //
+        // 2026-09-24 — resolved further up now, because the seller's own rate
+        // depends on it (ADR-043).
 
         // TASK-194 §3.2 — Affiliate's deductive mode has to be resolved
         // BEFORE recordDirectSale() writes the agent's own ledger row,
@@ -314,7 +341,7 @@ class CommissionService
             }
         }
 
-        $ledger = $this->recordDirectSale($referral, $tier, $rule, $agentDirectAmountSatang, $saleValue);
+        $ledger = $this->recordDirectSale($referral, $tier, $sellerRate, $agentDirectAmountSatang, $saleValue);
 
         /*
          * 2026-09-12 — every engine below takes the COMMISSION BASE, never
@@ -376,6 +403,14 @@ class CommissionService
      * A referral with no co_agent_id is unaffected — exactly the single
      * row this method always returns as $ledger, same as before TASK-026.
      *
+     * 2026-09-24 (ADR-043) — BOTH SPLIT ROWS CARRY THE REFERRING AGENT'S
+     * RATE, including when it came from that agent's rank. A split divides
+     * one commission; it does not create a second sale. Reading the
+     * co-agent's own rank here would break the invariant this method exists
+     * to hold — that the two rows sum EXACTLY to $amountSatang — and it is
+     * the same boundary the co-agent's manager chain already sits outside
+     * of (see the TODO at the bottom of this method).
+     *
      * TASK-174 (human decision D1, 2026-08-12) — WHEN THE SPLIT IS SWITCHED
      * OFF FOR THIS COMPANY, A REFERRAL THAT ALREADY CARRIES A co_agent_id
      * PRODUCES ONE ROW, THE FULL AMOUNT, TO THE REFERRING AGENT:
@@ -393,7 +428,7 @@ class CommissionService
      * agent entered. Rows already written keep their history untouched —
      * this method only ever creates (BR-4).
      */
-    private function recordDirectSale(Referral $referral, CertTier $tier, CommissionRule $rule, int $amountSatang, SaleValueSnapshot $saleValue): CommissionLedger
+    private function recordDirectSale(Referral $referral, CertTier $tier, SellerRate $sellerRate, int $amountSatang, SaleValueSnapshot $saleValue): CommissionLedger
     {
         $splitEnabled = $this->commissionSplitSettingService->isEnabledForCompany($referral->company_id);
 
@@ -405,8 +440,8 @@ class CommissionService
                 'cert_tier_id_at_time' => $tier->id,
                 'product_id' => $referral->product_id,
                 ...$saleValue->ledgerColumns(),
-                'rate_type_applied' => $rule->rate_type,
-                'rate_applied' => $rule->rate_value,
+                'rate_type_applied' => $sellerRate->rateType,
+                'rate_applied' => $sellerRate->rateValue,
                 'amount_satang' => $amountSatang,
                 'payment_status' => PaymentStatus::Pending,
                 'paid_at' => null,
@@ -424,8 +459,8 @@ class CommissionService
             'cert_tier_id_at_time' => $tier->id,
             'product_id' => $referral->product_id,
             ...$saleValue->ledgerColumns(),
-            'rate_type_applied' => $rule->rate_type,
-            'rate_applied' => $rule->rate_value,
+            'rate_type_applied' => $sellerRate->rateType,
+            'rate_applied' => $sellerRate->rateValue,
             'amount_satang' => $referringAgentShareSatang,
             'payment_status' => PaymentStatus::Pending,
             'paid_at' => null,
@@ -439,8 +474,8 @@ class CommissionService
             'cert_tier_id_at_time' => $tier->id,
             'product_id' => $referral->product_id,
             ...$saleValue->ledgerColumns(),
-            'rate_type_applied' => $rule->rate_type,
-            'rate_applied' => $rule->rate_value,
+            'rate_type_applied' => $sellerRate->rateType,
+            'rate_applied' => $sellerRate->rateValue,
             'amount_satang' => $coAgentShareSatang,
             'payment_status' => PaymentStatus::Pending,
             'paid_at' => null,
@@ -453,6 +488,48 @@ class CommissionService
         // on it). // TODO: CONFIRM (business rule) — should a co-agent's
         // manager also earn an override on the co-agent's split?
         return $referringAgentLedger;
+    }
+
+    /**
+     * WHICH LADDER THE SELLER'S OWN RATE IS READ OFF (ADR-043, choice ค).
+     *
+     * Stairstep is the only plan that measures anything in rank rates —
+     * Generation borrows the ladder's breakaway FLAG but prices its own
+     * payouts from commission_generation_rules, and the other four never
+     * look at agent_ranks at all. So this branches on the plan and leaves
+     * five of six behaviours byte-identical to before.
+     *
+     * The un-ranked fallback is load-bearing rather than defensive: every
+     * agent starts with current_rank_id = NULL and only the scheduled
+     * recalculation writes it, so without it a recruit's first sale would
+     * pay them nothing. It is the same reasoning as
+     * StairstepCommissionService's entry-rank substitution (ADR-042 choice
+     * 2ก) approached from the other side — there, a missing rank must not
+     * OVERPAY the manager; here, it must not UNDERPAY the seller.
+     *
+     * Deliberately NOT done here: substituting the threshold-0 rank for an
+     * un-ranked seller the way the override walk does. The seller has a
+     * real rate available — the company's own commission_rules figure —
+     * and using a stand-in when the actual answer is in hand would be
+     * guessing where guessing is not needed. Keeping the flat rate also
+     * means this change cannot alter what any non-Stairstep company, or
+     * any Stairstep company that has not built a ladder, is paid.
+     */
+    private function resolveSellerRate(User $agent, CommissionPlanType $planType, CommissionRule $rule): SellerRate
+    {
+        if ($planType !== CommissionPlanType::StairstepBreakaway) {
+            return SellerRate::fromRule($rule);
+        }
+
+        $rank = $agent->currentRank;
+
+        if (! $rank) {
+            Log::info("CommissionService: stairstep seller {$agent->id} holds no rank — falling back to the commission_rule rate for their own share (ADR-043).");
+
+            return SellerRate::fromRule($rule);
+        }
+
+        return SellerRate::fromRank($rank);
     }
 
     /**
