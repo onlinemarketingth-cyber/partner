@@ -348,21 +348,79 @@ class StairstepCommissionService
         $manager = $sellingAgent->manager;
         $depth = 0;
 
+        // Resolved lazily and at most once per sale — most chains contain no
+        // un-ranked agent at all and must not pay for a query about one.
+        $entryRank = null;
+        $entryRankResolved = false;
+
         while ($manager !== null && $depth < self::MAX_CHAIN_DEPTH) {
             $childRank = $child->currentRank;
 
-            if ($childRank?->is_breakaway_rank) {
+            /*
+             * ═══ AN UN-RANKED DOWNLINE IS TREATED AS THE ENTRY RANK ═══
+             *
+             * Owner decision 2026-09-24 (choice 2ก).
+             *
+             * This used to read `$childRank->rate_value ?? 0`, which on a
+             * null rank quietly became 0 — and a child rate of 0 makes the
+             * differential the manager's FULL rank rate instead of a
+             * difference. That is not a rare edge: current_rank_id starts
+             * null on every new agent and only the scheduled recalculation
+             * ever writes it, so with a monthly cadence a recruit's first
+             * sale overpaid their manager for up to 30 days, into ledger
+             * rows BR-4 forbids correcting. The plan's own guarantee — the
+             * company never pays out more than the highest rank's rate in
+             * the chain — was false exactly where it mattered most.
+             *
+             * The substitute is not a guess: an agent with no volume clears
+             * the threshold-0 rank anyway, so this is the same answer the
+             * next recalculation will write, reached sooner. It stands in
+             * for the whole iteration, breakaway check included, because
+             * "this child counts as the entry rank" has to mean one thing.
+             */
+            if ($childRank === null) {
+                if (! $entryRankResolved) {
+                    $entryRank = $this->entryRankFor((int) $referral->company_id);
+                    $entryRankResolved = true;
+                }
+
+                $childRank = $entryRank;
+            }
+
+            /*
+             * No threshold-0 rank to stand in with: the company's ladder
+             * cannot say what this agent's rate is, and CLAUDE.md Section 8
+             * guardrail 1 says not to invent one. No row for THIS hop — the
+             * walk continues, because the manager above has a rank of their
+             * own and the next pair is perfectly well defined.
+             *
+             * CommissionReadinessService reports the missing entry rank, so
+             * this silence is not the only signal the admin gets.
+             */
+            if ($childRank === null) {
+                $child = $manager;
+                $manager = $manager->manager;
+                $depth++;
+
+                continue;
+            }
+
+            if ($childRank->is_breakaway_rank) {
                 break;
             }
 
             $managerRank = $manager->currentRank;
 
             if ($managerRank) {
-                $childRateTypeMismatch = $childRank && $childRank->rate_type !== $managerRank->rate_type;
+                // Both ranks are real rows from here on — the null child was
+                // resolved or skipped above — so the mismatch test no longer
+                // has to double as a null check, and the child's rate is read
+                // straight rather than through a `?? 0` that used to turn "no
+                // rank" into "0%".
+                $childRateTypeMismatch = $childRank->rate_type !== $managerRank->rate_type;
 
                 if (! $childRateTypeMismatch) {
-                    $childRateValue = $childRank->rate_value ?? 0;
-                    $differential = $managerRank->rate_value - $childRateValue;
+                    $differential = $managerRank->rate_value - $childRank->rate_value;
 
                     if ($differential > 0) {
                         $amountSatang = CommissionRateCalculator::compute($managerRank->rate_type, $differential, $productPriceSatang);
@@ -393,5 +451,33 @@ class StairstepCommissionService
             $manager = $manager->manager;
             $depth++;
         }
+    }
+
+    /**
+     * The rank an agent holds when they have cleared nothing.
+     *
+     * `volume_threshold = 0` exactly, not "the lowest threshold there is".
+     * A ladder whose cheapest rung needs ฿50,000 has no opinion about
+     * somebody at ฿0, and borrowing that rung's rate would be inventing a
+     * business value (BR-7) rather than reading one.
+     *
+     * Ties broken by sort_order then id so the substitute is the same row on
+     * every sale — a ladder with two threshold-0 rungs is a finding of its
+     * own (AgentRankLadderInspector::DUPLICATE_THRESHOLDS), and until it is
+     * fixed the money must at least be repeatable.
+     *
+     * withoutGlobalScopes() for the same reason the rest of this Service
+     * uses it: recordForReferral() also runs from a gateway confirmation
+     * with no authenticated user, where TenantScope filters nothing. The
+     * explicit company_id is the real BR-6 boundary here.
+     */
+    private function entryRankFor(int $companyId): ?AgentRank
+    {
+        return AgentRank::withoutGlobalScopes()
+            ->where('company_id', $companyId)
+            ->where('volume_threshold', 0)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->first();
     }
 }

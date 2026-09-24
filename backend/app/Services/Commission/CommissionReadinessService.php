@@ -3,6 +3,8 @@
 namespace App\Services\Commission;
 
 use App\Enums\CommissionPlanType;
+use App\Enums\CommissionRateType;
+use App\Enums\UserRole;
 use App\Models\AgentRank;
 use App\Models\CommissionBinarySetting;
 use App\Models\CommissionGenerationRule;
@@ -74,8 +76,14 @@ class CommissionReadinessService
 {
     // 2026-09-12 — see the PV branch in forCompany(): the banner must ask
     // the SAME object the money asks, or "ready" can mean two things.
+    // 2026-09-24 — the ladder inspector is SHARED with the write path
+    // (AgentRankService / Store+UpdateAgentRankRequest) on purpose. The
+    // banner and the save error have to mean the same thing by "this ladder
+    // is broken", for the same reason resolveRuleForCompany() is a
+    // hand-checked mirror rather than a second opinion.
     public function __construct(
         private readonly CommissionBasisResolver $commissionBasisResolver,
+        private readonly AgentRankLadderInspector $ladderInspector,
     ) {}
 
     /**
@@ -386,9 +394,33 @@ class CommissionReadinessService
             ];
         }
 
+        /*
+         * 2026-09-24 — the five silent failures of the Stairstep plan the
+         * owner asked about, and the reason they belong on THIS banner.
+         *
+         * Every one of them is a config state the platform accepts, pays
+         * money under, and never mentions: a mixed-type ladder whose pairs
+         * are skipped, rates that do not rise with volume so the
+         * differential lands at zero, two ranks on one threshold, no
+         * threshold-0 rank to fall back on, and a seller rate that no longer
+         * agrees with the ladder it is supposed to telescope into. The same
+         * shape as the gaps already listed above — nothing errors, nobody is
+         * told, and it surfaces weeks later as somebody asking where their
+         * money went.
+         *
+         * All AMBER, never red, by this Service's own rule: in each of them
+         * the agent who closed the deal IS paid. Red stays reserved for
+         * "ดีลที่ปิดได้จะไม่มีใครได้เงิน".
+         */
+        $stairstepIssues = isset($planTypesInUse[CommissionPlanType::StairstepBreakaway->value])
+            ? $this->stairstepIssues($companyId)
+            : [];
+
+        $issues = [...$issues, ...$stairstepIssues];
+
         $state = $this->resolveState($total, $covered, $issues);
 
-        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps, $pointValueGaps, $companyDefaultMissing), $total, $covered, $issues, $canFix);
+        return $this->payload($state, $this->resolveBlockingStep($state, $uncovered, $overlapping, $unsetStructures, $leaderGaps, $pointValueGaps, $companyDefaultMissing, $stairstepIssues), $total, $covered, $issues, $canFix);
     }
 
     /**
@@ -436,8 +468,9 @@ class CommissionReadinessService
      * the blocking action.
      *
      * @param  list<string>  $unsetStructures
+     * @param  list<array{code: string, label: string, count: int}>  $stairstepIssues
      */
-    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps, int $pointValueGaps, bool $companyDefaultMissing): ?int
+    private function resolveBlockingStep(string $state, int $uncovered, int $overlapping, array $unsetStructures, int $leaderGaps, int $pointValueGaps, bool $companyDefaultMissing, array $stairstepIssues = []): ?int
     {
         if ($state === 'ready') {
             return null;
@@ -448,6 +481,17 @@ class CommissionReadinessService
         }
 
         if ($unsetStructures !== []) {
+            return 2;
+        }
+
+        /*
+         * Step 2 — the rank ladder is edited there, and so is the seller
+         * rate's counterpart. Ranked BELOW the rate gaps above for the usual
+         * reason: a product with no rate pays nobody, while a broken ladder
+         * still pays the seller. Ranked ABOVE the leader-rate gap because a
+         * ladder finding can silence an entire chain rather than one hop.
+         */
+        if ($stairstepIssues !== []) {
             return 2;
         }
 
@@ -670,6 +714,176 @@ class CommissionReadinessService
         }
 
         return $missing;
+    }
+
+    /**
+     * EVERYTHING THAT CAN BE WRONG WITH A STAIRSTEP SETUP WITHOUT SAYING SO.
+     *
+     * Three sources, deliberately separated:
+     *
+     *   · the LADDER's own invariants, asked of AgentRankLadderInspector —
+     *     the identical object the save path consults, so an admin cannot be
+     *     refused a save for a reason the banner never mentioned, or shown a
+     *     banner about a state the form was happy to write;
+     *   · the AGENTS, which the inspector cannot see: how many currently
+     *     hold no rank at all;
+     *   · the SELLER RATE, which lives in a different table entirely and is
+     *     the one gap that makes the plan's central promise untrue.
+     *
+     * @return list<array{code: string, label: string, count: int}>
+     */
+    private function stairstepIssues(int $companyId): array
+    {
+        $ranks = AgentRank::withoutGlobalScopes()
+            ->where('company_id', $companyId)
+            ->orderBy('sort_order')
+            ->orderBy('id')
+            ->get();
+
+        // No ladder at all is already reported as a missing plan structure
+        // by unsetStructuralPlans(). Saying it twice in two vocabularies is
+        // how a banner stops being read.
+        if ($ranks->isEmpty()) {
+            return [];
+        }
+
+        $issues = [];
+        $findings = $this->ladderInspector->inspect(AgentRankLadderInspector::rungsFrom($ranks));
+
+        foreach ($findings as $code => $count) {
+            $issues[] = [
+                // Prefixed so a frontend can tell a ladder finding from the
+                // rate-table findings above without parsing the label.
+                'code' => 'stairstep_'.$code,
+                'label' => $this->ladderInspector->label($code, $count),
+                'count' => $count,
+            ];
+        }
+
+        $entryRank = $ranks->firstWhere('volume_threshold', 0);
+
+        $unranked = (int) User::withoutGlobalScopes()
+            ->where('company_id', $companyId)
+            ->where('role', UserRole::Agent)
+            ->whereNull('current_rank_id')
+            ->count();
+
+        if ($unranked > 0) {
+            /*
+             * Not an error on its own — current_rank_id starts null on every
+             * new agent and only the scheduled recalculation writes it, so a
+             * company will normally always have a few. It is reported because
+             * the CONSEQUENCE differs entirely depending on the ladder: with
+             * a threshold-0 rank these agents are treated as holding it
+             * (owner choice 2ก) and nothing is lost; without one, every sale
+             * they make pays their manager nothing, and an admin has no way
+             * to see how many people that is.
+             */
+            $issues[] = [
+                'code' => 'stairstep_unranked_agents',
+                'label' => $entryRank !== null
+                    ? "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น — ระบบจะคิดให้เท่ากับขั้นเกณฑ์ ฿0 ไปก่อน จนกว่ารอบคำนวณอันดับถัดไปจะทำงาน"
+                    : "มีตัวแทน {$unranked} คนที่ยังไม่มีขั้น และบริษัทนี้ไม่มีขั้นเกณฑ์ ฿0 — ดีลของพวกเขาจะไม่จ่ายส่วนต่างให้หัวหน้าเลย",
+                'count' => $unranked,
+            ];
+        }
+
+        $mismatch = $this->sellerRateMismatch($companyId, $ranks, $entryRank);
+
+        if ($mismatch !== null) {
+            $issues[] = $mismatch;
+        }
+
+        return $issues;
+    }
+
+    /**
+     * THE SELLER RATE AND THE LADDER DISAGREEING (owner choice 1ก).
+     *
+     * A Stairstep chain pays the seller their own rate out of
+     * commission_rules, then pays each manager only the difference between
+     * their rank and the one below. Those differences telescope, so the
+     * company's total outlay is exactly the highest rank reached in that
+     * chain — but ONLY while the seller's rate equals the bottom rung. Set
+     * them differently and every sale quietly costs (seller − bottom rung)
+     * more or less than the number the owner thought they were capping at.
+     *
+     * Reported rather than enforced, which is the whole of choice 1ก: the
+     * two values legitimately answer different questions (commission_rules
+     * can price per product and per category, agent_ranks cannot price
+     * anything per product at all), so a company may mean this. What it may
+     * not do is mean it by accident.
+     *
+     * Percentage rules only. A fixed-satang seller rate and a percentage
+     * ladder cannot be compared without a sale to apply them to, and
+     * inventing one to put a number on the banner would be exactly the
+     * guessing this file's mirror rule exists to prevent.
+     *
+     * @param  Collection<int, AgentRank>  $ranks
+     * @return array{code: string, label: string, count: int}|null
+     */
+    private function sellerRateMismatch(int $companyId, Collection $ranks, ?AgentRank $entryRank): ?array
+    {
+        // Nothing to compare against — NO_ENTRY_RANK already carries that.
+        if ($entryRank === null || $entryRank->rate_type !== CommissionRateType::Percentage) {
+            return null;
+        }
+
+        $liveRules = CommissionRule::withoutGlobalScopes()
+            ->where('company_id', $companyId)
+            ->where('effective_from', '<=', now())
+            ->where(fn ($query) => $query->whereNull('effective_to')->orWhere('effective_to', '>=', now()))
+            ->get(['rate_type', 'rate_value']);
+
+        $mismatched = $liveRules
+            ->filter(fn (CommissionRule $rule) => $rule->rate_type === CommissionRateType::Percentage
+                && (int) $rule->rate_value !== (int) $entryRank->rate_value)
+            ->values();
+
+        if ($mismatched->isEmpty()) {
+            return null;
+        }
+
+        $entryPct = $this->formatBasisPoints((int) $entryRank->rate_value);
+        $distinctRates = $mismatched->pluck('rate_value')->unique()->values();
+
+        /*
+         * With exactly one offending rate the banner can do the arithmetic
+         * for the admin, and that number is the entire point of the warning:
+         * total = top rank + (seller − bottom rung). With several there is
+         * no single answer, so it says how many rows to go look at instead
+         * of averaging them into a figure nobody's sale will ever produce.
+         */
+        if ($distinctRates->count() === 1) {
+            $topRankValue = (int) $ranks
+                ->filter(fn (AgentRank $rank) => $rank->rate_type === CommissionRateType::Percentage)
+                ->max('rate_value');
+
+            $sellerValue = (int) $distinctRates->first();
+            $sellerPct = $this->formatBasisPoints($sellerValue);
+            $topPct = $this->formatBasisPoints($topRankValue);
+            $resultPct = $this->formatBasisPoints($topRankValue + $sellerValue - (int) $entryRank->rate_value);
+
+            return [
+                'code' => 'stairstep_seller_rate_mismatch',
+                'label' => "อัตราผู้ขาย {$sellerPct}% ไม่เท่ากับขั้นต่ำสุด {$entryPct}% — ยอดจ่ายรวมของสายจะเป็น {$resultPct}% แทนที่จะเท่ากับอัตราขั้นสูงสุด {$topPct}%",
+                'count' => $mismatched->count(),
+            ];
+        }
+
+        return [
+            'code' => 'stairstep_seller_rate_mismatch',
+            'label' => "อัตราผู้ขาย {$mismatched->count()} รายการไม่เท่ากับขั้นต่ำสุด {$entryPct}% — ยอดจ่ายรวมของสายจะไม่เท่ากับอัตราขั้นสูงสุดตามที่แผนนี้ตั้งใจ",
+            'count' => $mismatched->count(),
+        ];
+    }
+
+    /** Basis points as a human percentage: 500 -> "5", 1250 -> "12.5". */
+    private function formatBasisPoints(int $basisPoints): string
+    {
+        $formatted = number_format($basisPoints / 100, 2, '.', '');
+
+        return rtrim(rtrim($formatted, '0'), '.') ?: '0';
     }
 
     /** Thai plan names, matching CommissionPlansView.vue's own planTypeLabels. */
