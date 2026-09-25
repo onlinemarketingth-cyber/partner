@@ -15,6 +15,7 @@ use App\Models\Company;
 use App\Models\Referral;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -43,13 +44,21 @@ class StairstepCommissionService
      * recalculates current_rank_id for every Agent whose company's
      * recalculation cadence is now due.
      *
+     * `$onlyCompanyId` (2026-09-25, UAT-017) narrows the sweep to one
+     * company. The scheduled run never passes it. It exists for an operator
+     * running the job by hand on a shared deployment: without it, "rank my
+     * test company now" also re-ranks every real company that happens to be
+     * due, which is not the operator's decision to make. The cadence still
+     * applies either way — see nextDueAt().
+     *
      * @return int number of agents recalculated this run
      */
-    public function recalculateRanks(): int
+    public function recalculateRanks(?int $onlyCompanyId = null): int
     {
         $processed = 0;
 
         Company::whereHas('agentRankSetting')
+            ->when($onlyCompanyId !== null, fn ($query) => $query->whereKey($onlyCompanyId))
             ->with('agentRankSetting')
             ->chunkById(50, function ($companies) use (&$processed) {
                 foreach ($companies as $company) {
@@ -60,21 +69,40 @@ class StairstepCommissionService
         return $processed;
     }
 
+    /**
+     * When this company's ranks may next be recalculated; null means now.
+     *
+     * Public so the console command can SAY why a run did nothing. "0 agents
+     * recalculated" on a company that ran an hour ago reads as a broken job,
+     * when it is the cadence working — and UAT-017's second recalculation is
+     * exactly that trap: run the same day, it changes nothing, by design.
+     */
+    public function nextDueAt(AgentRankSetting $settings): ?CarbonInterface
+    {
+        if ($settings->last_recalculated_at === null) {
+            return null;
+        }
+
+        $next = $settings->last_recalculated_at->copy()->addDays($this->intervalDays($settings));
+
+        return $next->lte(now()) ? null : $next;
+    }
+
+    private function intervalDays(AgentRankSetting $settings): int
+    {
+        return match ($settings->recalculation_frequency) {
+            AgentRankRecalculationFrequency::Daily => 1,
+            AgentRankRecalculationFrequency::Weekly => 7,
+            AgentRankRecalculationFrequency::Monthly => 30,
+        };
+    }
+
     private function recalculateCompanyRanks(Company $company): int
     {
         /** @var AgentRankSetting $settings */
         $settings = $company->agentRankSetting;
 
-        $intervalDays = match ($settings->recalculation_frequency) {
-            AgentRankRecalculationFrequency::Daily => 1,
-            AgentRankRecalculationFrequency::Weekly => 7,
-            AgentRankRecalculationFrequency::Monthly => 30,
-        };
-
-        $due = $settings->last_recalculated_at === null
-            || $settings->last_recalculated_at->lte(now()->subDays($intervalDays));
-
-        if (! $due) {
+        if ($this->nextDueAt($settings) !== null) {
             return 0;
         }
 

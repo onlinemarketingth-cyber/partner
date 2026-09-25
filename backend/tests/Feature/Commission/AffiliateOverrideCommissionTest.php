@@ -38,12 +38,9 @@ class AffiliateOverrideCommissionTest extends TestCase
 
     private function advanceToStage(Referral $referral, User $agent, PipelineStage $target): Referral
     {
-        while ($referral->current_stage !== $target) {
-            $this->actingAs($agent)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-            $referral->refresh();
-        }
-
-        return $referral;
+        // Crosses Complete Payment through a confirmed order — see
+        // TestCase::closeSale() for why no test may press its way past it.
+        return $this->advanceReferralTo($referral, $agent, $target);
     }
 
     /** @return array{company: Company, basic: CertTier, managerTier: CertTier, manager: User, agent: User} */

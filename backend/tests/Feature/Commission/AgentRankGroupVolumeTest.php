@@ -117,10 +117,7 @@ class AgentRankGroupVolumeTest extends TestCase
             'current_stage' => PipelineStage::CompleteRegistered, 'meeting_number' => null, 'submitted_at' => now(),
         ]);
 
-        while ($referral->current_stage !== PipelineStage::CompletePayment) {
-            $this->actingAs($seller)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-            $referral->refresh();
-        }
+        $this->closeSale($referral, $seller);
 
         return $referral;
     }

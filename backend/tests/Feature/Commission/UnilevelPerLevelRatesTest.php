@@ -114,10 +114,7 @@ class UnilevelPerLevelRatesTest extends TestCase
             'product_id' => $product->id, 'branch' => 'Silom', 'preferred_time' => now()->addDay(),
             'current_stage' => PipelineStage::CompleteRegistered, 'meeting_number' => null, 'submitted_at' => now(),
         ]);
-        while ($referral->current_stage !== PipelineStage::CompletePayment) {
-            $this->actingAs($seller)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-            $referral->refresh();
-        }
+        $this->closeSale($referral, $seller);
     }
 
     private function overrideFor(User $manager): int
@@ -230,10 +227,7 @@ class UnilevelPerLevelRatesTest extends TestCase
             'product_id' => $product->id, 'branch' => 'Silom', 'preferred_time' => now()->addDay(),
             'current_stage' => PipelineStage::CompleteRegistered, 'meeting_number' => null, 'submitted_at' => now(),
         ]);
-        while ($referral->current_stage !== PipelineStage::CompletePayment) {
-            $this->actingAs($seller)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-            $referral->refresh();
-        }
+        $this->closeSale($referral, $seller);
         unset($tier);
 
         $this->assertSame(20_000, $this->overrideFor($manager));

@@ -3,7 +3,9 @@
 namespace App\Services\Referral;
 
 use App\Enums\GamificationSourceType;
+use App\Enums\OrderStatus;
 use App\Enums\PipelineStage;
+use App\Models\Order;
 use App\Models\PipelineStageLog;
 use App\Models\PipelineTemplate;
 use App\Models\Referral;
@@ -70,12 +72,53 @@ class PipelineService
      * silently no-op'ing when the referral has nowhere left to go; see
      * nextStageFor()'s docblock for the last-stage rule.
      *
-     * @throws ValidationException when the referral has no legal next stage
+     * ═══ ENTERING COMPLETE PAYMENT NEEDS A PAID ORDER (2026-09-25) ═══
+     *
+     * Owner's ruling, 2026-09-25, on a hole found while preparing UAT-017:
+     * an agent could press the portal's advance button on their own
+     * direct-sale referral and move it from complete_registered straight to
+     * complete_payment — no order, no slip, nobody from the company looking —
+     * and this method would book their commission (BR-4) on the spot. New
+     * products default to the direct-sale template, so that was nearly every
+     * product on the platform. A test asserted it as intended.
+     *
+     * It predates the order flow: when ADR-026 made direct sale a one-step
+     * journey there was no order to wait for, so "advance" WAS the sale. The
+     * 2026-08-21 audit then made proof-of-payment a precondition of
+     * OrderService::confirmPayment() — and this door, one method over, kept
+     * letting anyone past without it.
+     *
+     * So the rule lives HERE, at the one method every stage change goes
+     * through, rather than in the controller that happened to expose it: a
+     * second endpoint wired to advance() later would otherwise reopen the
+     * hole without anybody touching a guard. Complete Payment is entered only
+     * with the PAID order that settled this referral in hand, and
+     * confirmPayment() is the only caller that has one. Everyone else —
+     * agent, leader, Company Admin, Super Admin — is refused, because the
+     * rule is about proof, not rank: an admin who has seen a slip confirms
+     * the order that carries it.
+     *
+     * Every other edge is untouched: the medical journey's earlier stages,
+     * the post-sale stages after payment, the Ongoing Next Meeting self-loop.
+     *
+     * @param  Order|null  $settledBy  the paid order closing this referral —
+     *                                 required when, and only when, the next
+     *                                 stage is Complete Payment
+     *
+     * @throws ValidationException when the referral has no legal next stage,
+     *                             or the next stage is Complete Payment and
+     *                             no paid order for this referral was given
      */
-    public function advance(Referral $referral, User $actor): Referral
+    public function advance(Referral $referral, User $actor, ?Order $settledBy = null): Referral
     {
         $fromStage = $referral->current_stage;
         $toStage = $this->nextStageFor($referral);
+
+        if ($toStage === PipelineStage::CompletePayment && ! $this->settles($settledBy, $referral)) {
+            throw ValidationException::withMessages([
+                'referral' => 'ขั้น "ชำระเงินแล้ว" ต้องปิดผ่านการยืนยันคำสั่งซื้อที่มีหลักฐานการชำระเงินเท่านั้น — ให้ลูกค้าแนบสลิป แล้วแอดมินของบริษัทกดยืนยันที่หน้ารายการชำระเงิน',
+            ]);
+        }
 
         // End of the journey. Deliberately a 422, NOT a silent no-op:
         // a no-op would return 200 with an unchanged stage, which reads
@@ -480,5 +523,21 @@ class PipelineService
         }
 
         return $index;
+    }
+
+    /**
+     * Whether $order is what closes $referral: this referral's own order,
+     * already marked Paid.
+     *
+     * Status, and not merely presence, because confirmPayment() marks the
+     * order Paid in the same transaction just before it calls advance(); an
+     * order still Pending or AwaitingVerification in hand here would mean a
+     * caller skipped the proof check it is the only place to perform.
+     */
+    private function settles(?Order $order, Referral $referral): bool
+    {
+        return $order !== null
+            && $order->referral_id === $referral->id
+            && $order->status === OrderStatus::Paid;
     }
 }

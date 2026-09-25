@@ -187,8 +187,10 @@ class XpAwardingTest extends TestCase
         $this->actingAs($agent)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
         $this->assertSame(10, XpLedger::where('user_id', $agent->id)->sum('xp_awarded'));
 
-        // 3rd advance: -> Complete Payment (stage XP + payment bonus)
-        $this->actingAs($agent)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
+        // 3rd step: -> Complete Payment (stage XP + payment bonus). Taken by
+        // an admin confirming the order since 2026-09-25 — and the XP still
+        // lands on the AGENT, which is the part this test is about.
+        $this->closeSale($referral, $agent);
         $this->assertSame(115, XpLedger::where('user_id', $agent->id)->sum('xp_awarded'));
     }
 

@@ -21,7 +21,9 @@ use App\Models\Referral;
 use App\Models\User;
 use App\Models\UserCertification;
 use App\Models\XpLedger;
+use App\Services\Referral\PipelineService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Validation\ValidationException;
 use Tests\TestCase;
 
 /**
@@ -161,10 +163,17 @@ class PipelineTemplateAdvanceTest extends TestCase
         ];
 
         foreach ($walk as $index => $stage) {
-            $this->actingAs($agent)
-                ->postJson("/api/v1/referrals/{$referral->id}/advance")
-                ->assertOk()
-                ->assertJsonPath('data.current_stage.key', $stage);
+            // The payment edge is crossed by a confirmed order, never by the
+            // agent's own button (2026-09-25) — see TestCase::closeSale().
+            if ($stage === 'complete_payment') {
+                $this->closeSale($referral, $agent);
+                $this->assertSame(PipelineStage::CompletePayment, $referral->fresh()->current_stage);
+            } else {
+                $this->actingAs($agent)
+                    ->postJson("/api/v1/referrals/{$referral->id}/advance")
+                    ->assertOk()
+                    ->assertJsonPath('data.current_stage.key', $stage);
+            }
 
             // BR-4 — the ledger row appears at complete_payment and at no
             // earlier stage.
@@ -194,6 +203,13 @@ class PipelineTemplateAdvanceTest extends TestCase
         $this->assertDatabaseHas('pipeline_stage_logs', [
             'referral_id' => $referral->id,
             'from_stage' => 'finish_1st_doctor_meeting',
+            'to_stage' => 'complete_payment',
+        ]);
+        // Whoever earns the commission must not be the one attesting that the
+        // money arrived (audit 2026-08-21, D1) — the payment edge is logged
+        // against the admin who confirmed the order, never the agent.
+        $this->assertDatabaseMissing('pipeline_stage_logs', [
+            'referral_id' => $referral->id,
             'to_stage' => 'complete_payment',
             'changed_by_user_id' => $agent->id,
         ]);
@@ -258,22 +274,140 @@ class PipelineTemplateAdvanceTest extends TestCase
     // direct_sale_default — the journey ADR-026 exists to unblock.
     // ---------------------------------------------------------------
 
-    public function test_a_direct_sale_referral_advances_straight_from_registration_to_payment(): void
+    /**
+     * THE HOLE THIS TEST USED TO ASSERT AS INTENDED (2026-09-25).
+     *
+     * It was named "advances straight from registration to payment" and
+     * proved that an agent pressing their own advance button booked their own
+     * commission — no order, no slip, nobody from the company involved. On
+     * the direct-sale template, which new products default to, that was the
+     * whole sale. Owner's ruling: Complete Payment is entered only through a
+     * confirmed order. The direct-sale journey is still one step long; the
+     * step is now taken by the admin who confirms the payment.
+     */
+    public function test_an_agent_cannot_mark_their_own_direct_sale_paid(): void
     {
         [$company, $agent, $product] = $this->makeCompanyAgentProduct();
         $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
 
         $this->actingAs($agent)
             ->postJson("/api/v1/referrals/{$referral->id}/advance")
-            ->assertOk()
-            ->assertJsonPath('data.current_stage.key', 'complete_payment');
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('referral');
 
+        // Nothing moved and nothing was written — no stage, no audit row
+        // claiming a transition, and above all no money.
+        $this->assertSame(PipelineStage::CompleteRegistered, $referral->fresh()->current_stage);
+        $this->assertSame(0, PipelineStageLog::where('referral_id', $referral->id)->count());
+        $this->assertSame(0, CommissionLedger::where('referral_id', $referral->id)->count());
+    }
+
+    /*
+     * The rule lives in PipelineService::advance() itself, not in the
+     * controller that exposed it, so a SECOND caller wired to advance()
+     * later cannot reopen the hole by forgetting a guard. These three go
+     * straight at the service to pin what "the order that settles it" means.
+     */
+    public function test_the_service_refuses_payment_with_an_order_still_awaiting_verification(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
+        $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
+
+        try {
+            app(PipelineService::class)->advance($referral, $agent, $order);
+            $this->fail('An unverified slip must not close a sale.');
+        } catch (ValidationException) {
+            // expected
+        }
+
+        $this->assertSame(0, CommissionLedger::where('referral_id', $referral->id)->count());
+    }
+
+    public function test_the_service_refuses_payment_with_another_referrals_paid_order(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $direct = $this->directSaleTemplate($company);
+        $referral = $this->makeReferral($company, $agent, $product, $direct);
+        $other = $this->makeReferral($company, $agent, $product, $direct);
+        $paidElsewhere = Order::factory()->paid()->create(['referral_id' => $other->id]);
+
+        try {
+            app(PipelineService::class)->advance($referral, $agent, $paidElsewhere);
+            $this->fail("One sale's payment must not close another.");
+        } catch (ValidationException) {
+            // expected
+        }
+
+        $this->assertSame(0, CommissionLedger::where('referral_id', $referral->id)->count());
+    }
+
+    public function test_the_service_enters_payment_with_this_referrals_paid_order(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
+        $order = Order::factory()->paid()->create(['referral_id' => $referral->id]);
+
+        app(PipelineService::class)->advance($referral, $agent, $order);
+
+        $this->assertSame(PipelineStage::CompletePayment, $referral->fresh()->current_stage);
+        $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)->count());
+    }
+
+    public function test_a_direct_sale_closes_when_an_admin_confirms_its_order(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
+
+        $this->closeSale($referral, $agent);
+
+        $this->assertSame(PipelineStage::CompletePayment, $referral->fresh()->current_stage);
         $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)->count());
         $this->assertDatabaseHas('pipeline_stage_logs', [
             'referral_id' => $referral->id,
             'from_stage' => 'complete_registered',
             'to_stage' => 'complete_payment',
         ]);
+    }
+
+    /**
+     * The rule is about PROOF, not about rank. An admin who has seen a slip
+     * confirms the order that carries it; pressing advance as an admin would
+     * attest a payment with nothing on file, which is the same hole with a
+     * more senior finger on the button.
+     */
+    public function test_an_admin_cannot_press_a_referral_into_payment_either(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
+
+        $this->actingAs($this->paymentConfirmer($company))
+            ->postJson("/api/v1/referrals/{$referral->id}/advance")
+            ->assertStatus(422);
+
+        $this->actingAs(User::factory()->superAdmin()->create())
+            ->postJson("/api/v1/referrals/{$referral->id}/advance")
+            ->assertStatus(422);
+
+        $this->assertSame(0, CommissionLedger::where('referral_id', $referral->id)->count());
+    }
+
+    /**
+     * An order waiting for verification is a slip somebody still has to
+     * judge. Its existence is not a confirmation, so the advance door stays
+     * shut even with one on file — the admin confirms the ORDER.
+     */
+    public function test_an_order_awaiting_verification_does_not_open_the_advance_door(): void
+    {
+        [$company, $agent, $product] = $this->makeCompanyAgentProduct();
+        $referral = $this->makeReferral($company, $agent, $product, $this->directSaleTemplate($company));
+        Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
+
+        $this->actingAs($agent)
+            ->postJson("/api/v1/referrals/{$referral->id}/advance")
+            ->assertStatus(422);
+
+        $this->assertSame(0, CommissionLedger::where('referral_id', $referral->id)->count());
     }
 
     public function test_confirm_payment_succeeds_immediately_on_a_direct_sale_referral(): void
@@ -312,7 +446,11 @@ class PipelineTemplateAdvanceTest extends TestCase
         ]);
         $referral = $this->makeReferral($company, $agent, $product, $template);
 
-        foreach (['complete_payment', 'delivery', 'follow_up'] as $stage) {
+        // Payment through a confirmed order; the post-sale stages after it
+        // are still ordinary, agent-pressed steps.
+        $this->closeSale($referral, $agent);
+
+        foreach (['delivery', 'follow_up'] as $stage) {
             $this->actingAs($agent)
                 ->postJson("/api/v1/referrals/{$referral->id}/advance")
                 ->assertOk()
@@ -397,6 +535,12 @@ class PipelineTemplateAdvanceTest extends TestCase
         $referral = $this->makeReferral($company, $agent, $product, null);
 
         foreach (['waiting_appointment', 'finish_1st_doctor_meeting', 'complete_payment', 'ongoing_next_meeting'] as $stage) {
+            if ($stage === 'complete_payment') {
+                $this->closeSale($referral, $agent);
+
+                continue;
+            }
+
             $this->actingAs($agent)
                 ->postJson("/api/v1/referrals/{$referral->id}/advance")
                 ->assertOk()

@@ -2745,6 +2745,17 @@ const planShapeSeedProduct = computed<ProductOption | null>(() => {
  * ═══════════════════════════════════════════════════════════════════════
  */
 type CommissionViewMode = 'overview' | 'steps' | 'flow'
+
+/** What the overview's summary strip states — see `overviewPayout`. */
+interface OverviewPayout {
+  baseSatang: number
+  /** The ceiling: the top rung, paid when no breakaway holder cuts the walk. */
+  totalSatang: number
+  totalPct: number
+  /** Where a chain is cut, when a breakaway rung sits below the top. */
+  breakawayPct: number | null
+  breakawaySatang: number | null
+}
 const viewMode = ref<CommissionViewMode>('steps')
 
 /**
@@ -2907,17 +2918,30 @@ const cardContext = computed<CardContext>(() => ({
  * NUMBER.
  *
  * Stairstep is the plan whose total is a property of the settings alone: the
- * differentials telescope, so the company's outlay is the highest rung in the
- * chain, whoever sells and however long the chain is. Every other plan needs
- * a shape or a cycle to answer at all — Binary pays what two legs matched,
- * Matrix and Generation pay per level down a tree.
+ * differentials telescope, so the company's outlay is the highest rung the
+ * walk reaches. Every other plan needs a shape or a cycle to answer at all —
+ * Binary pays what two legs matched, Matrix and Generation pay per level down
+ * a tree.
+ *
+ * ── CORRECTED 2026-09-25 ──
+ *
+ * This used to say the outlay is "the highest rung in the chain, whoever
+ * sells and however long the chain is", and the strip printed the top rung
+ * as THE total. That is only the ceiling. The walk stops above the first
+ * breakaway holder it passes, so on a ladder with a breakaway rung below the
+ * top — which is the usual shape, and UAT-017's — most chains pay the
+ * breakaway rung, not the top one: ฿2,000 on a ฿10,000 deal where the strip
+ * said ฿2,500. Writing UAT-017's expected figures is what exposed it.
+ *
+ * So the strip now says สูงสุด and names where a chain is cut. With one
+ * breakaway rung, which is every ladder seen so far, both figures are exact.
  *
  * So the strip states the figure where it is genuinely a figure and stays
  * silent elsewhere, rather than duplicating five engines' arithmetic in a
  * view. PlanShapePreview already answers the other five, honestly, one worked
  * example at a time.
  */
-const overviewPayout = computed<{ baseSatang: number; totalSatang: number; totalPct: number } | null>(() => {
+const overviewPayout = computed<OverviewPayout | null>(() => {
   if (viewingPlanType.value !== 'stairstep_breakaway') return null
 
   const base = ladderBaseSatang.value
@@ -2929,12 +2953,24 @@ const overviewPayout = computed<{ baseSatang: number; totalSatang: number; total
 
   const totalPct = Math.max(...rates)
 
+  // The LOWEST breakaway rung priced below the top: the earliest point a
+  // walk up the chain can be cut, and so what a chain passing a holder of it
+  // pays in total. Null when no breakaway rung sits below the top.
+  const cuts = cardContext.value.ranks
+    .filter((rank) => rank.breakaway && rank.ratePct !== null && rank.ratePct < totalPct)
+    .map((rank) => rank.ratePct as number)
+  const breakawayPct = cuts.length > 0 ? Math.min(...cuts) : null
+
   // Basis points, one round at the multiply — BR-3, the same shape the
   // backend uses, so the strip cannot drift a satang from the ledger.
+  const satangAt = (pct: number) => Math.round((base * (pct * 100)) / 10000)
+
   return {
     baseSatang: base,
-    totalSatang: Math.round((base * (totalPct * 100)) / 10000),
+    totalSatang: satangAt(totalPct),
     totalPct,
+    breakawayPct,
+    breakawaySatang: breakawayPct === null ? null : satangAt(breakawayPct),
   }
 })
 

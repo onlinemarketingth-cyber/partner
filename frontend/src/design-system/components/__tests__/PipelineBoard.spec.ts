@@ -51,6 +51,7 @@ vi.mock('@/api/client', () => ({
 
 import PipelineBoard from '../PipelineBoard.vue'
 import TabFilterBar from '../TabFilterBar.vue'
+import { useAuthStore } from '@/stores/auth'
 import ShareLinkModal from '../ShareLinkModal.vue'
 
 // jsdom implements no scrolling at all. TabFilterBar centres the active tab
@@ -222,8 +223,11 @@ describe('PipelineBoard — ADR-026 per-template journeys', () => {
     expect(wrapper.text()).toContain('ลงทะเบียนสำเร็จ → ชำระเงินสำเร็จ')
     expect(wrapper.text()).toContain('ลงทะเบียนสำเร็จ → … → นัดหมายครั้งถัดไป (5 ขั้น)')
 
-    // And each row offers only the move ITS OWN template allows next.
-    expect(wrapper.text()).toContain('ไป: ชำระเงินสำเร็จ') // direct sale, from stage 0
+    // And each row offers only the move ITS OWN template allows next. The
+    // direct sale's next move is payment, which is no longer a button
+    // (2026-09-25): it says what it waits for instead of "ไป: ชำระเงินสำเร็จ".
+    expect(wrapper.text()).not.toContain('ไป: ชำระเงินสำเร็จ') // direct sale, from stage 0
+    expect(wrapper.text()).toContain('ยังไม่มีคำสั่งซื้อ')
     expect(wrapper.text()).toContain('ไป: พบแพทย์ครั้งแรกแล้ว') // medical, from stage 1
   })
 
@@ -293,9 +297,12 @@ describe('PipelineBoard — ADR-026 per-template journeys', () => {
 
   it('advances by POSTing to that referral, with no target stage in the body', async () => {
     post.mockResolvedValue({ data: null })
-    const wrapper = await mountBoard([referral(7, 'ลูกค้าขายตรง', DIRECT, 0)])
+    // A medical deal one step short of the doctor meeting — an edge that is
+    // still pressed by hand. (This used to be a direct sale pressed into
+    // payment, the move the server has refused since 2026-09-25.)
+    const wrapper = await mountBoard([referral(7, 'ลูกค้าแพ็กเกจแพทย์', MEDICAL, 1)])
 
-    await findButton(wrapper, 'ไป: ชำระเงินสำเร็จ').trigger('click')
+    await findButton(wrapper, 'ไป: พบแพทย์ครั้งแรกแล้ว').trigger('click')
     await flushPromises()
 
     // No body: the backend owns the state machine and writes the audit log.
@@ -788,6 +795,8 @@ describe('PipelineBoard — TASK-191 §3.3 share the paid voucher link', () => {
       status: 'awaiting_verification',
       status_label: 'รอตรวจสอบ',
     })
+    // The confirm door is a Company Admin's (OrderPolicy, audit 2026-08-21).
+    useAuthStore().user = { id: 900, name: 'admin', role: 'company_admin', is_team_leader: false } as never
     const wrapper = await mountBoard([awaitingConfirm])
 
     expect(wrapper.find('[data-test="confirm-order"]').exists()).toBe(true)

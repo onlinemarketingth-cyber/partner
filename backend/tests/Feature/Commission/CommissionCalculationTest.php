@@ -36,12 +36,9 @@ class CommissionCalculationTest extends TestCase
 
     private function advanceToStage(Referral $referral, User $agent, PipelineStage $target): Referral
     {
-        while ($referral->current_stage !== $target) {
-            $this->actingAs($agent)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-            $referral->refresh();
-        }
-
-        return $referral;
+        // Crosses Complete Payment through a confirmed order — see
+        // TestCase::closeSale() for why no test may press its way past it.
+        return $this->advanceReferralTo($referral, $agent, $target);
     }
 
     public function test_reaching_complete_payment_creates_a_commission_ledger_entry_with_the_correct_amount(): void

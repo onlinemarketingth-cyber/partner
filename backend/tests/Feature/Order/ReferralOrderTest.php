@@ -275,25 +275,25 @@ class ReferralOrderTest extends TestCase
     }
 
     /**
-     * The §2 defect this task exists to close: advancing books the commission,
-     * then confirming the still-`pending` order must close the customer's bill
-     * WITHOUT booking a second one (OrderService::confirmPayment's
-     * `alreadyClosed` branch — untouched by this task).
+     * A referral that reached Complete Payment BEFORE 2026-09-25 — when the
+     * advance button could still take it there — may be sitting at that stage
+     * with its bill still open. Confirming that order must close the bill
+     * WITHOUT booking commission a second time (OrderService::confirmPayment's
+     * `alreadyClosed` branch).
+     *
+     * This used to be reached by pressing advance as the admin first. That
+     * press is now refused (see PipelineTemplateAdvanceTest), so the state is
+     * built directly: it is legacy data, and production has it.
      */
-    public function test_advancing_then_confirming_marks_the_order_paid_without_a_second_ledger_row(): void
+    public function test_confirming_a_legacy_referral_already_at_payment_books_nothing_twice(): void
     {
         $company = Company::factory()->create();
         $agent = User::factory()->agent()->create(['company_id' => $company->id]);
         $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
-        $referral = $this->makeReferral($company, $agent, PipelineStage::Finish1stDoctorMeeting);
+        $referral = $this->makeReferral($company, $agent, PipelineStage::CompletePayment);
         $order = Order::factory()->awaitingVerification()->create(['referral_id' => $referral->id]);
 
-        $this->actingAs($admin)->postJson("/api/v1/referrals/{$referral->id}/advance")->assertOk();
-
-        $this->assertSame(PipelineStage::CompletePayment, $referral->fresh()->current_stage);
-        $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)->count());
-        // The live payment page is still open at this point — that is the defect.
-        $this->assertSame(OrderStatus::AwaitingVerification, $order->fresh()->status);
+        $ledgerBefore = CommissionLedger::where('referral_id', $referral->id)->count();
 
         $this->actingAs($admin)
             ->postJson("/api/v1/orders/{$order->id}/confirm")
@@ -305,6 +305,7 @@ class ReferralOrderTest extends TestCase
         $this->assertSame(OrderStatus::Paid, $order->status);
         $this->assertNotNull($order->paid_at);
         $this->assertSame($admin->id, $order->verified_by_user_id);
-        $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)->count());
+        $this->assertSame($ledgerBefore, CommissionLedger::where('referral_id', $referral->id)->count());
+        $this->assertSame(PipelineStage::CompletePayment, $referral->fresh()->current_stage);
     }
 }

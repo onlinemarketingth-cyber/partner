@@ -82,6 +82,13 @@ class PipelineTest extends TestCase
         ];
 
         foreach ($expected as $stage) {
+            // The payment edge is a confirmed order, not a button (2026-09-25).
+            if ($stage === 'complete_payment') {
+                $this->closeSale($referral, $agent);
+
+                continue;
+            }
+
             $this->actingAs($agent)
                 ->postJson("/api/v1/referrals/{$referral->id}/advance")
                 ->assertOk()

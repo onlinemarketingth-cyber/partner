@@ -165,6 +165,7 @@ import {
   PAYMENT_STAGE_KEY,
   type PipelineStageRef,
 } from '@/utils/pipelineStages'
+import { useAuthStore } from '@/stores/auth'
 
 /**
  * Structurally identical to HeroHeader's `HeroKpi`, declared here so the
@@ -325,6 +326,53 @@ function canConfirmOrder(r: ReferralItem): boolean {
   if (!order) return false
   if (order.status === 'cancelled' || order.status === 'paid') return false
   return r.pipeline.next_stage?.key === PAYMENT_STAGE_KEY || isAtOrPastPayment(r)
+}
+
+/**
+ * ═══ COMPLETE PAYMENT IS NOT A BUTTON ANY MORE (2026-09-25) ═══
+ *
+ * Owner's ruling on a hole found while preparing UAT-017: this board used to
+ * offer "ไป: ชำระเงินแล้ว" on the agent's own direct-sale deal, and pressing
+ * it booked the agent's commission with no order and no slip. The server now
+ * refuses to enter Complete Payment except through a confirmed order
+ * (PipelineService::advance), so the button would only ever produce a 422.
+ *
+ * What the agent sees instead is WHY the deal is waiting and on whom — the
+ * order it still needs, the customer's slip, or the admin's confirmation —
+ * because "nothing happens here" on the one stage that pays them is the
+ * question they will otherwise ask their leader.
+ */
+function paymentIsNext(r: ReferralItem): boolean {
+  return r.pipeline.next_stage?.key === PAYMENT_STAGE_KEY
+}
+
+function canAdvanceByHand(r: ReferralItem): boolean {
+  return r.pipeline.next_stage !== null && !paymentIsNext(r)
+}
+
+function paymentWaitLabel(r: ReferralItem): string {
+  const status = r.order?.status
+
+  if (status === 'awaiting_verification') return td('pipeline.wait_admin_confirm', 'รอแอดมินยืนยันการชำระเงิน')
+  if (status === 'pending') return td('pipeline.wait_customer_slip', 'รอลูกค้าชำระเงินและแนบสลิป')
+
+  return td('pipeline.wait_order', 'ยังไม่มีคำสั่งซื้อ — สร้างคำสั่งซื้อเพื่อรับชำระเงิน')
+}
+
+/**
+ * The confirm button is offered only to someone the server lets confirm.
+ *
+ * OrderPolicy has refused agents since the 2026-08-21 audit ("whoever earns
+ * the commission must not also attest that the money arrived"), but this
+ * board kept rendering the button for them, so an agent's press ended in a
+ * 403. The server stays the gate; this only stops offering a door that is
+ * locked from the other side.
+ */
+const auth = useAuthStore()
+const mayConfirmPayments = computed(() => !!auth.user && auth.user.role !== 'agent')
+
+function offerConfirm(r: ReferralItem): boolean {
+  return mayConfirmPayments.value && canConfirmOrder(r)
 }
 
 /**
@@ -688,7 +736,8 @@ async function advance(referral: ReferralItem) {
   // allow. The button is already hidden in that case; this is the
   // belt-and-braces half, because "the user discovers the rule from a 422"
   // is exactly what a template-aware board exists to prevent.
-  if (!referral.pipeline.next_stage) return
+  // Payment included: that edge belongs to the order's confirmation now.
+  if (!canAdvanceByHand(referral)) return
   advancing.value = referral.id
   errorMessage.value = ''
   try {
@@ -729,7 +778,7 @@ function askConfirmOrder(referral: ReferralItem): void {
   // Re-checked here, not just in the template: the affordance and the action
   // must agree even if a refetch changed the row underneath. Same
   // belt-and-braces shape as advance()'s `next_stage` guard above.
-  if (!canConfirmOrder(referral) || !referral.order) return
+  if (!offerConfirm(referral) || !referral.order) return
   errorMessage.value = ''
   pendingConfirm.value = { referral, order: referral.order }
 }
@@ -1028,7 +1077,7 @@ function formatDateTime(iso: string): string {
                         stays that way.
                       -->
                       <AppButton
-                        v-if="canConfirmOrder(r)"
+                        v-if="offerConfirm(r)"
                         size="sm"
                         :loading="confirmingOrderId === r.order?.id"
                         :disabled="confirmingOrderId !== null"
@@ -1056,7 +1105,7 @@ function formatDateTime(iso: string): string {
                            buttons structurally exclusive there is no pair of
                            blues for hue to disambiguate. -->
                       <AppButton
-                        v-else-if="r.pipeline.next_stage"
+                        v-else-if="canAdvanceByHand(r)"
                         size="sm"
                         :loading="advancing === r.id"
                         :title="td('pipeline.advance_to', '', { stage: stageLabelTh(r.pipeline.next_stage) })"
@@ -1065,6 +1114,15 @@ function formatDateTime(iso: string): string {
                       >
                         {{ td('pipeline.to_stage', '', { stage: stageLabelTh(r.pipeline.next_stage) }) }}
                       </AppButton>
+                      <!-- 2026-09-25 — the payment edge is the order's, so
+                           the row says what it is waiting for instead. -->
+                      <span
+                        v-else-if="paymentIsNext(r)"
+                        class="text-xs font-bold text-ink-card-subtle whitespace-nowrap"
+                        data-test="payment-wait"
+                      >
+                        {{ paymentWaitLabel(r) }}
+                      </span>
                       <span
                         v-else-if="!r.pipeline.stages.length"
                         class="text-xs font-bold text-ink-danger whitespace-nowrap"

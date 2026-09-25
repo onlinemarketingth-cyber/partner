@@ -56,7 +56,11 @@ const LADDER = [
   { id: 2, company_id: CO.id, name: 'UAT ขั้นผู้จัดการ', volume_threshold: 20_000_000, sort_order: 2, rate_type: 'percentage', rate_value: 2_000, is_breakaway_rank: true },
 ]
 
-function mockApi({ sellerRate = 500, planType = 'stairstep_breakaway' }: { sellerRate?: number; planType?: string } = {}) {
+function mockApi({
+  sellerRate = 500,
+  planType = 'stairstep_breakaway',
+  ranks = LADDER,
+}: { sellerRate?: number; planType?: string; ranks?: unknown[] } = {}) {
   get.mockImplementation(async (path: string) => {
     if (path.startsWith('/commission-readiness')) return READY
     if (path.startsWith('/commission-settings')) {
@@ -88,7 +92,7 @@ function mockApi({ sellerRate = 500, planType = 'stairstep_breakaway' }: { selle
     if (path.startsWith('/agent-rank-settings')) {
       return { data: { company_id: CO.id, trailing_window_days: 90, volume_scope: 'personal', recalculation_frequency: 'monthly' } }
     }
-    if (path.startsWith('/agent-ranks')) return { data: LADDER }
+    if (path.startsWith('/agent-ranks')) return { data: ranks }
     if (path.startsWith('/commission-rules')) {
       return {
         data: [{
@@ -200,6 +204,29 @@ describe('what the overview says about this company', () => {
 
     expect(wrapper.get('[data-test="overview-row-rank-ladder"]').text()).toContain('5% / 20%')
     expect(wrapper.get('[data-test="overview-row-seller-default-rate"]').text()).toContain('5%')
+  })
+
+  it('with a breakaway rung below the top, names the cut the chain actually pays', async () => {
+    /*
+     * UAT-017's ladder: 5 / 12 / 20 (breakaway) / 25. The top rung is a
+     * ceiling; a chain passing the 20% holder stops at ฿2,000. The strip
+     * said ฿2,500 flat until 2026-09-25.
+     */
+    mockApi({
+      ranks: [
+        { id: 1, company_id: CO.id, name: 'เริ่มต้น', volume_threshold: 0, sort_order: 1, rate_type: 'percentage', rate_value: 500, is_breakaway_rank: false },
+        { id: 2, company_id: CO.id, name: 'ผู้นำ', volume_threshold: 2_000_000, sort_order: 2, rate_type: 'percentage', rate_value: 1_200, is_breakaway_rank: false },
+        { id: 3, company_id: CO.id, name: 'ผู้จัดการ', volume_threshold: 4_000_000, sort_order: 3, rate_type: 'percentage', rate_value: 2_000, is_breakaway_rank: true },
+        { id: 4, company_id: CO.id, name: 'ผู้อำนวยการ', volume_threshold: 6_000_000, sort_order: 4, rate_type: 'percentage', rate_value: 2_500, is_breakaway_rank: false },
+      ],
+    })
+    const wrapper = await mountView()
+    wrappers.push(wrapper)
+
+    await openOverview(wrapper)
+
+    expect(wrapper.get('[data-test="overview-total"]').text()).toContain('2,500')
+    expect(wrapper.get('[data-test="overview-breakaway-cut"]').text()).toContain('2,000')
   })
 
   it('states the payout Stairstep guarantees — the highest rung in the chain', async () => {

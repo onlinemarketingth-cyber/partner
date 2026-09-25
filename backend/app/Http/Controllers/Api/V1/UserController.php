@@ -41,7 +41,10 @@ class UserController extends Controller
 
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = User::query()->with(['company', 'manager']);
+        // `currentRank` since 2026-09-25 — the roster's "ขั้นปัจจุบัน". One
+        // eager load for the page rather than a query per row; UserResource
+        // only emits it for a company whose plan runs on ranks.
+        $query = User::query()->with(['company', 'manager', 'currentRank']);
 
         $viewerIsSuperAdmin = (bool) $request->user()?->isSuperAdmin();
 

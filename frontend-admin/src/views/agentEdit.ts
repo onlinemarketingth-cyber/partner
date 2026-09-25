@@ -44,6 +44,14 @@ export interface AgentItem {
    * was every single row.
    */
   binary_leg?: 'left' | 'right' | null
+  /**
+   * 2026-09-25 — the rung this agent holds. Three states, and the screen
+   * needs all three (UserResource carries the reasoning):
+   *   · key ABSENT — the company's plan has no ranks at all;
+   *   · `null`     — it does, and this agent holds none yet;
+   *   · an object  — the rung.
+   */
+  current_rank?: { id: number; name: string; is_breakaway: boolean } | null
   // TASK-128 — the edit modal binds these two, not `name`: `name` is a
   // DERIVED value (User::booted()'s saving() hook recomputes it from the
   // pair) and UpdateUserRequest has no `name` rule at all, so writing back

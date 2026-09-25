@@ -47,7 +47,15 @@ const props = defineProps<{
    * What one sale pays out under the settings as they stand, for the summary
    * strip. Null while it cannot be computed — no plan chosen, no product.
    */
-  payout: { baseSatang: number; totalSatang: number; totalPct: number } | null
+  payout: {
+    baseSatang: number
+    /** The ceiling — the top rung, reached when no breakaway holder cuts the walk. */
+    totalSatang: number
+    totalPct: number
+    /** Where a chain passing a breakaway holder stops. Null when no such rung. */
+    breakawayPct?: number | null
+    breakawaySatang?: number | null
+  } | null
 }>()
 
 const emit = defineEmits<{ edit: [cardId: CardId] }>()
@@ -133,7 +141,9 @@ const sellerPairing = computed<{ ok: boolean; note: string } | null>(() => {
     >
       <div class="flex-1 min-w-[240px] space-y-1">
         <p class="text-[12.5px] tracking-wide text-slate-400">
-          <template v-if="payout">ตั้งมาทั้งหมดแล้ว ดีล ฿{{ baht(payout.baseSatang) }} จ่ายออกรวม</template>
+          <!-- สูงสุด, not a flat total (corrected 2026-09-25): the top rung is
+               only reached when no breakaway holder cuts the walk first. -->
+          <template v-if="payout">ตั้งมาทั้งหมดแล้ว ดีล ฿{{ baht(payout.baseSatang) }} จ่ายออกรวมสูงสุด</template>
           <!--
             Not every plan can state one total from settings alone — Binary
             pays on a cycle, Matrix and Generation on a shape. Rather than
@@ -141,6 +151,13 @@ const sellerPairing = computed<{ ok: boolean; note: string } | null>(() => {
             plans are pointed at the worked example that already does it.
           -->
           <template v-else>ดูยอดจ่ายต่อดีลของแผนนี้ได้ที่ผังการจ่าย ด้านล่างของขั้นที่ 2</template>
+        </p>
+        <p
+          v-if="payout && payout.breakawayPct != null && payout.breakawaySatang != null"
+          class="text-[12.5px] text-slate-300"
+          data-test="overview-breakaway-cut"
+        >
+          สายที่มีคนขั้นตัดสายคั่นอยู่ จ่ายรวม {{ payout.breakawayPct }}% · ฿{{ baht(payout.breakawaySatang) }}
         </p>
         <p v-if="tone === 'missing'" class="text-[13px] font-bold text-rose-200" data-test="overview-nobody-paid">
           ดีลที่ปิดได้ตอนนี้จะไม่มีใครได้เงิน

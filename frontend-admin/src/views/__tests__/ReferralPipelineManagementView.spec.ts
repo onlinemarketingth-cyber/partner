@@ -257,10 +257,19 @@ describe('§4.1 — one door, never two', () => {
     expect(confirmButton(wrapper, 'มานี').text()).toBe('รับชำระเงินแล้ว')
   })
 
-  it('shows ONLY the advance button on a card with no order (§4.5)', async () => {
+  /*
+   * 2026-09-25 — THE PAYMENT GATE HAS NO ADVANCE BUTTON, FOR ADMINS EITHER.
+   *
+   * These cards sit one step before payment with no live order. They used to
+   * offer "ไป: ชำระเงินสำเร็จ", and pressing it booked commission with no
+   * order behind it. The server refuses that move from anyone now; the rule
+   * is about proof, not rank. So: no door, and a line saying what closes it.
+   */
+  it('offers no door at the payment gate on a card with no order, and says what closes it', async () => {
     const wrapper = await mountBoard([makeReferral({ name: 'มานะ', order: null })])
 
-    expect(doors(wrapper, 'มานะ')).toEqual({ confirm: false, advance: true })
+    expect(doors(wrapper, 'มานะ')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'มานะ').get('[data-test="payment-wait"]').text()).toContain('ยืนยันคำสั่งซื้อที่มีสลิป')
   })
 
   it('treats an ABSENT order key exactly like a null one', async () => {
@@ -268,7 +277,8 @@ describe('§4.1 — one door, never two', () => {
     // eager-load `orders` sends.
     const wrapper = await mountBoard([makeReferral({ name: 'ปิติ' })])
 
-    expect(doors(wrapper, 'ปิติ')).toEqual({ confirm: false, advance: true })
+    expect(doors(wrapper, 'ปิติ')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'ปิติ').find('[data-test="payment-wait"]').exists()).toBe(true)
   })
 
   it('offers no confirm on a cancelled order, and no confirm on an already-paid one', async () => {
@@ -281,7 +291,8 @@ describe('§4.1 — one door, never two', () => {
       }),
     ])
 
-    expect(doors(wrapper, 'ชูใจ')).toEqual({ confirm: false, advance: true })
+    // A cancelled order is no order: the card waits for a live one.
+    expect(doors(wrapper, 'ชูใจ')).toEqual({ confirm: false, advance: false })
     // Already paid: nothing left to confirm, but the journey continues.
     expect(doors(wrapper, 'วีระ')).toEqual({ confirm: false, advance: true })
   })
@@ -388,20 +399,36 @@ describe('§4.1 follow-up — drag is a door too', () => {
     expect(wrapper.text()).toContain('ลากเลื่อนไม่ได้')
   })
 
-  it('a card WITHOUT the confirm button still drags and advances, exactly as before', async () => {
-    // The control. §4.5 — no order means no confirm door, so drag-to-advance
-    // is untouched for every card that is not at an open bill.
-    const wrapper = await mountBoard([makeReferral({ id: 43, name: 'มานะ', order: null })])
+  it('a card short of the payment gate still drags and advances, exactly as before', async () => {
+    // The control. The 2026-09-25 ruling moved ONE edge; every other move
+    // is still a drag or a press.
+    const wrapper = await mountBoard([makeReferral({ id: 43, name: 'มานะ', current: WAITING, order: null })])
 
     expect(doors(wrapper, 'มานะ')).toEqual({ confirm: false, advance: true })
     expect(card(wrapper, 'มานะ').attributes('draggable')).toBe('true')
 
     await card(wrapper, 'มานะ').trigger('dragstart')
-    await column(wrapper, PAYMENT_STAGE_KEY).trigger('drop')
+    await column(wrapper, 'finish_1st_doctor_meeting').trigger('drop')
     await flushPromises()
 
     expect(post).toHaveBeenCalledTimes(1)
     expect(post).toHaveBeenCalledWith('/referrals/43/advance')
+  })
+
+  it('a card at the payment gate with no order cannot be dragged into payment', async () => {
+    // It used to be draggable (`!canConfirmOrder`), and the drop booked
+    // commission with nothing on file. Neither the attribute nor a drop
+    // that arrives anyway (synthetic event, stale card) may reach /advance.
+    const wrapper = await mountBoard([makeReferral({ id: 44, name: 'มานะ', order: null })])
+
+    expect(card(wrapper, 'มานะ').attributes('draggable')).toBe('false')
+
+    await card(wrapper, 'มานะ').trigger('dragstart')
+    await column(wrapper, PAYMENT_STAGE_KEY).trigger('drop')
+    await flushPromises()
+
+    expect(post).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('ปิดได้ด้วยการยืนยันคำสั่งซื้อที่มีสลิปเท่านั้น')
   })
 })
 

@@ -432,7 +432,10 @@ class OrderService
             // Advance ONLY when the referral hasn't already reached Complete
             // Payment — this is what fires BR-4 commission, exactly once.
             if (! $alreadyClosed) {
-                $this->pipelineService->advance($referral, $actor);
+                // $order goes with it: Complete Payment is only entered with
+                // the paid order that settles the referral in hand — see
+                // PipelineService::advance(), 2026-09-25.
+                $this->pipelineService->advance($referral, $actor, $order);
             }
 
             // ADR-033 (TASK-189) §2.2/B1 — mint the voucher under the EXACT

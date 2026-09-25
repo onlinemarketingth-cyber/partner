@@ -184,6 +184,28 @@ describe('the summary strip', () => {
     expect(text).toContain('20%')
   })
 
+  it('calls the top rung a ceiling, and says where a breakaway rung cuts below it', () => {
+    /*
+     * Corrected 2026-09-25. The strip used to print the top rung as THE total.
+     * On a ladder with a breakaway rung below the top, a chain that passes a
+     * holder of it stops there — UAT-017's T1 pays ฿2,000, not the ฿2,500
+     * the strip claimed.
+     */
+    const wrapper = mountOverview({
+      payout: { baseSatang: 1_000_000, totalSatang: 250_000, totalPct: 25, breakawayPct: 20, breakawaySatang: 200_000 },
+    })
+
+    expect(wrapper.get('[data-test="overview-summary"]').text()).toContain('สูงสุด')
+    expect(wrapper.get('[data-test="overview-total"]').text()).toContain('2,500')
+    const cut = wrapper.get('[data-test="overview-breakaway-cut"]').text()
+    expect(cut).toContain('20%')
+    expect(cut).toContain('2,000')
+  })
+
+  it('says nothing about a cut when no breakaway rung sits below the top', () => {
+    expect(mountOverview().find('[data-test="overview-breakaway-cut"]').exists()).toBe(false)
+  })
+
   it('says plainly when a deal would pay nobody', () => {
     /*
      * Red is reserved for one sentence being literally true, the same line

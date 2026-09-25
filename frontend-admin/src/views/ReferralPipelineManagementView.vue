@@ -162,6 +162,39 @@ function canConfirmOrder(r: ReferralItem): boolean {
 }
 
 /**
+ * ═══ COMPLETE PAYMENT IS NOT A BUTTON — FOR ADMINS EITHER (2026-09-25) ═══
+ *
+ * Owner's ruling on the hole found preparing UAT-017: pressing a referral
+ * into Complete Payment booked commission with no order and no slip. The
+ * server now refuses that move from ANYONE (PipelineService::advance) — the
+ * rule is about proof, not rank, so an admin who has seen a slip confirms
+ * the ORDER that carries it.
+ *
+ * TASK-176 §4.1 already made the confirm button REPLACE the advance one on a
+ * card with a live order. This closes the case it left: a card at the
+ * payment gate with NO live order, where "ไป: ชำระเงินสำเร็จ" was still on
+ * offer, and so was dragging it into that column.
+ *
+ * `canAdvanceByHand` is the one predicate for both of those doors — the
+ * button and the drag — used twice, never kept as two conditions.
+ */
+function paymentIsNext(r: ReferralItem): boolean {
+  return r.pipeline.next_stage?.key === PAYMENT_STAGE_KEY
+}
+
+function canAdvanceByHand(r: ReferralItem): boolean {
+  return r.pipeline.next_stage !== null && !paymentIsNext(r)
+}
+
+function paymentWaitLabel(r: ReferralItem): string {
+  // No live order at the gate (none yet, or a cancelled one): the card is
+  // waiting on an order, and the order screen is where one is settled.
+  return r.order && r.order.status !== 'cancelled'
+    ? 'รอยืนยันการชำระเงินจากคำสั่งซื้อ'
+    : 'ยังไม่มีคำสั่งซื้อ — ปิดการขายได้ด้วยการยืนยันคำสั่งซื้อที่มีสลิป'
+}
+
+/**
  * BR-3 — satang is an integer everywhere except right here, at the
  * display layer. Thousands-separated, two decimals, and the result is a
  * string that is only ever rendered: no computed baht value is stored on
@@ -373,6 +406,12 @@ function onDrop(stageKey: string): void {
       'รายการนี้มีบิลที่ยังไม่ปิด — กดปุ่ม “รับชำระเงินแล้ว” บนการ์ดเพื่อปิดบิลและเลื่อนสถานะพร้อมกัน (ลากเลื่อนไม่ได้)'
     return
   }
+  // 2026-09-25 — the payment column is entered by confirming an order, never
+  // by a drag; see canAdvanceByHand().
+  if (paymentIsNext(r)) {
+    errorMessage.value = 'ขั้น “ชำระเงินสำเร็จ” ปิดได้ด้วยการยืนยันคำสั่งซื้อที่มีสลิปเท่านั้น (ลากเลื่อนไม่ได้)'
+    return
+  }
   if (!valid) {
     // Name the ONE stage this referral may move to, instead of restating
     // the general rule — with per-template journeys, "the next stage"
@@ -407,7 +446,8 @@ async function advance(referral: ReferralItem) {
   // ADR-026 — never send a move this referral's own template does not
   // allow. The UI already hides the affordance; this is the second half,
   // so the admin never learns the rule from a 422.
-  if (!referral.pipeline.next_stage) return
+  // Payment included — that edge belongs to the order's confirmation now.
+  if (!canAdvanceByHand(referral)) return
   advancing.value = referral.id
   errorMessage.value = ''
   try {
@@ -593,9 +633,11 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 TASK-176 §4.1 follow-up (ag-lead ruling, 2026-08-13) —
                 one door, counting the drag gesture as a door.
 
-                `draggable` is the NEGATION OF THE SAME PREDICATE that
-                picks the button below; there is deliberately no second
-                condition here to keep as its inverse. A card offering
+                `draggable` is THE SAME PREDICATE that picks the advance
+                button below (`canAdvanceByHand`, 2026-09-25); there is
+                deliberately no second condition here to keep in step with
+                it. It used to be `!canConfirmOrder(r)`, which still let a
+                card with NO order be dragged into the payment column. A card offering
                 "รับชำระเงินแล้ว" cannot be dragged to the next column,
                 because that drag would POST /advance and book BR-4
                 commission while the bill stays open (§2).
@@ -608,11 +650,11 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               <div
                 v-for="r in col.items"
                 :key="r.id"
-                :draggable="!canConfirmOrder(r)"
+                :draggable="canAdvanceByHand(r)"
                 class="bg-white border border-slate-200 rounded-lg p-3 hover:shadow-sm transition-all"
                 :class="[
                   draggedId === r.id ? 'opacity-40' : '',
-                  canConfirmOrder(r) ? 'cursor-pointer' : 'cursor-move',
+                  canAdvanceByHand(r) ? 'cursor-move' : 'cursor-pointer',
                 ]"
                 data-test="referral-card"
                 @dragstart="onDragStart(r)"
@@ -672,7 +714,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                      template has a next stage, and it names that stage so
                      the admin knows which column to drag to. -->
                 <button
-                  v-else-if="r.pipeline.next_stage"
+                  v-else-if="canAdvanceByHand(r)"
                   :disabled="advancing === r.id"
                   class="mt-2 w-full px-2 py-1 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 truncate"
                   data-test="advance"
@@ -680,6 +722,13 @@ watch(() => activeCompany.companyId, () => { loadAll() })
                 >
                   {{ advancing === r.id ? 'กำลังดำเนินการ...' : `ไป: ${stageLabelTh(r.pipeline.next_stage)}` }}
                 </button>
+                <p
+                  v-else-if="paymentIsNext(r)"
+                  class="mt-2 text-center text-xs font-bold text-slate-500"
+                  data-test="payment-wait"
+                >
+                  {{ paymentWaitLabel(r) }}
+                </p>
                 <p v-else class="mt-2 text-center text-xs font-bold text-slate-400">จบเส้นทางแล้ว</p>
               </div>
             </div>

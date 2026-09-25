@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Enums\Ability;
+use App\Enums\CommissionPlanType;
 use App\Models\User;
 use App\Services\Platform\AccountActivityProbe;
 use App\Support\Money\SupportedCurrency;
@@ -109,6 +110,31 @@ class UserResource extends JsonResource
             // Cast to bool explicitly: MySQL hands back tinyint 1/0 and
             // the JSON contract for both frontends must be a real boolean.
             'is_team_leader' => (bool) $this->is_team_leader,
+            /*
+             * 2026-09-25 — WHICH RUNG THIS AGENT HOLDS. Owner, while planning
+             * UAT-017: an admin could not see anyone's rank anywhere, and had
+             * to infer it from the size of their commission rows — on a plan
+             * where the rank IS the pay (ADR-043).
+             *
+             * Present only when the caller eager-loaded `currentRank` (the
+             * roster does) AND the company runs on ranks. The key's ABSENCE
+             * means "this plan has no ranks"; `null` means "this plan has
+             * ranks and this agent holds none yet" — a real state every agent
+             * starts in until the scheduled recalculation first runs, and one
+             * the screen has to be able to say out loud.
+             *
+             * Name and the breakaway flag only. The rung's RATE is company
+             * config an admin reads on the commission screen, and repeating
+             * it per person would be a second place for it to look wrong.
+             */
+            'current_rank' => $this->when(
+                $this->relationLoaded('currentRank') && $this->companyRunsOnRanks(),
+                fn () => $this->currentRank ? [
+                    'id' => (int) $this->currentRank->id,
+                    'name' => $this->currentRank->name,
+                    'is_breakaway' => (bool) $this->currentRank->is_breakaway_rank,
+                ] : null,
+            ),
             // 2026-08-22 — the agent's own notification-email preference,
             // so ProfileSettingsView can render the toggle in its true
             // position on load instead of guessing. Same explicit bool cast
@@ -399,5 +425,17 @@ class UserResource extends JsonResource
                 ],
             ),
         ];
+    }
+
+    /**
+     * Stairstep reads rank rates; Generation reads only the breakaway flag,
+     * to find where a generation begins. Both assign ranks through the same
+     * scheduled job, so both have a rank to show. No other plan does.
+     */
+    private function companyRunsOnRanks(): bool
+    {
+        $plan = $this->relationLoaded('company') ? $this->company?->commission_plan_type : null;
+
+        return in_array($plan, [CommissionPlanType::StairstepBreakaway, CommissionPlanType::Generation], true);
     }
 }

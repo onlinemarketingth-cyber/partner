@@ -278,9 +278,11 @@ describe('ClientsView — the merged board is still ADR-026 correct', () => {
     expect(journeyHeadings).toHaveLength(2)
 
     // Each row offers only the move its OWN template allows next. If the
-    // merge ever flattens to one column set, the direct sale's next stage
-    // stops being ชำระเงินสำเร็จ.
-    expect(wrapper.text()).toContain('ไป: ชำระเงินสำเร็จ')
+    // merge ever flattens to one column set, the direct sale stops waiting
+    // on payment and starts offering the medical row's next step. Payment is
+    // not a button since 2026-09-25, so the direct sale says what it waits for.
+    expect(wrapper.text()).toContain('ยังไม่มีคำสั่งซื้อ')
+    expect(wrapper.text()).not.toContain('ไป: ชำระเงินสำเร็จ')
     expect(wrapper.text()).toContain('ไป: พบแพทย์ครั้งแรกแล้ว')
   })
 

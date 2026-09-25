@@ -79,6 +79,7 @@ vi.mock('@/api/client', () => ({
 
 import PipelineBoard from '../PipelineBoard.vue'
 import { PAYMENT_STAGE_KEY, type PipelineStageRef } from '@/utils/pipelineStages'
+import { useAuthStore } from '@/stores/auth'
 
 // jsdom implements no scrolling at all, and TabFilterBar centres its active
 // tab with el.scrollTo() once a bar has more than 3 tabs. Same shim as
@@ -222,8 +223,18 @@ function dialogConfirm(wrapper: Wrapper) {
   return button
 }
 
+/**
+ * Who is looking at the board. The confirm door belongs to a Company Admin —
+ * OrderPolicy has refused agents since the 2026-08-21 audit — so the door
+ * tests below run as one, and the agent's view has its own describe block.
+ */
+function signInAs(role: 'agent' | 'company_admin') {
+  useAuthStore().user = { id: 900, name: role, role, is_team_leader: false } as never
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
+  signInAs('company_admin')
   vi.clearAllMocks()
   // No `localStorage.clear()` here. The `localStorage` this environment
   // provides is not a working Storage — `clear` is not a function, and neither
@@ -247,10 +258,20 @@ describe('§4.3 — one door, never two', () => {
     expect(card(wrapper, 'มานี').text()).not.toContain('ไป: ')
   })
 
-  it('shows ONLY the advance button on a row with no order', async () => {
+  /*
+   * 2026-09-25 — THE PAYMENT EDGE HAS NO BUTTON.
+   *
+   * These two rows used to offer "ไป: ชำระเงินสำเร็จ", and pressing it booked
+   * commission with no order behind it. The server now refuses that move
+   * from anyone; payment is entered only by confirming an order. So a row
+   * at the payment gate with no live order offers NO door, and says what it
+   * is waiting for instead.
+   */
+  it('offers no door at the payment gate when there is no order, and says so', async () => {
     const wrapper = await mountBoard([makeReferral({ name: 'มานะ', order: null })])
 
-    expect(doors(wrapper, 'มานะ')).toEqual({ confirm: false, advance: true })
+    expect(doors(wrapper, 'มานะ')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'มานะ').get('[data-test="payment-wait"]').text()).toContain('ยังไม่มีคำสั่งซื้อ')
   })
 
   it('treats an ABSENT order key exactly like a null one', async () => {
@@ -258,7 +279,8 @@ describe('§4.3 — one door, never two', () => {
     // eager-load `orders` sends (the nested ClientResource uses).
     const wrapper = await mountBoard([makeReferral({ name: 'ปิติ' })])
 
-    expect(doors(wrapper, 'ปิติ')).toEqual({ confirm: false, advance: true })
+    expect(doors(wrapper, 'ปิติ')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'ปิติ').get('[data-test="payment-wait"]').text()).toContain('ยังไม่มีคำสั่งซื้อ')
   })
 
   it('offers no confirm on a cancelled order, and no confirm on an already-paid one', async () => {
@@ -271,7 +293,10 @@ describe('§4.3 — one door, never two', () => {
       }),
     ])
 
-    expect(doors(wrapper, 'ชูใจ')).toEqual({ confirm: false, advance: true })
+    // A cancelled order is no order: the row waits for a new one rather
+    // than offering the payment edge as a button.
+    expect(doors(wrapper, 'ชูใจ')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'ชูใจ').get('[data-test="payment-wait"]').text()).toContain('ยังไม่มีคำสั่งซื้อ')
     // Already paid: nothing left to confirm, but the journey continues.
     expect(doors(wrapper, 'วีระ')).toEqual({ confirm: false, advance: true })
   })
@@ -378,6 +403,58 @@ describe('§4.3 — one door, never two', () => {
 
     expect(doors(wrapper, 'ตรงดิ่ง')).toEqual({ confirm: true, advance: false })
     expect(doors(wrapper, 'ทางยาว')).toEqual({ confirm: false, advance: true })
+  })
+})
+
+/*
+ * ══════════════════════════════════════════════════════════════════════
+ * 2026-09-25 — WHAT AN AGENT IS OFFERED AT THE PAYMENT GATE: NOTHING TO PRESS.
+ *
+ * Two doors used to be shown to agents here, and both were wrong in
+ * different ways. "ไป: ชำระเงินสำเร็จ" worked, and booked the agent's own
+ * commission with no order or slip — the hole found preparing UAT-017. And
+ * "รับชำระเงินแล้ว" was rendered for them too, though OrderPolicy has
+ * refused agents since the 2026-08-21 audit, so it could only end in a 403.
+ *
+ * The row now tells the agent what the deal is waiting for and on whom.
+ * ══════════════════════════════════════════════════════════════════════
+ */
+describe('an agent at the payment gate', () => {
+  beforeEach(() => signInAs('agent'))
+
+  it.each([
+    ['awaiting_verification', 'รอแอดมินยืนยันการชำระเงิน'],
+    ['pending', 'รอลูกค้าชำระเงินและแนบสลิป'],
+  ] as const)('is offered no door on a %s order, and is told who it waits on', async (status, wording) => {
+    const wrapper = await mountBoard([makeReferral({ name: 'มานี', order: makeOrder({ status }) })])
+
+    expect(doors(wrapper, 'มานี')).toEqual({ confirm: false, advance: false })
+    expect(card(wrapper, 'มานี').get('[data-test="payment-wait"]').text()).toBe(wording)
+  })
+
+  it('is offered no door on a direct sale with no order — the self-pay hole', async () => {
+    const wrapper = await mountBoard([
+      makeReferral({ name: 'ตรงดิ่ง', journey: DIRECT_SALE_JOURNEY, current: REGISTERED, order: null }),
+    ])
+
+    expect(doors(wrapper, 'ตรงดิ่ง')).toEqual({ confirm: false, advance: false })
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('still advances by hand everywhere the payment edge is not next', async () => {
+    // The ruling moved ONE edge. The medical journey's earlier stages, and
+    // everything after payment, are still the agent's to press.
+    const wrapper = await mountBoard([
+      makeReferral({ name: 'ทางยาว', journey: MEDICAL_JOURNEY, current: REGISTERED, order: null }),
+      makeReferral({
+        name: 'จ่ายแล้ว',
+        current: PAYMENT,
+        order: makeOrder({ id: 78, status: 'paid', paid_at: '2026-08-12T04:00:00.000000Z' }),
+      }),
+    ])
+
+    expect(doors(wrapper, 'ทางยาว')).toEqual({ confirm: false, advance: true })
+    expect(doors(wrapper, 'จ่ายแล้ว')).toEqual({ confirm: false, advance: true })
   })
 })
 

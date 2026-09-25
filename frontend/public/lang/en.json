@@ -489,7 +489,10 @@
     "no_branch": "No branch specified",
     "meeting_no": "Meeting {n}",
     "advance_to": "Advance to {stage}",
-    "to_stage": "To: {stage}"
+    "to_stage": "To: {stage}",
+    "wait_admin_confirm": "Waiting for an admin to confirm payment",
+    "wait_customer_slip": "Waiting for the customer to pay and upload a slip",
+    "wait_order": "No order yet — create one to take payment"
   },
   "affiliate": {
     "needs_basic": "You must pass Basic certification before creating affiliate links — start in Academy",

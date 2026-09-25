@@ -791,6 +791,29 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                   </span>
                 </p>
                 <p class="text-xs text-slate-400 truncate">{{ a.email }}</p>
+                <!--
+                  2026-09-25 — ขั้นปัจจุบัน. Owner: an admin could not see
+                  anyone's rank anywhere, only guess it from commission rows,
+                  on a plan where the rank IS the agent's pay (ADR-043).
+
+                  Rendered only when the server sent the key, i.e. when this
+                  company's plan runs on ranks; `null` is shown, not hidden —
+                  "ยังไม่มีขั้น" is the state every agent starts in until the
+                  daily ranking job first runs, and the one an admin most
+                  needs to recognise.
+                -->
+                <p
+                  v-if="a.role === 'agent' && 'current_rank' in a"
+                  class="text-xs mt-1"
+                  :class="a.current_rank ? 'text-slate-600' : 'text-slate-400'"
+                  data-test="agent-current-rank"
+                >
+                  <template v-if="a.current_rank">
+                    ขั้นปัจจุบัน: <span class="font-bold">{{ a.current_rank.name }}</span>
+                    <span v-if="a.current_rank.is_breakaway" class="ml-1 text-amber-700">· ขั้นตัดสาย</span>
+                  </template>
+                  <template v-else>ยังไม่มีขั้น — ระบบจัดขั้นให้ในรอบคำนวณครั้งถัดไป</template>
+                </p>
                 <p v-if="a.role === 'agent'" class="text-xs mt-1" :class="a.has_passed_basic_cert ? 'text-emerald-600' : 'text-amber-600'">
                   {{ a.has_passed_basic_cert ? 'ผ่าน Basic แล้ว — ขายได้' : 'ยังไม่ผ่าน Basic — ยังขายไม่ได้' }}
                 </p>
