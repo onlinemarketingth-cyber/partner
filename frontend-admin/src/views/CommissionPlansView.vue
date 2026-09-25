@@ -137,6 +137,9 @@ import PlanShapePreview from '@/design-system/components/PlanShapePreview.vue'
  * them changes what a real person is paid.
  */
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
+import CommissionOverview from '@/design-system/components/CommissionOverview.vue'
+import CommissionStepChecklist from '@/design-system/components/CommissionStepChecklist.vue'
+import type { CardContext, CardId } from '@/constants/commissionCards'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -2723,6 +2726,268 @@ const planShapeSeedProduct = computed<ProductOption | null>(() => {
   return [...sellable].sort((a, b) => a.id - b.id)[0] ?? null
 })
 
+/*
+ * ═══════════════════════════════════════════════════════════════════════
+ * THE OVERVIEW MODE (owner, 2026-09-24 — design B + C1)
+ *
+ * "การ setup ค่าต่างๆ ยังดูยาก ยุ่งยาก ไม่มีลำดับขั้นตอน".
+ *
+ * The four steps cut along the SERVER's tables, so settings that must agree
+ * with each other sit in different tabs where they cannot be compared. This
+ * mode ignores the steps and lists everything by topic, which is the only
+ * thing that puts the rank ladder beside the seller rate it has to match.
+ *
+ * ADDED BESIDE the step flow, never instead of it: the steps keep their
+ * gating, their forms and their writes, and this mode owns no input at all.
+ * That boundary is the lesson of the setup wizard deleted on 2026-09-12 —
+ * it became a SECOND set of writes to the same money endpoints, and the note
+ * where it used to live says "Do not re-add it".
+ * ═══════════════════════════════════════════════════════════════════════
+ */
+type CommissionViewMode = 'overview' | 'steps' | 'flow'
+const viewMode = ref<CommissionViewMode>('steps')
+
+/**
+ * ═══ THE THIRD MODE: ผังการจ่าย (จอ 4) ═══
+ *
+ * The same worked example that sits inside step 2, given the whole width.
+ * Not a different chart and not a second source of truth — PlanShapePreview
+ * reads this company's own seed either way, and owns no write in either
+ * place (its rate slot was removed on 2026-09-24 when the Unilevel ladder
+ * moved out to its own section).
+ *
+ * Why it earns a mode of its own: inside step 2 the example answers "what
+ * does the number I am typing do". Whole-width it answers a different
+ * question — "who gets paid, in what order, down the chain" — which is the
+ * one an admin is asked in a meeting and cannot answer by reading a form.
+ *
+ * It MOUNTS FRESH each time the mode opens, because its block is `v-if` and
+ * not `v-show` like the step panel beside it. That difference is the whole
+ * mechanism and is load-bearing: the step copy of this chart keeps its own
+ * sandbox state, and two scratchpads quietly disagreeing about a demo price
+ * is how somebody comes to doubt a real number. Opening this one always
+ * starts from the company's seed, exactly like opening the screen does.
+ *
+ * It first shipped with a `:key` counter doing that job as well. A mutation
+ * removing the key left every test green — `v-if` had already been doing it
+ * alone — so the counter went rather than stay as a mechanism no test can
+ * tell apart from its absence (the same correction as ADR-044's deleted
+ * soft-delete filter).
+ *
+ * The step panel keeps `v-show` for the opposite reason: unmounting it would
+ * take a half-typed rate form with it.
+ */
+
+/**
+ * NEITHER OTHER MODE HAS ANYTHING TO SAY UNTIL A COMPANY IS PICKED (จอ 6).
+ *
+ * Step 1 IS the company picker, and `stepReachable` already refuses steps
+ * 2–4 without one. The mode switch sits above that gate, so without this the
+ * overview would render a full card list of ยังไม่ตั้ง — a red claim about
+ * the settings of no company in particular — and the flow chart would draw a
+ * payout for a plan nobody has chosen.
+ *
+ * The buttons stay visible and clickable rather than disappearing: a control
+ * that vanishes teaches nothing, while one that explains itself sends the
+ * admin to step 1. Same reasoning as the locked step tabs above.
+ */
+const companyChosen = computed(() => effectiveCompanyId.value !== null)
+
+/**
+ * Which step the rail is for, or null on step 1 — which asks no card,
+ * because it is the company picker the other three are about.
+ *
+ * A computed rather than a cast in the template: `activeStep as 2 | 3 | 4`
+ * inside a binding is read by the Vue ESLint parser as the deprecated filter
+ * syntax, and it would also be a cast that quietly claims step 1 away.
+ */
+const cardStep = computed<2 | 3 | 4 | null>(() => (activeStep.value === 1 ? null : activeStep.value))
+
+/**
+ * THE OVERVIEW SPEAKS FOR EVERY TAB, SO IT MUST HAVE EVERY TAB'S DATA.
+ *
+ * `ensureTabLoaded`'s own note warns that a section rendered without being
+ * navigated to "would show an empty list and never fetch, which reads exactly
+ * like 'this company has nothing configured'". This mode is that hazard at
+ * full width: it makes a claim about all six tabs at once while only the one
+ * the admin happened to open has been fetched, so an untouched rank ladder
+ * would be reported as ยังไม่ตั้ง — about money, in red, wrongly.
+ *
+ * So opening it fetches what it is about to speak for, and it renders nothing
+ * until that lands. Only the current plan's tab is pulled: the card list
+ * already hides the other five plans' rows, and fetching for rows nobody will
+ * see is five requests spent to answer nothing.
+ */
+const overviewTabs = computed<Tab[]>(() => {
+  // 'rules' feeds four cards on every plan — the seller rate, the scoped
+  // rates, the PV column and the team-leader rates — so it is never optional.
+  // The plan's own tab comes from planTypeToTab, the map the step chips and
+  // the readiness probe already steer by; a second copy here would be one
+  // more place to forget when a seventh plan lands.
+  const planTab = planTypeToTab[viewingPlanType.value]
+
+  return planTab ? ['rules', planTab] : ['rules']
+})
+
+const overviewReady = computed(() => overviewTabs.value.every((tab) => loadedTabs.value.has(tab)))
+
+async function openOverview(): Promise<void> {
+  viewMode.value = 'overview'
+
+  await Promise.all(overviewTabs.value.map((tab) => ensureTabLoaded(tab)))
+}
+
+/** The plain data the card list reads — see constants/commissionCards.ts. */
+const cardContext = computed<CardContext>(() => ({
+  planType: (viewingPlanType.value ?? 'unilevel') as CardContext['planType'],
+  basis: commissionBasis.value ?? null,
+  productsMissingPointValue: productsMissingPointValue.value.length,
+  companyDefaultRatePct: companyDefaultRules.value[0]
+    ? companyDefaultRules.value[0].rate_value / 100
+    : null,
+  scopedRateCount: categoryRulesAll.value.length,
+  ranks: byCompany(agentRanks.value).map((rank) => ({
+    name: rank.name,
+    thresholdSatang: rank.volume_threshold,
+    // A rank priced in fixed satang has no percentage to report, and
+    // inventing one would put a number in front of an admin that no engine
+    // will ever apply. Null says "this rung is not a percentage".
+    ratePct: rank.rate_type === 'percentage' ? rank.rate_value / 100 : null,
+    breakaway: rank.is_breakaway_rank,
+  })),
+  rankSettings: rankSettingsForm.value.trailing_window_days === ''
+    ? null
+    : {
+        trailingWindowDays: Number(rankSettingsForm.value.trailing_window_days),
+        volumeScope: rankSettingsForm.value.volume_scope,
+        recalculationFrequency: rankSettingsForm.value.recalculation_frequency,
+      },
+  binary: binarySettings.value
+    ? {
+        matchedRatePct: binarySettings.value.matched_rate_type === 'percentage'
+          ? binarySettings.value.matched_rate_value / 100
+          : null,
+        cycle: binarySettings.value.cycle_frequency,
+        capSatang: binarySettings.value.payout_cap_satang,
+        carryOver: binarySettings.value.carry_over_unmatched,
+      }
+    : null,
+  matrix: matrixSettings.value
+    ? {
+        width: matrixSettings.value.width,
+        depth: matrixSettings.value.depth,
+        levelRatesPct: byCompany(matrixLevelRates.value)
+          .filter((rate) => rate.rate_type === 'percentage')
+          .map((rate) => rate.rate_value / 100),
+      }
+    : null,
+  generation: generationSettings.value
+    ? {
+        maxDepth: generationSettings.value.max_generation_depth,
+        ratesPct: byCompany(generationRules.value)
+          .filter((rule) => rule.rate_type === 'percentage')
+          .map((rule) => rule.rate_value / 100),
+      }
+    : null,
+  affiliate: affiliateSettings.value
+    ? { attributionWindowDays: affiliateSettings.value.attribution_window_days }
+    : null,
+  leaderLevelRatesPct: levelLadderDraft.value.map((row) => row.percent),
+  leaderFlatRatePct: activeOverrideRules.value.find((rule) => !rule.level && rule.rate_type === 'percentage')
+    ? activeOverrideRules.value.find((rule) => !rule.level && rule.rate_type === 'percentage')!.rate_value / 100
+    : null,
+  maxOverrideDepth: maxOverrideDepth.value === '' ? null : Number(maxOverrideDepth.value),
+  overrideMode: overrideModeUnknown.value ? null : overrideMode.value,
+  withdrawalMinSatang: minWithdrawalBaht.value === '' ? null : Math.round(Number(minWithdrawalBaht.value) * 100),
+  withholdingTaxPct: whtRatePercent.value === '' ? null : Number(whtRatePercent.value),
+}))
+
+/**
+ * WHAT ONE DEAL PAYS OUT, FOR THE SUMMARY STRIP — AND ONLY WHERE THAT IS ONE
+ * NUMBER.
+ *
+ * Stairstep is the plan whose total is a property of the settings alone: the
+ * differentials telescope, so the company's outlay is the highest rung in the
+ * chain, whoever sells and however long the chain is. Every other plan needs
+ * a shape or a cycle to answer at all — Binary pays what two legs matched,
+ * Matrix and Generation pay per level down a tree.
+ *
+ * So the strip states the figure where it is genuinely a figure and stays
+ * silent elsewhere, rather than duplicating five engines' arithmetic in a
+ * view. PlanShapePreview already answers the other five, honestly, one worked
+ * example at a time.
+ */
+const overviewPayout = computed<{ baseSatang: number; totalSatang: number; totalPct: number } | null>(() => {
+  if (viewingPlanType.value !== 'stairstep_breakaway') return null
+
+  const base = ladderBaseSatang.value
+  const rates = cardContext.value.ranks
+    .map((rank) => rank.ratePct)
+    .filter((rate): rate is number => rate !== null)
+
+  if (base <= 0 || rates.length === 0) return null
+
+  const totalPct = Math.max(...rates)
+
+  // Basis points, one round at the multiply — BR-3, the same shape the
+  // backend uses, so the strip cannot drift a satang from the ledger.
+  return {
+    baseSatang: base,
+    totalSatang: Math.round((base * (totalPct * 100)) / 10000),
+    totalPct,
+  }
+})
+
+/**
+ * Which control a card's "แก้ไข" opens.
+ *
+ * Reuses focusPlanControl()'s destinations rather than inventing a second
+ * navigation: that function already knows which step owns each control, that
+ * a locked step must refuse rather than silently do nothing, and how to
+ * flash the destination once it arrives.
+ */
+const CARD_FOCUS_TARGETS: Partial<Record<CardId, string>> = {
+  'plan-type': 'plan-chips',
+  basis: 'basis-card',
+  'pv-table': 'pv-table',
+  'seller-default-rate': 'seller-rate',
+  'seller-scoped-rates': 'seller-scoped-rates',
+  'rank-ladder': 'rank-ladder',
+  'rank-volume-scope': 'rank-settings',
+  'rank-cadence': 'rank-settings',
+  'binary-matched-rate': 'binary',
+  'binary-cycle': 'binary',
+  'binary-cap-carry': 'binary',
+  'matrix-shape': 'matrix-levels',
+  'matrix-level-rates': 'matrix-levels',
+  'generation-depth': 'generation',
+  'generation-rates': 'generation',
+  'affiliate-window': 'affiliate',
+  'affiliate-leader-rate': 'leader-rates',
+  'leader-level-rates': 'unilevel-levels',
+  'leader-depth-cap': 'leader-depth-cap',
+  'override-mode': 'override-mode',
+  'withdrawal-min': 'withdrawal-min',
+  'withholding-tax': 'withholding-tax',
+}
+
+/**
+ * Both card surfaces navigate through here — the overview's "แก้ไข" and the
+ * step rail's rows. One function on purpose: they are the same action asked
+ * from two places, and a second copy would be the one that gets forgotten
+ * when a card gains a destination.
+ */
+function goToCard(cardId: CardId): void {
+  // Leave the overview FIRST: focusPlanControl scrolls to a selector, and a
+  // selector inside a panel that is still hidden resolves to an element with
+  // no position at all. (Already 'steps' when the rail calls — harmless.)
+  viewMode.value = 'steps'
+
+  const target = CARD_FOCUS_TARGETS[cardId]
+
+  if (target) void focusPlanControl(target)
+}
+
 /**
  * WHAT THE UNILEVEL LADDER'S BAHT COLUMN IS PRICED AGAINST (2026-09-24).
  *
@@ -4093,6 +4358,35 @@ function focusDestinationFor(target: string): FocusDestination | null {
      */
     case 'unilevel-levels':
       return { step: 2, selector: '[data-test="plan-structure-unilevel"]', missing: '' }
+
+    /*
+     * ═══ THE OVERVIEW'S DESTINATIONS (design B + C1) ═══
+     *
+     * Every row on the overview hands its card id back and lands here, so
+     * that screen inherits the step gating and the "this step is locked, and
+     * here is why" message for free. Adding a second navigation beside this
+     * one is how the two would start disagreeing about which step owns what.
+     */
+    case 'plan-chips':
+      return { step: 2, selector: '[data-test="plan-explainer"]', missing: '' }
+    case 'basis-card':
+      return { step: 2, selector: '[data-test="basis-card"]', missing: '' }
+    case 'pv-table':
+      return { step: 2, selector: '[data-test="pv-table"]', missing: '' }
+    case 'rank-settings':
+      return { step: 2, selector: '[data-test="rank-volume-scope"]', missing: '' }
+    case 'seller-scoped-rates':
+      return { step: 3, selector: '[data-test="step3-categories"]', missing: 'อัตราตามหมวดหมู่อยู่ในขั้นที่ 3 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'leader-rates':
+      return { step: 4, selector: '[data-test="step4-leader-rates"]', missing: 'อัตราหัวหน้าทีมอยู่ในขั้นที่ 4 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'leader-depth-cap':
+      return { step: 4, selector: '[data-test="step4-level-ladder"]', missing: 'จำนวนชั้นที่จ่ายอยู่ในขั้นที่ 4 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'override-mode':
+      return { step: 4, selector: '[data-test="step4-override-mode"]', missing: 'ที่มาของเงินหัวหน้าทีมอยู่ในขั้นที่ 4 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'withdrawal-min':
+      return { step: 4, selector: '[data-test="step4-withdrawal-minimum"]', missing: 'ยอดขั้นต่ำในการเบิกอยู่ในขั้นที่ 4 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
+    case 'withholding-tax':
+      return { step: 4, selector: '[data-test="wht-input"]', missing: 'ภาษีหัก ณ ที่จ่ายอยู่ในขั้นที่ 4 — ทำขั้นก่อนหน้าให้เสร็จก่อน' }
     case 'binary':
       return { step: 2, selector: '[data-test="plan-structure-binary"]', missing: '' }
     case 'matrix-levels':
@@ -5235,7 +5529,110 @@ watch(companyPlanType, (pt) => {
       </button>
     </div>
 
-    <div class="mt-4 rounded-2xl border border-slate-200 bg-white/95 overflow-hidden">
+    <!--
+      ═══ TWO WAYS INTO THE SAME SETTINGS (owner, 2026-09-24) ═══
+
+      ภาพรวม lists everything by topic and edits nothing; ตั้งค่าทีละขั้น is
+      the four-step flow, unchanged. The step flow stays MOUNTED behind the
+      overview (v-show, not v-if) for the reason the modal note below spells
+      out: unmounting a panel takes any half-typed form in it with no word to
+      the admin, and switching views is one click away.
+    -->
+    <div class="mt-4 flex w-fit max-w-full flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 sm:gap-2" data-test="commission-view-mode">
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-[13.5px] font-bold transition-colors sm:px-4"
+        :class="viewMode === 'overview' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-700'"
+        :aria-pressed="viewMode === 'overview'"
+        data-test="view-mode-overview"
+        @click="openOverview"
+      >
+        ภาพรวม
+      </button>
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-[13.5px] font-bold transition-colors sm:px-4"
+        :class="viewMode === 'steps' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-700'"
+        :aria-pressed="viewMode === 'steps'"
+        data-test="view-mode-steps"
+        @click="viewMode = 'steps'"
+      >
+        ตั้งค่าทีละขั้น
+      </button>
+      <button
+        type="button"
+        class="rounded-lg px-3 py-2 text-[13.5px] font-bold transition-colors sm:px-4"
+        :class="viewMode === 'flow' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:text-slate-700'"
+        :aria-pressed="viewMode === 'flow'"
+        data-test="view-mode-flow"
+        @click="viewMode = 'flow'"
+      >
+        ผังการจ่าย
+      </button>
+    </div>
+
+    <div v-if="viewMode === 'overview'" class="mt-4">
+      <EmptyState
+        v-if="!companyChosen"
+        icon="building"
+        title="ยังไม่ได้เลือกบริษัท"
+        message="ภาพรวมเป็นของบริษัทเดียว — เลือกบริษัทในขั้นที่ 1 ก่อน แล้วค่าทุกตัวของบริษัทนั้นจะมาแสดงที่นี่"
+        data-test="overview-no-company"
+      />
+      <!--
+        Nothing is rendered until the tabs this mode speaks for have landed.
+        A card list drawn over half-fetched data would report a saved rank
+        ladder as ยังไม่ตั้ง — a false statement about money, made in red,
+        for as long as the request takes. See `overviewTabs` in the script.
+      -->
+      <LoadingSkeleton v-else-if="!overviewReady" type="list" :rows="6" data-test="overview-loading" />
+      <CommissionOverview
+        v-else
+        :plan-type="cardContext.planType"
+        :context="cardContext"
+        :can-edit="canEditCommissionConfig"
+        :payout="overviewPayout"
+        @edit="goToCard"
+      />
+    </div>
+
+    <!--
+      ผังการจ่าย — the same worked example step 2 carries, at full width and
+      with nothing beside it. `v-if` (not `v-show`) is deliberate: it remounts
+      the chart on every open so it always starts from this company's seed.
+      See the CommissionViewMode block for why two sandboxes left to drift
+      apart is worse than losing a demo tweak.
+    -->
+    <div v-if="viewMode === 'flow'" class="mt-4" data-test="commission-flow">
+      <EmptyState
+        v-if="!companyChosen"
+        icon="building"
+        title="ยังไม่ได้เลือกบริษัท"
+        message="ผังการจ่ายวาดจากแผนและอัตราของบริษัทที่เลือก — เลือกบริษัทในขั้นที่ 1 ก่อน"
+        data-test="flow-no-company"
+      />
+      <PlanShapePreview
+        v-else
+        :plan-type="viewingPlanType"
+        :basis="commissionBasis"
+        :seed="planShapeSeed"
+        :live-level-rates="liveLevelRates"
+        default-open
+        @focus-target="focusPlanControl"
+      />
+      <!--
+        The jump back. focusPlanControl already refuses a locked step and
+        says why, so this is one line and not a gate of its own.
+      -->
+      <p v-if="companyChosen" class="mt-3 px-1 text-[12.5px] text-slate-500">
+        อยากแก้ตัวเลขที่เห็นในผังนี้? กดที่กล่องในผัง หรือกลับไปที่
+        <button type="button" class="font-bold text-brand-600 hover:underline" data-test="flow-back-to-steps" @click="viewMode = 'steps'">
+          ตั้งค่าทีละขั้น
+        </button>
+      </p>
+    </div>
+
+    <div v-show="viewMode === 'steps'" class="mt-4 rounded-2xl border border-slate-200 bg-white/95 overflow-hidden">
       <!--
         The four step tabs, GATED (2026-09-12) — owner: "ยังคลิ๊กเลือกได้ทุก
         tab เลย ตามที่คุยไว้ต้องทำทีละขั้นตอน". A step opens only once every
@@ -5309,7 +5706,25 @@ watch(companyPlanType, (pt) => {
       <div class="p-5 sm:p-6">
         <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" />
 
-        <template v-else>
+        <!--
+          ═══ THE STEP, AND WHAT THE STEP IS ASKING (จอ 2/3, 2026-09-24) ═══
+
+          The rail is the card model's half of the STEP flow: it names the
+          decisions this step owns and jumps to them, while the forms beside
+          it keep every write. It owns no input — same boundary as the
+          overview, same reason (the wizard deleted on 2026-09-12).
+
+          Two columns only from `xl`. Below that the rail drops BELOW the
+          forms rather than squeezing beside them: a 260px column on a tablet
+          leaves the rate tables scrolling sideways, and DoD Section 9 asks
+          for Desktop/Tablet/Mobile to work, not to fit.
+
+          Step 1 has no cards — it picks the company the other three are about
+          — so the rail would be an empty box there, which reads as "this step
+          asks nothing" rather than "this step is the company picker".
+        -->
+        <div v-else class="grid items-start gap-6" :class="activeStep === 1 ? '' : 'xl:grid-cols-[minmax(0,1fr)_268px]'">
+          <div class="min-w-0">
           <!-- ═══════════ ขั้นที่ 1 · เลือกบริษัท ═══════════ -->
           <section v-if="activeStep === 1" class="space-y-4" data-test="step-panel-1">
             <div>
@@ -7714,7 +8129,18 @@ watch(companyPlanType, (pt) => {
               </p>
             </template>
           </section>
-        </template>
+          </div>
+
+          <CommissionStepChecklist
+            v-if="cardStep"
+            :plan-type="cardContext.planType"
+            :context="cardContext"
+            :step="cardStep"
+            :can-edit="canEditCommissionConfig"
+            class="xl:sticky xl:top-4"
+            @focus="goToCard"
+          />
+        </div>
       </div>
 
       <!--

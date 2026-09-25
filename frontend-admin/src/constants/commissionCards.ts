@@ -583,8 +583,24 @@ export function cardsForPlan(plan: CommissionPlanType): CommissionCard[] {
     plan === 'unilevel'
       ? [
           {
+            /*
+             * STEP 2, NOT STEP 4 — and this is the one card where that is
+             * surprising enough to write down.
+             *
+             * It writes `commission_override_rules`, which is step 4's table,
+             * so step 4 is where it began. But the Unilevel ladder editor
+             * itself moved into step 2's structure area on 2026-09-24, out of
+             * PlanShapePreview's slot, and `step` is not a claim about a table
+             * — it is where the ADMIN finds the control. Left at 4 the step
+             * rail named a setting that is not on step 4 while staying silent
+             * on step 2, where the admin is looking straight at it, and
+             * stepProgress() counted both steps wrong.
+             *
+             * `group` stays 'leader': the overview lists by topic, and whose
+             * money this is did not change when the form moved.
+             */
             id: 'leader-level-rates',
-            step: 4,
+            step: 2,
             group: 'leader',
             question: 'หัวหน้าทีมได้กี่ชั้น ชั้นละเท่าไร',
             why: 'จ่ายขึ้นไปทั้งสาย ชั้นละอัตราของตัวเอง ไม่ใช่ส่วนต่าง — ยอดที่บริษัทจ่ายออกจึงโตตามจำนวนชั้น ไม่มีเพดานแบบแผนอันดับ',
