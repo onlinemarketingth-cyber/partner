@@ -45,7 +45,13 @@ function mountOverview(over: {
   plan?: CommissionPlanType
   context?: Partial<CardContext>
   canEdit?: boolean
-  payout?: { baseSatang: number; totalSatang: number; totalPct: number } | null
+  payout?: {
+    baseSatang: number
+    totalSatang: number
+    totalPct: number
+    breakawayPct?: number | null
+    breakawaySatang?: number | null
+  } | null
 } = {}) {
   return mount(CommissionOverview, {
     props: {

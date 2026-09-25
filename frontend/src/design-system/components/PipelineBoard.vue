@@ -350,6 +350,17 @@ function canAdvanceByHand(r: ReferralItem): boolean {
   return r.pipeline.next_stage !== null && !paymentIsNext(r)
 }
 
+/**
+ * The Thai name of the stage the advance button moves to. A function rather
+ * than `stageLabelTh(r.pipeline.next_stage)` inline: the button's v-if goes
+ * through canAdvanceByHand(), and TypeScript does not narrow `next_stage` to
+ * non-null across a function call — the inline form failed `vue-tsc --build`
+ * on 2026-09-25 and blocked a deploy.
+ */
+function nextStageLabel(r: ReferralItem): string {
+  return r.pipeline.next_stage ? stageLabelTh(r.pipeline.next_stage) : ''
+}
+
 function paymentWaitLabel(r: ReferralItem): string {
   const status = r.order?.status
 
@@ -1108,11 +1119,11 @@ function formatDateTime(iso: string): string {
                         v-else-if="canAdvanceByHand(r)"
                         size="sm"
                         :loading="advancing === r.id"
-                        :title="td('pipeline.advance_to', '', { stage: stageLabelTh(r.pipeline.next_stage) })"
+                        :title="td('pipeline.advance_to', '', { stage: nextStageLabel(r) })"
                         data-test="advance"
                         @click.stop="advance(r)"
                       >
-                        {{ td('pipeline.to_stage', '', { stage: stageLabelTh(r.pipeline.next_stage) }) }}
+                        {{ td('pipeline.to_stage', '', { stage: nextStageLabel(r) }) }}
                       </AppButton>
                       <!-- 2026-09-25 — the payment edge is the order's, so
                            the row says what it is waiting for instead. -->
