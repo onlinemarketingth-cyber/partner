@@ -1199,6 +1199,8 @@ Route::prefix('v1')->group(function () {
         // attempt; authorization + company scoping live in
         // StoreUserCertificationRequest.
         Route::post('/user-certifications', [UserCertificationController::class, 'store']);
+        // 2026-09-28 — the same override for several agents at once (roster).
+        Route::post('/user-certifications/bulk', [UserCertificationController::class, 'bulk']);
         // Academy Sprint 6 — on-demand certificate PDF, same tenant/ownership
         // rule as a single-record read (UserCertificationPolicy::view).
         Route::get('/user-certifications/{userCertification}/download', [UserCertificationController::class, 'download'])->name('user-certifications.download');

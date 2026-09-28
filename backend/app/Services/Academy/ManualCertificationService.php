@@ -64,4 +64,35 @@ class ManualCertificationService
             return $certification;
         });
     }
+
+    /**
+     * 2026-09-28 — the roster's "อนุมัติการเรียน N คน".
+     *
+     * grant() for each agent, in ONE transaction: a failure part-way leaves
+     * nobody half-approved and the screen's count honest. Each new grant
+     * writes its own audit row (same as one-at-a-time); an agent who already
+     * holds the tier is reported back rather than re-logged.
+     *
+     * @param  iterable<User>  $targets
+     * @return array{granted: list<int>, already_held: list<int>}
+     */
+    public function grantMany(iterable $targets, CertTier $tier, User $actor): array
+    {
+        return DB::transaction(function () use ($targets, $tier, $actor) {
+            $granted = [];
+            $alreadyHeld = [];
+
+            foreach ($targets as $target) {
+                $certification = $this->grant($target, $tier, $actor);
+
+                if ($certification->wasRecentlyCreated) {
+                    $granted[] = $target->id;
+                } else {
+                    $alreadyHeld[] = $target->id;
+                }
+            }
+
+            return ['granted' => $granted, 'already_held' => $alreadyHeld];
+        });
+    }
 }

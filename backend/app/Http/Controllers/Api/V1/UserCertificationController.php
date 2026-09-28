@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Academy\BulkGrantUserCertificationRequest;
 use App\Http\Requests\Academy\StoreUserCertificationRequest;
 use App\Http\Resources\UserCertificationResource;
 use App\Models\CertTier;
@@ -11,6 +12,7 @@ use App\Models\UserCertification;
 use App\Services\Academy\CertificatePdfService;
 use App\Services\Academy\ManualCertificationService;
 use App\Support\CompanyScopeFilter;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -56,6 +58,28 @@ class UserCertificationController extends Controller
      * ability as a single-record read (Super Admin, the owning agent, or
      * Company Admin of the same company) — see UserCertificationPolicy.
      */
+    /**
+     * POST /user-certifications/bulk — 2026-09-28, the roster's bulk
+     * "อนุมัติการเรียน". The same override as store(), for several agents.
+     * The Form Request has already scoped every id to an active agent the
+     * actor may grant to; withoutGlobalScopes here only lets a Super Admin
+     * reach agents outside the header's company, which that rule allows.
+     */
+    public function bulk(BulkGrantUserCertificationRequest $request, ManualCertificationService $service): JsonResponse
+    {
+        $ids = array_map('intval', $request->validated('user_ids'));
+        $targets = User::withoutGlobalScopes()->whereIn('id', $ids)->orderBy('id')->get();
+        $tier = CertTier::findOrFail($request->integer('cert_tier_id'));
+
+        $result = $service->grantMany($targets, $tier, $request->user());
+
+        return response()->json(['data' => [
+            'cert_tier' => ['id' => $tier->id, 'key' => $tier->key, 'name' => $tier->name],
+            'granted_user_ids' => $result['granted'],
+            'already_held_user_ids' => $result['already_held'],
+        ]]);
+    }
+
     public function download(UserCertification $userCertification, CertificatePdfService $service): mixed
     {
         $this->authorize('view', $userCertification);

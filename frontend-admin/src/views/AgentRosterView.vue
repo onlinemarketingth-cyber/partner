@@ -134,7 +134,10 @@ async function loadAgents() {
     const requests: Promise<unknown>[] = [
       fetchAllPages<AgentItem>(buildUsersPath()),
       api.get<{ data: CertTierOption[] }>('/cert-tiers'),
-      api.get<{ data: UserCertificationItem[] }>('/user-certifications'),
+      // All pages: the bulk "อนุมัติการเรียน" dialog reads who already holds a
+      // tier from this list, and the endpoint pages at 15 — the first page
+      // alone made the modal and the dialog wrong past the 15th grant.
+      fetchAllPages<UserCertificationItem>('/user-certifications'),
     ]
     // TASK-209 P4 — the company list for the create form comes from the
     // global store now (one fetch for the whole app, idempotent), not a
@@ -143,7 +146,7 @@ async function loadAgents() {
     const [res, tiersRes, certsRes] = await Promise.all(requests)
     agents.value = res as AgentItem[]
     certTiers.value = (tiersRes as { data: CertTierOption[] }).data
-    certifications.value = (certsRes as { data: UserCertificationItem[] }).data
+    certifications.value = certsRes as UserCertificationItem[]
     companies.value = activeCompany.companies
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
@@ -177,6 +180,127 @@ const filterTabs: Array<{ id: RosterFilter; label: string }> = [
 const filteredAgents = computed(() => agents.value.filter((a) => (rosterFilter.value === 'active' ? a.is_active : !a.is_active)))
 const activeCount = computed(() => agents.value.filter((a) => a.is_active).length)
 const inactiveCount = computed(() => agents.value.filter((a) => !a.is_active).length)
+
+/* ── อนุมัติการเรียน — one agent or many (2026-09-28) ──────────────────────
+ *
+ * Owner: "เพิ่มปุ่มอนุมัติ class เรียน และสามารถเลือกอนุมัติทั้งหมด หรือเลือก
+ * อนุมัติหลายรายการได้". The action is the BR-1 admin override that already
+ * exists one agent at a time in the edit modal (grant a cert tier without an
+ * exam, ManualCertificationService) — the same rules, the same audit, now
+ * from the list: tick agents, then one button.
+ *
+ * Only ACTIVE, APPROVED agents can be ticked: an applicant still waiting for
+ * approval is approved first, and a company admin never needs the course.
+ */
+const onlyWithoutBasic = ref(false)
+
+function lacksBasic(a: AgentItem): boolean {
+  return a.role === 'agent' && !a.has_passed_basic_cert
+}
+
+const withoutBasicCount = computed(() => filteredAgents.value.filter(lacksBasic).length)
+
+/** What the list shows: the tab, then the "ยังไม่ผ่าน Basic" chip. */
+const listedAgents = computed(() =>
+  onlyWithoutBasic.value && rosterFilter.value === 'active' ? filteredAgents.value.filter(lacksBasic) : filteredAgents.value,
+)
+
+function isGrantable(a: AgentItem): boolean {
+  return a.is_active
+    && a.role === 'agent'
+    && a.agent_approval_status !== 'pending'
+    && a.agent_approval_status !== 'rejected'
+}
+
+const selectedIds = ref<number[]>([])
+const selectableListed = computed(() => (rosterFilter.value === 'active' ? listedAgents.value.filter(isGrantable) : []))
+const selectedAgents = computed(() => agents.value.filter((a) => selectedIds.value.includes(a.id)))
+const allListedSelected = computed(
+  () => selectableListed.value.length > 0 && selectableListed.value.every((a) => selectedIds.value.includes(a.id)),
+)
+
+function isSelected(a: AgentItem): boolean {
+  return selectedIds.value.includes(a.id)
+}
+
+function toggleSelected(a: AgentItem): void {
+  selectedIds.value = isSelected(a) ? selectedIds.value.filter((id) => id !== a.id) : [...selectedIds.value, a.id]
+}
+
+function toggleSelectAll(): void {
+  const listed = selectableListed.value.map((a) => a.id)
+  selectedIds.value = allListedSelected.value
+    ? selectedIds.value.filter((id) => !listed.includes(id))
+    : Array.from(new Set([...selectedIds.value, ...listed]))
+}
+
+function clearSelection(): void {
+  selectedIds.value = []
+}
+
+// A ticked row that leaves the list (tab switched, chip changed, reload)
+// leaves the selection too — the button must never act on somebody the
+// admin can no longer see.
+watch(selectableListed, (rows) => {
+  const visible = new Set(rows.map((a) => a.id))
+  if (selectedIds.value.some((id) => !visible.has(id))) {
+    selectedIds.value = selectedIds.value.filter((id) => visible.has(id))
+  }
+})
+
+const grantTargets = ref<AgentItem[] | null>(null)
+const grantTierId = ref<number | null>(null)
+const granting = ref(false)
+const grantDialogError = ref('')
+const grantResult = ref<{ tierName: string; granted: number; alreadyHeld: number } | null>(null)
+
+function openGrant(targets: AgentItem[]): void {
+  if (targets.length === 0) return
+  grantTargets.value = targets
+  grantTierId.value = (certTiers.value.find((t) => t.key === 'basic') ?? certTiers.value[0])?.id ?? null
+  grantDialogError.value = ''
+}
+
+function closeGrant(): void {
+  if (granting.value) return
+  grantTargets.value = null
+}
+
+function holdsTier(agentId: number, tierId: number | null): boolean {
+  if (tierId === null) return false
+  if (certifications.value.some((c) => c.user_id === agentId && c.cert_tier?.id === tierId)) return true
+  // Basic is also known from the row itself, which is always complete.
+  const tier = certTiers.value.find((t) => t.id === tierId)
+  return tier?.key === 'basic' && agents.value.find((a) => a.id === agentId)?.has_passed_basic_cert === true
+}
+
+const grantWill = computed(() => (grantTargets.value ?? []).filter((a) => !holdsTier(a.id, grantTierId.value)))
+const grantSkip = computed(() => (grantTargets.value ?? []).filter((a) => holdsTier(a.id, grantTierId.value)))
+const grantTierName = computed(() => certTiers.value.find((t) => t.id === grantTierId.value)?.name ?? '')
+
+async function confirmGrant(): Promise<void> {
+  if (!grantTargets.value || grantTierId.value === null || grantWill.value.length === 0) return
+  granting.value = true
+  grantDialogError.value = ''
+  try {
+    const res = await api.post<{ data: { cert_tier: CertTierOption; granted_user_ids: number[]; already_held_user_ids: number[] } }>(
+      '/user-certifications/bulk',
+      { user_ids: grantTargets.value.map((a) => a.id), cert_tier_id: grantTierId.value },
+    )
+    grantResult.value = {
+      tierName: res.data.cert_tier.name,
+      granted: res.data.granted_user_ids.length,
+      alreadyHeld: res.data.already_held_user_ids.length,
+    }
+    grantTargets.value = null
+    clearSelection()
+    await loadAgents()
+  } catch (e) {
+    grantDialogError.value = e instanceof ApiError ? `อนุมัติไม่สำเร็จ: ${e.message}` : 'อนุมัติไม่สำเร็จ'
+  } finally {
+    granting.value = false
+  }
+}
 
 function registeredViaLabel(via?: AgentItem['registered_via']): string {
   const labels: Record<string, string> = { email: 'อีเมล', facebook: 'Facebook', line: 'LINE', google: 'Google' }
@@ -497,6 +621,17 @@ function rowPrimary(a: AgentItem): RowPrimaryAction | null {
     }
   }
 
+  // 2026-09-28 — the one-agent "อนุมัติการเรียน", only while it is needed.
+  if (isGrantable(a) && lacksBasic(a)) {
+    return {
+      label: 'อนุมัติการเรียน',
+      icon: 'check',
+      test: 'grant-course',
+      disabled: granting.value,
+      onSelect: () => openGrant([a]),
+    }
+  }
+
   return null
 }
 
@@ -772,11 +907,100 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
 
     <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
     <template v-else>
-      <EmptyState v-if="!filteredAgents.length" icon="users" title="ไม่มีรายชื่อในหมวดนี้" class="mt-4" />
+      <!-- ── อนุมัติการเรียน (2026-09-28) ─────────────────────────────── -->
+      <div
+        v-if="grantResult"
+        data-test="grant-result"
+        class="mt-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
+      >
+        <Icon name="check_circle" :size="18" class="shrink-0" />
+        <p class="flex-1">
+          <b>อนุมัติ {{ grantResult.tierName }} ให้ {{ grantResult.granted }} คนแล้ว</b>
+          <span v-if="grantResult.alreadyHeld"> · ข้าม {{ grantResult.alreadyHeld }} คน (มีระดับนี้อยู่แล้ว)</span>
+        </p>
+        <button type="button" class="p-1 rounded hover:bg-emerald-100" aria-label="ปิดข้อความ" @click="grantResult = null">
+          <Icon name="x" :size="16" />
+        </button>
+      </div>
+
+      <div v-if="rosterFilter === 'active'" class="mt-4 flex flex-wrap items-center gap-2" data-test="basic-filter">
+        <button
+          type="button"
+          class="min-h-[40px] px-4 rounded-full text-sm font-bold border transition-colors"
+          :class="!onlyWithoutBasic ? 'bg-brand-600 border-brand-600 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'"
+          @click="onlyWithoutBasic = false"
+        >ทั้งหมด ({{ filteredAgents.length }})</button>
+        <button
+          type="button"
+          data-test="only-without-basic"
+          class="min-h-[40px] px-4 rounded-full text-sm font-bold border transition-colors"
+          :class="onlyWithoutBasic ? 'bg-brand-600 border-brand-600 text-white' : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'"
+          @click="onlyWithoutBasic = true"
+        >ยังไม่ผ่าน Basic ({{ withoutBasicCount }})</button>
+      </div>
+
+      <!-- The header row IS the action bar once anything is ticked, and it
+           stays pinned while a long list scrolls under it (owner reviewed
+           the mockup, 2026-09-28). -->
+      <div
+        v-if="selectableListed.length > 0"
+        data-test="select-bar"
+        class="sticky top-0 z-10 mt-3 flex flex-wrap items-center gap-3 min-h-[56px] px-4 py-2 rounded-xl border transition-colors"
+        :class="selectedIds.length ? 'bg-brand-600 border-brand-600 text-white shadow-lg' : 'bg-slate-50 border-slate-200 text-slate-700'"
+      >
+        <label class="flex items-center gap-3 text-sm font-bold cursor-pointer">
+          <input
+            type="checkbox"
+            data-test="select-all"
+            class="w-[18px] h-[18px] rounded"
+            :class="selectedIds.length ? 'accent-white' : 'accent-brand-600'"
+            :checked="allListedSelected"
+            @change="toggleSelectAll"
+          />
+          เลือกทั้งหมด ({{ selectableListed.length }} ตัวแทนในรายการนี้)
+        </label>
+        <span v-if="!selectedIds.length" class="text-xs text-slate-500">ผู้ดูแลบริษัทและผู้สมัครที่รออนุมัติเลือกไม่ได้</span>
+        <div v-else class="flex-1 flex flex-wrap items-center justify-end gap-2">
+          <span class="text-sm" data-test="selected-count"><b>เลือกแล้ว {{ selectedIds.length }} คน</b></span>
+          <button
+            type="button"
+            data-test="clear-selection"
+            class="min-h-[40px] px-3 rounded-lg border border-brand-300 text-sm font-bold hover:bg-brand-500"
+            @click="clearSelection"
+          >ล้างการเลือก</button>
+          <button
+            type="button"
+            data-test="bulk-grant"
+            :disabled="granting"
+            class="min-h-[40px] px-4 inline-flex items-center gap-1.5 rounded-lg bg-white text-brand-700 text-sm font-bold hover:bg-brand-50 disabled:opacity-60"
+            @click="openGrant(selectedAgents)"
+          >
+            <Icon name="check" :size="16" />
+            อนุมัติการเรียน {{ selectedIds.length }} คน
+          </button>
+        </div>
+      </div>
+
+      <EmptyState v-if="!listedAgents.length" icon="users" title="ไม่มีรายชื่อในหมวดนี้" class="mt-4" />
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
-        <div v-for="a in filteredAgents" :key="a.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
+        <div
+          v-for="a in listedAgents"
+          :key="a.id"
+          class="border rounded-xl p-4"
+          :class="isSelected(a) ? 'bg-brand-50 border-brand-200' : 'bg-white/95 border-slate-200'"
+        >
           <div class="flex items-start justify-between gap-3">
             <div class="flex items-start gap-3 min-w-0">
+              <input
+                v-if="rosterFilter === 'active'"
+                type="checkbox"
+                data-test="select-agent"
+                class="mt-0.5 w-[18px] h-[18px] rounded accent-brand-600 shrink-0 disabled:opacity-30"
+                :aria-label="`เลือก ${a.name}`"
+                :disabled="!isGrantable(a)"
+                :checked="isSelected(a)"
+                @change="toggleSelected(a)"
+              />
               <Icon name="user" :size="18" class="text-brand-600 mt-0.5 shrink-0" />
               <div class="min-w-0">
                 <p class="text-sm font-bold text-slate-900 truncate">
@@ -909,6 +1133,66 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
 
     <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
     <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
+
+    <!-- อนุมัติการเรียน — pick the tier, see who is granted and who already
+         holds it, confirm. A modal of its own: ConfirmDialog has no room for
+         a choice. -->
+    <div
+      v-if="grantTargets"
+      class="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-slate-500/30 backdrop-blur-sm"
+      @click.self="closeGrant"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="grant-title"
+        data-test="grant-dialog"
+        class="w-full max-w-lg rounded-2xl bg-white shadow-2xl p-6 space-y-4"
+      >
+        <div>
+          <h3 id="grant-title" class="text-lg font-bold text-slate-900">อนุมัติการเรียนโดยไม่ต้องสอบ</h3>
+          <p class="text-xs text-slate-500 mt-1">บันทึกลงประวัติว่าใครอนุมัติ เมื่อไร — ยกเลิกทีหลังไม่ได้</p>
+        </div>
+
+        <fieldset class="space-y-2">
+          <legend class="text-xs font-bold text-slate-600 mb-2">อนุมัติระดับ</legend>
+          <label
+            v-for="t in certTiers"
+            :key="t.id"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer"
+            :class="grantTierId === t.id ? 'border-brand-600 bg-brand-50' : 'border-slate-200 bg-white'"
+          >
+            <input v-model="grantTierId" type="radio" name="grant-tier" :value="t.id" class="accent-brand-600" data-test="grant-tier" />
+            <span class="text-sm font-bold text-slate-900">{{ t.name }}</span>
+            <span v-if="t.key === 'basic'" class="text-xs text-slate-500">ผ่านแล้วขายได้ทันที</span>
+          </label>
+        </fieldset>
+
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5 text-sm">
+          <p class="text-emerald-800" data-test="grant-will">
+            <b>จะอนุมัติ {{ grantWill.length }} คน</b>
+            <span class="text-slate-600"> {{ grantWill.map((a) => a.name).join(', ') || '—' }}</span>
+          </p>
+          <p v-if="grantSkip.length" class="text-amber-800" data-test="grant-skip">
+            <b>ข้าม {{ grantSkip.length }} คน</b>
+            <span class="text-slate-600"> {{ grantSkip.map((a) => a.name).join(', ') }} — มี {{ grantTierName }} อยู่แล้ว</span>
+          </p>
+        </div>
+
+        <p v-if="grantDialogError" class="text-sm text-rose-700" data-test="grant-error">{{ grantDialogError }}</p>
+
+        <div class="flex justify-end gap-2">
+          <button type="button" class="btn-secondary" :disabled="granting" @click="closeGrant">ยกเลิก</button>
+          <button
+            type="button"
+            class="btn-primary"
+            data-test="confirm-grant"
+            :disabled="granting || grantWill.length === 0"
+            @click="confirmGrant"
+          >{{ granting ? 'กำลังอนุมัติ…' : `อนุมัติ ${grantWill.length} คน` }}</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 2026-09-08 (human: "soft delete เองต้องแจ้งเตือนผู้ใช้ถึงผลกระทบเป็น
          ภาษาคนเข้าใจ ไม่เอาภาษาระบบ").
