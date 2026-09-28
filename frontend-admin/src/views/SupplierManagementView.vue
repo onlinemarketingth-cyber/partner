@@ -39,6 +39,7 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import SupplierForm from './supplier/SupplierForm.vue'
 import { formatMoney } from '@/composables/useClientFile'
 import {
@@ -142,7 +143,6 @@ function startEdit(row: SupplierRow): void {
     gp_mode: row.gp_mode,
     gp_value: row.gp_value,
     release_trigger: row.release_trigger,
-    min_withdrawal_satang: row.min_withdrawal_satang,
     wht_rate: row.wht_rate,
     payout_bank_name: row.payout_bank_name,
     payout_bank_account_number: row.payout_bank_account_number,
@@ -227,7 +227,53 @@ const kpis = computed(() => [
   },
 ])
 
-onMounted(load)
+/* ── Platform setting: the auto-receive window (ADR-048) ──────────────────
+ *
+ * Owner: "ถ้า Agent หรือลูกค้าไม่กดรับสินค้าเกิน 15 วันหลัง คู่ค้ากดยืนยันว่า
+ * จัดส่งสำเร็จแล้ว พึงเบิกเงินได้" — one number for the whole platform. It
+ * lives here because it is a supplier rule; it is loaded on its own so a
+ * failure here never blanks the supplier list.
+ */
+const autoReceiveDays = ref<number | null>(null)
+// string | number: v-model on a number input hands back a number.
+const autoReceiveInput = ref<string | number>('')
+const savingSetting = ref(false)
+const settingMessage = ref('')
+
+async function loadSettings(): Promise<void> {
+  try {
+    const r = await api.get<{ data: { auto_receive_days: number | null } }>('/supplier-settings')
+    autoReceiveDays.value = r.data?.auto_receive_days ?? null
+    autoReceiveInput.value = autoReceiveDays.value === null ? '' : String(autoReceiveDays.value)
+  } catch {
+    autoReceiveDays.value = null
+  }
+}
+
+const settingChanged = computed(() =>
+  String(autoReceiveInput.value).trim() !== '' && Number(autoReceiveInput.value) !== autoReceiveDays.value)
+
+async function saveSettings(): Promise<void> {
+  savingSetting.value = true
+  settingMessage.value = ''
+  try {
+    const r = await api.put<{ data: { auto_receive_days: number } }>('/supplier-settings', {
+      auto_receive_days: Number(autoReceiveInput.value),
+    })
+    autoReceiveDays.value = r.data.auto_receive_days
+    autoReceiveInput.value = String(r.data.auto_receive_days)
+    settingMessage.value = 'บันทึกแล้ว'
+  } catch (e) {
+    settingMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ: ${e.message}` : 'บันทึกไม่สำเร็จ'
+  } finally {
+    savingSetting.value = false
+  }
+}
+
+onMounted(() => {
+  void load()
+  void loadSettings()
+})
 </script>
 
 <template>
@@ -257,6 +303,39 @@ onMounted(load)
       data-test="error"
       class="mt-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm px-4 py-3"
     >{{ errorMessage }}</p>
+
+    <!-- ── Platform setting (ADR-048) ─────────────────────────────────── -->
+    <section
+      class="mt-4 flex flex-wrap items-center gap-2 rounded-xl bg-white/95 border border-slate-200 px-4 py-3"
+      data-test="auto-receive-setting"
+    >
+      <label for="auto-receive-days" class="text-sm font-bold text-slate-700">
+        ยืนยันรับสินค้าอัตโนมัติเมื่อครบ
+      </label>
+      <input
+        id="auto-receive-days"
+        v-model="autoReceiveInput"
+        type="number"
+        min="1"
+        max="365"
+        data-test="auto-receive-days"
+        class="w-20 min-h-[36px] px-2 rounded-lg border border-slate-300 text-sm text-right"
+      />
+      <span class="text-sm text-slate-700">วันหลังคู่ค้าจัดส่ง</span>
+      <InfoPopover label="ยืนยันรับสินค้าอัตโนมัติ">
+        ใช้กับคู่ค้าที่ตั้งจังหวะการเบิกเป็น "เมื่อผู้รับได้รับสินค้า" — ยอดของคู่ค้าจะเบิกได้เมื่อตัวแทนหรือลูกค้ากดรับสินค้า
+        ถ้าไม่มีใครกดภายในจำนวนวันนี้หลังคู่ค้าบันทึกการจัดส่ง ระบบจะถือว่าได้รับแล้วและปล่อยยอดให้เอง
+        ค่านี้ใช้กับคู่ค้าทุกราย
+      </InfoPopover>
+      <button
+        type="button"
+        data-test="save-auto-receive"
+        :disabled="!settingChanged || savingSetting"
+        class="min-h-[36px] px-3 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 transition"
+        @click="saveSettings"
+      >{{ savingSetting ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
+      <span v-if="settingMessage" class="text-xs text-slate-600" data-test="auto-receive-message">{{ settingMessage }}</span>
+    </section>
 
     <!-- ── Create ────────────────────────────────────────────────────── -->
     <section

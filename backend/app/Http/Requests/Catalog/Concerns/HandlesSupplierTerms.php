@@ -170,11 +170,17 @@ trait HandlesSupplierTerms
             $hasProductTerms = ($this->input('supplier_gp_mode', $product?->supplier_gp_mode?->value) !== null)
                 && ($this->input('supplier_gp_value', $product?->supplier_gp_value) !== null);
 
-            if ($hasProductTerms) {
+            $supplier = Supplier::find($supplierId);
+
+            /*
+             * 2026-09-27 (ADR-048) — a product's own GP covers GP only. The
+             * release trigger is always the supplier's, so a product with its
+             * own GP under a supplier with no trigger used to pass here and
+             * then fail every payment for it.
+             */
+            if ($hasProductTerms && $supplier?->release_trigger !== null) {
                 return;
             }
-
-            $supplier = Supplier::find($supplierId);
 
             if ($supplier === null || ! $supplier->hasCompleteTerms()) {
                 $validator->errors()->add(

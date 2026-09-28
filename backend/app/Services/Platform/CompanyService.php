@@ -2,7 +2,9 @@
 
 namespace App\Services\Platform;
 
+use App\Models\AuditLog;
 use App\Models\Company;
+use App\Models\User;
 use App\Services\Catalog\ProductCatalogPropagationService;
 use App\Services\Pipeline\PipelineTemplateProvisioner;
 use App\Services\Theme\ThemePresetService;
@@ -63,8 +65,17 @@ class CompanyService
         // Same transaction as the company row: a company that exists but
         // cannot sell is worse than one that failed to be created, because
         // the first looks like success.
-        return DB::transaction(function () use ($data) {
+        // is_test is not fillable (see Company::casts()); a new company is
+        // empty, so it may be born a test company — set explicitly here.
+        $isTest = (bool) ($data['is_test'] ?? false);
+        unset($data['is_test']);
+
+        return DB::transaction(function () use ($data, $isTest) {
             $company = Company::create($data);
+
+            if ($isTest) {
+                $company->forceFill(['is_test' => true])->save();
+            }
 
             $this->pipelineTemplateProvisioner->provision($company);
 
@@ -121,9 +132,33 @@ class CompanyService
     /**
      * @param  array<string, mixed>  $data
      */
-    public function update(Company $company, array $data): Company
+    /**
+     * 2026-09-26 — closing or reopening a company is written to the audit log.
+     *
+     * `is_active` is the "ปิดบริษัท" switch: it locks every user of the tenant
+     * out and stops its scheduled money jobs (Company::scopeOperational). That
+     * is an action on permissions and on money, so §6 wants who and when. The
+     * other fields on this form are identity and payout details, unchanged.
+     */
+    public function update(Company $company, array $data, ?User $actor = null): Company
     {
+        $wasActive = (bool) $company->is_active;
+
         $company->update($data);
+
+        $isActive = (bool) $company->is_active;
+        if ($wasActive !== $isActive) {
+            AuditLog::create([
+                'company_id' => $company->id,
+                'actor_user_id' => $actor?->id,
+                'action' => $isActive ? 'company.reopened' : 'company.closed',
+                'auditable_type' => Company::class,
+                'auditable_id' => $company->id,
+                'old_values' => ['is_active' => $wasActive],
+                'new_values' => ['is_active' => $isActive],
+                'ip_address' => request()?->ip(),
+            ]);
+        }
 
         return $company;
     }

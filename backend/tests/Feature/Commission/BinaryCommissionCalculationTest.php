@@ -297,4 +297,28 @@ class BinaryCommissionCalculationTest extends TestCase
         $this->assertSame(0, $processed);
         $this->assertDatabaseCount('commission_ledger', 0);
     }
+
+    public function test_a_closed_company_s_cycle_is_not_run(): void
+    {
+        // "ปิดบริษัท" stops the money jobs too (owner, 2026-09-26).
+        $company = Company::factory()->create(['commission_plan_type' => CommissionPlanType::Binary->value, 'is_active' => false]);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        CommissionBinarySetting::factory()->create([
+            'company_id' => $company->id,
+            'matched_rate_type' => CommissionRateType::Percentage,
+            'matched_rate_value' => 1000,
+            'cycle_frequency' => BinaryCycleFrequency::Weekly,
+            'payout_cap_satang' => null,
+            'carry_over_unmatched' => true,
+        ]);
+        BinaryLegVolume::factory()->create([
+            'company_id' => $company->id, 'agent_id' => $agent->id,
+            'left_volume_satang' => 500000, 'right_volume_satang' => 300000,
+            'last_cycle_at' => null,
+        ]);
+
+        $this->assertSame(0, app(BinaryCommissionService::class)->runDueCycles());
+        $this->assertDatabaseCount('commission_ledger', 0);
+        $this->assertDatabaseHas('binary_leg_volumes', ['agent_id' => $agent->id, 'left_volume_satang' => 500000]);
+    }
 }

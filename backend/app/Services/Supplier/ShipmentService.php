@@ -5,32 +5,44 @@ namespace App\Services\Supplier;
 use App\Enums\OrderStatus;
 use App\Enums\ShippingStatus;
 use App\Enums\SupplierReleaseTrigger;
+use App\Models\AuditLog;
+use App\Models\Company;
 use App\Models\Order;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * 2026-09-16 — the parcel left.
+ * 2026-09-16 — the parcel left. 2026-09-27 — and the recipient got it.
  *
- * Owner: "supplier เป็นคนส่งเอง". The supplier has the goods, so the supplier
- * is the one who can say a parcel has gone — and saying so is what releases
- * their own money on an OnDelivered deal. That is a slightly uncomfortable
- * arrangement (the payee reports the event that triggers payment) and it is
- * the owner's call; what this service can do is make sure the claim is
- * recorded with a name, a time and a tracking number against it, so it is a
- * statement somebody made rather than a flag that changed.
+ * Owner (2026-09-16): "supplier เป็นคนส่งเอง". The supplier records the
+ * shipment, with a tracking number because that is the only part of "I sent
+ * it" anybody else can check.
  *
- * ── WHY MARKING SHIPPED REQUIRES A TRACKING NUMBER ──
+ * ── WHO RELEASES THE MONEY ON A DELIVER-BEFORE-PAY DEAL (ADR-048) ──
  *
- * It is the only part of the claim anybody else can check. Without it "I sent
- * it" is unfalsifiable, and on an OnDelivered deal it is unfalsifiable and
- * also worth money.
+ * Until 2026-09-27 the supplier's own "shipped" click released their money:
+ * the payee reported the event that paid them. The owner changed it:
+ *
+ *   "ต้องแก้ไขเป็นผู้รับกดรับสินค้า ถ้า Agent หรือลูกค้าไม่กดรับสินค้าเกิน 15 วัน
+ *    หลัง คู่ค้ากดยืนยันว่าจัดส่งสำเร็จแล้ว พึงเบิกเงินได้"
+ *
+ * So shipping releases nothing. RECEIPT does — confirmed by the selling agent
+ * in the portal or by the customer on the payment link, whoever is first — or,
+ * if neither does, by the system once `auto_receive_days` (a platform setting,
+ * seeded at the owner's 15) have passed since shipping.
  */
 class ShipmentService
 {
+    public const VIA_AGENT = 'agent';
+
+    public const VIA_CUSTOMER = 'customer';
+
+    public const VIA_AUTO = 'auto';
+
     public function __construct(
         private SupplierSettlementService $settlements,
+        private SupplierPlatformSettingService $settings,
     ) {}
 
     /**
@@ -39,13 +51,10 @@ class ShipmentService
      * Refuses rather than silently correcting in three cases, all of which
      * mean the caller has the wrong order:
      *
-     *   · the product needs no shipping — there is nothing to send, and
-     *     accepting a tracking number would produce a parcel record for a
-     *     service appointment;
+     *   · the product needs no shipping — there is nothing to send;
      *   · the order is not paid — we do not ship what has not been bought;
      *   · it already shipped — a second tracking number would overwrite the
-     *     first with no record that it ever existed, and on an OnDelivered
-     *     deal the money is already out.
+     *     first with no record that it ever existed.
      */
     public function markShipped(Order $order, User $actor, string $trackingNumber): Order
     {
@@ -67,47 +76,115 @@ class ShipmentService
             ]);
         }
 
-        return DB::transaction(function () use ($order, $actor, $trackingNumber) {
+        $order->update([
+            'shipping_status' => ShippingStatus::Shipped,
+            'tracking_number' => trim($trackingNumber),
+            'shipped_at' => now(),
+            'shipped_by_user_id' => $actor->id,
+        ]);
+
+        return $order->fresh();
+    }
+
+    /**
+     * The recipient says the parcel arrived — or the window has passed.
+     *
+     * Releases an OnDelivered deal's money in the same transaction: "it
+     * arrived" and "the supplier can now be paid for it" are one fact.
+     *
+     * Refused on an order that is not Paid (a refunded order is not received
+     * into anybody's payout), not shipped yet, or already received.
+     */
+    public function confirmReceipt(Order $order, string $via, ?User $actor = null): Order
+    {
+        return DB::transaction(function () use ($order, $via, $actor) {
+            $order = Order::withoutGlobalScopes()->whereKey($order->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($order->status !== OrderStatus::Paid) {
+                throw ValidationException::withMessages([
+                    'order' => 'ยืนยันรับสินค้าได้เฉพาะคำสั่งซื้อที่ชำระเงินแล้วเท่านั้น',
+                ]);
+            }
+
+            if ($order->received_at !== null) {
+                throw ValidationException::withMessages([
+                    'order' => 'คำสั่งซื้อนี้ยืนยันรับสินค้าไปแล้ว',
+                ]);
+            }
+
+            if ($order->shipping_status !== ShippingStatus::Shipped) {
+                throw ValidationException::withMessages([
+                    'order' => 'คู่ค้ายังไม่ได้บันทึกการจัดส่งคำสั่งซื้อนี้',
+                ]);
+            }
+
             $order->update([
-                'shipping_status' => ShippingStatus::Shipped,
-                'tracking_number' => trim($trackingNumber),
-                'shipped_at' => now(),
-                'shipped_by_user_id' => $actor->id,
+                'shipping_status' => ShippingStatus::Delivered,
+                'received_at' => now(),
+                'receipt_confirmed_via' => $via,
+                'received_by_user_id' => $actor?->id,
             ]);
 
-            /*
-             * Same transaction as the status change, for the same reason the
-             * voucher redemption releases inside its own: "the parcel went"
-             * and "the money for it became payable" are one fact on an
-             * OnDelivered deal. A crash between them leaves a supplier who has
-             * shipped and cannot be paid, with nothing to show why.
-             *
-             * A no-op on any other trigger — the service decides, not this.
-             */
-            $this->settlements->releaseFor($order, SupplierReleaseTrigger::OnDelivered);
+            $released = $this->settlements->releaseFor($order, SupplierReleaseTrigger::OnDelivered);
+
+            // §6 — this can make supplier money payable.
+            AuditLog::create([
+                'company_id' => $order->company_id,
+                'actor_user_id' => $actor?->id,
+                'action' => 'order.receipt_confirmed',
+                'auditable_type' => Order::class,
+                'auditable_id' => $order->id,
+                'old_values' => ['shipping_status' => ShippingStatus::Shipped->value],
+                'new_values' => [
+                    'shipping_status' => ShippingStatus::Delivered->value,
+                    'via' => $via,
+                    'supplier_rows_released' => $released,
+                ],
+                'ip_address' => $via === self::VIA_AUTO ? null : request()?->ip(),
+            ]);
 
             return $order->fresh();
         });
     }
 
     /**
-     * Confirm the parcel arrived.
+     * Confirm every parcel nobody confirmed within the platform window.
      *
-     * Separate from markShipped because it is a different claim by a different
-     * person at a different time, and because nothing about payment hangs on
-     * it — OnDelivered releases at SHIPPED (see ShippingStatus::hasLeft()).
-     * This is bookkeeping, and it is allowed to be.
+     * Run by the scheduler daily, AND on the screens and actions that read a
+     * supplier's balance — production has not always had its scheduler
+     * running, and a supplier's money must not depend on a cron line.
+     * Idempotent: a confirmed order is never picked twice.
+     *
+     * Closed companies are skipped like every other scheduled money job
+     * (ADR-047): their work waits until they are reopened.
      */
-    public function markDelivered(Order $order): Order
+    public function autoConfirmDue(): int
     {
-        if (! ($order->shipping_status instanceof ShippingStatus && $order->shipping_status->hasLeft())) {
-            throw ValidationException::withMessages([
-                'order' => 'ต้องบันทึกการจัดส่งก่อนจึงจะยืนยันว่าได้รับแล้วได้',
-            ]);
+        $days = $this->settings->autoReceiveDays();
+
+        if ($days === null) {
+            return 0;
         }
 
-        $order->update(['shipping_status' => ShippingStatus::Delivered]);
+        $dueIds = Order::withoutGlobalScopes()
+            ->where('status', OrderStatus::Paid->value)
+            ->where('shipping_status', ShippingStatus::Shipped->value)
+            ->whereNull('received_at')
+            ->where('shipped_at', '<=', now()->subDays($days))
+            ->whereIn('company_id', Company::operational()->select('id'))
+            ->pluck('id');
 
-        return $order->fresh();
+        $confirmed = 0;
+
+        foreach ($dueIds as $id) {
+            try {
+                $this->confirmReceipt(Order::withoutGlobalScopes()->findOrFail($id), self::VIA_AUTO);
+                $confirmed++;
+            } catch (ValidationException) {
+                // Confirmed by a person between the query and the lock.
+            }
+        }
+
+        return $confirmed;
     }
 }

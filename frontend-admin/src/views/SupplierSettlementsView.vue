@@ -43,6 +43,8 @@ interface Balance {
 interface SettlementRow {
   id: number
   order_number: string | null
+  /** ADR-048 — 'refund' rows are the negative of a refunded sale. */
+  entry_kind?: 'sale' | 'refund'
   product_name: string | null
   sale_price_satang: number
   amount_satang: number
@@ -167,7 +169,10 @@ function statusLabel(status: string): string {
                 <td class="px-4 py-3 text-slate-600 whitespace-nowrap">
                   {{ row.created_at ? formatDateTime(row.created_at) : '—' }}
                 </td>
-                <td class="px-4 py-3 font-bold text-slate-900 whitespace-nowrap">{{ row.order_number ?? '—' }}</td>
+                <td class="px-4 py-3 font-bold text-slate-900 whitespace-nowrap">
+                  {{ row.order_number ?? '—' }}
+                  <span v-if="row.entry_kind === 'refund'" data-test="refund-chip" class="ml-1.5 align-middle rounded px-1.5 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold">คืนเงินลูกค้า</span>
+                </td>
                 <td class="px-4 py-3 text-slate-700">{{ row.product_name ?? '—' }}</td>
                 <td class="px-4 py-3 text-right text-slate-600 whitespace-nowrap">฿{{ formatMoney(row.sale_price_satang) }}</td>
                 <!-- Can be negative: where our commission and GP together

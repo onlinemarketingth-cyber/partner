@@ -31,6 +31,10 @@ class CompanyResource extends JsonResource
             'currency_symbol' => SupportedCurrency::symbol($this->resource->currencyCode()),
             'slug' => $this->slug,
             'is_active' => $this->is_active,
+            // 2026-09-26 — see CompanyRemovalService. `went_live_at` is sent
+            // so the screen can say why the test flag cannot come back on.
+            'is_test' => (bool) $this->is_test,
+            'went_live_at' => $this->went_live_at,
             'commission_plan_type' => $this->commission_plan_type?->value,
             // 2026-09-12 — 'price' or 'pv'. Coalesced rather than made
             // nullable in the payload: a company read back before the

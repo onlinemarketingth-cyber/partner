@@ -54,6 +54,13 @@ class RecalculateAgentRanks extends Command
             return self::FAILURE;
         }
 
+        if (! $company->isOperational()) {
+            $this->error("{$company->name} (id {$company->id}) is closed, so its ranks are not recalculated. Nothing was changed.");
+            $this->line('Reopen the company first (หน้าจัดการบริษัท · เปิดบริษัทอีกครั้ง).');
+
+            return self::FAILURE;
+        }
+
         if (! $company->agentRankSetting) {
             $this->error("{$company->name} (id {$company->id}) has no rank settings, so it has no ranks to calculate.");
             $this->line('Save the rank settings on the commission screen first (ขั้นที่ 2 · บันไดอันดับ).');

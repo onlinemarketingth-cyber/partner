@@ -85,6 +85,10 @@ class Order extends Model
         'tracking_number',
         'shipped_at',
         'shipped_by_user_id',
+        // ADR-048 — the recipient's confirmation, same service-only rule.
+        'received_at',
+        'receipt_confirmed_via',
+        'received_by_user_id',
         // ADR-027 / TASK-139 — stamped ONCE by OrderService at creation from
         // the company's active gateway, then never re-read from the company.
         // A /pay link already in a customer's hand must not change what it
@@ -139,7 +143,21 @@ class Order extends Model
             'refund_reported_satang' => 'integer',
             'shipping_status' => ShippingStatus::class,
             'shipped_at' => 'datetime',
+            'received_at' => 'datetime',
         ];
+    }
+
+    /**
+     * ADR-048 — may the recipient confirm receipt right now? Paid, shipped by
+     * the supplier, not yet received. The single predicate both confirm
+     * buttons (agent portal, customer link) read; ShipmentService enforces
+     * the same three conditions.
+     */
+    public function canConfirmReceipt(): bool
+    {
+        return $this->status === OrderStatus::Paid
+            && $this->shipping_status === ShippingStatus::Shipped
+            && $this->received_at === null;
     }
 
     /**

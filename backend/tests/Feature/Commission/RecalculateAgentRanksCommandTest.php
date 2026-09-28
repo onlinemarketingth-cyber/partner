@@ -145,4 +145,32 @@ class RecalculateAgentRanksCommandTest extends TestCase
             ->expectsOutputToContain('has no rank settings')
             ->assertFailed();
     }
+
+    public function test_the_sweep_skips_a_closed_or_deleted_company(): void
+    {
+        // "ปิดบริษัท" stops everything, rank changes included (2026-09-26).
+        [, $openRung, $openAgent] = $this->rankedCompany();
+        [$closed, , $closedAgent] = $this->rankedCompany();
+        [$deleted, , $deletedAgent] = $this->rankedCompany();
+        $closed->update(['is_active' => false]);
+        $deleted->delete(); // CompanyService::delete()'s soft delete
+
+        $this->artisan('commissions:recalculate-agent-ranks')->assertSuccessful();
+
+        $this->assertSame($openRung->id, $openAgent->fresh()->current_rank_id);
+        $this->assertNull($closedAgent->fresh()->current_rank_id);
+        $this->assertNull($deletedAgent->fresh()->current_rank_id);
+    }
+
+    public function test_naming_a_closed_company_is_refused_with_the_reason(): void
+    {
+        [$closed, , $agent] = $this->rankedCompany();
+        $closed->update(['is_active' => false]);
+
+        $this->artisan('commissions:recalculate-agent-ranks', ['--company' => $closed->id])
+            ->expectsOutputToContain('is closed')
+            ->assertFailed();
+
+        $this->assertNull($agent->fresh()->current_rank_id);
+    }
 }

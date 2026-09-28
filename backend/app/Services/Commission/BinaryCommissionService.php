@@ -8,9 +8,9 @@ use App\Enums\CommissionEarnedVia;
 use App\Enums\PaymentStatus;
 use App\Models\BinaryLegVolume;
 use App\Models\BinaryMatchingCycle;
-use App\Models\Company;
 use App\Models\CommissionBinarySetting;
 use App\Models\CommissionLedger;
+use App\Models\Company;
 use App\Models\Referral;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
@@ -99,7 +99,8 @@ class BinaryCommissionService
     {
         $processed = 0;
 
-        Company::whereHas('commissionBinarySetting')
+        Company::operational()
+            ->whereHas('commissionBinarySetting')
             ->with('commissionBinarySetting')
             ->chunkById(50, function ($companies) use (&$processed) {
                 foreach ($companies as $company) {

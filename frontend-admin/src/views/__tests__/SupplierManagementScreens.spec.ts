@@ -97,7 +97,6 @@ const SUPPLIER: {
   gp_mode: string | null
   gp_value: number | null
   release_trigger: string | null
-  min_withdrawal_satang: number | null
   wht_rate: number | null
   payout_bank_name: string | null
   payout_bank_account_number: string | null
@@ -120,7 +119,6 @@ const SUPPLIER: {
   gp_mode: 'percent_of_sale',
   gp_value: 3000,
   release_trigger: 'on_payment',
-  min_withdrawal_satang: null,
   wht_rate: 300,
   payout_bank_name: 'ธนาคารกสิกรไทย',
   payout_bank_account_number: '123-4-56789-0',

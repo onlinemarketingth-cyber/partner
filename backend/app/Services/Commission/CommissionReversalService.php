@@ -9,6 +9,7 @@ use App\Models\AuditLog;
 use App\Models\CommissionLedger;
 use App\Models\Order;
 use App\Models\User;
+use App\Services\Supplier\SupplierSettlementService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -45,6 +46,10 @@ use Illuminate\Validation\ValidationException;
  */
 class CommissionReversalService
 {
+    public function __construct(
+        private SupplierSettlementService $supplierSettlements,
+    ) {}
+
     /**
      * Refund a paid order and reverse every commission it generated.
      *
@@ -123,6 +128,13 @@ class CommissionReversalService
                 ]);
             }
 
+            /*
+             * ADR-048 — the supplier's side of the same refund. Owner:
+             * "คืนเงินลูกค้าแล้ว … หักครั้งถัดไป". Inside this transaction, so
+             * a refund can never leave the supplier still owed for the sale.
+             */
+            $supplierReversal = $this->supplierSettlements->reverseForRefund($order);
+
             $order->update([
                 'status' => OrderStatus::Refunded,
                 'refunded_at' => now(),
@@ -157,6 +169,7 @@ class CommissionReversalService
                         static fn (CommissionLedger $entry): int => $entry->amount_satang,
                         $reversals,
                     )),
+                    'supplier_satang_reversed' => $supplierReversal?->amount_satang,
                 ],
                 'ip_address' => request()?->ip(),
             ]);

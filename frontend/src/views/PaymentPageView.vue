@@ -150,6 +150,12 @@ interface PublicOrder {
   shipping_recipient_name: string | null
   shipping_phone: string | null
   shipping_address: string | null
+  // ADR-048 — the parcel, and whether the customer may confirm receipt here.
+  shipping_status?: 'pending' | 'shipped' | 'delivered' | null
+  tracking_number?: string | null
+  shipped_at?: string | null
+  received_at?: string | null
+  can_confirm_receipt?: boolean
   // ADR-033 §2.4/E1 — absent (not null) until paid + issued.
   voucher?: PublicVoucher | null
   // TASK-159 §3 — the theme of the company that owns this order, same
@@ -193,6 +199,30 @@ async function loadOrder() {
   }
 }
 onMounted(loadOrder)
+
+/* ── ADR-048: the customer confirms the parcel arrived ───────────────────
+ *
+ * Owner: "ผู้รับกดรับสินค้า". Two taps — the first asks, the second
+ * confirms — because it cannot be undone and it releases the supplier's
+ * money. No login: the link itself is the customer's key, as for the slip.
+ */
+const receiptAsking = ref(false)
+const receiptBusy = ref(false)
+const receiptError = ref('')
+
+async function confirmReceipt() {
+  receiptBusy.value = true
+  receiptError.value = ''
+  try {
+    const res = await api.post<{ data: PublicOrder }>(`/pay/${token}/receipt`)
+    order.value = res.data
+    receiptAsking.value = false
+  } catch (e) {
+    receiptError.value = e instanceof ApiError ? e.message : 'ยืนยันไม่สำเร็จ กรุณาลองใหม่'
+  } finally {
+    receiptBusy.value = false
+  }
+}
 
 async function renderQr() {
   // The payload's presence IS the condition — the server builds one whenever
@@ -1045,6 +1075,50 @@ async function payByCard() {
           </div>
           <h2 class="mt-4 text-lg font-bold text-ink-card">{{ td('pay.done') }}</h2>
           <p class="mt-1 text-sm text-ink-card-muted">{{ td('pay.thanks') }}</p>
+
+          <!-- ADR-048 — shipping status, and the customer's receipt button. -->
+          <div
+            v-if="order.requires_shipping"
+            data-test="shipping-status"
+            class="mt-4 rounded-2xl border border-line-card p-4 text-sm text-left"
+          >
+            <p class="font-bold text-ink-card flex items-center gap-1.5">
+              <Icon name="truck" :size="18" class="text-ink-brand" /> การจัดส่ง
+            </p>
+            <p v-if="order.received_at" class="mt-1 text-ink-success" data-test="received-note">ได้รับสินค้าแล้ว</p>
+            <p v-else-if="order.shipping_status === 'shipped'" class="mt-1 text-ink-card-muted">
+              จัดส่งแล้ว<template v-if="order.tracking_number"> · เลขพัสดุ {{ order.tracking_number }}</template>
+            </p>
+            <p v-else class="mt-1 text-ink-card-muted">กำลังเตรียมจัดส่ง</p>
+
+            <template v-if="order.can_confirm_receipt">
+              <button
+                v-if="!receiptAsking"
+                type="button"
+                data-test="confirm-receipt"
+                class="mt-3 w-full min-h-[44px] rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700 transition"
+                @click="receiptAsking = true"
+              >ได้รับสินค้าแล้ว</button>
+              <div v-else class="mt-3" data-test="confirm-receipt-ask">
+                <p class="text-xs text-ink-card-muted">กดยืนยันเมื่อได้รับสินค้าครบแล้วเท่านั้น — ยืนยันแล้วยกเลิกไม่ได้</p>
+                <div class="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    data-test="confirm-receipt-yes"
+                    :disabled="receiptBusy"
+                    class="flex-1 min-h-[44px] rounded-xl bg-emerald-600 text-white text-sm font-bold disabled:opacity-60"
+                    @click="confirmReceipt"
+                  >{{ receiptBusy ? 'กำลังบันทึก...' : 'ยืนยันได้รับแล้ว' }}</button>
+                  <button
+                    type="button"
+                    class="flex-1 min-h-[44px] rounded-xl border border-line-card text-sm font-bold text-ink-card"
+                    @click="receiptAsking = false"
+                  >ยังไม่ได้รับ</button>
+                </div>
+              </div>
+              <p v-if="receiptError" class="mt-2 text-xs text-ink-danger" data-test="receipt-error">{{ receiptError }}</p>
+            </template>
+          </div>
 
           <!-- ADR-033 (TASK-189) §2.4/E1 — service-access voucher, rendered
                once paid AND a voucher was actually issued (older/legacy

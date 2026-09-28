@@ -47,13 +47,14 @@ export const GP_MODE_HINTS: Record<GpMode, string> = {
 export const RELEASE_TRIGGER_LABELS: Record<ReleaseTrigger, string> = {
   on_payment: 'ทันทีที่ลูกค้าชำระเงิน',
   on_redeemed: 'เมื่อลูกค้ามาใช้สิทธิ์',
-  on_delivered: 'เมื่อจัดส่งสินค้าแล้ว',
+  on_delivered: 'เมื่อผู้รับได้รับสินค้า',
 }
 
 export const RELEASE_TRIGGER_HINTS: Record<ReleaseTrigger, string> = {
   on_payment: 'เหมาะกับสินค้าที่ส่งมอบทันที',
   on_redeemed: 'เหมาะกับคอร์ส/บริการที่ลูกค้าต้องมาใช้ที่สาขา',
-  on_delivered: 'เหมาะกับสินค้าที่ต้องจัดส่ง — ยอดจะยังไม่ปล่อยจนกว่าจะบันทึกเลขพัสดุ',
+  // ADR-048 — receipt, not the supplier's own shipped click.
+  on_delivered: 'เหมาะกับสินค้าที่ต้องจัดส่ง — ปล่อยยอดเมื่อตัวแทนหรือลูกค้ากดรับสินค้า หรือครบจำนวนวันที่ตั้งไว้หลังจัดส่ง',
 }
 
 /** 10000 basis points = 100%. */
@@ -120,7 +121,6 @@ export interface SupplierFormValue {
   gp_mode: GpMode | null
   gp_value: number | null
   release_trigger: ReleaseTrigger | null
-  min_withdrawal_satang: number | null
   wht_rate: number | null
   payout_bank_name: string | null
   payout_bank_account_number: string | null
@@ -147,7 +147,6 @@ export function emptySupplier(): SupplierFormValue {
     gp_mode: null,
     gp_value: null,
     release_trigger: null,
-    min_withdrawal_satang: null,
     wht_rate: null,
     payout_bank_name: null,
     payout_bank_account_number: null,

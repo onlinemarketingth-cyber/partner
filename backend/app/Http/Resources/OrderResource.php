@@ -189,11 +189,17 @@ class OrderResource extends JsonResource
             'shipping_status_label' => $this->shipping_status?->label(),
             'tracking_number' => $this->tracking_number,
             'shipped_at' => $this->shipped_at?->toIso8601String(),
+            // ADR-048 — receipt, and who confirmed it (agent / customer / auto).
+            'received_at' => $this->received_at?->toIso8601String(),
+            'receipt_confirmed_via' => $this->receipt_confirmed_via,
             'shipping_recipient_name' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_recipient_name),
             'shipping_phone' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_phone),
             'shipping_address' => $this->when((bool) $this->product?->requires_shipping, $this->shipping_address),
 
             'permissions' => [
+                // ADR-048 — the selling agent's "ได้รับสินค้าแล้ว" button.
+                'confirm_receipt' => (bool) $request->user()?->can('confirmReceipt', $this->resource)
+                    && $this->canConfirmReceipt(),
                 'confirm' => (bool) $request->user()?->can('confirm', $this->resource)
                     && $this->isPayable()
                     && ($this->status === OrderStatus::AwaitingVerification || $this->hasGatewayPayment()),

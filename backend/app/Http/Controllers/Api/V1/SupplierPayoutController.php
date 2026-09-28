@@ -2,12 +2,12 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalRequest;
+use App\Services\Supplier\ShipmentService;
 use App\Services\Supplier\SupplierPayoutService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -45,9 +45,13 @@ class SupplierPayoutController extends Controller
      * One row per supplier, not per sale — this screen answers "who do we owe
      * and how much", and the sales behind a figure are one click away.
      */
-    public function index(Request $request, SupplierPayoutService $payouts): JsonResponse
+    public function index(Request $request, SupplierPayoutService $payouts, ShipmentService $shipments): JsonResponse
     {
         abort_unless($request->user()->isSuperAdmin(), 403);
+
+        // ADR-048 — parcels past the auto-receive window count as received
+        // before anyone reads a balance off this screen.
+        $shipments->autoConfirmDue();
 
         /*
          * Inactive suppliers are listed too, and on purpose: ending a deal
@@ -96,7 +100,7 @@ class SupplierPayoutController extends Controller
         // CompanyPayout, so it opens Approved: the admin pressing this button
         // IS the decision, and asking them to approve it on the next screen
         // would be the rubber stamp WithdrawalSource warns about.
-        $created = $payouts->open($supplier, $request->user(), WithdrawalSource::CompanyPayout);
+        $created = $payouts->open($supplier, $request->user());
 
         return response()->json(['data' => $this->present($created)], 201);
     }
@@ -139,13 +143,27 @@ class SupplierPayoutController extends Controller
             $supplierWithdrawalRequest,
             $request->user(),
             $validated['transfer_reference'] ?? null,
+            $validated['wht_certificate_no'] ?? null,
         );
 
-        if (! empty($validated['wht_certificate_no'])) {
-            $updated->update(['wht_certificate_no' => $validated['wht_certificate_no']]);
-        }
+        return response()->json(['data' => $this->present($updated)]);
+    }
 
-        return response()->json(['data' => $this->present($updated->fresh())]);
+    /**
+     * ADR-048 — take back a payout that was raised but not transferred.
+     * Without it a failed transfer left the rows reserved for good.
+     */
+    public function cancel(Request $request, SupplierWithdrawalRequest $supplierWithdrawalRequest, SupplierPayoutService $payouts): JsonResponse
+    {
+        abort_unless($request->user()->isSuperAdmin(), 403);
+
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'max:500'],
+        ]);
+
+        $updated = $payouts->cancel($supplierWithdrawalRequest, $request->user(), $validated['reason']);
+
+        return response()->json(['data' => $this->present($updated)]);
     }
 
     /** The sales behind one supplier's balance. */
@@ -163,7 +181,7 @@ class SupplierPayoutController extends Controller
              * of dependency that breaks the day the gate above widens.
              */
             ->with([
-                'order:id,order_number',
+                'order' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'order_number'),
                 'product' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'name'),
                 'company' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'name'),
             ])
@@ -174,6 +192,9 @@ class SupplierPayoutController extends Controller
             'data' => $rows->getCollection()->map(fn (SupplierSettlementLedger $row) => [
                 'id' => $row->id,
                 'order_number' => $row->order?->order_number,
+                // ADR-048 — 'sale' or 'refund'. A refund row is the negative
+                // of its sale and comes off the next payout.
+                'entry_kind' => $row->entry_kind,
                 'product_name' => $row->product?->name,
                 // Which of OUR companies sold it — the thing a supplier
                 // statement is unauditable without.
@@ -213,6 +234,9 @@ class SupplierPayoutController extends Controller
             'bank_account_holder_name' => $r->bank_account_holder_name,
             'transferred_at' => $r->transferred_at?->toIso8601String(),
             'transfer_reference' => $r->transfer_reference,
+            // Carries the cancellation reason since ADR-048 (the column is
+            // shared with the agent flow's rejection reason).
+            'cancel_reason' => $r->rejection_reason,
             'created_at' => $r->created_at?->toIso8601String(),
         ];
     }

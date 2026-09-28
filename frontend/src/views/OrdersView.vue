@@ -68,6 +68,19 @@ interface Order {
   has_slip: boolean
   paid_at: string | null
   created_at: string
+  /*
+   * ADR-048 — shipping, for products a supplier sends. The agent (or the
+   * customer on the pay link) confirms receipt; that is what releases the
+   * supplier's money on a deliver-before-pay deal.
+   */
+  requires_shipping?: boolean
+  shipping_status?: 'pending' | 'shipped' | 'delivered' | null
+  shipping_status_label?: string | null
+  tracking_number?: string | null
+  shipped_at?: string | null
+  received_at?: string | null
+  receipt_confirmed_via?: 'agent' | 'customer' | 'auto' | null
+  permissions?: { confirm_receipt?: boolean }
 }
 
 interface ReferralOption {
@@ -316,6 +329,47 @@ async function confirmCancelOrder() {
     busyId.value = null
     cancelTarget.value = null
   }
+}
+
+/* ── ADR-048: "ได้รับสินค้าแล้ว" ─────────────────────────────────────────
+ *
+ * Owner: "ผู้รับกดรับสินค้า". The button shows only when the server says this
+ * agent may confirm this order (permissions.confirm_receipt): it sold it, the
+ * supplier has shipped it, and nobody has confirmed yet.
+ */
+const receiptTarget = ref<Order | null>(null)
+const showReceiptConfirm = ref(false)
+
+function askConfirmReceipt(order: Order) {
+  if (busyId.value) return
+  receiptTarget.value = order
+  showReceiptConfirm.value = true
+}
+
+async function confirmReceipt() {
+  const order = receiptTarget.value
+  if (!order) return
+  busyId.value = order.id
+  actionError.value = null
+  try {
+    await api.post(`/orders/${order.id}/receipt`)
+    showReceiptConfirm.value = false
+    await loadOrders()
+    toast.success('ยืนยันรับสินค้าแล้ว')
+  } catch (e) {
+    const message = apiErrorMessage(e, 'ยืนยันรับสินค้าไม่สำเร็จ')
+    actionError.value = { id: order.id, message }
+    toast.error(message)
+  } finally {
+    busyId.value = null
+    receiptTarget.value = null
+  }
+}
+
+function receiptNote(order: Order): string {
+  if (order.receipt_confirmed_via === 'auto') return 'ระบบยืนยันรับสินค้าให้อัตโนมัติ'
+  if (order.receipt_confirmed_via === 'customer') return 'ลูกค้ายืนยันรับสินค้าแล้ว'
+  return 'ยืนยันรับสินค้าแล้ว'
 }
 
 /**
@@ -585,6 +639,33 @@ const hasOrders = computed(() => orders.value.length > 0)
             <span>ชำระเงินเรียบร้อยแล้ว<template v-if="order.paid_at"> เมื่อ {{ formatDate(order.paid_at) }}</template></span>
           </p>
 
+          <!-- ADR-048 — the parcel, for products a supplier ships. -->
+          <div
+            v-if="order.requires_shipping && order.status === 'paid'"
+            data-test="shipping-row"
+            class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-chip border border-line-card px-3 py-2 text-xs text-ink-card-muted"
+          >
+            <Icon name="truck" :size="14" class="shrink-0" />
+            <span v-if="order.received_at" data-test="received-note">
+              {{ receiptNote(order) }} · {{ formatDate(order.received_at) }}
+            </span>
+            <span v-else-if="order.shipping_status === 'shipped'">
+              คู่ค้าจัดส่งแล้ว<template v-if="order.tracking_number"> · เลขพัสดุ {{ order.tracking_number }}</template>
+            </span>
+            <span v-else>รอคู่ค้าจัดส่ง</span>
+            <AppButton
+              v-if="order.permissions?.confirm_receipt"
+              size="sm"
+              class="ml-auto"
+              data-test="confirm-receipt"
+              :disabled="busyId === order.id"
+              @click="askConfirmReceipt(order)"
+            >
+              <Icon name="check" :size="14" />
+              ได้รับสินค้าแล้ว
+            </AppButton>
+          </div>
+
           <p
             v-if="isAwaitingAdminCheck(order)"
             data-test="awaiting-admin-note"
@@ -652,6 +733,18 @@ const hasOrders = computed(() => orders.value.length > 0)
       variant="danger"
       :busy="busyId !== null"
       @confirm="confirmCancelOrder"
+    />
+
+    <!-- ADR-048 — confirming receipt releases the supplier's money on a
+         deliver-before-pay deal, so it asks first. Inside the root, same
+         reason as the cancel dialog above. -->
+    <ConfirmDialog
+      v-model:show="showReceiptConfirm"
+      title="ยืนยันว่าลูกค้าได้รับสินค้าแล้ว"
+      :body="receiptTarget ? `คำสั่งซื้อ ${receiptTarget.order_number} — กดยืนยันเมื่อลูกค้าได้รับสินค้าจริงแล้วเท่านั้น ยืนยันแล้วยกเลิกไม่ได้` : ''"
+      variant="primary"
+      :busy="busyId !== null"
+      @confirm="confirmReceipt"
     />
 
     <SlipViewerModal

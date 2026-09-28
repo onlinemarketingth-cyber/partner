@@ -168,6 +168,8 @@ class UatResetCommand extends Command
         'company_payment_gateway_settings',
         'platform_mail_settings',
         'video_processing_settings',
+        // ADR-048 — the supplier auto-receive window. Config, kept.
+        'supplier_platform_settings',
     ];
 
     /**

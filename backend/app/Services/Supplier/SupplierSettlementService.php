@@ -3,7 +3,6 @@
 namespace App\Services\Supplier;
 
 use App\Enums\PaymentStatus;
-use App\Enums\ShippingStatus;
 use App\Enums\SupplierGpMode;
 use App\Enums\SupplierReleaseTrigger;
 use App\Models\CommissionLedger;
@@ -65,7 +64,9 @@ class SupplierSettlementService
          * races past OrderService's own guard should be a no-op, not a
          * constraint violation surfaced to whoever pressed the button.
          */
-        $existing = SupplierSettlementLedger::where('order_id', $order->id)->first();
+        $existing = SupplierSettlementLedger::where('order_id', $order->id)
+            ->where('entry_kind', SupplierSettlementLedger::KIND_SALE)
+            ->first();
 
         if ($existing) {
             return $existing;
@@ -98,6 +99,7 @@ class SupplierSettlementService
                 'supplier_id' => $supplier->id,
                 'company_id' => $order->company_id,
                 'order_id' => $order->id,
+                'entry_kind' => SupplierSettlementLedger::KIND_SALE,
                 'product_id' => $product->id,
                 'sale_price_satang_at_time' => $sale,
                 'commission_satang_at_time' => $commission,
@@ -105,6 +107,9 @@ class SupplierSettlementService
                 'gp_value_at_time' => $terms['gp_value'],
                 'gp_satang_at_time' => $gp,
                 'wht_rate_at_time' => $terms['wht_rate'],
+                // ADR-048 — the trigger is a term of THIS sale. Release reads
+                // it from here, never from the supplier's current deal.
+                'release_trigger_at_time' => $terms['trigger']->value,
                 'amount_satang' => $amount,
                 'released_at' => $this->releaseAtFor($order, $terms['trigger']),
                 'payment_status' => PaymentStatus::Pending->value,
@@ -139,9 +144,20 @@ class SupplierSettlementService
     /**
      * Release rows whose trigger has now fired.
      *
-     * Called when a voucher is redeemed and when a parcel is marked shipped —
-     * the two events that are not the payment itself. Returns how many rows
-     * moved, so callers can log a surprise rather than assume.
+     * Called when a voucher is redeemed and when the recipient confirms a
+     * parcel arrived (or the auto-confirm window passes). Returns how many
+     * rows moved, so callers can log a surprise rather than assume.
+     *
+     * ── THE ROW'S OWN TRIGGER, NOT THE DEAL'S CURRENT ONE (ADR-048) ──
+     *
+     * This used to match the supplier's current `release_trigger`. Change a
+     * deal from "on redemption" to "on payment" and every row still waiting
+     * for a redemption could never be released again: the redemption now
+     * looked for a trigger the deal no longer had. The trigger is snapshotted
+     * on the row at sale time, and that is what is matched.
+     *
+     * A refund row carries its sale's trigger, so the pair is released
+     * together and keeps summing to zero.
      *
      * Deliberately narrow: it only ever sets `released_at`, never clears it.
      * Money that has become payable does not become unpayable because
@@ -151,15 +167,63 @@ class SupplierSettlementService
     {
         return SupplierSettlementLedger::where('order_id', $order->id)
             ->whereNull('released_at')
-            /*
-             * `suppliers` carries no global scope of its own (a supplier is
-             * not a tenant), so this needs no withoutGlobalScopes — but the
-             * column name changed with the table, and reading the OLD name
-             * here would have matched nothing and silently released nothing,
-             * forever, on every OnRedeemed and OnDelivered deal.
-             */
-            ->whereHas('supplier', fn ($q) => $q->where('release_trigger', $trigger->value))
+            ->where('release_trigger_at_time', $trigger->value)
             ->update(['released_at' => now()]);
+    }
+
+    /**
+     * A refunded order: write the refund row against its supplier sale.
+     *
+     * Owner (2026-09-27): "คืนเงินลูกค้าแล้ว … หักครั้งถัดไป". The sale row is
+     * never edited (same rule as BR-4). Its negative is written beside it:
+     *
+     *   · sale already payable or paid → the refund row is payable now, so it
+     *     comes off the supplier's NEXT payout — including when the sale is
+     *     sitting in a payout that has not been transferred yet;
+     *   · sale not yet payable (waiting for redemption or receipt) → the
+     *     refund row waits with it, and the pair nets to zero in "not yet
+     *     payable" instead of paying the supplier for a sale that was undone.
+     *
+     * Idempotent: a second call finds the refund row and returns it.
+     */
+    public function reverseForRefund(Order $order): ?SupplierSettlementLedger
+    {
+        $sale = SupplierSettlementLedger::where('order_id', $order->id)
+            ->where('entry_kind', SupplierSettlementLedger::KIND_SALE)
+            ->lockForUpdate()
+            ->first();
+
+        if (! $sale) {
+            return null;
+        }
+
+        $existing = SupplierSettlementLedger::where('reverses_ledger_id', $sale->id)->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
+        return SupplierSettlementLedger::create([
+            'supplier_id' => $sale->supplier_id,
+            'company_id' => $sale->company_id,
+            'order_id' => $sale->order_id,
+            'entry_kind' => SupplierSettlementLedger::KIND_REFUND,
+            'reverses_ledger_id' => $sale->id,
+            'product_id' => $sale->product_id,
+            // Copied verbatim, like CommissionReversalService does: the refund
+            // describes the sale as it was priced then, so the pair reads as a
+            // pair.
+            'sale_price_satang_at_time' => $sale->sale_price_satang_at_time,
+            'commission_satang_at_time' => $sale->commission_satang_at_time,
+            'gp_mode_at_time' => $sale->gp_mode_at_time,
+            'gp_value_at_time' => $sale->gp_value_at_time,
+            'gp_satang_at_time' => $sale->gp_satang_at_time,
+            'wht_rate_at_time' => $sale->wht_rate_at_time,
+            'release_trigger_at_time' => $sale->release_trigger_at_time,
+            'amount_satang' => -$sale->amount_satang,
+            'released_at' => $sale->released_at !== null ? now() : null,
+            'payment_status' => PaymentStatus::Pending->value,
+        ]);
     }
 
     /**
@@ -246,10 +310,10 @@ class SupplierSettlementService
      * Our margin, by mode.
      *
      * BR-3 — multiply before dividing, once, at the end. `intdiv` truncates
-     * toward zero, which rounds the fraction of a satang OUR way rather than
-     * the supplier's; stated here because "which way does it round" is a real
-     * question about real money and a reader should not have to infer it from
-     * an operator.
+     * toward zero, so GP loses the fraction of a satang and the SUPPLIER keeps
+     * it; stated here because "which way does it round" is a real question
+     * about real money and a reader should not have to infer it from an
+     * operator.
      */
     private function gp(SupplierGpMode $mode, int $value, int $sale, int $commission): int
     {
@@ -269,7 +333,7 @@ class SupplierSettlementService
      *
      * Only for OnPayment deals. The other two wait for an event that has not
      * happened yet — with one exception worth spelling out: an order whose
-     * product needs no shipping can never reach ShippingStatus::Shipped, so an
+     * product needs no shipping can never be shipped or received, so an
      * OnDelivered deal on a service product would hold that money forever. A
      * deal set that way against a service is a configuration mistake, and this
      * treats it as one by leaving the row unreleased and visible in the
@@ -280,10 +344,10 @@ class SupplierSettlementService
     {
         return match ($trigger) {
             SupplierReleaseTrigger::OnPayment => now()->toDateTimeString(),
-            SupplierReleaseTrigger::OnDelivered => $order->shipping_status instanceof ShippingStatus
-                && $order->shipping_status->hasLeft()
-                    ? now()->toDateTimeString()
-                    : null,
+            // ADR-048 — received, not merely shipped.
+            SupplierReleaseTrigger::OnDelivered => $order->received_at !== null
+                ? now()->toDateTimeString()
+                : null,
             SupplierReleaseTrigger::OnRedeemed => null,
         };
     }

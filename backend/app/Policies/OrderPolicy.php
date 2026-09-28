@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\UserRole;
 use App\Models\Order;
 use App\Models\User;
 
@@ -58,6 +59,20 @@ class OrderPolicy
      * through the single platform Super Admin account would make the
      * platform owner a queue in front of every company's revenue.
      */
+    /**
+     * ADR-048 — "ผู้รับกดรับสินค้า": the agent who sold it (or the customer,
+     * on the public link — PublicPaymentController). Not an admin: the owner
+     * named the agent and the customer, and a confirmation is only worth
+     * something if it comes from the person the parcel went to or their
+     * agent.
+     */
+    public function confirmReceipt(User $user, Order $order): bool
+    {
+        return $user->role === UserRole::Agent
+            && $user->company_id === $order->company_id
+            && (int) $order->agent_id === (int) $user->id;
+    }
+
     public function confirm(User $user, Order $order): bool
     {
         if ($user->isSuperAdmin()) {

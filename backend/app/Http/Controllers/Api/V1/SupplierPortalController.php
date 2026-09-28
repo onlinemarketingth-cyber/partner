@@ -121,9 +121,12 @@ class SupplierPortalController extends Controller
      * Showing it alongside means the screen answers the question instead of
      * starting a phone call.
      */
-    public function balance(Request $request, SupplierPayoutService $payouts): JsonResponse
+    public function balance(Request $request, SupplierPayoutService $payouts, ShipmentService $shipments): JsonResponse
     {
         $supplier = $this->assertPartner($request);
+
+        // ADR-048 — see SupplierPayoutController::index().
+        $shipments->autoConfirmDue();
 
         return response()->json(['data' => $payouts->balanceFor($supplier)]);
     }
@@ -135,7 +138,15 @@ class SupplierPortalController extends Controller
 
         $rows = SupplierSettlementLedger::query()
             ->where('supplier_id', $request->user()->supplier_id)
-            ->with(['order:id,order_number,paid_at', 'product:id,name'])
+            /*
+             * withoutGlobalScopes on both: a partner belongs to no tenant, so
+             * TenantScope on Order hid every order and the "order_number"
+             * column came back empty on every row (found 2026-09-27).
+             */
+            ->with([
+                'order' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'order_number', 'paid_at'),
+                'product' => fn ($q) => $q->withoutGlobalScopes()->select('id', 'name'),
+            ])
             ->latest('id')
             ->paginate(50);
 
@@ -143,6 +154,9 @@ class SupplierPortalController extends Controller
             'data' => $rows->getCollection()->map(fn (SupplierSettlementLedger $row) => [
                 'id' => $row->id,
                 'order_number' => $row->order?->order_number,
+                // ADR-048 — a refund row is shown as such, so a supplier can
+                // see why a payout came in smaller.
+                'entry_kind' => $row->entry_kind,
                 'product_name' => $row->product?->name,
                 'sale_price_satang' => $row->sale_price_satang_at_time,
                 // What they get. NOT the commission or the GP that produced

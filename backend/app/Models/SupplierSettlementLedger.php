@@ -4,9 +4,11 @@ namespace App\Models;
 
 use App\Enums\PaymentStatus;
 use App\Enums\SupplierGpMode;
+use App\Enums\SupplierReleaseTrigger;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * 2026-09-16 — one sale of a supplier's product, and what it left them owed.
@@ -35,6 +37,8 @@ class SupplierSettlementLedger extends Model
         'supplier_id',
         'company_id',
         'order_id',
+        'entry_kind',
+        'reverses_ledger_id',
         'product_id',
         'sale_price_satang_at_time',
         'commission_satang_at_time',
@@ -42,6 +46,7 @@ class SupplierSettlementLedger extends Model
         'gp_value_at_time',
         'gp_satang_at_time',
         'wht_rate_at_time',
+        'release_trigger_at_time',
         'amount_satang',
         'released_at',
         'payment_status',
@@ -56,6 +61,7 @@ class SupplierSettlementLedger extends Model
             'gp_value_at_time' => 'integer',
             'gp_satang_at_time' => 'integer',
             'wht_rate_at_time' => 'integer',
+            'release_trigger_at_time' => SupplierReleaseTrigger::class,
             // Signed — a shortfall is carried by the supplier (owner's ruling).
             'amount_satang' => 'integer',
             'released_at' => 'datetime',
@@ -69,6 +75,26 @@ class SupplierSettlementLedger extends Model
      *
      * @return BelongsTo<Supplier, $this>
      */
+    /**
+     * 2026-09-27 — ADR-048. What a row is: the sale itself, or the refund of
+     * one. A refund row carries the negative of the sale's amount and points
+     * back at it, so the pair sums to zero and the sale row is never edited.
+     */
+    public const KIND_SALE = 'sale';
+
+    public const KIND_REFUND = 'refund';
+
+    /** The refund row written against this sale, if the order was refunded. */
+    public function reversal(): HasOne
+    {
+        return $this->hasOne(self::class, 'reverses_ledger_id');
+    }
+
+    public function isRefund(): bool
+    {
+        return $this->entry_kind === self::KIND_REFUND;
+    }
+
     public function supplier(): BelongsTo
     {
         return $this->belongsTo(Supplier::class);

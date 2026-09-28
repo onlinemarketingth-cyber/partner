@@ -27,7 +27,8 @@ namespace App\Enums;
  *               If the customer then refunds, we are out of pocket and have
  *               to ask for it back.
  *   OnRedeemed  the customer has turned up and taken the service.
- *   OnDelivered the parcel has gone.
+ *   OnDelivered the recipient has the parcel — or the auto-receive window
+ *               after shipping passed with nobody confirming (ADR-048).
  *
  * The last two are the safe ones; the first exists because some suppliers
  * will not agree to anything else.
@@ -40,7 +41,11 @@ enum SupplierReleaseTrigger: string
     /** The voucher was redeemed — the service was actually taken. */
     case OnRedeemed = 'on_redeemed';
 
-    /** The parcel was marked shipped by the supplier. */
+    /**
+     * The recipient confirmed the parcel arrived — or nobody did within the
+     * platform's auto-receive window after the supplier shipped it (ADR-048).
+     * The stored value keeps its old name; what it waits for changed.
+     */
     case OnDelivered = 'on_delivered';
 
     public function label(): string
@@ -48,7 +53,7 @@ enum SupplierReleaseTrigger: string
         return match ($this) {
             self::OnPayment => 'เมื่อลูกค้าชำระเงิน',
             self::OnRedeemed => 'เมื่อตัดสิทธิ์บัตรกำนัลแล้ว',
-            self::OnDelivered => 'เมื่อจัดส่งแล้ว',
+            self::OnDelivered => 'เมื่อผู้รับได้รับสินค้า',
         };
     }
 }

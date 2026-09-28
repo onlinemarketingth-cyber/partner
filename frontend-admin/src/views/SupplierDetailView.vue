@@ -68,6 +68,8 @@ interface SupplierProduct {
 interface SettlementRow {
   id: number
   order_number: string | null
+  /** ADR-048 — 'refund' rows are the negative of a refunded sale. */
+  entry_kind?: 'sale' | 'refund'
   product_name: string | null
   sold_by_company: string | null
   sale_price_satang: number
@@ -140,7 +142,6 @@ function toFormValue(row: SupplierDetail): SupplierFormValue {
     gp_mode: row.gp_mode,
     gp_value: row.gp_value,
     release_trigger: row.release_trigger,
-    min_withdrawal_satang: row.min_withdrawal_satang,
     wht_rate: row.wht_rate,
     payout_bank_name: row.payout_bank_name,
     payout_bank_account_number: row.payout_bank_account_number,
@@ -415,7 +416,10 @@ const inputClass = 'min-h-[40px] w-full px-3 rounded-lg border border-slate-300 
             </thead>
             <tbody>
               <tr v-for="r in settlements" :key="r.id" class="border-b border-slate-100 last:border-0">
-                <td class="px-4 py-3 text-slate-700">{{ r.order_number ?? '—' }}</td>
+                <td class="px-4 py-3 text-slate-700">
+                  {{ r.order_number ?? '—' }}
+                  <span v-if="r.entry_kind === 'refund'" data-test="refund-chip" class="ml-1.5 align-middle rounded px-1.5 py-0.5 bg-rose-50 text-rose-700 text-[10px] font-bold">คืนเงินลูกค้า</span>
+                </td>
                 <td class="px-4 py-3 text-slate-700">{{ r.product_name ?? '—' }}</td>
                 <!-- Which of OUR companies sold it. A supplier statement that
                      cannot say this is unauditable. -->

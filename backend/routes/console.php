@@ -1,5 +1,6 @@
 <?php
 
+use App\Console\Commands\AutoConfirmSupplierReceipts;
 use App\Console\Commands\DispatchDueFollowUpReminders;
 use App\Console\Commands\DispatchDueRenewalCommissions;
 use App\Console\Commands\DispatchPendingNotificationEmails;
@@ -56,6 +57,9 @@ Schedule::command(RecalculateAgentRanks::class)->daily();
 // this feature, unlike Binary/Stairstep's cycle_frequency/
 // recalculation_frequency — "monthly" IS the confirmed cadence).
 Schedule::command(PayDueAgentPromotionCredits::class)->monthly();
+
+// ADR-048 — supplier parcels past the auto-receive window count as received.
+Schedule::command(AutoConfirmSupplierReceipts::class)->daily();
 
 // TASK-094 — abandoned chunked-upload .part files. Hourly rather than
 // daily: on the production host (shared hosting, 600K inode quota) a

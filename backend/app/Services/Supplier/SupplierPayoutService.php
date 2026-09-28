@@ -5,6 +5,7 @@ namespace App\Services\Supplier;
 use App\Enums\PaymentStatus;
 use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
+use App\Models\AuditLog;
 use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\SupplierWithdrawalItem;
@@ -17,10 +18,11 @@ use Illuminate\Validation\ValidationException;
 /**
  * 2026-09-16 — raising and settling a payment to a supplier.
  *
- * Mirrors CommissionWithdrawalService step for step, including the one that
- * matters most: **the ledger settles at TRANSFER, not at approval**. Raising a
- * payout reserves the rows; nothing is marked paid until somebody records that
- * the money actually left the bank. That is แนวทาง C, chosen for the
+ * Mirrors CommissionWithdrawalService's company-payout path, including the
+ * step that matters most: **the ledger settles at TRANSFER, not when the
+ * payout is raised**. Raising a payout reserves the rows; nothing is marked
+ * paid until somebody records that the money actually left the bank. There is
+ * no supplier-request path (owner, 2026-09-27 — ADR-048). That is แนวทาง C, chosen for the
  * commission flow for the same reason it applies here — an approval is a
  * decision and a transfer is an event, and the event is the one the books
  * follow.
@@ -35,6 +37,10 @@ use Illuminate\Validation\ValidationException;
 class SupplierPayoutService
 {
     private const BASIS_POINT_SCALE = 10000;
+
+    public function __construct(
+        private ShipmentService $shipments,
+    ) {}
 
     /**
      * What a supplier is owed right now, and what it is made of.
@@ -82,86 +88,89 @@ class SupplierPayoutService
     /**
      * Raise a payout for everything this supplier can currently be paid.
      *
+     * ── ONLY WE RAISE IT (ADR-048) ──
+     *
+     * Owner, 2026-09-27: suppliers do not request withdrawals themselves. So
+     * there is no supplier-request path, no review queue and no minimum: an
+     * admin pressing this button IS the decision, and the request opens
+     * Approved, waiting only for the transfer.
+     *
      * ── WHY THERE IS NO "PAY PART OF IT" ARGUMENT ──
      *
-     * Because the shortfall rows make partial payouts dangerous. A supplier's
-     * balance is the NET of positive sales and negative ones (commission + GP
-     * exceeded the price; the owner ruled the supplier carries it). Let a
+     * Because the shortfall and refund rows make partial payouts dangerous. A
+     * supplier's balance is the NET of positive sales and negative rows. Let a
      * caller pick an amount and the obvious implementation pays the positive
-     * rows and leaves the negatives behind — which pays out MORE than is owed
-     * and leaves a permanent debit that reduces every future payout. Taking
-     * the whole payable set is the only version that cannot do that.
+     * rows and leaves the negatives behind — which pays out MORE than is owed.
+     * Taking the whole payable set is the only version that cannot do that.
+     *
+     * ── ONE AT A TIME ──
+     *
+     * The supplier row is locked for the whole calculation, the same way the
+     * commission flow locks the agent. Two admins pressing the button together
+     * (or one double-click) would otherwise both read the same rows as
+     * unreserved and pay them twice.
      */
-    public function open(Supplier $supplier, User $actor, WithdrawalSource $source): SupplierWithdrawalRequest
+    public function open(Supplier $supplier, User $actor): SupplierWithdrawalRequest
     {
-        $rows = $this->payableRows($supplier);
+        // Parcels past the auto-receive window become payable first, so the
+        // payout is never smaller than the supplier is owed because the
+        // scheduler had not run yet.
+        $this->shipments->autoConfirmDue();
 
-        if ($rows->isEmpty()) {
-            throw ValidationException::withMessages([
-                'supplier' => 'ไม่มียอดที่พร้อมจ่ายสำหรับคู่ค้ารายนี้',
-            ]);
-        }
+        return DB::transaction(function () use ($supplier, $actor) {
+            $supplier = Supplier::query()->whereKey($supplier->id)->lockForUpdate()->firstOrFail();
 
-        $gross = (int) $rows->sum('amount_satang');
+            if (blank($supplier->payout_bank_account_number) || blank($supplier->payout_bank_account_name)) {
+                throw ValidationException::withMessages([
+                    'supplier' => 'คู่ค้ารายนี้ยังไม่มีบัญชีรับเงิน — ตั้งบัญชีที่หน้าจัดการคู่ค้าก่อนจึงจะตั้งจ่ายได้',
+                ]);
+            }
 
-        /*
-         * A net of zero or less is not a payment. It means this supplier's
-         * shortfalls currently cancel out (or exceed) what they have sold, so
-         * there is nothing to transfer — and we do NOT go and ask them for the
-         * difference: the owner's ruling is that it nets off against their
-         * future sales, which is what leaving these rows open achieves.
-         */
-        if ($gross <= 0) {
-            throw ValidationException::withMessages([
-                'supplier' => 'ยอดคงเหลือของคู่ค้ารายนี้เป็นศูนย์หรือติดลบ — ยังตั้งจ่ายไม่ได้ (จะหักกลบกับยอดขายรอบถัดไป)',
-            ]);
-        }
+            $rows = $this->payableRows($supplier);
 
-        /*
-         * The minimum binds a SUPPLIER asking, never us deciding to settle
-         * what we owe. Identical asymmetry to the agent flow, and for the same
-         * reason: refusing to let somebody ask for 12 baht is a policy;
-         * refusing to let ourselves pay a debt we have decided to pay is not.
-         */
-        if ($source === WithdrawalSource::AgentRequest
-            && $supplier->min_withdrawal_satang !== null
-            && $gross < $supplier->min_withdrawal_satang) {
-            throw ValidationException::withMessages([
-                'supplier' => 'ยอดคงเหลือยังไม่ถึงขั้นต่ำที่กำหนดไว้สำหรับการขอเบิก',
-            ]);
-        }
+            if ($rows->isEmpty()) {
+                throw ValidationException::withMessages([
+                    'supplier' => 'ไม่มียอดที่พร้อมจ่ายสำหรับคู่ค้ารายนี้',
+                ]);
+            }
 
-        $tax = $this->withholdingFor($rows);
+            $gross = (int) $rows->sum('amount_satang');
 
-        return DB::transaction(function () use ($supplier, $actor, $source, $rows, $gross, $tax) {
+            /*
+             * A net of zero or less is not a payment. It means this supplier's
+             * shortfalls and refunds currently cancel out (or exceed) what they
+             * have sold, so there is nothing to transfer — and we do NOT go and
+             * ask them for the difference: the owner's rulings ("supplier เป็น
+             * ผู้รับผิดชอบ", "หักครั้งถัดไป") are that it nets off against their
+             * future sales, which is what leaving these rows open achieves.
+             */
+            if ($gross <= 0) {
+                throw ValidationException::withMessages([
+                    'supplier' => 'ยอดคงเหลือของคู่ค้ารายนี้เป็นศูนย์หรือติดลบ — ยังตั้งจ่ายไม่ได้ (จะหักกลบกับยอดขายรอบถัดไป)',
+                ]);
+            }
+
+            $tax = $this->withholdingFor($rows);
+
             $request = SupplierWithdrawalRequest::create([
                 'supplier_id' => $supplier->id,
-                'source' => $source->value,
-                // Same rule as WithdrawalSource documents for agents: a
-                // supplier asking needs a decision; an admin raising it has
-                // already made one by pressing the button.
-                'status' => $source === WithdrawalSource::AgentRequest
-                    ? WithdrawalStatus::PendingReview->value
-                    : WithdrawalStatus::Approved->value,
+                'source' => WithdrawalSource::CompanyPayout->value,
+                'status' => WithdrawalStatus::Approved->value,
                 'gross_satang' => $gross,
                 'wht_rate_at_time' => $tax['rate'],
                 'wht_satang' => $tax['satang'],
                 'net_satang' => $gross - $tax['satang'],
                 /*
                  * Snapshot — a supplier changing bank details later must not
-                 * rewrite where this money was sent.
-                 *
-                 * 2026-09-17 — the supplier's OWN payout account, on the
-                 * suppliers table. It was briefly `companies.payment_bank_*`,
-                 * which is the account a TENANT takes customer money in
-                 * through — paying a trading partner into it conflated two
-                 * different accounts pointing in opposite directions.
+                 * rewrite where this money was sent. The supplier's OWN payout
+                 * account (suppliers.payout_bank_*), never the tenant's
+                 * receiving account.
                  */
                 'bank_name' => $supplier->payout_bank_name,
                 'bank_account_number' => $supplier->payout_bank_account_number,
                 'bank_account_holder_name' => $supplier->payout_bank_account_name,
-                'decided_by_user_id' => $source === WithdrawalSource::CompanyPayout ? $actor->id : null,
-                'decided_at' => $source === WithdrawalSource::CompanyPayout ? now() : null,
+                'decided_by_user_id' => $actor->id,
+                'decided_at' => now(),
             ]);
 
             foreach ($rows as $row) {
@@ -173,6 +182,13 @@ class SupplierPayoutService
                 ]);
             }
 
+            $this->audit($request, $actor, 'supplier_payout.opened', null, [
+                'gross_satang' => $gross,
+                'wht_satang' => $tax['satang'],
+                'net_satang' => $gross - $tax['satang'],
+                'ledger_rows' => $rows->count(),
+            ]);
+
             return $request->fresh('items');
         });
     }
@@ -180,86 +196,98 @@ class SupplierPayoutService
     /**
      * Money has left the bank. THIS is where the ledger settles.
      *
-     * Not at approval — an approval is a decision that can still be undone by
-     * a failed transfer, and a ledger marked paid on the strength of one is a
-     * ledger that disagrees with the bank statement.
+     * Not when the payout is raised — that is a decision that can still be
+     * undone by a failed transfer (see cancel()), and a ledger marked paid on
+     * the strength of one is a ledger that disagrees with the bank statement.
      */
-    public function markTransferred(SupplierWithdrawalRequest $request, User $actor, ?string $reference = null): SupplierWithdrawalRequest
-    {
-        if ($request->status !== WithdrawalStatus::Approved) {
-            throw ValidationException::withMessages([
-                'status' => 'บันทึกการโอนได้เฉพาะรายการที่อนุมัติแล้วเท่านั้น (สถานะปัจจุบัน: '.$request->status->value.')',
-            ]);
-        }
+    public function markTransferred(
+        SupplierWithdrawalRequest $request,
+        User $actor,
+        ?string $reference = null,
+        ?string $whtCertificateNo = null,
+    ): SupplierWithdrawalRequest {
+        return DB::transaction(function () use ($request, $actor, $reference, $whtCertificateNo) {
+            $request = SupplierWithdrawalRequest::query()->whereKey($request->id)->lockForUpdate()->firstOrFail();
 
-        return DB::transaction(function () use ($request, $actor, $reference) {
+            if ($request->status !== WithdrawalStatus::Approved) {
+                throw ValidationException::withMessages([
+                    'status' => 'บันทึกการโอนได้เฉพาะรายการที่รอโอนเท่านั้น (สถานะปัจจุบัน: '.$request->status->label().')',
+                ]);
+            }
+
             $request->update([
                 'status' => WithdrawalStatus::Transferred->value,
                 'transferred_at' => now(),
                 'transfer_reference' => $reference,
-                'decided_by_user_id' => $request->decided_by_user_id ?? $actor->id,
-                'decided_at' => $request->decided_at ?? now(),
+                'wht_certificate_no' => filled($whtCertificateNo) ? $whtCertificateNo : $request->wht_certificate_no,
             ]);
 
             /*
              * Settle every row this request drew on — INCLUDING the negative
-             * ones. They were paid in the sense that matters: their effect has
-             * been taken into account in the transfer that just happened, and
-             * leaving them Pending would apply the same shortfall again on the
-             * next payout, and the one after that.
+             * ones. Their effect has been taken into account in the transfer
+             * that just happened; leaving them Pending would apply the same
+             * shortfall or refund again on the next payout.
              */
             SupplierSettlementLedger::query()
                 ->whereIn('id', $request->items()->pluck('supplier_settlement_ledger_id'))
                 ->update(['payment_status' => PaymentStatus::Paid->value]);
 
+            $this->audit($request, $actor, 'supplier_payout.transferred',
+                ['status' => WithdrawalStatus::Approved->value],
+                ['status' => WithdrawalStatus::Transferred->value, 'transfer_reference' => $reference, 'net_satang' => $request->net_satang],
+            );
+
             return $request->fresh('items');
         });
     }
 
-    /** An admin agreeing to a request the supplier raised. */
-    public function approve(SupplierWithdrawalRequest $request, User $actor): SupplierWithdrawalRequest
+    /**
+     * Take back a payout that was raised but never transferred.
+     *
+     * The transfer failed, the account was wrong, it was raised by mistake.
+     * Without this the rows stayed reserved forever — "open" — and could
+     * never be paid by any later payout. Cancelling drops the reservation and
+     * the rows return to the payable pool untouched (they were never marked
+     * paid). The reason is required and kept on the request.
+     */
+    public function cancel(SupplierWithdrawalRequest $request, User $actor, string $reason): SupplierWithdrawalRequest
     {
-        if ($request->status !== WithdrawalStatus::PendingReview) {
-            throw ValidationException::withMessages([
-                'status' => 'อนุมัติได้เฉพาะรายการที่รอตรวจสอบเท่านั้น',
+        return DB::transaction(function () use ($request, $actor, $reason) {
+            $request = SupplierWithdrawalRequest::query()->whereKey($request->id)->lockForUpdate()->firstOrFail();
+
+            if ($request->status !== WithdrawalStatus::Approved) {
+                throw ValidationException::withMessages([
+                    'status' => 'ยกเลิกได้เฉพาะรายการที่ยังไม่ได้โอนเท่านั้น',
+                ]);
+            }
+
+            $request->update([
+                'status' => WithdrawalStatus::Cancelled->value,
+                'rejection_reason' => $reason,
             ]);
-        }
 
-        $request->update([
-            'status' => WithdrawalStatus::Approved->value,
-            'decided_by_user_id' => $actor->id,
-            'decided_at' => now(),
-        ]);
+            $this->audit($request, $actor, 'supplier_payout.cancelled',
+                ['status' => WithdrawalStatus::Approved->value],
+                ['status' => WithdrawalStatus::Cancelled->value, 'reason' => $reason],
+            );
 
-        return $request->fresh();
+            return $request->fresh('items');
+        });
     }
 
-    /**
-     * Turning a request down releases its reservation.
-     *
-     * The reason is required by the application, shown to the supplier
-     * verbatim, and is the entire difference between a refusal they can act on
-     * and one they have to telephone about.
-     */
-    public function reject(SupplierWithdrawalRequest $request, User $actor, string $reason): SupplierWithdrawalRequest
+    private function audit(SupplierWithdrawalRequest $request, User $actor, string $action, ?array $old, ?array $new): void
     {
-        if (! $request->status->isOpen()) {
-            throw ValidationException::withMessages([
-                'status' => 'ปฏิเสธได้เฉพาะรายการที่ยังไม่ปิดเท่านั้น',
-            ]);
-        }
-
-        $request->update([
-            'status' => WithdrawalStatus::Rejected->value,
-            'rejection_reason' => $reason,
-            'decided_by_user_id' => $actor->id,
-            'decided_at' => now(),
+        // §6 — money. No company_id: a supplier is not a tenant.
+        AuditLog::create([
+            'company_id' => null,
+            'actor_user_id' => $actor->id,
+            'action' => $action,
+            'auditable_type' => SupplierWithdrawalRequest::class,
+            'auditable_id' => $request->id,
+            'old_values' => $old,
+            'new_values' => ['supplier_id' => $request->supplier_id] + ($new ?? []),
+            'ip_address' => request()?->ip(),
         ]);
-
-        // The ledger rows are untouched on purpose — they were never marked
-        // paid, and dropping the allocation is what returns them to the
-        // payable pool. Nothing to undo.
-        return $request->fresh();
     }
 
     /**
@@ -290,8 +318,14 @@ class SupplierPayoutService
      */
     private function withholdingFor(Collection $rows): array
     {
+        /*
+         * ADR-048 — a REFUND row is different from a shortfall: it takes back
+         * income that was (or would have been) withheld against, so it reduces
+         * the base at its own rate. A group whose refunds exceed its sales
+         * withholds nothing rather than a negative amount.
+         */
         $byRate = $rows
-            ->filter(fn (SupplierSettlementLedger $row) => $row->amount_satang > 0)
+            ->filter(fn (SupplierSettlementLedger $row) => $row->amount_satang > 0 || $row->isRefund())
             ->groupBy(fn (SupplierSettlementLedger $row) => (int) ($row->wht_rate_at_time ?? 0));
 
         $satang = 0;
@@ -304,7 +338,7 @@ class SupplierPayoutService
             // Multiply the GROUP's total before dividing once — summing
             // per-row tax would round a fraction of a satang away on every
             // line, which on a thousand-line payout is real money.
-            $satang += intdiv((int) $group->sum('amount_satang') * (int) $rate, self::BASIS_POINT_SCALE);
+            $satang += intdiv(max(0, (int) $group->sum('amount_satang')) * (int) $rate, self::BASIS_POINT_SCALE);
         }
 
         $rates = $byRate->keys()->map(fn ($r) => (int) $r)->unique()->values();

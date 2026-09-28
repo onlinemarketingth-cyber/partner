@@ -13,6 +13,7 @@ use App\Models\Referral;
 use App\Services\Commission\CommissionReversalService;
 use App\Services\Order\CustomerPaymentConfirmationMailer;
 use App\Services\Order\OrderService;
+use App\Services\Supplier\ShipmentService;
 use App\Support\CompanyScopeFilter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -310,6 +311,20 @@ class OrderController extends Controller
         $reversals->refundOrder($order, $request->user(), $validated['reason']);
 
         return new OrderResource($order->fresh()->load(self::RELATIONS));
+    }
+
+    /**
+     * POST /orders/{order}/receipt — ADR-048. The selling agent says the
+     * customer has the parcel. Releases the supplier's money on a
+     * deliver-before-pay deal; the service refuses anything not yet shipped.
+     */
+    public function confirmReceipt(Order $order, ShipmentService $shipments): OrderResource
+    {
+        $this->authorize('confirmReceipt', $order);
+
+        $updated = $shipments->confirmReceipt($order, ShipmentService::VIA_AGENT, request()->user());
+
+        return new OrderResource($updated->load(self::RELATIONS));
     }
 
     /** GET /orders/{order}/slip — access-checked private-disk download (§6). */

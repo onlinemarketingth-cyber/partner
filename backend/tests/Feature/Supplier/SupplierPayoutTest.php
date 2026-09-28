@@ -4,7 +4,6 @@ namespace Tests\Feature\Supplier;
 
 use App\Enums\PaymentStatus;
 use App\Enums\SupplierGpMode;
-use App\Enums\WithdrawalSource;
 use App\Enums\WithdrawalStatus;
 use App\Models\Company;
 use App\Models\Order;
@@ -138,7 +137,7 @@ class SupplierPayoutTest extends TestCase
     {
         $this->ledgerRow(60000);
 
-        $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $this->service()->open($this->supplier, $this->admin());
 
         $balance = $this->service()->balanceFor($this->supplier);
         $this->assertSame(0, $balance['payable_satang']);
@@ -157,7 +156,7 @@ class SupplierPayoutTest extends TestCase
         $good = $this->ledgerRow(100000);
         $bad = $this->ledgerRow(-30000);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(70000, $request->gross_satang);
         $this->assertCount(2, $request->items);
@@ -179,7 +178,7 @@ class SupplierPayoutTest extends TestCase
 
         $this->expectException(ValidationException::class);
 
-        $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $this->service()->open($this->supplier, $this->admin());
     }
 
     // ── Withholding tax ────────────────────────────────────────────────
@@ -189,7 +188,7 @@ class SupplierPayoutTest extends TestCase
         // Correct for a sale of goods, and the state every deal starts in.
         $this->ledgerRow(100000, whtRate: null);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(0, $request->wht_satang);
         $this->assertSame(100000, $request->net_satang);
@@ -199,7 +198,7 @@ class SupplierPayoutTest extends TestCase
     {
         $this->ledgerRow(100000, whtRate: 300); // 3%
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(300, $request->wht_rate_at_time);
         $this->assertSame(3000, $request->wht_satang);
@@ -219,7 +218,7 @@ class SupplierPayoutTest extends TestCase
         $this->ledgerRow(300000, whtRate: 0);
         $this->ledgerRow(100000, whtRate: 300);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(3000, $request->wht_satang, 'tax was not grouped by rate');
         $this->assertSame(400000, $request->gross_satang);
@@ -238,7 +237,7 @@ class SupplierPayoutTest extends TestCase
         $this->ledgerRow(100000, whtRate: 300);
         $this->ledgerRow(-50000, whtRate: 300);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(50000, $request->gross_satang);
         $this->assertSame(3000, $request->wht_satang, 'tax should be 3% of the 100000 of income, not of the 50000 net');
@@ -250,7 +249,7 @@ class SupplierPayoutTest extends TestCase
         $this->ledgerRow(123457, whtRate: 300);
         $this->ledgerRow(98765, whtRate: 0);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame($request->gross_satang - $request->wht_satang, $request->net_satang);
     }
@@ -264,18 +263,9 @@ class SupplierPayoutTest extends TestCase
         // warns about.
         $this->ledgerRow(60000);
 
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(WithdrawalStatus::Approved, $request->status);
-    }
-
-    public function test_a_supplier_raised_request_waits_for_review(): void
-    {
-        $this->ledgerRow(60000);
-
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::AgentRequest);
-
-        $this->assertSame(WithdrawalStatus::PendingReview, $request->status);
     }
 
     public function test_the_ledger_settles_at_transfer_and_not_at_approval(): void
@@ -283,7 +273,7 @@ class SupplierPayoutTest extends TestCase
         // แนวทาง C, unchanged from the commission flow: an approval is a
         // decision, a transfer is an event, and the books follow the event.
         $row = $this->ledgerRow(60000);
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->assertSame(PaymentStatus::Pending, $row->fresh()->payment_status);
 
@@ -295,40 +285,26 @@ class SupplierPayoutTest extends TestCase
     public function test_the_bank_details_are_snapshotted_so_a_later_change_cannot_rewrite_history(): void
     {
         $this->ledgerRow(60000);
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $request = $this->service()->open($this->supplier, $this->admin());
 
         $this->supplier->forceFill(['payout_bank_account_number' => '999-9-99999-9'])->save();
 
         $this->assertSame('123-4-56789-0', $request->fresh()->bank_account_number);
     }
 
-    public function test_rejecting_returns_the_rows_to_the_payable_pool(): void
+    public function test_cancelling_a_raised_payout_returns_the_rows_to_the_payable_pool(): void
     {
+        // ADR-048 — a transfer that failed must not leave the rows reserved
+        // for good.
         $this->ledgerRow(60000);
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::AgentRequest);
+        $request = $this->service()->open($this->supplier, $this->admin());
+        $this->assertSame(0, $this->service()->balanceFor($this->supplier)['payable_satang']);
 
-        $this->service()->reject($request, $this->admin(), 'เอกสารไม่ครบ');
+        $this->service()->cancel($request, $this->admin(), 'โอนไม่สำเร็จ บัญชีปิดแล้ว');
 
+        $this->assertSame(WithdrawalStatus::Cancelled, $request->fresh()->status);
         $this->assertSame(60000, $this->service()->balanceFor($this->supplier)['payable_satang']);
-    }
-
-    public function test_the_minimum_binds_a_supplier_asking_but_not_us_settling(): void
-    {
-        /*
-         * Refusing to let somebody ask for 12 baht is a policy. Refusing to
-         * let ourselves pay a debt we have decided to pay is not. Same
-         * asymmetry the agent flow has.
-         */
-        $this->supplier->forceFill(['min_withdrawal_satang' => 100000])->save();
-        $this->ledgerRow(50000);
-
-        $paidAnyway = $this->service()->open($this->supplier->fresh(), $this->admin(), WithdrawalSource::CompanyPayout);
-        $this->assertSame(50000, $paidAnyway->gross_satang);
-
-        $this->service()->reject($paidAnyway, $this->admin(), 'reset');
-
-        $this->expectException(ValidationException::class);
-        $this->service()->open($this->supplier->fresh(), $this->admin(), WithdrawalSource::AgentRequest);
+        $this->assertSame(60000, $this->service()->open($this->supplier, $this->admin())->gross_satang);
     }
 
     public function test_unreleased_rows_are_never_paid_out(): void
@@ -337,24 +313,30 @@ class SupplierPayoutTest extends TestCase
 
         $this->expectException(ValidationException::class);
 
-        $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $this->service()->open($this->supplier, $this->admin());
     }
 
-    public function test_transfer_is_refused_on_a_request_that_was_never_approved(): void
+    public function test_a_cancelled_payout_cannot_be_transferred_or_cancelled_again(): void
     {
         $this->ledgerRow(60000);
-        $request = $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::AgentRequest);
+        $request = $this->service()->open($this->supplier, $this->admin());
+        $this->service()->cancel($request, $this->admin(), 'ตั้งผิด');
+
+        try {
+            $this->service()->markTransferred($request, $this->admin(), 'REF-2');
+            $this->fail('a cancelled payout was transferred');
+        } catch (ValidationException) {
+        }
 
         $this->expectException(ValidationException::class);
-
-        $this->service()->markTransferred($request, $this->admin(), 'REF-2');
+        $this->service()->cancel($request, $this->admin(), 'อีกครั้ง');
     }
 
     public function test_a_supplier_with_nothing_owed_cannot_have_a_payout_raised(): void
     {
         $this->expectException(ValidationException::class);
 
-        $this->service()->open($this->supplier, $this->admin(), WithdrawalSource::CompanyPayout);
+        $this->service()->open($this->supplier, $this->admin());
     }
 
     public function test_one_suppliers_rows_never_reach_another_suppliers_payout(): void

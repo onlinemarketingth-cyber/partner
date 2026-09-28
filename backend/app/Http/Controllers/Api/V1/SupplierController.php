@@ -12,6 +12,7 @@ use App\Models\Supplier;
 use App\Models\SupplierSettlementLedger;
 use App\Models\User;
 use App\Services\Supplier\SupplierPayoutService;
+use App\Services\Supplier\SupplierService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -105,12 +106,9 @@ class SupplierController extends Controller
         ]);
     }
 
-    public function store(StoreSupplierRequest $request): JsonResponse
+    public function store(StoreSupplierRequest $request, SupplierService $suppliers): JsonResponse
     {
-        $supplier = Supplier::create([
-            ...$request->validated(),
-            'created_by_user_id' => $request->user()->id,
-        ]);
+        $supplier = $suppliers->create($request->validated(), $request->user());
 
         return response()->json(['data' => $this->present($supplier)], 201);
     }
@@ -137,11 +135,11 @@ class SupplierController extends Controller
         ]);
     }
 
-    public function update(UpdateSupplierRequest $request, Supplier $supplier): JsonResponse
+    public function update(UpdateSupplierRequest $request, Supplier $supplier, SupplierService $suppliers): JsonResponse
     {
-        $supplier->update($request->validated());
+        $updated = $suppliers->update($supplier, $request->validated(), $request->user());
 
-        return response()->json(['data' => $this->present($supplier->fresh())]);
+        return response()->json(['data' => $this->present($updated)]);
     }
 
     /**
@@ -283,7 +281,6 @@ class SupplierController extends Controller
             'gp_mode' => $supplier->gp_mode?->value,
             'gp_value' => $supplier->gp_value,
             'release_trigger' => $supplier->release_trigger?->value,
-            'min_withdrawal_satang' => $supplier->min_withdrawal_satang,
             'wht_rate' => $supplier->wht_rate,
 
             'payout_bank_name' => $supplier->payout_bank_name,

@@ -22,7 +22,7 @@
 
 ## §0.5 ก่อนเริ่ม — ทำใน Terminal บน Mac ของคุณ
 
-ทุกคำสั่งรันจากโฟลเดอร์โปรเจกต์ มันอ่านค่าเชื่อมต่อจาก `.env.deploy` ของคุณเอง คุณไม่ต้องพิมพ์รหัสผ่านหรือคีย์ใด ๆ
+ทุกคำสั่งมี 2 บรรทัด: บรรทัดแรกเข้าโฟลเดอร์โปรเจกต์และโหลดค่าเชื่อมต่อจาก `.env.deploy` บรรทัดที่สองต่อเข้าเซิร์ฟเวอร์ **ให้คัดลอกทั้งกล่องทีเดียว** แล้ววางใน Terminal ถ้าเซิร์ฟเวอร์ถามรหัสผ่าน ให้พิมพ์รหัสของคุณเอง
 
 ### 0.5.1 ☐ Deploy ขึ้น production ก่อน
 
@@ -37,7 +37,8 @@ commit ตามคำสั่งที่ ag-lead ให้ไว้ แล้
 ### 0.5.2 ☐ ล้าง UAT ชุดเดิมออก
 
 ```bash
-cd /Applications/MAMP/htdocs/agent && source .env.deploy && ssh -t -p "$SSH_PORT" ${SSH_KEY_PATH:+-i "$SSH_KEY_PATH"} "$SSH_USER@$SSH_HOST" "cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan uat:purge-commission-plans"
+cd /Applications/MAMP/htdocs/agent && source .env.deploy
+ssh -t -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan uat:purge-commission-plans"
 ```
 
 - **สิ่งที่ถูกลบ:** เฉพาะบริษัทที่ slug ขึ้นต้นด้วย `uat-plan-` และทุกอย่างใต้บริษัทนั้น (คือ 6 บริษัท `UAT · Unilevel` … `UAT · Affiliate`)
@@ -49,7 +50,8 @@ cd /Applications/MAMP/htdocs/agent && source .env.deploy && ssh -t -p "$SSH_PORT
 ### 0.5.3 ☐ (อ่านอย่างเดียว) ระบบคำนวณขั้นอัตโนมัติรันอยู่จริงไหม
 
 ```bash
-cd /Applications/MAMP/htdocs/agent && source .env.deploy && ssh -p "$SSH_PORT" ${SSH_KEY_PATH:+-i "$SSH_KEY_PATH"} "$SSH_USER@$SSH_HOST" "crontab -l 2>/dev/null | grep -i 'schedule:run' || echo 'NOT FOUND in crontab'; cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan schedule:list 2>/dev/null | grep -i rank"
+cd /Applications/MAMP/htdocs/agent && source .env.deploy
+ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "crontab -l 2>/dev/null | grep -i 'schedule:run' || echo 'NOT FOUND in crontab'; cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan schedule:list 2>/dev/null | grep -i rank"
 ```
 
 - UAT ชุดนี้ไม่ต้องใช้ระบบอัตโนมัติ เพราะคุณสั่งคำนวณเอง แต่ **บริษัทจริงที่ใช้แผนอันดับต้องพึ่งมัน**
@@ -197,7 +199,8 @@ cd /Applications/MAMP/htdocs/agent && source .env.deploy && ssh -p "$SSH_PORT" $
 ## §7 ส่วนที่ 6 — จัดขั้นครั้งแรก (Terminal)
 
 ```bash
-cd /Applications/MAMP/htdocs/agent && source .env.deploy && ssh -p "$SSH_PORT" ${SSH_KEY_PATH:+-i "$SSH_KEY_PATH"} "$SSH_USER@$SSH_HOST" "cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan commissions:recalculate-agent-ranks --company=uat-plan-stairstep-by-hand"
+cd /Applications/MAMP/htdocs/agent && source .env.deploy
+ssh -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "cd '$BACKEND_REMOTE_PATH' && ${PHP_BIN:-php} artisan commissions:recalculate-agent-ranks --company=uat-plan-stairstep-by-hand"
 ```
 
 | # | ตรวจอะไร | ผลที่ต้องเห็น | ผ่าน |

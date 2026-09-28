@@ -99,13 +99,6 @@ function setGpMode(mode: string): void {
   })
 }
 
-const minWithdrawalInput = computed<number | null>(() =>
-  props.modelValue.min_withdrawal_satang === null ? null : satangToBaht(props.modelValue.min_withdrawal_satang))
-
-function setMinWithdrawal(raw: string): void {
-  patch({ min_withdrawal_satang: raw === '' ? null : bahtToSatang(Number(raw)) })
-}
-
 const whtInput = computed<number | null>(() =>
   props.modelValue.wht_rate === null ? null : basisPointsToPercent(props.modelValue.wht_rate))
 
@@ -249,23 +242,8 @@ const inputClass = 'min-h-[40px] w-full px-3 rounded-lg border border-slate-300 
         <span v-if="modelValue.release_trigger" class="block text-xs text-slate-500 mt-1">{{ RELEASE_TRIGGER_HINTS[modelValue.release_trigger] }}</span>
       </label>
 
-      <label class="block">
-        <span class="block text-xs font-bold text-slate-600 mb-1">ยอดขั้นต่ำต่อการขอเบิก (บาท)</span>
-        <input
-          :value="minWithdrawalInput ?? ''"
-          data-test="min-withdrawal"
-          type="number"
-          step="0.01"
-          min="0"
-          :class="inputClass"
-          placeholder="เว้นว่าง = ไม่กำหนดขั้นต่ำ"
-          @input="setMinWithdrawal(($event.target as HTMLInputElement).value)"
-        />
-        <!-- The asymmetry is worth one sentence: it is easy to read this as a
-             floor on payments generally, and then wonder why a small debt was
-             settled anyway. -->
-        <span class="block text-xs text-slate-500 mt-1">ใช้เฉพาะตอนคู่ค้าขอเบิกเอง — ถ้าเราตั้งจ่ายให้ ยอดเท่าไหร่ก็จ่ายได้</span>
-      </label>
+      <!-- 2026-09-27 (ADR-048) — the "minimum per withdrawal request" field
+           is gone: suppliers do not request withdrawals, we raise payouts. -->
     </fieldset>
 
     <!-- ── 3. ภาษี ───────────────────────────────────────────────────── -->

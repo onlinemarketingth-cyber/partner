@@ -81,7 +81,8 @@ class StoreSupplierRequest extends FormRequest
             // One column, one rule — see the migration for why they share.
             'gp_value' => ['nullable', 'integer', 'min:0'],
             'release_trigger' => ['nullable', Rule::enum(SupplierReleaseTrigger::class)],
-            'min_withdrawal_satang' => ['nullable', 'integer', 'min:0'],
+            // min_withdrawal_satang is no longer accepted (ADR-048): suppliers
+            // do not request withdrawals, so a minimum had nothing to bind.
             // Basis points. 10000 = 100%, which is absurd but is the ceiling
             // the column can hold; the realistic values are 0 and 300.
             'wht_rate' => ['nullable', 'integer', 'min:0', 'max:10000'],

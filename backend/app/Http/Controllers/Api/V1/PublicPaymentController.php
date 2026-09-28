@@ -15,6 +15,7 @@ use App\Services\Link\TrackedLinkService;
 use App\Services\Order\OrderService;
 use App\Services\Payment\GatewayPaymentService;
 use App\Services\Payment\Gateways\GatewayException;
+use App\Services\Supplier\ShipmentService;
 use Illuminate\Validation\ValidationException;
 
 // ADR-017 (TASK-054) — the PUBLIC, UNAUTHENTICATED payment page
@@ -56,6 +57,21 @@ class PublicPaymentController extends Controller
         );
 
         return new PublicOrderResource($order->load(self::RELATIONS));
+    }
+
+    /**
+     * POST /pay/{token}/receipt — ADR-048. The customer confirms the parcel
+     * arrived, from the link they paid on (they have no login). Whoever is
+     * first — this or the agent in the portal — counts; the service refuses
+     * the second.
+     */
+    public function confirmReceipt(string $token, ShipmentService $shipments): PublicOrderResource
+    {
+        $order = $this->resolve($token);
+
+        $updated = $shipments->confirmReceipt($order, ShipmentService::VIA_CUSTOMER);
+
+        return new PublicOrderResource($updated->load(self::RELATIONS));
     }
 
     /**

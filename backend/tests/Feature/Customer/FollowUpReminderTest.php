@@ -127,4 +127,27 @@ class FollowUpReminderTest extends TestCase
         Notification::assertSentTo($admin, FollowUpReminderNotification::class);
         Notification::assertNotSentTo($agent, FollowUpReminderNotification::class);
     }
+
+    public function test_a_closed_company_s_followups_are_not_sent(): void
+    {
+        // "ปิดบริษัท" stops everything (owner, 2026-09-26). Nobody there can
+        // log in to act on a reminder.
+        Notification::fake();
+
+        $company = Company::factory()->create(['is_active' => false]);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $client = Client::factory()->create(['company_id' => $company->id, 'referring_agent_id' => $agent->id]);
+        $activity = ClientActivity::factory()->create([
+            'company_id' => $company->id,
+            'client_id' => $client->id,
+            'logged_by_user_id' => $agent->id,
+            'follow_up_at' => now()->subMinute(),
+            'follow_up_notified_at' => null,
+        ]);
+
+        $this->artisan(DispatchDueFollowUpReminders::class)->assertSuccessful();
+
+        Notification::assertNothingSent();
+        $this->assertNull($activity->fresh()->follow_up_notified_at);
+    }
 }

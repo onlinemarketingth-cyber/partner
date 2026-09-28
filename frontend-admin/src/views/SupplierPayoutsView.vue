@@ -29,7 +29,8 @@
  *
  * This is the first place in this system that withholds tax at all. Accounting
  * transfers `net`, reconciles against `gross`, and issues a certificate for
- * the difference — so all three are on screen and in the CSV. A row showing
+ * the difference — so all three are on screen. (There is no CSV export yet;
+ * an earlier version of this note said there was.) A row showing
  * only one of them cannot be reconciled against a bank statement.
  */
 import { computed, onMounted, ref } from 'vue'
@@ -80,6 +81,8 @@ interface PayoutRequest {
   bank_account_holder_name: string | null
   transferred_at: string | null
   transfer_reference: string | null
+  /** ADR-048 — why a raised payout was cancelled. */
+  cancel_reason?: string | null
   created_at: string | null
 }
 
@@ -166,6 +169,7 @@ const certificateNo = ref('')
 const transferring = ref(false)
 
 function openTransfer(request: PayoutRequest): void {
+  cancelTarget.value = null
   transferTarget.value = request
   transferReference.value = ''
   certificateNo.value = ''
@@ -188,6 +192,36 @@ async function confirmTransfer(): Promise<void> {
       : 'บันทึกการโอนไม่สำเร็จ'
   } finally {
     transferring.value = false
+  }
+}
+
+/* ── Cancelling a raised payout (ADR-048) ─────────────────────────────────
+ *
+ * The transfer failed, the account was wrong, it was raised by mistake. The
+ * rows go back to "ตั้งจ่ายได้" untouched. A reason is required and kept.
+ */
+const cancelTarget = ref<PayoutRequest | null>(null)
+const cancelReason = ref('')
+const cancelling = ref(false)
+
+function openCancel(request: PayoutRequest): void {
+  transferTarget.value = null
+  cancelTarget.value = request
+  cancelReason.value = ''
+}
+
+async function confirmCancel(): Promise<void> {
+  if (!cancelTarget.value || !cancelReason.value.trim()) return
+  cancelling.value = true
+  errorMessage.value = ''
+  try {
+    await api.post(`/supplier-payouts/${cancelTarget.value.id}/cancel`, { reason: cancelReason.value.trim() })
+    cancelTarget.value = null
+    await loadAll()
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `ยกเลิกไม่สำเร็จ: ${e.message}` : 'ยกเลิกไม่สำเร็จ'
+  } finally {
+    cancelling.value = false
   }
 }
 
@@ -342,15 +376,24 @@ function statusLabel(status: string): string {
                 {{ r.bank_name }}<br />{{ r.bank_account_number }}<br />{{ r.bank_account_holder_name }}
               </td>
               <td class="px-4 py-3 text-right whitespace-nowrap">
-                <button
-                  v-if="transferTarget?.id !== r.id"
-                  type="button"
-                  data-test="mark-transferred"
-                  class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition"
-                  @click="openTransfer(r)"
-                >
-                  <Icon name="check" :size="14" /> บันทึกว่าโอนแล้ว
-                </button>
+                <div v-if="transferTarget?.id !== r.id && cancelTarget?.id !== r.id" class="inline-flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    data-test="mark-transferred"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition"
+                    @click="openTransfer(r)"
+                  >
+                    <Icon name="check" :size="14" /> บันทึกว่าโอนแล้ว
+                  </button>
+                  <button
+                    type="button"
+                    data-test="open-cancel-payout"
+                    class="min-h-[36px] px-3 inline-flex items-center gap-1.5 rounded-lg border border-rose-200 text-rose-700 text-xs font-bold hover:bg-rose-50 transition"
+                    @click="openCancel(r)"
+                  >
+                    <Icon name="x" :size="14" /> ยกเลิกการตั้งจ่าย
+                  </button>
+                </div>
               </td>
             </tr>
 
@@ -412,6 +455,45 @@ function statusLabel(status: string): string {
                 </div>
               </td>
             </tr>
+
+            <!-- Cancel — same inline shape as the transfer row above. -->
+            <tr v-if="cancelTarget?.id === r.id" class="border-b border-slate-100">
+              <td colspan="6" class="px-4 pb-4">
+                <div class="p-4 rounded-xl bg-rose-50 border border-rose-200" data-test="cancel-panel">
+                  <p class="text-sm text-rose-900 font-bold">
+                    ยกเลิกการตั้งจ่ายให้ {{ r.supplier_name }} ฿{{ formatMoney(r.net_satang) }}
+                  </p>
+                  <p class="text-xs text-rose-800 mt-0.5">
+                    ยอดจะกลับไปอยู่ที่ "ตั้งจ่ายได้" ตามเดิม — ใช้เมื่อโอนไม่สำเร็จหรือตั้งจ่ายผิด
+                  </p>
+                  <label class="block mt-3">
+                    <span class="text-xs font-bold text-slate-600">เหตุผล</span>
+                    <input
+                      v-model="cancelReason"
+                      type="text"
+                      maxlength="500"
+                      data-test="cancel-reason"
+                      class="mt-1 w-full min-h-[40px] px-3 rounded-lg border border-slate-300 text-sm"
+                    />
+                  </label>
+                  <div class="flex items-center gap-2 mt-3">
+                    <button
+                      type="button"
+                      data-test="confirm-cancel-payout"
+                      :disabled="cancelling || !cancelReason.trim()"
+                      class="min-h-[38px] px-4 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-60 transition"
+                      @click="confirmCancel"
+                    >{{ cancelling ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิก' }}</button>
+                    <button
+                      type="button"
+                      data-test="keep-payout"
+                      class="min-h-[38px] px-4 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-white transition"
+                      @click="cancelTarget = null"
+                    >ไม่ยกเลิก</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
             </template>
           </tbody>
         </table>
@@ -441,7 +523,10 @@ function statusLabel(status: string): string {
                 {{ r.transferred_at ? formatDateTime(r.transferred_at) : '—' }}
               </td>
               <td class="px-4 py-3 font-bold text-slate-900">{{ r.supplier_name }}</td>
-              <td class="px-4 py-3 text-slate-600">{{ statusLabel(r.status) }}</td>
+              <td class="px-4 py-3 text-slate-600">
+                {{ statusLabel(r.status) }}
+                <span v-if="r.status === 'cancelled' && r.cancel_reason" class="block text-xs text-slate-400">{{ r.cancel_reason }}</span>
+              </td>
               <td class="px-4 py-3 text-right text-slate-600 whitespace-nowrap">฿{{ formatMoney(r.gross_satang) }}</td>
               <td class="px-4 py-3 text-right text-slate-600 whitespace-nowrap">฿{{ formatMoney(r.wht_satang) }}</td>
               <td class="px-4 py-3 text-right font-bold text-slate-900 whitespace-nowrap">฿{{ formatMoney(r.net_satang) }}</td>

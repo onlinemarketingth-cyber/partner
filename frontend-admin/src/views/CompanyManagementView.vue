@@ -5,9 +5,14 @@
  * auth.user.role, and the backend's CompanyPolicy is the real
  * enforcement either way (Section 5).
  *
- * A Company is the tenant boundary itself (CLAUDE.md §2). No cascading
- * actions on deactivate/delete are implemented here since none are defined
- * anywhere in CLAUDE.md yet (see CompanyService's own flagged note).
+ * A Company is the tenant boundary itself (CLAUDE.md §2).
+ *
+ * ── 2026-09-26: CLOSE, DELETE, AND THE TEST FLAG (ADR-047) ──
+ *
+ * ปิดบริษัท stops everything in the tenant, money jobs included, and is
+ * reversible. ลบ is permanent and the server decides whether it is allowed:
+ * a บริษัททดสอบ goes whole; a real company only while it holds no business
+ * data. See CompanyRemovalService for the rules this screen only displays.
  *
  * ── 2026-09-17: IT CAN NOW BE EDITED ──
  *
@@ -29,6 +34,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
 // TASK-209 P4 — this screen ignores the header company scope on purpose.
 import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
@@ -75,6 +81,13 @@ interface CompanyItem {
   currency_code: string
   currency_symbol: string
   is_active: boolean
+  /*
+   * 2026-09-26 — บริษัททดสอบ. A test company may be deleted whole; a real one
+   * only while it holds no business data. Switching it off (going live) is
+   * one-way, recorded in went_live_at. See CompanyRemovalService.
+   */
+  is_test: boolean
+  went_live_at: string | null
   commission_plan_type: CommissionPlanType
   user_count: number
   created_at: string
@@ -215,7 +228,7 @@ async function loadCurrencies(): Promise<void> {
 
 // ── Create form ──
 const showCreateForm = ref(false)
-const createForm = ref<{ name: string; slug: string; currency_code: string; commission_plan_type: CommissionPlanType }>({
+const createForm = ref<{ name: string; slug: string; currency_code: string; commission_plan_type: CommissionPlanType; is_test: boolean }>({
   name: '',
   slug: '',
   // Seeded from the server's own default rather than a literal 'THB': the
@@ -223,6 +236,7 @@ const createForm = ref<{ name: string; slug: string; currency_code: string; comm
   // fact and only one place should assert it.
   currency_code: 'THB',
   commission_plan_type: 'unilevel',
+  is_test: false,
 })
 const creating = ref(false)
 async function submitCreate() {
@@ -234,8 +248,9 @@ async function submitCreate() {
       slug: createForm.value.slug || slugify(createForm.value.name),
       currency_code: createForm.value.currency_code,
       commission_plan_type: createForm.value.commission_plan_type,
+      is_test: createForm.value.is_test,
     })
-    createForm.value = { name: '', slug: '', currency_code: defaultCurrency.value, commission_plan_type: 'unilevel' }
+    createForm.value = { name: '', slug: '', currency_code: defaultCurrency.value, commission_plan_type: 'unilevel', is_test: false }
     showCreateForm.value = false
     await reloadAll()
   } catch (e) {
@@ -399,12 +414,238 @@ async function saveEdit(company: CompanyItem) {
   }
 }
 
-async function toggleActive(company: CompanyItem) {
+/* ── ปิดบริษัท / เปิดบริษัทอีกครั้ง ─────────────────────────────────────────
+ *
+ * 2026-09-26 — owner: "ทำปุ่มปิดบริษัท ที่ปิดการใช้งานทุกระบบในบริษัทนี้".
+ *
+ * Until today the status chip on each row WAS the switch: one click on
+ * "ใช้งานอยู่" locked out every user of a tenant, with no question asked and
+ * nothing on the chip saying it was a button. It is now a plain label, and
+ * closing is an explicit button behind a dialog that lists what stops.
+ *
+ * What stops is not decided here. Logins, every authenticated request and
+ * the public pages were already gated on Company::isOperational (TASK-183);
+ * the scheduled money jobs now are too (Company::scopeOperational). This
+ * screen only has to say so truthfully.
+ */
+const pendingActiveChange = ref<CompanyItem | null>(null)
+const savingActive = ref(false)
+
+const activeChangeBody = computed(() => {
+  const c = pendingActiveChange.value
+  if (!c) return ''
+
+  if (c.is_active) {
+    return `ทุกระบบของ "${c.name}" จะหยุด:\n`
+      + '· ผู้ใช้ทุกคนของบริษัทนี้เข้าสู่ระบบไม่ได้ และคนที่ใช้งานอยู่จะใช้ต่อไม่ได้ทันที\n'
+      + '· ลิงก์สมัคร ลิงก์แชร์ ลิงก์พันธมิตร และหน้าชำระเงินของบริษัทใช้ไม่ได้\n'
+      + '· งานอัตโนมัติหยุด: ค่าคอมต่ออายุ รอบไบนารี ปรับอันดับ จ่ายโบนัสโปรโมชัน แจ้งเตือนติดตามลูกค้า และอีเมลแจ้งเตือน\n\n'
+      + 'ข้อมูลทั้งหมดยังอยู่ครบ และเปิดบริษัทอีกครั้งได้ทุกเมื่อ — รายการที่ถึงกำหนดระหว่างปิด (เช่น ค่าคอมต่ออายุ) จะทำต่อในรอบถัดไปหลังเปิด'
+  }
+
+  return `"${c.name}" จะกลับมาใช้งานได้ตามปกติ:\n`
+    + '· ผู้ใช้เข้าสู่ระบบได้ ลิงก์สาธารณะกลับมาใช้ได้\n'
+    + '· งานอัตโนมัติกลับมาทำงาน รวมถึงรายการที่ถึงกำหนดระหว่างปิด'
+})
+
+async function applyActiveChange() {
+  const c = pendingActiveChange.value
+  if (!c) return
+
+  savingActive.value = true
+  errorMessage.value = ''
   try {
-    await api.put(`/companies/${company.id}`, { is_active: !company.is_active })
+    await api.put(`/companies/${c.id}`, { is_active: !c.is_active })
     await reloadAll()
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'
+    errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ: ${e.message}` : 'อัปเดตไม่สำเร็จ'
+  } finally {
+    savingActive.value = false
+    pendingActiveChange.value = null
+  }
+}
+
+/* ── บริษัททดสอบ ──────────────────────────────────────────────────────────
+ *
+ * The server decides whether the flag may move (on: only while the company
+ * is empty and has never gone live; off: always, and for good). This screen
+ * asks first, then shows the server's refusal word for word if there is one.
+ */
+const pendingTestChange = ref<{ company: CompanyItem; to: boolean } | null>(null)
+const savingTest = ref(false)
+
+const testChangeBody = computed(() => {
+  const p = pendingTestChange.value
+  if (!p) return ''
+
+  if (p.to) {
+    return `ตั้ง "${p.company.name}" เป็นบริษัททดสอบ\n\n`
+      + 'บริษัททดสอบลบได้ทั้งหมดในครั้งเดียว — ผู้ใช้ ค่าคอม และข้อมูลทุกอย่าง\n'
+      + 'ตั้งได้เฉพาะบริษัทที่ยังไม่มีข้อมูลการใช้งาน และยังไม่เคยเปิดใช้งานจริง'
+  }
+
+  return `เปลี่ยน "${p.company.name}" เป็นบริษัทใช้งานจริง\n\n`
+    + 'ทำแล้วย้อนกลับไม่ได้:\n'
+    + '· กลับเป็นบริษัททดสอบไม่ได้อีก\n'
+    + '· จะลบได้เฉพาะตอนที่ยังไม่มีตัวแทน/ผู้สมัคร ลูกค้า ดีล คำสั่งซื้อ ค่าคอม หรือคำขอถอนเงิน\n\n'
+    + 'ข้อมูลทดสอบที่มีอยู่ตอนนี้จะกลายเป็นข้อมูลจริงไปด้วย — ถ้ายังมีข้อมูลทดสอบค้างอยู่ ให้ลบบริษัทนี้แล้วสร้างใหม่แทน'
+})
+
+async function applyTestChange() {
+  const p = pendingTestChange.value
+  if (!p) return
+
+  savingTest.value = true
+  errorMessage.value = ''
+  try {
+    await api.put(`/companies/${p.company.id}/test-mode`, { is_test: p.to })
+    await reloadAll()
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `เปลี่ยนประเภทบริษัทไม่สำเร็จ: ${e.message}` : 'เปลี่ยนประเภทบริษัทไม่สำเร็จ'
+  } finally {
+    savingTest.value = false
+    pendingTestChange.value = null
+  }
+}
+
+function formatDate(iso: string | null): string {
+  return iso ? new Date(iso).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : ''
+}
+
+/* ── ลบบริษัท ──────────────────────────────────────────────────────────────
+ *
+ * 2026-09-26 — owner: a test company is deleted WHOLE (users, commission,
+ * everything); a real one only while it holds no business data.
+ *
+ * The dialog is driven by the server's own assessment (GET …/removal), never
+ * by counting in the browser: the rule lives in CompanyRemovalService and
+ * this screen only reads its answer. Three answers, three dialogs:
+ *   wipe    → list what goes, type the name to confirm
+ *   empty   → say it is empty, type the name to confirm
+ *   blocked → no delete at all; say what blocks it and offer ปิดบริษัท
+ */
+type RemovalMode = 'wipe' | 'empty' | 'blocked'
+interface RemovalCount {
+  key: string
+  count: number
+}
+interface RemovalAssessment {
+  mode: RemovalMode
+  blockers: RemovalCount[]
+  contents: RemovalCount[]
+}
+
+const removalLabels: Record<string, [string, string]> = {
+  users: ['ผู้ใช้งานทั้งหมด', 'คน'],
+  agents: ['ตัวแทน / ผู้สมัคร', 'คน'],
+  clients: ['ลูกค้า', 'ราย'],
+  referrals: ['รายการแนะนำ (ดีล)', 'รายการ'],
+  orders: ['คำสั่งซื้อ', 'รายการ'],
+  commission: ['รายการค่าคอมมิชชัน', 'รายการ'],
+  withdrawals: ['คำขอถอนเงิน', 'รายการ'],
+  products: ['สินค้า', 'รายการ'],
+}
+
+function countLines(rows: RemovalCount[]): string {
+  return rows
+    .filter((r) => r.count > 0)
+    .map((r) => {
+      const [label, unit] = removalLabels[r.key] ?? [r.key, 'รายการ']
+
+      return `· ${label} ${r.count.toLocaleString('th-TH')} ${unit}`
+    })
+    .join('\n')
+}
+
+const removalTarget = ref<CompanyItem | null>(null)
+const removal = ref<RemovalAssessment | null>(null)
+const checkingRemovalId = ref<number | null>(null)
+const deleting = ref(false)
+
+async function openRemoval(company: CompanyItem) {
+  checkingRemovalId.value = company.id
+  errorMessage.value = ''
+  try {
+    const res = await api.get<{ data: RemovalAssessment }>(`/companies/${company.id}/removal`)
+    removal.value = res.data
+    removalTarget.value = company
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `ตรวจสอบก่อนลบไม่สำเร็จ: ${e.message}` : 'ตรวจสอบก่อนลบไม่สำเร็จ'
+  } finally {
+    checkingRemovalId.value = null
+  }
+}
+
+function closeRemoval() {
+  removalTarget.value = null
+  removal.value = null
+}
+
+const removalTitle = computed(() => {
+  const c = removalTarget.value
+  if (!c || !removal.value) return ''
+
+  return removal.value.mode === 'blocked' ? `ลบ "${c.name}" ไม่ได้` : `ลบ "${c.name}" ถาวร`
+})
+
+const removalBody = computed(() => {
+  const r = removal.value
+  if (!r) return ''
+
+  if (r.mode === 'wipe') {
+    const lines = countLines(r.contents)
+
+    return 'บริษัททดสอบ — จะลบทุกอย่างของบริษัทนี้ กู้คืนไม่ได้:\n'
+      + (lines ? `${lines}\n` : '')
+      + '· และการตั้งค่าทั้งหมดของบริษัท (สินค้า แผนค่าคอม ธีม บทเรียน ฯลฯ)\n\n'
+      + 'บันทึกการใช้งาน (audit log) ยังเก็บไว้ · ไฟล์ที่อัปโหลดไว้ยังอยู่บนเซิร์ฟเวอร์'
+  }
+
+  if (r.mode === 'empty') {
+    const users = r.contents.find((x) => x.key === 'users')?.count ?? 0
+
+    return 'บริษัทนี้ยังไม่มีข้อมูลการใช้งาน จะลบถาวร กู้คืนไม่ได้:\n'
+      + (users > 0 ? `· ผู้ดูแล / ผู้ใช้งาน ${users.toLocaleString('th-TH')} คน\n` : '')
+      + '· การตั้งค่าทั้งหมดของบริษัท\n\n'
+      + 'บันทึกการใช้งาน (audit log) ยังเก็บไว้'
+  }
+
+  const closeHint = removalTarget.value?.is_active
+    ? 'ถ้าต้องการหยุดใช้งาน ให้ "ปิดบริษัท" แทน — ข้อมูลทั้งหมดยังอยู่ และเปิดกลับได้'
+    : 'บริษัทนี้ปิดอยู่แล้ว — ข้อมูลทั้งหมดยังเก็บไว้'
+
+  return 'บริษัทนี้มีข้อมูลการใช้งานจริงแล้ว จึงลบไม่ได้:\n'
+    + `${countLines(r.blockers)}\n\n`
+    + closeHint
+})
+
+/** blocked: the confirm button becomes "ปิดบริษัทแทน" (or just closes). */
+async function confirmRemoval() {
+  const c = removalTarget.value
+  const r = removal.value
+  if (!c || !r) return
+
+  if (r.mode === 'blocked') {
+    closeRemoval()
+    if (c.is_active) pendingActiveChange.value = c
+
+    return
+  }
+
+  deleting.value = true
+  errorMessage.value = ''
+  try {
+    await api.delete(`/companies/${c.id}/purge`, { confirm_name: c.name })
+    if (editingId.value === c.id) {
+      editingId.value = null
+      editForm.value = null
+    }
+    await reloadAll()
+  } catch (e) {
+    errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ: ${e.message}` : 'ลบไม่สำเร็จ'
+  } finally {
+    deleting.value = false
+    closeRemoval()
   }
 }
 
@@ -499,6 +740,17 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
           ต้องตั้งค่าที่หน้า "แผนค่าแนะนำ" ก่อน ระบบจึงจะคำนวณค่าแนะนำตามรูปแบบนี้ได้
         </p>
       </div>
+      <div class="col-span-2 flex items-center gap-2">
+        <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+          <input v-model="createForm.is_test" type="checkbox" data-test="create-is-test" class="rounded border-slate-300" />
+          บริษัททดสอบ
+        </label>
+        <InfoPopover label="บริษัททดสอบ">
+          บริษัททดสอบลบได้ทั้งหมดในครั้งเดียว — ผู้ใช้ ค่าคอม และข้อมูลทุกอย่าง
+          เหมาะกับการทดลองระบบ เมื่อทดสอบเสร็จให้เปลี่ยนเป็น "ใช้งานจริง" (ทำแล้วย้อนกลับไม่ได้)
+          บริษัทใช้งานจริงลบได้เฉพาะตอนที่ยังไม่มีตัวแทน ลูกค้า ดีล หรือค่าคอม
+        </InfoPopover>
+      </div>
       <div class="col-span-2 flex justify-end gap-2">
         <button type="button" class="btn-secondary" @click="showCreateForm = false">ยกเลิก</button>
         <button type="submit" :disabled="creating" data-test="submit-create" class="btn-primary">
@@ -511,12 +763,36 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
     <template v-else>
       <EmptyState v-if="!companies.length" icon="building" title="ยังไม่มีบริษัทในระบบ" class="mt-4" />
       <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2 mt-4">
-        <div v-for="c in companies" :key="c.id" class="bg-white/95 border border-slate-200 rounded-xl p-4">
-        <div class="flex items-center justify-between gap-3">
+        <div
+          v-for="c in companies"
+          :key="c.id"
+          data-test="company-row"
+          class="border rounded-xl p-4"
+          :class="c.is_active ? 'bg-white/95 border-slate-200' : 'bg-slate-50 border-slate-200'"
+        >
+        <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex items-start gap-3 min-w-0">
             <Icon name="building" :size="18" class="text-brand-600 mt-0.5 shrink-0" />
             <div class="min-w-0">
-              <p class="text-sm font-bold text-slate-900">{{ c.name }}</p>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <p class="text-sm font-bold" :class="c.is_active ? 'text-slate-900' : 'text-slate-500'">{{ c.name }}</p>
+                <!-- A LABEL, not a switch. Until 2026-09-26 this chip was the
+                     one-click kill switch for the whole tenant. -->
+                <span
+                  data-test="status-label"
+                  class="text-[11px] font-bold px-1.5 py-0.5 rounded"
+                  :class="c.is_active ? 'text-emerald-700 bg-emerald-50' : 'text-slate-500 bg-slate-200'"
+                >
+                  {{ c.is_active ? 'ใช้งานอยู่' : 'ปิดอยู่' }}
+                </span>
+                <span
+                  v-if="c.is_test"
+                  data-test="test-chip"
+                  class="text-[11px] font-bold px-1.5 py-0.5 rounded text-amber-700 bg-amber-50"
+                >
+                  บริษัททดสอบ
+                </span>
+              </div>
               <p class="text-xs text-slate-400">/{{ c.slug }} · {{ c.user_count }} ผู้ใช้งาน</p>
               <div class="mt-1.5 flex items-center gap-1.5">
                 <select
@@ -536,7 +812,7 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
               </div>
             </div>
           </div>
-          <div class="flex items-center gap-2 shrink-0">
+          <div class="flex flex-wrap items-center gap-2 shrink-0">
             <button
               type="button"
               data-test="edit-company"
@@ -547,11 +823,23 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
               {{ editingId === c.id ? 'ปิด' : 'แก้ไข' }}
             </button>
             <button
-              class="text-xs font-bold px-2 py-1 rounded-lg"
-              :class="c.is_active ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'text-slate-400 bg-slate-100 hover:bg-slate-200'"
-              @click="toggleActive(c)"
+              type="button"
+              data-test="toggle-active"
+              class="text-xs font-bold px-2 py-1 rounded-lg inline-flex items-center gap-1"
+              :class="c.is_active ? 'text-amber-700 bg-amber-50 hover:bg-amber-100' : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100'"
+              @click="pendingActiveChange = c"
             >
-              {{ c.is_active ? 'ใช้งานอยู่' : 'ปิดใช้งาน' }}
+              {{ c.is_active ? 'ปิดบริษัท' : 'เปิดบริษัทอีกครั้ง' }}
+            </button>
+            <button
+              type="button"
+              data-test="delete-company"
+              :disabled="checkingRemovalId === c.id"
+              class="text-xs font-bold px-2 py-1 rounded-lg inline-flex items-center gap-1 text-rose-600 bg-rose-50 hover:bg-rose-100 disabled:opacity-50"
+              @click="openRemoval(c)"
+            >
+              <Icon name="trash" :size="13" />
+              {{ checkingRemovalId === c.id ? 'กำลังตรวจ...' : 'ลบ' }}
             </button>
           </div>
         </div>
@@ -687,6 +975,44 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
             </div>
           </div>
 
+          <!-- ── ประเภทบริษัท (บริษัททดสอบ / ใช้งานจริง) ──────────────────
+               Its own endpoint and its own confirm, NOT part of บันทึก:
+               switching to live is one-way, and a one-way door must not
+               ride along with a rename. -->
+          <div class="mt-4 p-3 rounded-lg border border-slate-200 flex flex-wrap items-center gap-2" data-test="company-type">
+            <p class="text-xs font-bold text-slate-600">ประเภทบริษัท:</p>
+            <p class="text-sm font-bold" :class="c.is_test ? 'text-amber-700' : 'text-slate-800'">
+              {{ c.is_test ? 'บริษัททดสอบ' : 'ใช้งานจริง' }}
+              <span v-if="!c.is_test && c.went_live_at" class="text-xs font-normal text-slate-400">
+                ตั้งแต่ {{ formatDate(c.went_live_at) }}
+              </span>
+            </p>
+            <InfoPopover label="ประเภทบริษัท">
+              บริษัททดสอบลบได้ทั้งหมดในครั้งเดียว — ผู้ใช้ ค่าคอม และข้อมูลทุกอย่าง
+              เมื่อทดสอบเสร็จให้เปลี่ยนเป็นใช้งานจริง ซึ่งย้อนกลับไม่ได้
+              บริษัทใช้งานจริงลบได้เฉพาะตอนที่ยังไม่มีตัวแทน/ผู้สมัคร ลูกค้า ดีล คำสั่งซื้อ ค่าคอม หรือคำขอถอนเงิน
+              ถ้ามีข้อมูลแล้วให้ใช้ "ปิดบริษัท" แทน
+            </InfoPopover>
+            <button
+              v-if="c.is_test"
+              type="button"
+              data-test="go-live"
+              class="ml-auto text-xs font-bold px-2 py-1 rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+              @click="pendingTestChange = { company: c, to: false }"
+            >
+              เปลี่ยนเป็นใช้งานจริง
+            </button>
+            <button
+              v-else-if="!c.went_live_at"
+              type="button"
+              data-test="mark-test"
+              class="ml-auto text-xs font-bold px-2 py-1 rounded-lg text-amber-700 bg-amber-50 hover:bg-amber-100"
+              @click="pendingTestChange = { company: c, to: true }"
+            >
+              ตั้งเป็นบริษัททดสอบ
+            </button>
+          </div>
+
           <div class="mt-4 flex items-center gap-2">
             <button
               type="button"
@@ -725,6 +1051,55 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
       @confirm="pendingSlugChange && saveEdit(pendingSlugChange)"
       @cancel="pendingSlugChange = null"
       @update:show="(v: boolean) => { if (!v) pendingSlugChange = null }"
+    />
+
+    <!-- ปิดบริษัท / เปิดบริษัทอีกครั้ง. Closing is `warning`, not `danger`:
+         nothing is destroyed and it is reversible. -->
+    <ConfirmDialog
+      :show="pendingActiveChange !== null"
+      :variant="pendingActiveChange?.is_active ? 'warning' : 'primary'"
+      size="md"
+      :title="pendingActiveChange?.is_active ? `ปิดบริษัท ${pendingActiveChange?.name ?? ''}` : `เปิดบริษัท ${pendingActiveChange?.name ?? ''} อีกครั้ง`"
+      :body="activeChangeBody"
+      :busy="savingActive"
+      :confirm-label="pendingActiveChange?.is_active ? 'ปิดบริษัท' : 'เปิดบริษัท'"
+      cancel-label="ยกเลิก"
+      @confirm="applyActiveChange"
+      @cancel="pendingActiveChange = null"
+      @update:show="(v: boolean) => { if (!v) pendingActiveChange = null }"
+    />
+
+    <!-- บริษัททดสอบ ⇄ ใช้งานจริง. Going live is one-way, hence `warning`. -->
+    <ConfirmDialog
+      :show="pendingTestChange !== null"
+      variant="warning"
+      size="md"
+      :title="pendingTestChange?.to ? 'ตั้งเป็นบริษัททดสอบ' : 'เปลี่ยนเป็นบริษัทใช้งานจริง'"
+      :body="testChangeBody"
+      :busy="savingTest"
+      :confirm-label="pendingTestChange?.to ? 'ตั้งเป็นบริษัททดสอบ' : 'เปลี่ยนเป็นใช้งานจริง'"
+      cancel-label="ยกเลิก"
+      @confirm="applyTestChange"
+      @cancel="pendingTestChange = null"
+      @update:show="(v: boolean) => { if (!v) pendingTestChange = null }"
+    />
+
+    <!-- ลบบริษัท. The server's assessment picks the dialog: typed-name
+         confirm for wipe/empty; for blocked, no delete button exists — the
+         confirm becomes "ปิดบริษัทแทน" (or just "รับทราบ" when already closed). -->
+    <ConfirmDialog
+      :show="removalTarget !== null && removal !== null"
+      :variant="removal?.mode === 'blocked' ? 'primary' : 'danger'"
+      size="md"
+      :title="removalTitle"
+      :body="removalBody"
+      :busy="deleting"
+      :confirm-phrase="removal?.mode === 'blocked' ? '' : (removalTarget?.name ?? '')"
+      :confirm-label="removal?.mode === 'blocked' ? (removalTarget?.is_active ? 'ปิดบริษัทแทน' : 'รับทราบ') : 'ลบถาวร'"
+      :cancel-label="removal?.mode === 'blocked' ? 'ปิดหน้าต่าง' : 'ยกเลิก'"
+      @confirm="confirmRemoval"
+      @cancel="closeRemoval"
+      @update:show="(v: boolean) => { if (!v) closeRemoval() }"
     />
   </main>
 </template>

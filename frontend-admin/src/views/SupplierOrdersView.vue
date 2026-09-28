@@ -46,6 +46,9 @@ interface SupplierOrder {
   shipping_status_label: string | null
   tracking_number: string | null
   shipped_at: string | null
+  /** ADR-048 — when the recipient (or the auto window) confirmed receipt. */
+  received_at?: string | null
+  receipt_confirmed_via?: 'agent' | 'customer' | 'auto' | null
   /**
    * ABSENT — not null — on a product that does not ship.
    *
@@ -226,6 +229,15 @@ const kpis = computed(() => [
             <span v-if="order.shipped_at" class="font-normal text-slate-500">
               · ส่งเมื่อ {{ formatDateTime(order.shipped_at) }}
             </span>
+          </p>
+          <!-- ADR-048 — on a deliver-before-pay deal this, not the shipped
+               click, is what makes the money payable. -->
+          <p v-if="order.received_at" data-test="received-note" class="mt-1 text-xs text-slate-600">
+            ผู้รับยืนยันรับสินค้าแล้ว {{ formatDateTime(order.received_at) }}
+            <span v-if="order.receipt_confirmed_via === 'auto'" class="text-slate-400">(ระบบยืนยันให้อัตโนมัติ)</span>
+          </p>
+          <p v-else-if="order.shipping_status === 'shipped'" data-test="awaiting-receipt-note" class="mt-1 text-xs text-slate-500">
+            รอผู้รับกดยืนยันรับสินค้า
           </p>
         </div>
 

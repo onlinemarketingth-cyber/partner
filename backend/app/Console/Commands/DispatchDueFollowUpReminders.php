@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\NotificationType;
 use App\Models\ClientActivity;
+use App\Models\Company;
 use App\Notifications\FollowUpReminderNotification;
 use App\Services\Notification\NotificationService;
 use Illuminate\Console\Command;
@@ -35,6 +36,8 @@ class DispatchDueFollowUpReminders extends Command
             ->whereNotNull('follow_up_at')
             ->whereNull('follow_up_notified_at')
             ->where('follow_up_at', '<=', now())
+            // A closed company's work waits until it is reopened (Company::scopeOperational).
+            ->whereIn('company_id', Company::operational()->select('id'))
             ->pluck('id');
 
         $dispatched = 0;

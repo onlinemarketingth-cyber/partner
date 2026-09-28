@@ -3,6 +3,7 @@
 namespace App\Console\Commands;
 
 use App\Models\AgentPromotionCredit;
+use App\Models\Company;
 use App\Services\Engagement\PromotionBonusService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -34,6 +35,8 @@ class PayDueAgentPromotionCredits extends Command
         // separate per-company loop is needed here.
         AgentPromotionCredit::withoutGlobalScopes()
             ->whereNull('paid_at')
+            // A closed company's work waits until it is reopened (Company::scopeOperational).
+            ->whereIn('company_id', Company::operational()->select('id'))
             ->chunkById(50, function ($credits) use ($promotionBonusService, &$paid) {
                 foreach ($credits as $credit) {
                     DB::transaction(function () use ($credit, $promotionBonusService, &$paid) {

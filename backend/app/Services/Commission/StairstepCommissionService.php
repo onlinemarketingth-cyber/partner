@@ -57,7 +57,8 @@ class StairstepCommissionService
     {
         $processed = 0;
 
-        Company::whereHas('agentRankSetting')
+        Company::operational()
+            ->whereHas('agentRankSetting')
             ->when($onlyCompanyId !== null, fn ($query) => $query->whereKey($onlyCompanyId))
             ->with('agentRankSetting')
             ->chunkById(50, function ($companies) use (&$processed) {

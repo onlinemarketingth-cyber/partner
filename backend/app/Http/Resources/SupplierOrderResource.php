@@ -78,6 +78,11 @@ class SupplierOrderResource extends JsonResource
             'shipping_status_label' => $this->shipping_status?->label(),
             'tracking_number' => $this->tracking_number,
             'shipped_at' => $this->shipped_at?->toIso8601String(),
+            // ADR-048 — the supplier sees when the recipient confirmed (or
+            // the auto-receive window did), because that is when their money
+            // on a deliver-before-pay deal becomes payable.
+            'received_at' => $this->received_at?->toIso8601String(),
+            'receipt_confirmed_via' => $this->receipt_confirmed_via,
 
             /*
              * Address and phone ONLY when there is a parcel. `when()` omits

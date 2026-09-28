@@ -10,6 +10,7 @@ use App\Notifications\AgentNotificationEmail;
 use App\Services\Notification\NotificationMailer;
 use App\Services\Notification\NotificationService;
 use App\Support\NotificationLink;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Notification;
@@ -290,7 +291,7 @@ class NotificationEmailTest extends TestCase
         // anywhere. This has already happened once in this codebase
         // (NewAgentRegistrationNotification, 2026-08-17).
         $this->assertNotInstanceOf(
-            \Illuminate\Contracts\Queue\ShouldQueue::class,
+            ShouldQueue::class,
             new AgentNotificationEmail(new NotificationRow),
             'AgentNotificationEmail must send synchronously — no queue worker is guaranteed.'
         );
@@ -381,5 +382,20 @@ class NotificationEmailTest extends TestCase
 
         $this->assertFalse(app(NotificationMailer::class)->send($row->fresh()));
         Notification::assertNothingSent();
+    }
+
+    public function test_the_sweep_does_not_mail_a_closed_company_s_agents(): void
+    {
+        // "ปิดบริษัท" stops everything (owner, 2026-09-26): no mail pointing
+        // at an app nobody there can log in to.
+        Notification::fake();
+        $agent = $this->agent();
+        $row = $this->service()->notify($agent, NotificationType::Announcement, 'ประกาศทดสอบ', null, '/announcements');
+        Company::whereKey($agent->company_id)->update(['is_active' => false]);
+
+        $this->artisan('notifications:send-emails')->assertSuccessful();
+
+        Notification::assertNothingSent();
+        $this->assertNull($row->fresh()->emailed_at);
     }
 }

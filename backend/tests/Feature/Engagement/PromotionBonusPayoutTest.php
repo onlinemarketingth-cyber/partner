@@ -277,4 +277,22 @@ class PromotionBonusPayoutTest extends TestCase
 
         $this->assertDatabaseCount('agent_promotion_credits', 0);
     }
+
+    public function test_a_closed_company_s_promotion_credits_wait_until_it_is_reopened(): void
+    {
+        // "ปิดบริษัท" stops the money jobs too (owner, 2026-09-26). The credit
+        // is still owed; it is paid on the first run after reopening.
+        [$company, $agent, , $referral] = $this->setUpAgentAndReferral(1000000);
+        AgentPromotion::create($this->promotionAttributes($company, PromotionPayoutTiming::MonthlyBatch));
+        $this->advanceToStage($referral, $agent, PipelineStage::CompletePayment);
+        $credit = AgentPromotionCredit::where('referral_id', $referral->id)->firstOrFail();
+
+        $company->update(['is_active' => false]);
+        $this->artisan(PayDueAgentPromotionCredits::class)->assertSuccessful();
+        $this->assertNull($credit->fresh()->paid_at);
+
+        $company->update(['is_active' => true]);
+        $this->artisan(PayDueAgentPromotionCredits::class)->assertSuccessful();
+        $this->assertNotNull($credit->fresh()->paid_at);
+    }
 }

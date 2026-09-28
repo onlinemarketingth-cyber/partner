@@ -168,4 +168,26 @@ class RenewalCommissionTest extends TestCase
         $this->assertSame(1, CommissionLedger::where('referral_id', $referral->id)
             ->where('earned_via', CommissionEarnedVia::Renewal->value)->count());
     }
+
+    /*
+     * "ปิดบริษัท" stops everything, money jobs included (owner, 2026-09-26).
+     * Paused, not forfeited: the renewal is still owed, and it is paid on the
+     * first run after the company is reopened.
+     */
+    public function test_a_closed_company_s_renewal_waits_until_it_is_reopened(): void
+    {
+        [$company, , $referral] = $this->sellOneReferralWithRenewalRule(recurs: false);
+        $company->update(['is_active' => false]);
+
+        Carbon::setTestNow(now()->addYear());
+        $this->artisan(DispatchDueRenewalCommissions::class)->assertSuccessful();
+
+        $this->assertSame(1, CommissionLedger::withoutGlobalScopes()->where('referral_id', $referral->id)->count());
+        $this->assertNotNull($referral->refresh()->next_renewal_date, 'still owed, not cleared');
+
+        $company->update(['is_active' => true]);
+        $this->artisan(DispatchDueRenewalCommissions::class)->assertSuccessful();
+
+        $this->assertSame(2, CommissionLedger::withoutGlobalScopes()->where('referral_id', $referral->id)->count());
+    }
 }

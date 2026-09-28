@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Company;
 use App\Models\Notification;
 use App\Services\Notification\NotificationMailer;
 use Illuminate\Console\Command;
@@ -60,6 +61,8 @@ class DispatchPendingNotificationEmails extends Command
             // Nobody wants "your account was approved" two days late. Past
             // the window the in-app notification stands on its own.
             ->where('email_due_at', '>=', now()->subHours($staleHours))
+            // A closed company's work waits until it is reopened (Company::scopeOperational).
+            ->whereIn('company_id', Company::operational()->select('id'))
             ->orderBy('email_due_at')
             ->limit($limit)
             ->get();

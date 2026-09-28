@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Enums\CommissionEarnedVia;
 use App\Enums\PaymentStatus;
 use App\Models\CommissionLedger;
+use App\Models\Company;
 use App\Models\Product;
 use App\Models\Referral;
 use App\Services\Commission\CommissionBasisResolver;
@@ -46,6 +47,8 @@ class DispatchDueRenewalCommissions extends Command
         $dueReferralIds = Referral::withoutGlobalScopes()
             ->whereNotNull('next_renewal_date')
             ->whereDate('next_renewal_date', '<=', now()->toDateString())
+            // A closed company's work waits until it is reopened (Company::scopeOperational).
+            ->whereIn('company_id', Company::operational()->select('id'))
             ->pluck('id');
 
         $dispatched = 0;

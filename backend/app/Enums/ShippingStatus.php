@@ -51,11 +51,9 @@ enum ShippingStatus: string
     /**
      * Has the parcel left?
      *
-     * The predicate SupplierReleaseTrigger::OnDelivered pays out on. Both
-     * Shipped and Delivered count: the supplier has done their part at the
-     * moment the parcel is handed over, and holding their money hostage to a
-     * courier's scan — which nothing in this system reads automatically —
-     * would mean it never releases at all.
+     * Both Shipped and Delivered count. Since ADR-048 this no longer releases
+     * supplier money on its own — RECEIPT does (orders.received_at), confirmed
+     * by the recipient or by the auto-confirm window. See ShipmentService.
      */
     public function hasLeft(): bool
     {

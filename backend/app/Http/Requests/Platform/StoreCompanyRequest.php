@@ -28,6 +28,10 @@ class StoreCompanyRequest extends FormRequest
             'name' => ['required', 'string', 'max:255'],
             'slug' => ['required', 'string', 'max:255', 'alpha_dash', 'unique:companies,slug'],
             'is_active' => ['sometimes', 'boolean'],
+            // 2026-09-26 — a new company is empty by definition, so it may be
+            // born a test company. After this, only the test-mode endpoint
+            // changes it (CompanyRemovalService).
+            'is_test' => ['sometimes', 'boolean'],
             /*
              * 2026-09-19 — the tenant's currency, chosen at provisioning.
              *

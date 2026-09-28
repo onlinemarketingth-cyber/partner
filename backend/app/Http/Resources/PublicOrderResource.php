@@ -101,6 +101,15 @@ class PublicOrderResource extends JsonResource
             'shipping_recipient_name' => $this->shipping_recipient_name,
             'shipping_phone' => $this->shipping_phone,
             'shipping_address' => $this->shipping_address,
+            // ADR-048 — what the customer needs to confirm receipt on this
+            // page: that it shipped, with what tracking number, and whether
+            // it has already been confirmed.
+            'shipping_status' => $this->shipping_status?->value,
+            'shipping_status_label' => $this->shipping_status?->label(),
+            'tracking_number' => $this->tracking_number,
+            'shipped_at' => $this->shipped_at?->toIso8601String(),
+            'received_at' => $this->received_at?->toIso8601String(),
+            'can_confirm_receipt' => $this->canConfirmReceipt(),
             // ADR-033 §2.2/§2.4 — only once paid, and only when a voucher
             // was actually issued (older/legacy paid orders predate this
             // feature and may have none).

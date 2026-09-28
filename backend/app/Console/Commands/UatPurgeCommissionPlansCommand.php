@@ -5,8 +5,8 @@ namespace App\Console\Commands;
 use App\Models\CommissionLedger;
 use App\Models\Company;
 use App\Models\User;
+use App\Services\Platform\CompanyRemovalService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 
 /**
  * Removes exactly what `uat:seed-commission-plans` created, and refuses to
@@ -31,8 +31,9 @@ use Illuminate\Support\Facades\DB;
  * about the integrity of a real company's payout history, and these rows
  * belong to companies that never paid anybody — so the delete goes through
  * the database rather than the model, deliberately and only here, scoped to
- * company ids this command has already proved are UAT tenants. Nothing else
- * in the codebase may do this.
+ * company ids this command has already proved are UAT tenants. The only other
+ * caller is the company screen's delete for a company flagged บริษัททดสอบ —
+ * see CompanyRemovalService, which both now share.
  */
 class UatPurgeCommissionPlansCommand extends Command
 {
@@ -43,7 +44,7 @@ class UatPurgeCommissionPlansCommand extends Command
     /** What the operator has to type. Not "yes" — the word names the thing being destroyed. */
     private const CONFIRMATION = 'PURGE UAT';
 
-    public function handle(): int
+    public function handle(CompanyRemovalService $removal): int
     {
         $companies = Company::withoutGlobalScopes()
             ->withTrashed()
@@ -102,58 +103,20 @@ class UatPurgeCommissionPlansCommand extends Command
             }
         }
 
-        DB::transaction(function () use ($ids): void {
-            /*
-             * Ledger rows first, through the query builder.
-             *
-             * CommissionLedger::deleting always throws (BR-4), which is right
-             * for every other caller and would leave these tenants
-             * undeletable. The cascade on companies.id would not reach them
-             * anyway without this, because the model is what carries the
-             * refusal, not the constraint.
-             */
-            CommissionLedger::withoutGlobalScopes()->whereIn('company_id', $ids)->delete();
-
-            /*
-             * ── WHY THE ORDER IS SPELLED OUT INSTEAD OF LEFT TO THE CASCADE ──
-             *
-             * Nearly every business table hangs off company_id with
-             * cascadeOnDelete (§5.1), so deleting the company row SHOULD be
-             * enough. It is not, and the reason is worth recording because it
-             * will look like redundant code to the next reader.
-             *
-             * Several of those cascaded tables also point at EACH OTHER with
-             * restrictOnDelete — commission_rules.product_id → products,
-             * referrals.client_id → clients, and so on. The cascade fires them
-             * in no defined order, so if products happen to go before the
-             * rules that reference them, RESTRICT stops the whole delete with
-             * a foreign-key error and the UAT tenants become undeletable.
-             *
-             * These six are the ones that hold RESTRICT references, deepest
-             * first. Everything else still rides the cascade, so a table added
-             * later needs no change here — unless it too takes a RESTRICT
-             * reference, which the purge test will catch the first time it is
-             * run for a plan that uses it.
-             */
-            foreach (['orders', 'referrals', 'commission_rules', 'commission_override_rules', 'clients', 'products'] as $table) {
-                DB::table($table)->whereIn('company_id', $ids)->delete();
-            }
-
-            /*
-             * users.current_rank_id points at agent_ranks, which the cascade
-             * is about to remove — and the user row itself survives (its
-             * company_id is nullOnDelete, not cascade). Cutting the link
-             * first is what stops a stairstep or generation tenant failing
-             * here on a constraint that has nothing to do with the tenant.
-             */
-            DB::table('users')->whereIn('company_id', $ids)->update(['current_rank_id' => null]);
-
-            /*
-             * forceDelete, not delete: a soft-deleted UAT company still owns
-             * its slug, and the next seed run would find it and revive it.
-             */
-            Company::withoutGlobalScopes()->withTrashed()->whereIn('id', $ids)->forceDelete();
-        });
+        /*
+         * 2026-09-26 — the deletion itself moved to CompanyRemovalService::wipe(),
+         * shared with the company screen's ลบบริษัท for test companies. One
+         * routine that deletes a tenant rather than two that drift apart; the
+         * ordering notes that used to live here (RESTRICT references, the rank
+         * pointer, forceDelete over delete) live there now.
+         *
+         * What stays HERE is this command's own gate: the `uat-plan-` prefix
+         * check above and the typed confirmation. The screen has its own gate
+         * — the บริษัททดสอบ flag and the company name typed back.
+         */
+        foreach ($companies as $company) {
+            $removal->wipe($company);
+        }
 
         $this->info('Deleted '.count($ids).' UAT compan'.(count($ids) === 1 ? 'y' : 'ies').'.');
 

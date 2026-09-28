@@ -7,6 +7,7 @@ use App\Enums\CommissionOverrideMode;
 use App\Enums\CommissionPlanType;
 use App\Models\Concerns\HasTrackedLink;
 use App\Support\Money\SupportedCurrency;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -145,6 +146,16 @@ class Company extends Model
     {
         return [
             'is_active' => 'boolean',
+            /*
+             * 2026-09-26 — deliberately NOT in $fillable. Whether a company
+             * may be wiped whole is decided by CompanyRemovalService, which
+             * refuses to set it on a company that already holds business data
+             * and never lets it back on once went_live_at is written. A mass-
+             * assigned `is_test: true` on PUT /companies would walk straight
+             * past both rules.
+             */
+            'is_test' => 'boolean',
+            'went_live_at' => 'datetime',
             // BR-3 — satang, always an integer. Cast explicitly so a value
             // read back from MySQL is never a numeric string in comparisons.
             'min_withdrawal_satang' => 'integer',
@@ -191,6 +202,29 @@ class Company extends Model
     public function isOperational(): bool
     {
         return $this->is_active === true && $this->deleted_at === null;
+    }
+
+    /**
+     * The same predicate as isOperational(), as SQL — for the scheduled jobs
+     * that pick work across every tenant (2026-09-26, "ปิดบริษัท").
+     *
+     * Closing a company used to stop its people and its public pages, but not
+     * the scheduler: renewals, binary cycles, rank changes and promotion
+     * credits kept writing money rows for a tenant nobody could log in to. The
+     * owner's ruling was that closing stops everything, money jobs included.
+     * Each of those jobs now narrows its work with this scope (directly, or as
+     * `whereIn('company_id', Company::operational()->select('id'))`), so the
+     * two conditions still live in this file and nowhere else.
+     *
+     * deleted_at is checked here as well rather than left to SoftDeletingScope,
+     * so a caller that reached for withoutGlobalScopes() cannot drop half of it.
+     *
+     * @param  Builder<self>  $query
+     */
+    public function scopeOperational($query): void
+    {
+        $query->where($this->qualifyColumn('is_active'), true)
+            ->whereNull($this->getQualifiedDeletedAtColumn());
     }
 
     /**
