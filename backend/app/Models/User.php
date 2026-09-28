@@ -7,10 +7,12 @@ use App\Enums\AgentApprovalStatus;
 use App\Enums\ApprovalSource;
 use App\Enums\BinaryLeg;
 use App\Enums\IdDocumentType;
+use App\Enums\RecruitPolicy;
 use App\Enums\RegistrationChannel;
 use App\Enums\UserRole;
 use App\Models\Scopes\TenantScope;
 use App\Notifications\VerifyRegistrationEmailNotification;
+use App\Services\Sales\TeamVisibilitySettingService;
 use Database\Factories\UserFactory;
 use Illuminate\Auth\MustVerifyEmail as MustVerifyEmailTrait;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
@@ -583,6 +585,51 @@ class User extends Authenticatable implements MustVerifyEmail
     public function isAgent(): bool
     {
         return $this->role === UserRole::Agent;
+    }
+
+    /**
+     * ADR-049 — may this agent invite people into their own team?
+     *
+     * One question, asked by every recruiting gate (minting a link, a link
+     * still admitting sign-ups, approving one's own recruits, listing them)
+     * so the four can never disagree. Before ADR-049 each of them read
+     * `is_team_leader` directly; that flag still answers "yes" under every
+     * policy, so no leader an admin already designated loses anything.
+     *
+     * Under the company's default policy (RecruitPolicy::AllCertified) any
+     * active agent who has passed Basic may recruit too — the standard in
+     * every MLM plan the owner compared, where recruiting IS how a leader
+     * comes to exist. Under RecruitPolicy::Designated only the flag counts,
+     * which is ADR-025 exactly as it was.
+     *
+     * Basic is read without the tenant scope on purpose: registration asks
+     * this question with nobody signed in, and the certification row is
+     * found by this user's own id, so there is nothing to leak.
+     */
+    public function canRecruit(): bool
+    {
+        if ($this->trashed()) {
+            return false;
+        }
+
+        // Checked before the role on purpose: the flag answered this alone
+        // until ADR-049, and nobody who held it may lose a right they had.
+        if ($this->is_team_leader) {
+            return true;
+        }
+
+        if (! $this->isAgent()) {
+            return false;
+        }
+
+        if (app(TeamVisibilitySettingService::class)->recruitPolicy($this->company_id) !== RecruitPolicy::AllCertified) {
+            return false;
+        }
+
+        return UserCertification::withoutGlobalScopes()
+            ->where('user_id', $this->id)
+            ->whereHas('certTier', fn ($query) => $query->where('key', 'basic'))
+            ->exists();
     }
 
     /**

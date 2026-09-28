@@ -231,7 +231,10 @@ const menuLinks = computed<MenuLink[]>(() => {
   // not mint their first invite link, so they could never get a first
   // report. Chicken-and-egg: the only escape was typing the URL by hand.
   const isMonitor = (home.value?.direct_reports_count ?? 0) > 0
-  const isRecruiter = auth.user?.is_team_leader === true
+  //
+  // ADR-049 — "recruiter" is now `can_recruit` (anyone who passed Basic,
+  // unless the company narrowed it to designated leaders), not the flag.
+  const isRecruiter = (auth.user?.can_recruit ?? auth.user?.is_team_leader) === true
   if (isMonitor || isRecruiter) {
     links.push({ to: '/my-team', icon: 'users', label: 'ทีมของฉัน' })
   }

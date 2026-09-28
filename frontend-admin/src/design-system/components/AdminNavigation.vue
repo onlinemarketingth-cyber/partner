@@ -382,7 +382,7 @@ const navItems: NavItem[] = [
       // same access level as "ธีม / แบรนด์" above (Company Admin AND Super
       // Admin), so NO `superAdminOnly` on any of the three.
       { name: 'video-settings', icon: 'settings', label: { th: 'ตั้งค่าวิดีโอ', en: 'Video Settings' } },
-      { name: 'team-visibility-settings', icon: 'users', label: { th: 'การมองเห็นข้อมูลทีม', en: 'Team Visibility' } },
+      { name: 'team-visibility-settings', icon: 'users', label: { th: 'ตั้งค่าทีม', en: 'Team Settings' } },
       // 'commission-split-settings' was here until 2026-09-12. It is now a
       // card inside CommissionPlansView's step 4 (ส่วนเพิ่มเติม) — a route, a
       // menu entry and a full page for one boolean, when the step flow

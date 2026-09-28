@@ -368,7 +368,7 @@ export const routes: RouteRecordRaw[] = [
       path: '/team-visibility-settings',
       name: 'team-visibility-settings',
       component: () => import('../views/TeamVisibilitySettingsView.vue'),
-      meta: { navLabel: 'การมองเห็นข้อมูลทีม' },
+      meta: { navLabel: 'ตั้งค่าทีม' },
     },
     /*
      * 2026-09-12 — REDIRECT, NOT A DELETION.

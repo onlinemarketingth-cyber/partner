@@ -38,6 +38,16 @@ export interface AuthUser {
    */
   is_team_leader: boolean
   /**
+   * ADR-049 — may this agent invite people into their team (the server's
+   * User::canRecruit()). Under the company's default policy that is anyone
+   * who has passed Basic; under "designated only" it is the flag above.
+   * Sent only on the caller's own profile (login, /me). Optional so a user
+   * cached before this field existed falls back to `is_team_leader` instead
+   * of failing to parse. UI-only, like the flag: every gate is re-checked
+   * server-side.
+   */
+  can_recruit?: boolean
+  /**
    * 2026-08-22 — the agent's own off switch for notification email, so
    * ProfileSettingsView can render the toggle in its true position on load
    * rather than guessing. Optional on the type (not on the wire) so a stale

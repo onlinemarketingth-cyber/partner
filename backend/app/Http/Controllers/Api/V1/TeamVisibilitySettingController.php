@@ -39,7 +39,7 @@ class TeamVisibilitySettingController extends Controller
             ? $request->integer('company_id')
             : $request->user()->company_id;
 
-        $service->upsert($companyId, $request->validated());
+        $service->upsert($companyId, $request->validated(), $request->user());
 
         return new TeamVisibilitySettingResource($service->forCompany($companyId));
     }

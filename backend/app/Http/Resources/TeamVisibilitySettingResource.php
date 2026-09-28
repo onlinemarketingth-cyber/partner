@@ -20,6 +20,8 @@ class TeamVisibilitySettingResource extends JsonResource
         return [
             'client_visibility_level' => $this['client_visibility_level'],
             'is_enabled' => $this['is_enabled'],
+            // ADR-049 — who may invite people into their team.
+            'recruit_policy' => $this['recruit_policy'],
         ];
     }
 }

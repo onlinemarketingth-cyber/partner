@@ -1,6 +1,7 @@
 # ADR-025: Team-leader recruit links (`is_team_leader` flag, self-approval, login gating)
 
 - **Date:** 2026-08-05
+- **Superseded in part by [ADR-049](ADR-049-who-may-recruit-is-a-company-setting.md) (2026-09-28):** who may recruit is now a per-company setting, and the default is any agent who has passed Basic. The flag below is still honoured as an always-yes override. §2's split between recruiting and the monitor, and §7's approval scope, are unchanged.
 - **Status:** Accepted — human-confirmed 2026-08-05 (four decisions answered directly). **Implemented 2026-08-05** across TASK-112…117, QA'd in TASK-118, defects fixed in TASK-119. **Backend tests are written but NOT run — the sandbox has no PHP; the human must run `php artisan migrate` then `php artisan test`, and must run the MySQL race procedure in the sprint doc, which the automated suite provably cannot cover.** Frontend `vue-tsc` + `eslint` clean on both apps.
 
 ### Measured outcome (added after the sprint)

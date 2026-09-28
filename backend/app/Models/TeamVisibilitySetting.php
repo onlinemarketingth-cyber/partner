@@ -34,6 +34,7 @@ class TeamVisibilitySetting extends Model
         'company_id',
         'client_visibility_level',
         'is_enabled',
+        'recruit_policy',
     ];
 
     protected function casts(): array

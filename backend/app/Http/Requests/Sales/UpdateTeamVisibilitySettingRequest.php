@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Sales;
 
 use App\Enums\Ability;
+use App\Enums\RecruitPolicy;
 use App\Enums\TeamVisibilityLevel;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -38,6 +39,9 @@ class UpdateTeamVisibilitySettingRequest extends FormRequest
             // at all (DownlineService::resolveLevel() then behaves exactly
             // as if the row were missing).
             'is_enabled' => ['required', 'boolean'],
+            // ADR-049. `sometimes`: an older screen that does not send it
+            // leaves the company's choice as it is.
+            'recruit_policy' => ['sometimes', Rule::enum(RecruitPolicy::class)],
         ];
     }
 }

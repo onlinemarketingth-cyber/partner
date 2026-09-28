@@ -24,7 +24,8 @@ use Illuminate\Database\Eloquent\Builder;
  *     provably identical. A leader must never see a row in their queue that
  *     403s when they press the button.
  *
- * ADR-025 §7 states the scope exactly: `is_team_leader = true` AND the
+ * ADR-025 §7 states the scope exactly: the actor may recruit (ADR-049:
+ * User::canRecruit(), which was `is_team_leader = true`) AND the
  * target's `manager_id = self` AND the target arrived via one of THIS
  * leader's links AND the target is currently `pending`. Anything else → 403.
  */
@@ -38,10 +39,10 @@ final class LeaderRecruitScope
      */
     public function mayApprove(User $actor, User $target): bool
     {
-        // ADR-025 §1/§2 — the admin-granted capability. Revoking the flag
-        // stops recruiting AND stops approving, immediately, even for
-        // recruits already in the queue.
-        if (! $actor->is_team_leader) {
+        // ADR-049 (was ADR-025 §1/§2's flag alone) — the right to recruit.
+        // Losing it stops recruiting AND stops approving, immediately, even
+        // for recruits already in the queue.
+        if (! $actor->canRecruit()) {
             return false;
         }
 

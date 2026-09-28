@@ -102,7 +102,7 @@ class AgentApprovalController extends Controller
     {
         $leader = $request->user();
 
-        abort_unless($leader->is_team_leader, 403, 'เฉพาะหัวหน้าทีมเท่านั้นที่ดูรายชื่อผู้สมัครในทีมได้');
+        abort_unless($leader->canRecruit(), 403, 'บัญชีนี้ยังไม่มีสิทธิ์ชวนเข้าทีม จึงดูรายชื่อผู้สมัครในทีมไม่ได้');
 
         return PendingRecruitResource::collection(
             $service->pendingRecruitsFor($leader)->paginate()

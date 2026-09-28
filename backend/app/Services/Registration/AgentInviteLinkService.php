@@ -37,32 +37,26 @@ class AgentInviteLinkService
      *                                            never read from $attributes even if a caller passed them
      *                                            (BR-6, Section 5 rule 5).
      *
-     * @throws ValidationException when $agent is not a designated team leader.
+     * @throws ValidationException when $agent may not recruit (User::canRecruit(), ADR-049).
      */
     public function create(User $agent, array $attributes): AgentInviteLink
     {
-        // ADR-025 §1 — the gate is the ADMIN-GRANTED FLAG `is_team_leader`,
-        // NOT a certification. The human was offered a cert-based gate and a
-        // gate that emerges from the reporting tree, and explicitly chose
-        // "agent ที่ admin ระบุว่าเป็นหัวหน้าทีม". So this reads nothing like
-        // the BR-1 `hasPassedCertTier('basic')` guard in
-        // ProductShareLinkService::create() that it is otherwise copied from
-        // — recruiting is a delegated administrative capability, not a
-        // selling right, and passing Basic grants no part of it.
+        // ADR-049 (supersedes ADR-025 §1's flag-only gate) — who may
+        // recruit is the company's own choice, asked through
+        // User::canRecruit() so this, the registration consume path and the
+        // leader's approval can never disagree. A designated team leader
+        // still always may; under the default policy so may any agent who
+        // has passed Basic.
         //
-        // ADR-025 §2 is the other half of the reason this lives here and
-        // nowhere else: seeing the team monitor stays keyed on HAVING DIRECT
-        // REPORTS, so revoking the flag stops future recruiting without
-        // blinding a leader to the team they still manage. Merging the two
-        // checks would silently break one of them.
-        if (! $agent->is_team_leader) {
+        // ADR-025 §2 still holds: the team monitor stays keyed on HAVING
+        // DIRECT REPORTS, so losing this right stops future recruiting
+        // without blinding anyone to the team they already manage.
+        if (! $agent->canRecruit()) {
             throw ValidationException::withMessages([
-                // Keyed on the flag itself, not on `agent_id` as the
-                // product-share precedent is: this request has no agent_id
-                // field to attach the error to (the owner is always the
-                // caller), and the flag name tells the reader — and TASK-116's
-                // UI — exactly which admin action would unblock them.
-                'is_team_leader' => 'ADR-025 §1: only an agent whom a Company Admin has designated as a team leader (is_team_leader) may create a recruit link.',
+                // Key kept as `is_team_leader`: it is what the portal already
+                // reads, and the designated-leader flag is still the one admin
+                // action that always unblocks this.
+                'is_team_leader' => 'ยังชวนเข้าทีมไม่ได้ — ต้องผ่านหลักสูตร Basic ก่อน หรือให้แอดมินเปิดสิทธิ์หัวหน้าทีม',
             ]);
         }
 

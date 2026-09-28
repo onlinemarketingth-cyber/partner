@@ -182,7 +182,7 @@ class RegistrationService
     /**
      * ag-lead ruling on TASK-114 item 5 (ADR-025 §5 left it open):
      * a minted link becomes UNUSABLE if its inviter has since been
-     * soft-deleted, has lost `is_team_leader`, or no longer belongs to the
+     * soft-deleted, may no longer recruit (User::canRecruit, ADR-049), or no longer belongs to the
      * link's company.
      *
      * WHY THIS LIVES HERE AND NOT IN AgentInviteLink::isUsable():
@@ -211,8 +211,8 @@ class RegistrationService
             return null; // deactivated (SoftDeletes) or hard-gone.
         }
 
-        if (! $inviter->is_team_leader) {
-            return null; // ADR-025 §2 — the flag was revoked; no more recruiting.
+        if (! $inviter->canRecruit()) {
+            return null; // ADR-049 — lost the right to recruit (flag revoked, policy narrowed, Basic gone); no more sign-ups.
         }
 
         if ($inviter->company_id !== $link->company_id) {

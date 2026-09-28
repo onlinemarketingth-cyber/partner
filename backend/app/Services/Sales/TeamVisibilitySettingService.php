@@ -2,8 +2,11 @@
 
 namespace App\Services\Sales;
 
+use App\Enums\RecruitPolicy;
 use App\Enums\TeamVisibilityLevel;
+use App\Models\AuditLog;
 use App\Models\TeamVisibilitySetting;
+use App\Models\User;
 
 /**
  * TASK-106 / ADR-024 §5 — BR-7: the team-visibility level is admin-editable
@@ -47,6 +50,7 @@ class TeamVisibilitySettingService
                         ? $raw
                         : TeamVisibilityLevel::default()->value,
                     'is_enabled' => (bool) $override->is_enabled,
+                    'recruit_policy' => $this->recruitPolicyFrom($override)->value,
                 ];
             }
         }
@@ -57,13 +61,44 @@ class TeamVisibilitySettingService
         return [
             'client_visibility_level' => TeamVisibilityLevel::default()->value,
             'is_enabled' => true,
+            'recruit_policy' => RecruitPolicy::default()->value,
         ];
     }
 
     /**
-     * @param  array{client_visibility_level?: string, is_enabled?: bool}  $data
+     * ADR-049 — who in this company may invite people into their team.
+     *
+     * Read with a raw fallback for the same reason as the visibility level
+     * above: an unknown stored value must not 500 the registration path. It
+     * degrades to Designated — the stricter rule — rather than opening
+     * recruiting on a value nobody chose.
      */
-    public function upsert(int $companyId, array $data): TeamVisibilitySetting
+    public function recruitPolicy(?int $companyId): RecruitPolicy
+    {
+        if ($companyId === null) {
+            return RecruitPolicy::Designated;
+        }
+
+        $row = TeamVisibilitySetting::withoutGlobalScopes()->where('company_id', $companyId)->first();
+
+        return $row ? $this->recruitPolicyFrom($row) : RecruitPolicy::default();
+    }
+
+    private function recruitPolicyFrom(TeamVisibilitySetting $row): RecruitPolicy
+    {
+        $raw = $row->getAttributes()['recruit_policy'] ?? null;
+
+        if ($raw === null || $raw === '') {
+            return RecruitPolicy::default();
+        }
+
+        return RecruitPolicy::tryFrom((string) $raw) ?? RecruitPolicy::Designated;
+    }
+
+    /**
+     * @param  array{client_visibility_level?: string, is_enabled?: bool, recruit_policy?: string}  $data
+     */
+    public function upsert(int $companyId, array $data, ?User $actor = null): TeamVisibilitySetting
     {
         // BR-6/§5 — $data comes from $request->validated() and may still
         // carry a client-supplied company_id (the Super Admin path in
@@ -77,9 +112,28 @@ class TeamVisibilitySettingService
         // AffiliateAttributionSettingService.
         unset($data['company_id']);
 
-        return TeamVisibilitySetting::withoutGlobalScopes()->updateOrCreate(
+        $before = $this->recruitPolicy($companyId);
+
+        $row = TeamVisibilitySetting::withoutGlobalScopes()->updateOrCreate(
             ['company_id' => $companyId],
             $data,
         );
+
+        // §6 — who may bring people into the company is a permission.
+        $after = $this->recruitPolicyFrom($row);
+        if ($after !== $before && $actor !== null) {
+            AuditLog::create([
+                'company_id' => $companyId,
+                'actor_user_id' => $actor->id,
+                'action' => 'team_settings.recruit_policy_changed',
+                'auditable_type' => TeamVisibilitySetting::class,
+                'auditable_id' => $row->id,
+                'old_values' => ['recruit_policy' => $before->value],
+                'new_values' => ['recruit_policy' => $after->value],
+                'ip_address' => request()?->ip(),
+            ]);
+        }
+
+        return $row;
     }
 }

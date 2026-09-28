@@ -19,6 +19,10 @@
  * (fail CLOSED), so the form must never render with no radio selected.
  * DO NOT change this default when touching this file.
  *
+ * ADR-049 (2026-09-28) — the page also holds "ใครชวนเข้าทีมได้", the
+ * per-company recruit policy, and is titled "ตั้งค่าทีม" so an admin looking
+ * for it finds it. Same endpoint, same save button: it is one settings row.
+ *
  * Same Super Admin company-picker pattern this codebase already repeats on
  * ThemeSettingsView / ProductCatalogView / AcademyManagementView — kept
  * duplicated here rather than extracted (scope creep beyond TASK-202).
@@ -31,6 +35,7 @@ import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vu
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
 
 const auth = useAuthStore()
 const isSuperAdmin = computed(() => auth.user?.role === 'super_admin')
@@ -53,9 +58,13 @@ const activeCompany = useActiveCompanyStore()
  */
 type TeamVisibilityLevel = 'counts_only' | 'names' | 'full_file'
 
+/** ADR-049 — App\Enums\RecruitPolicy. */
+type RecruitPolicy = 'all_certified' | 'designated'
+
 interface TeamVisibilitySettings {
   client_visibility_level: TeamVisibilityLevel
   is_enabled: boolean
+  recruit_policy: RecruitPolicy
 }
 
 /*
@@ -72,7 +81,25 @@ interface TeamVisibilitySettings {
 const TEAM_VISIBILITY_DEFAULTS: TeamVisibilitySettings = {
   client_visibility_level: 'counts_only',
   is_enabled: true,
+  // ADR-049 — the server's own default for a company with no row
+  // (RecruitPolicy::default()), shown as-is so the form tells the truth.
+  recruit_policy: 'all_certified',
 }
+
+// ADR-049 — who may "ชวนเข้าทีม". Owner, 2026-09-28: open to everyone who
+// passed Basic by default, narrowable to designated leaders per company.
+const RECRUIT_POLICY_OPTIONS: { value: RecruitPolicy; label: string; consequence: string }[] = [
+  {
+    value: 'all_certified',
+    label: 'ทุกคนที่ผ่าน Basic แล้ว',
+    consequence: 'ตัวแทนทุกคนที่ผ่านหลักสูตร Basic สร้างลิงก์ชวนเข้าทีมได้เอง',
+  },
+  {
+    value: 'designated',
+    label: 'เฉพาะคนที่แอดมินเปิดสิทธิ์',
+    consequence: 'เฉพาะตัวแทนที่แอดมินเปิด "หัวหน้าทีม" ไว้ในรายชื่อสมาชิก',
+  },
+]
 
 // Plain-language consequences, written for a non-technical admin: each line
 // says what the LEADER will see, not what the API returns.
@@ -155,13 +182,13 @@ onMounted(loadTeamVisibilitySettings)
     <HeroHeader
       icon="users"
       icon-color="text-brand-600"
-      title="การมองเห็นข้อมูลทีม"
-      subtitle="กำหนดว่าหัวหน้าทีมเห็นข้อมูลลูกค้าของลูกทีมได้แค่ไหน"
+      title="ตั้งค่าทีม"
+      subtitle="ใครชวนเข้าทีมได้ และหัวหน้าทีมเห็นข้อมูลลูกค้าของลูกทีมได้แค่ไหน"
       accent-color="brand"
       storage-key="admin-team-visibility-settings"
     />
 
-    <CompanyScopeNotice action="แก้ไขการมองเห็นข้อมูลทีม" />
+    <CompanyScopeNotice action="แก้ไขการตั้งค่าทีม" />
 
     <section class="mt-4 max-w-2xl bg-white/95 border border-slate-200 rounded-2xl p-5">
       <p class="text-base font-bold text-slate-500 mb-1 flex items-center gap-1.5">
@@ -178,6 +205,46 @@ onMounted(loadTeamVisibilitySettings)
       <div v-if="!activeCompany.requiresCompanyPick">
         <p v-if="loadingTeamVisibility" class="text-xs text-slate-400">กำลังโหลด...</p>
         <form v-else class="space-y-4" @submit.prevent="saveTeamVisibilitySettings">
+          <!-- ADR-049 — who may recruit. Outside the dimmed block below on
+               purpose: it does not depend on the team-page switch. -->
+          <fieldset class="pb-4 border-b border-slate-100" data-test="recruit-policy">
+            <legend class="text-sm font-bold text-slate-900 mb-2 flex items-center gap-1.5">
+              ใครชวนเข้าทีมได้
+              <InfoPopover label="ใครชวนเข้าทีมได้">
+                ผู้ที่มีสิทธิ์จะเห็นปุ่ม "ชวนเข้าทีม" ในหน้า "ทีมของฉัน" บน Member Portal และสร้างลิงก์ส่งให้คนอื่นสมัครได้
+                <br /><br />
+                ผู้สมัครผ่านลิงก์จะอยู่ในสถานะ "รออนุมัติ" จนกว่าผู้ชวนหรือแอดมินจะอนุมัติ และต้องผ่านหลักสูตร Basic ก่อนจึงจะขายได้
+                <br /><br />
+                ตัวแทนที่แอดมินเปิด "หัวหน้าทีม" ไว้ ชวนได้เสมอไม่ว่าจะเลือกแบบไหน
+                ถ้าเปลี่ยนเป็น "เฉพาะคนที่แอดมินเปิดสิทธิ์" ลิงก์ของคนที่ไม่มีสิทธิ์แล้วจะรับสมัครใหม่ไม่ได้ทันที
+                แต่ผู้สมัครที่รออนุมัติอยู่ แอดมินยังอนุมัติได้ตามปกติ
+              </InfoPopover>
+            </legend>
+            <div class="space-y-2">
+              <label
+                v-for="opt in RECRUIT_POLICY_OPTIONS"
+                :key="opt.value"
+                class="flex items-start gap-2.5 rounded-xl border p-3 cursor-pointer transition-colors"
+                :class="teamVisibilityForm.recruit_policy === opt.value
+                  ? 'border-brand-300 bg-brand-50'
+                  : 'border-slate-200 hover:border-brand-200'"
+              >
+                <input
+                  v-model="teamVisibilityForm.recruit_policy"
+                  type="radio"
+                  name="recruit_policy"
+                  :value="opt.value"
+                  :data-test="`recruit-${opt.value}`"
+                  class="mt-0.5 shrink-0"
+                />
+                <span class="min-w-0">
+                  <span class="block text-sm font-bold text-slate-900">{{ opt.label }}</span>
+                  <span class="block text-xs text-slate-500 leading-relaxed">{{ opt.consequence }}</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
           <!-- Master switch -->
           <div class="flex items-start gap-3">
             <button
@@ -250,7 +317,7 @@ onMounted(loadTeamVisibilitySettings)
           <div class="flex items-center justify-end gap-2">
             <span v-if="teamVisibilitySaved" class="text-xs font-bold text-emerald-600">บันทึกแล้ว</span>
             <button type="submit" :disabled="savingTeamVisibility" class="btn-primary">
-              {{ savingTeamVisibility ? 'กำลังบันทึก...' : 'บันทึกการมองเห็นทีม' }}
+              {{ savingTeamVisibility ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่าทีม' }}
             </button>
           </div>
         </form>

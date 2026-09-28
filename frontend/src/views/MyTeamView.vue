@@ -53,8 +53,8 @@ const { td } = useI18n()
  *
  *   `isLeader`      (from GET /me/team) = "I have direct reports".
  *                   Gates the MONITOR: the tabs, the roster, the KPIs.
- *   `isTeamLeader`  (from /me → users.is_team_leader) = "an admin designated
- *                   me a team leader". Gates RECRUITING: the "ชวนเข้าทีม"
+ *   `isTeamLeader`  (from /me → can_recruit, ADR-049; was users.is_team_leader)
+ *                   = "I may recruit". Gates RECRUITING: the "ชวนเข้าทีม"
  *                   action, the links list, the approval queue.
  *
  * They disagree in both directions, and both disagreements are intentional:
@@ -554,12 +554,17 @@ onUnmounted(() => {
 // ═══ TASK-116 / ADR-025 — recruiting (links + pending recruits) ═════════
 
 /**
- * THE GATE. `users.is_team_leader`, read from the authenticated user — NOT
+ * THE GATE. `can_recruit`, read from the authenticated user — NOT
  * `isLeader` above, which only means "has direct reports". See the file
  * docblock for why merging the two would break a real person in each
  * direction.
+ *
+ * ADR-049 — was `users.is_team_leader` alone. The server now answers "may
+ * this agent recruit" per the company's policy (default: anyone who passed
+ * Basic), and a designated leader is still always yes. The flag is only a
+ * fallback for a user object cached before `can_recruit` existed.
  */
-const isTeamLeader = computed(() => auth.user?.is_team_leader === true)
+const isTeamLeader = computed(() => (auth.user?.can_recruit ?? auth.user?.is_team_leader) === true)
 
 /**
  * Set when the server disagrees with the flag we read from /me.

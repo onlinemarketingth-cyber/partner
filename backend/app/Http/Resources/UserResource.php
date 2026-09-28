@@ -47,10 +47,20 @@ class UserResource extends JsonResource
      */
     private bool $revealBankAccountNumber = false;
 
+    /**
+     * ADR-049 — true only on the forOwner() responses (login, /me, the
+     * self-service profile endpoints), which is where `can_recruit` is sent.
+     * It answers a question about the CALLER's own rights and costs a
+     * settings lookup plus a certification query, so a roster of a hundred
+     * agents must not compute it a hundred times.
+     */
+    private bool $isOwnerView = false;
+
     public static function forOwner(User $user): self
     {
         $resource = new self($user);
         $resource->revealBankAccountNumber = true;
+        $resource->isOwnerView = true;
 
         return $resource;
     }
@@ -110,6 +120,12 @@ class UserResource extends JsonResource
             // Cast to bool explicitly: MySQL hands back tinyint 1/0 and
             // the JSON contract for both frontends must be a real boolean.
             'is_team_leader' => (bool) $this->is_team_leader,
+            // ADR-049 — may the signed-in agent invite people into their team
+            // (User::canRecruit()). The portal gates "ชวนเข้าทีม" and the
+            // "ทีมของฉัน" entry on this, never on is_team_leader: under the
+            // default policy an agent who passed Basic may recruit without the
+            // flag. Own profile only (see $isOwnerView).
+            'can_recruit' => $this->when($this->isOwnerView, fn () => $this->resource->canRecruit()),
             /*
              * 2026-09-25 — WHICH RUNG THIS AGENT HOLDS. Owner, while planning
              * UAT-017: an admin could not see anyone's rank anywhere, and had
