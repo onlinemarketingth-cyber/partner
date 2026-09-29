@@ -17,6 +17,7 @@ use App\Models\Scopes\SharedOrTenantScope;
 use App\Models\Scopes\TenantScope;
 use App\Services\Gamification\GamificationService;
 use App\Services\Link\TrackedLinkService;
+use App\Services\Payment\PaymentAccountService;
 use App\Services\Pipeline\PipelineTemplateResolver;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -445,7 +446,9 @@ class ProductShareCheckoutService
         // boundary), so a plain find() is correct even unauthenticated.
         $company = Company::find($companyId);
 
-        return $company?->payment_promptpay_id
+        // ADR-050 — the destination the new order WILL pay into, which is
+        // the platform's while every company uses it.
+        return app(PaymentAccountService::class)->transferDestinationForNewOrder($company)['promptpay_id']
             ? PaymentMethod::PromptPay
             : PaymentMethod::BankTransfer;
     }

@@ -400,6 +400,8 @@ const navItems: NavItem[] = [
       // holds the credentials each tenant's customer payments are taken
       // with, and its READ is gated server-side too.
       { name: 'payment-gateways', icon: 'credit_card', label: { th: 'ช่องทางรับชำระเงิน', en: 'Payment Gateways' }, superAdminOnly: true },
+      // ADR-050 — whether every company uses the platform's channels.
+      { name: 'platform-payment-settings', icon: 'credit_card', label: { th: 'ระบบชำระเงินกลาง', en: 'Platform Payments' }, superAdminOnly: true },
       // 2026-09-01 — TASK-041's Audit Log / PDPA / config-health screen
       // used to be reachable ONLY from AdminHomeView's card grid, which
       // no longer exists. Without an entry here the route would still

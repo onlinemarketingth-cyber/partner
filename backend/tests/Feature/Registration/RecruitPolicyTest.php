@@ -124,6 +124,20 @@ class RecruitPolicyTest extends TestCase
             ->assertJsonPath('data.agent_approval_status', 'approved');
     }
 
+    public function test_a_pending_recruit_is_in_the_queue_not_on_the_team(): void
+    {
+        $recruiter = $this->agent();
+        $recruit = $this->recruitOf($recruiter);
+
+        $this->actingAs($recruiter)->getJson('/api/v1/me/home')->assertOk()->assertJsonPath('data.direct_reports_count', 0);
+        $this->actingAs($recruiter)->getJson('/api/v1/me/team')->assertOk()->assertJsonCount(0, 'data.nodes');
+
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $this->company->id]);
+        $this->actingAs($admin)->putJson("/api/v1/agent-approvals/{$recruit->id}/approve")->assertOk();
+
+        $this->actingAs($recruiter)->getJson('/api/v1/me/home')->assertJsonPath('data.direct_reports_count', 1);
+    }
+
     public function test_a_recruiter_link_admits_sign_ups(): void
     {
         $recruiter = $this->agent();

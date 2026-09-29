@@ -1315,8 +1315,8 @@ watch(showCreateSheet, (open) => {
 
                 It now says the two things that were missing: this is a
                 SETTING rather than a permission you failed to earn, and here
-                is the name of the screen that holds it. "การมองเห็นข้อมูลทีม"
-                is the literal menu label in the admin console
+                is the name of the screen that holds it. "ตั้งค่าทีม" (renamed
+                from "การมองเห็นข้อมูลทีม" by ADR-049) is the literal menu label in the admin console
                 (frontend-admin router, navLabel on /team-visibility-settings)
                 — naming it is what turns "ask someone" into something the
                 reader can act on.

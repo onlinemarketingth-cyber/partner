@@ -2,6 +2,7 @@
 
 namespace App\Services\Sales;
 
+use App\Enums\AgentApprovalStatus;
 use App\Enums\TeamVisibilityLevel;
 use App\Models\Scopes\TenantScope;
 use App\Models\User;
@@ -274,12 +275,21 @@ class DownlineService
      * no-op. Dropping only TenantScope — not withoutGlobalScopes() — keeps
      * SoftDeletes active, so deactivated agents stay out of the tree.
      *
+     * 2026-09-28 (owner, ADR-049 UAT: "ไม่นับจนกว่าจะอนุมัติ") — only APPROVED
+     * people are team members. Someone who signed up through a recruit link
+     * already has manager_id pointing at the recruiter, so without this they
+     * appeared twice on ทีมของฉัน: once under "รออนุมัติเข้าทีม" and again
+     * in "สายงานของฉัน", counted in "ลูกทีมทั้งสาย" before anyone had said
+     * yes — and a rejected applicant stayed there for good. Pending recruits
+     * are the approval queue's (LeaderRecruitScope), not the team's.
+     *
      * @return Builder<User>
      */
     private function companyScoped(User $leader): Builder
     {
         return User::query()
             ->withoutGlobalScope(TenantScope::class)
-            ->where('company_id', $leader->company_id);
+            ->where('company_id', $leader->company_id)
+            ->where('agent_approval_status', AgentApprovalStatus::Approved);
     }
 }

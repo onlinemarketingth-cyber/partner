@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Sales;
 
+use App\Enums\AgentApprovalStatus;
 use App\Enums\TeamVisibilityLevel;
 use App\Enums\UserRole;
 use App\Models\Company;
@@ -401,5 +402,30 @@ class DownlineServiceTest extends TestCase
 
         $this->assertTrue($this->service()->subtreeIds($leader)->isEmpty());
         $this->assertFalse($this->service()->isInSubtree($leader, $child->id));
+    }
+
+    // 2026-09-28 (owner: "ไม่นับจนกว่าจะอนุมัติ") — an applicant who signed up
+    // through a recruit link already reports to the recruiter, but is not on
+    // the team until approved. Pending and rejected both stay out.
+    public function test_only_approved_people_are_in_the_downline(): void
+    {
+        $company = Company::factory()->create();
+        $leader = User::factory()->agent()->create(['company_id' => $company->id]);
+        $member = User::factory()->agent()->create(['company_id' => $company->id, 'manager_id' => $leader->id]);
+        $pending = User::factory()->agent()->pendingApproval()->create(['company_id' => $company->id, 'manager_id' => $leader->id]);
+        $rejected = User::factory()->agent()->create([
+            'company_id' => $company->id,
+            'manager_id' => $leader->id,
+            'agent_approval_status' => AgentApprovalStatus::Rejected,
+        ]);
+
+        $this->assertEquals([$member->id], $this->service()->directReports($leader)->pluck('id')->all());
+        $this->assertEquals([$member->id], $this->service()->subtreeIds($leader)->all());
+        $this->assertFalse($this->service()->isInSubtree($leader, $pending->id));
+        $this->assertFalse($this->service()->isInSubtree($leader, $rejected->id));
+
+        $pending->update(['agent_approval_status' => AgentApprovalStatus::Approved]);
+
+        $this->assertContains($pending->id, app(DownlineService::class)->subtreeIds($leader)->all());
     }
 }

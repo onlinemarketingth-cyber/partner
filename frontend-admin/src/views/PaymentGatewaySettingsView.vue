@@ -34,12 +34,34 @@
  * saving, and does not store them when that fails. So there is no separate
  * "test connection" button here — there is no state in which credentials are
  * saved but unproven, and a button implying otherwise would invite one.
+ *
+ * ── TWO SCOPES SINCE ADR-050 ──
+ *
+ * The same screen is "ระบบชำระเงินกลาง" when mounted with scope='platform':
+ * the platform switch ("แยกรายบริษัท / ใช้ค่าเดียวทุกบริษัท") on top, then
+ * the platform's own transfer account and Omise/Stripe keys, with exactly the
+ * cards, rules and states a company gets. One copy of the ~300-line card, so
+ * the two cannot drift.
+ *
+ * In company scope, while the switch says ใช้ค่าเดียวทุกบริษัท, the company's
+ * own settings are frozen server-side; this screen says so and links to the
+ * platform page instead of offering forms the server would refuse.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
+
+type AccountMode = 'company' | 'platform'
+
+const props = withDefaults(defineProps<{ scope?: AccountMode }>(), { scope: 'company' })
+
+/** ADR-050 — this screen edits the platform's own channels. */
+const isPlatform = computed(() => props.scope === 'platform')
 
 interface GatewayField {
   key: string
@@ -73,6 +95,25 @@ interface Gateway {
   fields: GatewayField[]
 }
 
+/**
+ * What every endpoint behind this screen answers with. The platform's adds
+ * the switch, why it cannot be switched yet, and its transfer account; a
+ * company's adds which mode the platform is in.
+ */
+interface Overview {
+  active_provider: string | null
+  gateways: Gateway[]
+  account_mode?: AccountMode
+  mode?: AccountMode
+  platform_ready_problems?: string[]
+  transfer_account?: {
+    promptpay_id: string | null
+    bank_name: string | null
+    bank_account_number: string | null
+    bank_account_name: string | null
+  }
+}
+
 const activeCompany = useActiveCompanyStore()
 
 const loading = ref(false)
@@ -87,7 +128,20 @@ const activatingProvider = ref<string | null>(null)
 const errorFor = ref<Record<string, string>>({})
 const noticeFor = ref<Record<string, string>>({})
 
-const basePath = computed(() => `/companies/${activeCompany.companyId}/payment-gateways`)
+const basePath = computed(() =>
+  isPlatform.value ? '/platform-payment-settings/gateways' : `/companies/${activeCompany.companyId}/payment-gateways`,
+)
+
+/** GET for the whole screen. The platform's lives one level up, with the switch. */
+const overviewPath = computed(() => (isPlatform.value ? '/platform-payment-settings' : basePath.value))
+
+/** ADR-050 — the platform switch, as the server last reported it. */
+const platformMode = ref<AccountMode>('company')
+const readinessProblems = ref<string[]>([])
+
+/** Company scope: 'platform' = this company's own settings are frozen. */
+const accountMode = ref<AccountMode>('company')
+const companyLocked = computed(() => !isPlatform.value && accountMode.value === 'platform')
 
 /**
  * The draft object for one provider, created on demand.
@@ -189,9 +243,6 @@ function storedValueLabel(field: GatewayField): string {
   return field.is_set ? '••••••••••••  (เก็บเข้ารหัสไว้)' : 'ยังไม่ได้ตั้งค่า'
 }
 
-/** The transfer/PromptPay channel — shown, never selected. */
-const alwaysOnGateway = computed(() => gateways.value.find((g) => g.always_available) ?? null)
-
 /** The ones an admin actually picks between. */
 const onlineGateways = computed(() => gateways.value.filter((g) => !g.always_available))
 
@@ -207,10 +258,10 @@ const deactivating = ref(false)
  * whichever gateway was picked last switched on forever.
  */
 async function useNoOnlineGateway(): Promise<void> {
-  if (activeCompany.companyId === null) return
+  if (!isPlatform.value && activeCompany.companyId === null) return
   deactivating.value = true
   try {
-    const res = await api.post<{ data: { active_provider: string | null; gateways: Gateway[] } }>(
+    const res = await api.post<{ data: Overview }>(
       `${basePath.value}/deactivate`,
       {},
     )
@@ -222,7 +273,19 @@ async function useNoOnlineGateway(): Promise<void> {
   }
 }
 
-function applyOverview(data: { active_provider: string | null; gateways: Gateway[] }): void {
+function applyOverview(data: Overview): void {
+  if (data.account_mode) accountMode.value = data.account_mode
+  if (data.mode) platformMode.value = data.mode
+  if (data.platform_ready_problems) readinessProblems.value = data.platform_ready_problems
+  if (data.transfer_account) {
+    payout.value = {
+      payment_promptpay_id: data.transfer_account.promptpay_id ?? '',
+      payment_bank_name: data.transfer_account.bank_name ?? '',
+      payment_bank_account_number: data.transfer_account.bank_account_number ?? '',
+      payment_bank_account_name: data.transfer_account.bank_account_name ?? '',
+    }
+  }
+
   // `active_provider` on the payload is deliberately not stored: each
   // gateway row already carries its own `is_active`, and a second copy of
   // "which one is on" is a second thing that can disagree with the first.
@@ -247,14 +310,14 @@ function applyOverview(data: { active_provider: string | null; gateways: Gateway
 }
 
 async function loadGateways(): Promise<void> {
-  if (activeCompany.requiresCompanyPick) {
+  if (!isPlatform.value && activeCompany.requiresCompanyPick) {
     gateways.value = []
     return
   }
   loading.value = true
   loadError.value = ''
   try {
-    const res = await api.get<{ data: { active_provider: string | null; gateways: Gateway[] } }>(basePath.value)
+    const res = await api.get<{ data: Overview }>(overviewPath.value)
     applyOverview(res.data)
   } catch (e) {
     loadError.value = e instanceof ApiError ? e.message : 'โหลดการตั้งค่าไม่สำเร็จ'
@@ -327,6 +390,10 @@ async function loadPayout(): Promise<void> {
 }
 
 async function savePayout(): Promise<void> {
+  if (isPlatform.value) {
+    await savePlatformPayout()
+    return
+  }
   if (activeCompany.companyId === null) return
   savingPayout.value = true
   payoutError.value = ''
@@ -348,7 +415,33 @@ async function savePayout(): Promise<void> {
   }
 }
 
+/** ADR-050 — the platform's own bank account / PromptPay. */
+async function savePlatformPayout(): Promise<void> {
+  savingPayout.value = true
+  payoutError.value = ''
+  payoutNotice.value = ''
+  try {
+    const res = await api.put<{ data: Overview }>('/platform-payment-settings/transfer-account', {
+      promptpay_id: payout.value.payment_promptpay_id.trim() || null,
+      bank_name: payout.value.payment_bank_name.trim() || null,
+      bank_account_number: payout.value.payment_bank_account_number.trim() || null,
+      bank_account_name: payout.value.payment_bank_account_name.trim() || null,
+    })
+    applyOverview(res.data)
+    payoutNotice.value = 'บันทึกบัญชีรับเงินกลางแล้ว'
+  } catch (e) {
+    payoutError.value = messageFrom(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingPayout.value = false
+  }
+}
+
 async function loadAll(): Promise<void> {
+  // The platform's transfer account arrives inside its overview.
+  if (isPlatform.value) {
+    await loadGateways()
+    return
+  }
   await Promise.all([loadGateways(), loadPayout()])
 }
 
@@ -356,7 +449,60 @@ onMounted(loadAll)
 // Re-load on a company switch. Without this the screen would keep showing
 // the previous company's configuration under the new company's name — on a
 // screen about where money goes, that is the worst possible stale render.
-watch(() => activeCompany.companyId, loadAll)
+// The platform page belongs to no company, so the header switch is not its business.
+watch(
+  () => activeCompany.companyId,
+  () => {
+    if (!isPlatform.value) void loadAll()
+  },
+)
+
+/*
+ * ── The platform switch (ADR-050) ──
+ *
+ * Confirmed in a dialog because one click moves every company's NEW orders
+ * to other bank accounts. The server refuses "ใช้ค่าเดียวทุกบริษัท" until the
+ * platform can take money both ways, and `readinessProblems` shows why before
+ * anyone presses it.
+ */
+const pendingMode = ref<AccountMode | null>(null)
+const savingMode = ref(false)
+const modeError = ref('')
+
+const MODE_OPTIONS: { value: AccountMode; label: string; consequence: string }[] = [
+  {
+    value: 'company',
+    label: 'แยกรายบริษัท',
+    consequence: 'แต่ละบริษัทรับเงินเข้าบัญชีและ Omise/Stripe ของตัวเอง ตั้งที่หน้า "ช่องทางรับชำระเงิน"',
+  },
+  {
+    value: 'platform',
+    label: 'ใช้ค่าเดียวทุกบริษัท',
+    consequence: 'ทุกบริษัทรับเงินผ่านบัญชีและช่องทางออนไลน์กลางด้านล่าง',
+  },
+]
+
+function askMode(mode: AccountMode): void {
+  modeError.value = ''
+  if (mode === platformMode.value) return
+  pendingMode.value = mode
+}
+
+async function confirmMode(): Promise<void> {
+  if (pendingMode.value === null) return
+  savingMode.value = true
+  modeError.value = ''
+  try {
+    const res = await api.put<{ data: Overview }>('/platform-payment-settings/mode', { mode: pendingMode.value })
+    applyOverview(res.data)
+    pendingMode.value = null
+  } catch (e) {
+    modeError.value = messageFrom(e, 'เปลี่ยนโหมดไม่สำเร็จ')
+    pendingMode.value = null
+  } finally {
+    savingMode.value = false
+  }
+}
 
 function messageFrom(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -373,7 +519,7 @@ async function saveGateway(gateway: Gateway): Promise<void> {
   noticeFor.value[gateway.provider] = ''
   try {
     const res = await api.put<{
-      data: { active_provider: string | null; gateways: Gateway[] }
+      data: Overview
       message: string | null
     }>(`${basePath.value}/${gateway.provider}`, {
       credentials: draftFor(gateway.provider),
@@ -417,7 +563,7 @@ async function activateGateway(gateway: Gateway): Promise<void> {
   errorFor.value[gateway.provider] = ''
   noticeFor.value[gateway.provider] = ''
   try {
-    const res = await api.post<{ data: { active_provider: string | null; gateways: Gateway[] } }>(
+    const res = await api.post<{ data: Overview }>(
       `${basePath.value}/activate`,
       { provider: gateway.provider },
     )
@@ -458,7 +604,10 @@ async function activateGateway(gateway: Gateway): Promise<void> {
 function webhookUrl(provider: string): string {
   const apiBase = (import.meta.env.VITE_API_BASE_URL as string).replace(/\/+$/, '')
 
-  return `${apiBase}/api/v1/webhooks/payments/${provider}/${activeCompany.companyId}`
+  // ADR-050 — the platform's keys are verified on their own endpoint.
+  const owner = isPlatform.value ? 'platform' : activeCompany.companyId
+
+  return `${apiBase}/api/v1/webhooks/payments/${provider}/${owner}`
 }
 
 const copiedWebhook = ref('')
@@ -483,17 +632,19 @@ function formatVerifiedAt(value: string | null): string {
     <HeroHeader
       icon="credit_card"
       icon-color="text-brand-600"
-      title="ช่องทางรับชำระเงิน"
-      subtitle="ตั้งค่าผู้ให้บริการรับชำระเงินของแต่ละบริษัท (Super Admin เท่านั้น)"
+      :title="isPlatform ? 'ระบบชำระเงินกลาง' : 'ช่องทางรับชำระเงิน'"
+      :subtitle="isPlatform
+        ? 'เลือกว่าทุกบริษัทใช้ช่องทางกลาง หรือแยกรายบริษัท (Super Admin เท่านั้น)'
+        : 'ตั้งค่าผู้ให้บริการรับชำระเงินของแต่ละบริษัท (Super Admin เท่านั้น)'"
       accent-color="brand"
-      storage-key="admin-payment-gateways"
+      :storage-key="isPlatform ? 'admin-platform-payments' : 'admin-payment-gateways'"
     />
 
     <!-- Refuses to render anything until a specific company is chosen. On a
          screen about where a tenant's money lands, "ทุกบริษัท" is not a
          meaningful scope — it would mean editing nobody's credentials. -->
     <div
-      v-if="activeCompany.requiresCompanyPick"
+      v-if="!isPlatform && activeCompany.requiresCompanyPick"
       class="mt-4 bg-white/95 border border-amber-200 rounded-2xl p-5 text-sm font-bold text-amber-700 flex items-center gap-2"
     >
       <Icon name="alert" :size="16" />
@@ -501,7 +652,7 @@ function formatVerifiedAt(value: string | null): string {
     </div>
 
     <template v-else>
-      <div class="mt-4 flex items-center gap-2 text-sm text-slate-500">
+      <div v-if="!isPlatform" class="mt-4 flex items-center gap-2 text-sm text-slate-500">
         <Icon name="building" :size="16" class="text-brand-600" />
         กำลังตั้งค่าให้บริษัท
         <span class="font-bold text-slate-900">{{ activeCompany.companyName }}</span>
@@ -512,6 +663,33 @@ function formatVerifiedAt(value: string | null): string {
       </div>
       <div v-else-if="loadError" class="mt-4 bg-white/95 border border-rose-200 rounded-2xl p-5 text-sm font-bold text-rose-600">
         {{ loadError }}
+      </div>
+
+      <!--
+        ADR-050 — a company's own settings while every company uses the
+        platform's. Kept on the server (switching back restores them), frozen
+        there too, so the forms are not offered at all.
+      -->
+      <div
+        v-else-if="companyLocked"
+        data-test="company-locked"
+        class="mt-4 max-w-4xl bg-white/95 border border-brand-200 rounded-2xl p-5 flex items-start gap-3"
+      >
+        <Icon name="lock" :size="18" class="mt-0.5 shrink-0 text-brand-600" />
+        <div class="min-w-0">
+          <p class="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+            บริษัทนี้ใช้ช่องทางชำระเงินกลางของแพลตฟอร์ม
+            <InfoPopover label="ช่องทางชำระเงินกลาง">
+              ระบบตั้งให้ทุกบริษัทรับเงินผ่านบัญชีและช่องทางออนไลน์กลางชุดเดียว
+              ค่าที่บริษัทนี้เคยตั้งไว้ยังเก็บอยู่ครบ ถ้าเปลี่ยนกลับเป็น "แยกรายบริษัท" จะกลับมาใช้ได้ทันที
+              <br /><br />
+              คำสั่งซื้อที่สร้างก่อนเปลี่ยนโหมด ยังจ่ายเข้าบัญชีเดิมที่แสดงให้ลูกค้าเห็นตอนแรก
+            </InfoPopover>
+          </p>
+          <RouterLink to="/platform-payment-settings" class="mt-2 inline-block text-sm font-bold text-brand-700 underline">
+            ไปที่หน้าระบบชำระเงินกลาง
+          </RouterLink>
+        </div>
       </div>
 
       <!--
@@ -542,6 +720,59 @@ function formatVerifiedAt(value: string | null): string {
         not say "pick one", so nobody read it that way.
       -->
       <div v-else class="mt-4 max-w-4xl space-y-5">
+        <!-- ADR-050 — the platform switch. Platform scope only. -->
+        <section v-if="isPlatform" data-test="platform-mode" class="bg-white/95 border border-slate-200 rounded-2xl p-5">
+          <h2 class="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+            ระบบชำระเงินของทุกบริษัท
+            <InfoPopover label="ระบบชำระเงินของทุกบริษัท">
+              "ใช้ค่าเดียวทุกบริษัท" = ลูกค้าของทุกบริษัทโอนเงิน สแกนพร้อมเพย์ และจ่ายบัตร เข้าบัญชีกลางของแพลตฟอร์ม
+              แพลตฟอร์มเป็นผู้โอนต่อให้แต่ละบริษัทเองนอกระบบ
+              <br /><br />
+              "แยกรายบริษัท" = แต่ละบริษัทรับเงินเข้าบัญชีของตัวเอง ตามที่ตั้งในหน้า "ช่องทางรับชำระเงิน"
+              <br /><br />
+              การเปลี่ยนมีผลกับคำสั่งซื้อที่สร้างหลังจากนี้เท่านั้น คำสั่งซื้อเดิมยังจ่ายเข้าบัญชีที่แสดงให้ลูกค้าเห็นตอนแรก
+            </InfoPopover>
+          </h2>
+
+          <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              v-for="opt in MODE_OPTIONS"
+              :key="opt.value"
+              type="button"
+              :data-test="`mode-${opt.value}`"
+              class="text-left rounded-xl border p-3 flex items-start gap-2.5 transition"
+              :class="platformMode === opt.value ? 'border-brand-300 bg-brand-50' : 'border-slate-200 hover:border-brand-200'"
+              :aria-pressed="platformMode === opt.value"
+              :disabled="savingMode"
+              @click="askMode(opt.value)"
+            >
+              <span
+                class="mt-0.5 w-[18px] h-[18px] shrink-0 rounded-full border-2 flex items-center justify-center"
+                :class="platformMode === opt.value ? 'border-brand-600' : 'border-slate-300'"
+              >
+                <span v-if="platformMode === opt.value" class="w-2.5 h-2.5 rounded-full bg-brand-600"></span>
+              </span>
+              <span class="min-w-0">
+                <span class="block text-sm font-bold text-slate-900">{{ opt.label }}</span>
+                <span class="block text-xs text-slate-500 leading-relaxed">{{ opt.consequence }}</span>
+              </span>
+            </button>
+          </div>
+
+          <!-- Why "ใช้ค่าเดียวทุกบริษัท" would be refused right now. -->
+          <ul
+            v-if="platformMode === 'company' && readinessProblems.length"
+            data-test="readiness"
+            class="mt-3 space-y-1 text-xs text-amber-700"
+          >
+            <li v-for="problem in readinessProblems" :key="problem" class="flex items-start gap-1.5">
+              <Icon name="alert" :size="14" class="mt-0.5 shrink-0" />
+              <span>{{ problem }}</span>
+            </li>
+          </ul>
+          <p v-if="modeError" class="mt-2 text-xs font-bold text-rose-600">{{ modeError }}</p>
+        </section>
+
         <template v-for="gateway in gateways" :key="gateway.provider">
           <!--
             The section heading sits INSIDE the loop, before the first online
@@ -700,7 +931,7 @@ function formatVerifiedAt(value: string | null): string {
                 :disabled="savingPayout"
                 @click="savePayout"
               >
-                {{ savingPayout ? 'กำลังบันทึก...' : 'บันทึกบัญชีรับเงิน' }}
+                {{ savingPayout ? 'กำลังบันทึก...' : (isPlatform ? 'บันทึกบัญชีรับเงินกลาง' : 'บันทึกบัญชีรับเงิน') }}
               </button>
             </div>
           </div>
@@ -868,5 +1099,18 @@ function formatVerifiedAt(value: string | null): string {
         </button>
       </div>
     </template>
+
+    <ConfirmDialog
+      :show="pendingMode !== null"
+      variant="warning"
+      :busy="savingMode"
+      :title="pendingMode === 'platform' ? 'ให้ทุกบริษัทใช้ช่องทางกลาง?' : 'กลับไปแยกรายบริษัท?'"
+      :body="pendingMode === 'platform'
+        ? 'คำสั่งซื้อที่สร้างหลังจากนี้ของทุกบริษัท จะจ่ายเข้าบัญชีและช่องทางออนไลน์กลางของแพลตฟอร์ม'
+        : 'คำสั่งซื้อที่สร้างหลังจากนี้ จะจ่ายเข้าบัญชีของแต่ละบริษัทตามที่แต่ละบริษัทตั้งไว้'"
+      :confirm-label="pendingMode === 'platform' ? 'ใช้ค่าเดียวทุกบริษัท' : 'แยกรายบริษัท'"
+      @confirm="confirmMode"
+      @cancel="pendingMode = null"
+    />
   </main>
 </template>

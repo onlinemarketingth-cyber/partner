@@ -331,12 +331,14 @@ async function handleSubmit() {
               <p class="mt-1 leading-relaxed">{{ blocked.message }}</p>
               <!-- Informational only, by design (TASK-021): there is no
                    action a pending applicant can take, so offering one would
-                   be a lie. Told what to expect instead of left guessing. -->
+                   be a lie. Told what to expect instead of left guessing.
+                   ADR-049: "the person who invited you", not "team leader" —
+                   any agent who passed Basic may recruit, flag or not. -->
               <p class="mt-1 leading-relaxed">
                 {{ t(
                   'login_blocked_pending_hint',
-                  'หัวหน้าทีมหรือผู้ดูแลระบบของบริษัทจะเป็นผู้อนุมัติ เมื่ออนุมัติแล้วคุณจะเข้าสู่ระบบได้ทันที',
-                  'Your team leader or a company administrator will approve it. You can sign in as soon as they do.',
+                  'ผู้ที่ชวนคุณเข้าทีมหรือผู้ดูแลระบบของบริษัทจะเป็นผู้อนุมัติ เมื่ออนุมัติแล้วคุณจะเข้าสู่ระบบได้ทันที',
+                  'The person who invited you or a company administrator will approve it. You can sign in as soon as they do.',
                 ) }}
               </p>
             </div>

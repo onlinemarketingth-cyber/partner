@@ -5,6 +5,7 @@ namespace App\Services\Payment\Gateways;
 use App\Enums\PaymentProvider;
 use App\Models\Company;
 use App\Models\Order;
+use App\Services\Payment\PaymentAccountService;
 use App\Services\Payment\PromptPayService;
 use Illuminate\Http\Request;
 
@@ -56,8 +57,14 @@ class ManualGateway implements PaymentGateway
      * Verification can only confirm its SHAPE, and this says so plainly: an
      * admin who reads "verified" must not believe the destination was tested.
      */
-    public function verifyCredentials(Company $company, array $credentials, bool $isLive): string
+    public function verifyCredentials(?Company $company, array $credentials, bool $isLive): string
     {
+        // ADR-050 — the platform's transfer destination is edited on its own
+        // card and has no key to prove; nothing here can verify it.
+        if ($company === null) {
+            throw new GatewayException('ช่องทางโอนเงิน/พร้อมเพย์ของแพลตฟอร์มตั้งที่การ์ดบัญชีรับเงิน ไม่มีคีย์ให้ตรวจสอบ');
+        }
+
         $proxy = preg_replace('/\D/', '', (string) $company->payment_promptpay_id) ?? '';
 
         if (! in_array(strlen($proxy), [10, 13], true)) {
@@ -74,9 +81,10 @@ class ManualGateway implements PaymentGateway
         return new PaymentIntent(
             kind: 'qr',
             amountSatang: $order->amount_satang,
-            // From the company, the same source the existing pay page uses.
+            // The same destination the pay page shows — the order's own
+            // company's, or the platform's (ADR-050).
             qrPayload: $this->promptPay->payload(
-                (string) $order->company?->payment_promptpay_id,
+                (string) app(PaymentAccountService::class)->transferDestination($order)['promptpay_id'],
                 $order->amount_satang,
             ),
             expectsSlipUpload: true,

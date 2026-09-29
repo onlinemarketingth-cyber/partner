@@ -104,7 +104,7 @@ class StripeGateway implements PaymentGateway
      * company's Stripe, and on a platform where each tenant's revenue lands
      * in their own account that is the mistake worth catching.
      */
-    public function verifyCredentials(Company $company, array $credentials, bool $isLive): string
+    public function verifyCredentials(?Company $company, array $credentials, bool $isLive): string
     {
         $secret = trim($credentials['secret_key'] ?? '');
         $publishable = trim($credentials['publishable_key'] ?? '');

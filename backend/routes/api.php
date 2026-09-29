@@ -78,6 +78,7 @@ use App\Http\Controllers\Api\V1\PaymentWebhookController;
 use App\Http\Controllers\Api\V1\PipelineTemplateController;
 use App\Http\Controllers\Api\V1\PlatformCommissionSettingController;
 use App\Http\Controllers\Api\V1\PlatformMailSettingController;
+use App\Http\Controllers\Api\V1\PlatformPaymentSettingController;
 use App\Http\Controllers\Api\V1\PlatformReportController;
 use App\Http\Controllers\Api\V1\ProductCatalogItemController;
 use App\Http\Controllers\Api\V1\ProductCatalogLinkController;
@@ -323,7 +324,13 @@ Route::prefix('v1')->group(function () {
      * of events must not be throttled into looking like a failure, and the
      * signature — not the rate limit — is what stops abuse.
      */
+    // ADR-050 — the platform's own endpoint, registered BEFORE the
+    // per-company one so 'platform' is never read as a company id.
+    Route::post('/webhooks/payments/{provider}/platform', [PaymentWebhookController::class, 'platform'])
+        ->middleware('throttle:120,1')
+        ->name('payment-webhooks.platform');
     Route::post('/webhooks/payments/{provider}/{company}', PaymentWebhookController::class)
+        ->whereNumber('company')
         ->middleware('throttle:120,1')
         ->name('payment-webhooks.handle');
 
@@ -1400,6 +1407,15 @@ Route::prefix('v1')->group(function () {
         // 2026-09-03 — "no online gateway" is a real setting, not the absence
         // of one, and bank transfer keeps working either way.
         Route::post('/companies/{company}/payment-gateways/deactivate', [CompanyPaymentGatewayController::class, 'deactivate']);
+
+        // ADR-050 — the platform switch ("ใช้ค่าเดียวทุกบริษัท / แยกรายบริษัท")
+        // and the platform's own channels. Super Admin only, read included.
+        Route::get('/platform-payment-settings', [PlatformPaymentSettingController::class, 'show']);
+        Route::put('/platform-payment-settings/mode', [PlatformPaymentSettingController::class, 'updateMode']);
+        Route::put('/platform-payment-settings/transfer-account', [PlatformPaymentSettingController::class, 'updateTransferAccount']);
+        Route::post('/platform-payment-settings/gateways/activate', [PlatformPaymentSettingController::class, 'activateGateway']);
+        Route::post('/platform-payment-settings/gateways/deactivate', [PlatformPaymentSettingController::class, 'deactivateGateway']);
+        Route::put('/platform-payment-settings/gateways/{provider}', [PlatformPaymentSettingController::class, 'updateGateway']);
 
         Route::get('/platform/mail-settings', [PlatformMailSettingController::class, 'show']);
         Route::put('/platform/mail-settings', [PlatformMailSettingController::class, 'update']);

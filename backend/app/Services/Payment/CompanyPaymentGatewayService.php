@@ -2,10 +2,16 @@
 
 namespace App\Services\Payment;
 
+use App\Enums\PaymentAccountScope;
 use App\Enums\PaymentProvider;
+use App\Models\AuditLog;
 use App\Models\Company;
 use App\Models\CompanyPaymentGatewaySetting;
+use App\Models\PlatformPaymentGatewaySetting;
+use App\Models\PlatformPaymentSetting;
+use App\Models\User;
 use App\Services\Payment\Gateways\GatewayException;
+use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -30,6 +36,18 @@ use Illuminate\Validation\ValidationException;
  * `companies.payment_provider` is one column, so two active providers cannot
  * be written down. A boolean per settings row could represent two, and MySQL
  * has no partial unique index with which to forbid it.
+ *
+ * ── TWO OWNERS SINCE ADR-050 ──
+ *
+ * A company's credentials (company_payment_gateway_settings, active provider
+ * on companies.payment_provider) and the platform's own
+ * (platform_payment_gateway_settings, active provider on
+ * platform_payment_settings.payment_provider). Every rule above holds for
+ * both, through the same private helpers, so the two cannot drift apart.
+ *
+ * While the platform switch says "ใช้ค่าเดียวทุกบริษัท", a company's own
+ * settings are kept but frozen: nothing reads them for new orders, and
+ * editing them would only suggest otherwise.
  */
 class CompanyPaymentGatewayService
 {
@@ -51,7 +69,30 @@ class CompanyPaymentGatewayService
             ->get()
             ->keyBy(fn (CompanyPaymentGatewaySetting $s) => $s->provider->value);
 
-        return array_map(function (PaymentProvider $provider) use ($company, $rows) {
+        return $this->describe($rows, $company->payment_provider);
+    }
+
+    /**
+     * ADR-050 — the same list for the platform's own credentials.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function platformOverview(): array
+    {
+        $rows = PlatformPaymentGatewaySetting::query()
+            ->get()
+            ->keyBy(fn (PlatformPaymentGatewaySetting $s) => $s->provider->value);
+
+        return $this->describe($rows, PlatformPaymentSetting::current()->payment_provider);
+    }
+
+    /**
+     * @param  Collection<string, CompanyPaymentGatewaySetting|PlatformPaymentGatewaySetting>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function describe(Collection $rows, ?string $activeProvider): array
+    {
+        return array_map(function (PaymentProvider $provider) use ($rows, $activeProvider) {
             $row = $rows->get($provider->value);
             $driver = $this->registry->driver($provider);
             $stored = $row?->credentials ?? [];
@@ -70,7 +111,7 @@ class CompanyPaymentGatewayService
                  */
                 'always_available' => $provider->requiresHumanVerification(),
                 'is_active' => ! $provider->requiresHumanVerification()
-                    && $company->payment_provider === $provider->value,
+                    && $activeProvider === $provider->value,
                 'is_live' => (bool) ($row?->is_live ?? false),
                 'is_configured' => $row !== null,
                 'is_verified' => (bool) $row?->isVerified(),
@@ -115,10 +156,64 @@ class CompanyPaymentGatewayService
      */
     public function save(Company $company, PaymentProvider $provider, array $input, bool $isLive): CompanyPaymentGatewaySetting
     {
-        $driver = $this->registry->driver($provider);
+        $this->assertCompanyManaged();
 
         $row = CompanyPaymentGatewaySetting::withoutGlobalScopes()
             ->firstOrNew(['company_id' => $company->id, 'provider' => $provider->value]);
+
+        $this->verifyAndStore($row, $provider, $input, $isLive, $company, ['company_id' => $company->id]);
+
+        /*
+         * Changing the credentials of the ACTIVE provider re-verifies it, but
+         * changing them can also invalidate it — a live key swapped for a
+         * test one, say. The mode is part of what was just verified, so the
+         * company's own record of "which mode am I taking money in" follows
+         * it here rather than drifting.
+         */
+        return $row->refresh();
+    }
+
+    /**
+     * ADR-050 — save and verify the platform's own credentials.
+     *
+     * @param  array<string, string>  $input
+     *
+     * @throws ValidationException
+     */
+    public function savePlatform(PaymentProvider $provider, array $input, bool $isLive, ?User $actor = null): PlatformPaymentGatewaySetting
+    {
+        $row = PlatformPaymentGatewaySetting::query()->firstOrNew(['provider' => $provider->value]);
+
+        $this->verifyAndStore($row, $provider, $input, $isLive, null, []);
+
+        // §6 — which account the whole platform's card payments land in.
+        // Names the provider and the mode, never a credential.
+        $this->auditPlatform($actor, 'platform_payment.gateway_saved', $row, [
+            'provider' => $provider->value,
+            'is_live' => $isLive,
+        ]);
+
+        return $row->refresh();
+    }
+
+    /**
+     * The shared half of save(): merge, require, verify against the
+     * provider, and store only what passed.
+     *
+     * @param  array<string, string>  $input
+     * @param  array<string, mixed>  $owner
+     *
+     * @throws ValidationException
+     */
+    private function verifyAndStore(
+        CompanyPaymentGatewaySetting|PlatformPaymentGatewaySetting $row,
+        PaymentProvider $provider,
+        array $input,
+        bool $isLive,
+        ?Company $company,
+        array $owner,
+    ): void {
+        $driver = $this->registry->driver($provider);
 
         $merged = $row->credentials ?? [];
         foreach ($driver->credentialFields() as $field) {
@@ -156,22 +251,13 @@ class CompanyPaymentGatewayService
         }
 
         $row->fill([
-            'company_id' => $company->id,
+            ...$owner,
             'provider' => $provider->value,
             'credentials' => $merged,
             'is_live' => $isLive,
             'verified_at' => now(),
             'verified_note' => $note,
         ])->save();
-
-        /*
-         * Changing the credentials of the ACTIVE provider re-verifies it, but
-         * changing them can also invalidate it — a live key swapped for a
-         * test one, say. The mode is part of what was just verified, so the
-         * company's own record of "which mode am I taking money in" follows
-         * it here rather than drifting.
-         */
-        return $row->refresh();
     }
 
     /**
@@ -186,28 +272,18 @@ class CompanyPaymentGatewayService
      */
     public function activate(Company $company, PaymentProvider $provider): Company
     {
+        $this->assertCompanyManaged();
+
         /*
          * 2026-09-03 — the manual flow cannot be "activated" because it is
          * never off. Allowing it here would write 'manual' back into a column
          * that now means "which ONLINE gateway", and the next reader would
          * take that to mean the company has an online gateway called manual.
          */
-        if ($provider->requiresHumanVerification()) {
-            throw ValidationException::withMessages([
-                'provider' => 'ช่องทางโอนเงิน/พร้อมเพย์เปิดใช้งานอยู่เสมอ ไม่ต้องเลือก',
-            ]);
-        }
-
-        $row = CompanyPaymentGatewaySetting::withoutGlobalScopes()
+        $this->assertActivatable($provider, CompanyPaymentGatewaySetting::withoutGlobalScopes()
             ->where('company_id', $company->id)
             ->where('provider', $provider->value)
-            ->first();
-
-        if ($row === null || ! $row->isVerified()) {
-            throw ValidationException::withMessages([
-                'provider' => 'ต้องตั้งค่าและตรวจสอบการเชื่อมต่อของช่องทางนี้ให้ผ่านก่อน จึงจะเปิดใช้งานได้',
-            ]);
-        }
+            ->first());
 
         /*
          * forceFill: `payment_provider` is deliberately NOT in Company's
@@ -232,9 +308,104 @@ class CompanyPaymentGatewayService
      */
     public function deactivateOnlineGateway(Company $company): Company
     {
+        $this->assertCompanyManaged();
+
         $company->forceFill(['payment_provider' => null])->save();
 
         return $company->refresh();
+    }
+
+    /**
+     * ADR-050 — switch the platform's online gateway. Same refusals as a
+     * company's: never the manual flow, never an unverified row.
+     *
+     * @throws ValidationException
+     */
+    public function activatePlatform(PaymentProvider $provider, ?User $actor = null): PlatformPaymentSetting
+    {
+        $this->assertActivatable($provider, PlatformPaymentGatewaySetting::query()
+            ->where('provider', $provider->value)
+            ->first());
+
+        $settings = PlatformPaymentSetting::current();
+        $before = $settings->payment_provider;
+        $settings->forceFill(['payment_provider' => $provider->value])->save();
+
+        $this->auditPlatform($actor, 'platform_payment.gateway_activated', $settings, ['provider' => $provider->value], ['provider' => $before]);
+
+        return $settings->refresh();
+    }
+
+    /**
+     * ADR-050 — the platform takes no card payments. Transfers keep working,
+     * so this is allowed even while every company uses the platform.
+     */
+    public function deactivatePlatformOnlineGateway(?User $actor = null): PlatformPaymentSetting
+    {
+        $settings = PlatformPaymentSetting::current();
+        $before = $settings->payment_provider;
+        $settings->forceFill(['payment_provider' => null])->save();
+
+        $this->auditPlatform($actor, 'platform_payment.gateway_deactivated', $settings, ['provider' => null], ['provider' => $before]);
+
+        return $settings->refresh();
+    }
+
+    /**
+     * @throws ValidationException
+     */
+    private function assertActivatable(PaymentProvider $provider, CompanyPaymentGatewaySetting|PlatformPaymentGatewaySetting|null $row): void
+    {
+        if ($provider->requiresHumanVerification()) {
+            throw ValidationException::withMessages([
+                'provider' => 'ช่องทางโอนเงิน/พร้อมเพย์เปิดใช้งานอยู่เสมอ ไม่ต้องเลือก',
+            ]);
+        }
+
+        if ($row === null || ! $row->isVerified()) {
+            throw ValidationException::withMessages([
+                'provider' => 'ต้องตั้งค่าและตรวจสอบการเชื่อมต่อของช่องทางนี้ให้ผ่านก่อน จึงจะเปิดใช้งานได้',
+            ]);
+        }
+    }
+
+    /**
+     * ADR-050 — a company's own payment settings are frozen while every
+     * company uses the platform's. Kept, not deleted: switching back must not
+     * mean re-typing keys that are printed nowhere.
+     *
+     * @throws ValidationException
+     */
+    private function assertCompanyManaged(): void
+    {
+        if (PlatformPaymentSetting::current()->mode === PaymentAccountScope::Platform) {
+            throw ValidationException::withMessages([
+                'mode' => 'ตอนนี้ทุกบริษัทใช้ช่องทางชำระเงินกลางของแพลตฟอร์ม — แก้ไขได้ที่หน้า "ระบบชำระเงินกลาง"',
+            ]);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $new
+     * @param  array<string, mixed>|null  $old
+     */
+    private function auditPlatform(
+        ?User $actor,
+        string $action,
+        PlatformPaymentSetting|PlatformPaymentGatewaySetting $subject,
+        array $new,
+        ?array $old = null,
+    ): void {
+        AuditLog::create([
+            'company_id' => null,
+            'actor_user_id' => $actor?->id,
+            'action' => $action,
+            'auditable_type' => $subject::class,
+            'auditable_id' => $subject->id,
+            'old_values' => $old,
+            'new_values' => $new,
+            'ip_address' => request()?->ip(),
+        ]);
     }
 
     /**
@@ -319,6 +490,45 @@ class CompanyPaymentGatewayService
                 return ['provider' => $provider, 'credentials' => [], 'is_live' => true];
             }
 
+            return null;
+        }
+
+        return [
+            'provider' => $provider,
+            'credentials' => $row->credentials ?? [],
+            'is_live' => (bool) $row->is_live,
+        ];
+    }
+
+    /**
+     * ADR-050 — the platform's ACTIVE online gateway, for charging an order
+     * stamped `payment_account = platform`. Null = no card payments.
+     *
+     * @return array{provider: PaymentProvider, credentials: array<string, string>, is_live: bool}|null
+     */
+    public function platformActiveConfig(): ?array
+    {
+        $provider = PlatformPaymentSetting::current()->activeProvider();
+
+        return $provider === null ? null : $this->platformConfigFor($provider);
+    }
+
+    /**
+     * ADR-050 — the platform's usable configuration for ONE named online
+     * provider, or null. Unlike configFor() there is no credential-free
+     * fallback: the platform's transfer destination is not a gateway row.
+     *
+     * @return array{provider: PaymentProvider, credentials: array<string, string>, is_live: bool}|null
+     */
+    public function platformConfigFor(PaymentProvider $provider): ?array
+    {
+        if ($provider->requiresHumanVerification()) {
+            return null;
+        }
+
+        $row = PlatformPaymentGatewaySetting::query()->where('provider', $provider->value)->first();
+
+        if ($row === null || ! $row->isVerified()) {
             return null;
         }
 

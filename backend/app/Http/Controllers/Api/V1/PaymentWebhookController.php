@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Enums\PaymentAccountScope;
 use App\Enums\PaymentProvider;
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
@@ -9,6 +10,7 @@ use App\Models\AuditLog;
 use App\Models\Company;
 use App\Models\Order;
 use App\Models\PaymentWebhookEvent;
+use App\Models\PlatformPaymentGatewaySetting;
 use App\Models\User;
 use App\Notifications\GatewayEventUnmatchedNotification;
 use App\Services\Payment\CompanyPaymentGatewayService;
@@ -88,6 +90,53 @@ class PaymentWebhookController extends Controller
             return response()->json(['message' => 'ไม่พบปลายทาง'], 404);
         }
 
+        return $this->process($paymentProvider, $tenant, $config, $request, $payments, $registry, $recorder);
+    }
+
+    /**
+     * ADR-050 — the platform's own webhook: `/webhooks/payments/{provider}/platform`.
+     *
+     * Verified against the PLATFORM's signing secret, chosen from the URL for
+     * the same reason a company's is (the payload may not nominate its own
+     * key). The order it names may belong to any company, but only an order
+     * stamped payment_account=platform — one this platform's keys actually
+     * charged — is ever matched.
+     */
+    public function platform(
+        string $provider,
+        Request $request,
+        CompanyPaymentGatewayService $gateways,
+        GatewayPaymentService $payments,
+        PaymentGatewayRegistry $registry,
+        PaymentWebhookRecorder $recorder,
+    ): JsonResponse {
+        $paymentProvider = PaymentProvider::tryFrom($provider);
+        $config = $paymentProvider === null ? null : $gateways->platformConfigFor($paymentProvider);
+
+        if ($paymentProvider === null || $config === null) {
+            return response()->json(['message' => 'ไม่พบปลายทาง'], 404);
+        }
+
+        return $this->process($paymentProvider, null, $config, $request, $payments, $registry, $recorder);
+    }
+
+    /**
+     * Everything after the key is chosen, shared by both endpoints.
+     *
+     * `$tenant` is the company named in the URL, or NULL for the platform's
+     * endpoint — whose company is only known once the order is found.
+     *
+     * @param  array{provider: PaymentProvider, credentials: array<string, string>, is_live: bool}  $config
+     */
+    private function process(
+        PaymentProvider $paymentProvider,
+        ?Company $tenant,
+        array $config,
+        Request $request,
+        GatewayPaymentService $payments,
+        PaymentGatewayRegistry $registry,
+        PaymentWebhookRecorder $recorder,
+    ): JsonResponse {
         $driver = $registry->driver($paymentProvider);
 
         if (! $driver->verifyWebhook($request, $config['credentials'])) {
@@ -102,7 +151,7 @@ class PaymentWebhookController extends Controller
              */
             Log::warning('Rejected a payment webhook with an invalid signature', [
                 'provider' => $paymentProvider->value,
-                'company_id' => $tenant->id,
+                'company_id' => $tenant?->id,
                 'ip' => $request->ip(),
             ]);
 
@@ -149,7 +198,7 @@ class PaymentWebhookController extends Controller
              */
             Log::info('Payment webhook ignored — no handler for this event type', [
                 'provider' => $paymentProvider->value,
-                'company_id' => $tenant->id,
+                'company_id' => $tenant?->id,
                 'event_type' => $outcome->eventType,
             ]);
 
@@ -164,6 +213,9 @@ class PaymentWebhookController extends Controller
         }
 
         $order = $this->resolveOrder($outcome->orderToken, $tenant);
+
+        // ADR-050 — on the platform's endpoint the company is the order's.
+        $tenant ??= $order?->company;
 
         if ($order === null) {
             // The most valuable row in the table: a verified event, naming
@@ -204,7 +256,7 @@ class PaymentWebhookController extends Controller
          */
         Log::info('Payment webhook applied', [
             'provider' => $paymentProvider->value,
-            'company_id' => $tenant->id,
+            'company_id' => $tenant?->id,
             'order_id' => $order->id,
             'order_number' => $order->order_number,
             'event_type' => $outcome->eventType,
@@ -261,13 +313,13 @@ class PaymentWebhookController extends Controller
     private function reportUnmatched(
         WebhookOutcome $outcome,
         PaymentProvider $provider,
-        Company $tenant,
+        ?Company $tenant,
     ): void {
         $isMoney = $outcome->result === WebhookResult::Paid;
 
         $context = [
             'provider' => $provider->value,
-            'company_id' => $tenant->id,
+            'company_id' => $tenant?->id,
             'charge_id' => $outcome->chargeId,
             'amount_satang' => $outcome->amountSatang,
             'result' => $outcome->result->value,
@@ -295,11 +347,11 @@ class PaymentWebhookController extends Controller
          * durable record of a payment that never landed anywhere.
          */
         AuditLog::create([
-            'company_id' => $tenant->id,
+            'company_id' => $tenant?->id,
             'actor_user_id' => null,
             'action' => 'order.gateway_payment_unmatched',
-            'auditable_type' => Company::class,
-            'auditable_id' => $tenant->id,
+            'auditable_type' => $tenant === null ? PlatformPaymentGatewaySetting::class : Company::class,
+            'auditable_id' => $tenant?->id ?? $this->platformGatewayId($provider),
             'new_values' => $context,
         ]);
 
@@ -309,14 +361,19 @@ class PaymentWebhookController extends Controller
          * have the provider retry an event that can never be placed.
          */
         try {
-            $admins = User::withoutGlobalScopes()
-                ->where('company_id', $tenant->id)
-                ->where('role', UserRole::CompanyAdmin->value)
-                ->get();
+            // ADR-050 — money that reached the PLATFORM's account belongs to
+            // no company yet, so the people to tell are the Super Admins who
+            // run that account.
+            $admins = $tenant === null
+                ? User::withoutGlobalScopes()->where('role', UserRole::SuperAdmin->value)->get()
+                : User::withoutGlobalScopes()
+                    ->where('company_id', $tenant->id)
+                    ->where('role', UserRole::CompanyAdmin->value)
+                    ->get();
 
             if ($admins->isEmpty()) {
                 Log::warning('Unmatched payment, and this company has no Company Admin to tell', [
-                    'company_id' => $tenant->id,
+                    'company_id' => $tenant?->id,
                 ]);
 
                 return;
@@ -329,7 +386,7 @@ class PaymentWebhookController extends Controller
             ));
         } catch (Throwable $e) {
             Log::error('Unmatched payment recorded but the admin notification failed to send', [
-                'company_id' => $tenant->id,
+                'company_id' => $tenant?->id,
                 'charge_id' => $outcome->chargeId,
                 'reason' => $e->getMessage(),
             ]);
@@ -364,11 +421,11 @@ class PaymentWebhookController extends Controller
      * "this keeps happening" collapses into one row a day rather than one
      * per delivery.
      */
-    private function auditOncePerDay(Company $tenant, string $action, string $key, array $context): void
+    private function auditOncePerDay(?Company $tenant, string $action, string $key, array $context): void
     {
         try {
             $alreadyToday = AuditLog::query()
-                ->where('company_id', $tenant->id)
+                ->where('company_id', $tenant?->id)
                 ->where('action', $action)
                 ->where('new_values->dedupe_key', $key)
                 ->where('created_at', '>=', now()->subDay())
@@ -379,11 +436,11 @@ class PaymentWebhookController extends Controller
             }
 
             AuditLog::create([
-                'company_id' => $tenant->id,
+                'company_id' => $tenant?->id,
                 'actor_user_id' => null,
                 'action' => $action,
-                'auditable_type' => Company::class,
-                'auditable_id' => $tenant->id,
+                'auditable_type' => $tenant === null ? PlatformPaymentGatewaySetting::class : Company::class,
+                'auditable_id' => $tenant?->id ?? $this->platformGatewayId(PaymentProvider::tryFrom((string) ($context['provider'] ?? ''))),
                 'new_values' => $context + ['dedupe_key' => $key],
             ]);
         } catch (Throwable $e) {
@@ -408,14 +465,38 @@ class PaymentWebhookController extends Controller
      * signed event from company A's account must not be able to reach into
      * company B's orders, whatever token it names.
      */
-    private function resolveOrder(?string $token, Company $company): ?Order
+    /**
+     * ADR-050 — what a platform-endpoint audit row is about: the platform's
+     * credentials that verified the event. That row always exists by now —
+     * the endpoint 404s without it.
+     */
+    private function platformGatewayId(?PaymentProvider $provider): ?int
+    {
+        return $provider === null ? null : PlatformPaymentGatewaySetting::query()
+            ->where('provider', $provider->value)
+            ->value('id');
+    }
+
+    /**
+     * The order a verified event names — and only if the key that verified
+     * it is the key that order pays through (ADR-050): a company's endpoint
+     * matches that company's own-account orders, the platform's endpoint
+     * matches platform-account orders of any company. A token alone never
+     * crosses from one account to the other.
+     */
+    private function resolveOrder(?string $token, ?Company $company): ?Order
     {
         if (blank($token)) {
             return null;
         }
 
         return Order::withoutGlobalScopes()
-            ->where('company_id', $company->id)
+            ->when(
+                $company === null,
+                fn ($q) => $q->where('payment_account', PaymentAccountScope::Platform->value),
+                fn ($q) => $q->where('company_id', $company->id)
+                    ->where('payment_account', PaymentAccountScope::Company->value),
+            )
             ->where('public_token', $token)
             ->first();
     }

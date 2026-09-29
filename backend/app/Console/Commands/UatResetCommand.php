@@ -167,6 +167,9 @@ class UatResetCommand extends Command
         'theme_presets',
         'company_payment_gateway_settings',
         'platform_mail_settings',
+        // ADR-050 — the platform's payment switch and its own channels.
+        'platform_payment_settings',
+        'platform_payment_gateway_settings',
         'video_processing_settings',
         // ADR-048 — the supplier auto-receive window. Config, kept.
         'supplier_platform_settings',

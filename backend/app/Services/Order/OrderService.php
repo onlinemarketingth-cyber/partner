@@ -14,6 +14,7 @@ use App\Models\User;
 use App\Services\Catalog\ProductPricingService;
 use App\Services\Link\TrackedLinkService;
 use App\Services\Notification\NotificationService;
+use App\Services\Payment\PaymentAccountService;
 use App\Services\Referral\PipelineService;
 use App\Services\Supplier\SupplierSettlementService;
 use App\Support\Media\StoredFileName;
@@ -62,6 +63,8 @@ class OrderService
         // Called at the very end of confirmPayment()'s transaction, after the
         // commission rows exist; see the call site for why the order matters.
         private SupplierSettlementService $supplierSettlementService,
+        // ADR-050 — whose accounts a new order pays into.
+        private PaymentAccountService $paymentAccounts,
     ) {}
 
     /**
@@ -95,7 +98,14 @@ class OrderService
          * call site passes it and the next change here will want it again;
          * removing it now would be churn in three files to delete one word.
          */
-        return ['payment_provider' => PaymentProvider::Manual->value, 'gateway_mode' => 'live'];
+        return [
+            'payment_provider' => PaymentProvider::Manual->value,
+            'gateway_mode' => 'live',
+            // ADR-050 — stamped now and never re-read from the switch: the
+            // pay link this order produces must keep showing the accounts it
+            // showed first, whatever the Super Admin changes later.
+            'payment_account' => $this->paymentAccounts->scopeForNewOrder()->value,
+        ];
     }
 
     /**

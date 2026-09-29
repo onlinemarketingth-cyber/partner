@@ -3,11 +3,13 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\Ability;
+use App\Enums\PaymentAccountScope;
 use App\Enums\PaymentProvider;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Payment\ActivatePaymentGatewayRequest;
 use App\Http\Requests\Payment\UpdatePaymentGatewayRequest;
 use App\Models\Company;
+use App\Models\PlatformPaymentSetting;
 use App\Services\Payment\CompanyPaymentGatewayService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -41,6 +43,10 @@ class CompanyPaymentGatewayController extends Controller
             'data' => [
                 'active_provider' => $company->payment_provider,
                 'gateways' => $this->service->overview($company),
+                // ADR-050 — 'platform' = every company uses the platform's
+                // channels; this company's own settings are kept but frozen,
+                // and the screen says so instead of offering to edit them.
+                'account_mode' => (PlatformPaymentSetting::current()->mode ?? PaymentAccountScope::default())->value,
             ],
         ]);
     }

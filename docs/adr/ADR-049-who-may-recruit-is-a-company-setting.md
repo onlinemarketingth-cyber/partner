@@ -44,6 +44,27 @@ The owner agreed to all three proposals.
 - **Audit.** Changing the policy writes `team_settings.recruit_policy_changed` with the old and new values (§6).
 - **Admin page.** The page is renamed "ตั้งค่าทีม" (it was "การมองเห็นข้อมูลทีม") so an admin can find the new setting. It is saved in the same request as the visibility level. The long explanation sits behind the ⓘ (§7).
 
+## Follow-up from UAT (same day)
+
+The owner checked this on production and saw a pending recruit twice on the recruiter's ทีมของฉัน page:
+- once under "รออนุมัติเข้าทีม";
+- again in "สายงานของฉัน", counted in "ลูกทีมทั้งสาย".
+
+This happened because registering through a link sets `manager_id` straight away.
+
+The owner ruled: **"ไม่นับจนกว่าจะอนุมัติ"** (not counted until approved).
+
+`DownlineService::companyScoped()` now keeps only `agent_approval_status = approved`. Pending and rejected applicants appear only in the approval queue. This applies to:
+- the team monitor;
+- its KPIs;
+- `/me/home`'s `direct_reports_count`.
+
+The approval queue (`LeaderRecruitScope`) is unchanged. Admin rosters are unaffected, and commission walks are unaffected.
+
+Two wording fixes shipped with this:
+- the portal note that names the admin page now says "ตั้งค่าทีม";
+- the pending-login hint now says "ผู้ที่ชวนคุณเข้าทีม" instead of "หัวหน้าทีม".
+
 ## Consequences
 
 - **Existing companies start on `all_certified`.** After deploy, every agent there who has passed Basic sees "ทีมของฉัน" and may mint links. A company that wants the old behaviour selects "เฉพาะคนที่แอดมินเปิดสิทธิ์" once.
@@ -56,7 +77,7 @@ The owner agreed to all three proposals.
 
 ## Tests
 
-- `tests/Feature/Registration/RecruitPolicyTest.php` has 16 tests. They cover:
+- `tests/Feature/Registration/RecruitPolicyTest.php` has 17 tests. `DownlineServiceTest` adds `test_only_approved_people_are_in_the_downline`. They cover:
   - the default;
   - an agent without Basic;
   - designated mode on all four gates;
@@ -66,7 +87,8 @@ The owner agreed to all three proposals.
   - validation;
   - the agent 403;
   - a cross-tenant write being ignored;
-  - `can_recruit` absent from another user's profile.
+  - `can_recruit` absent from another user's profile;
+  - a pending recruit sitting in the queue, not on the team.
 - Existing ADR-025 suites pass unchanged.
 - Portal spec: `HomeRecruitEntry.spec.ts`. Admin spec: `TeamSettingsRecruitPolicy.spec.ts`.
 - Mutation checks were run on each gate, the Basic check, the policy check, the owner-only field and the audit condition. All were killed.

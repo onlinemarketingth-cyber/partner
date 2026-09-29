@@ -344,7 +344,7 @@
     "filter_note": "Filters only what is already loaded — choose “All” and expand the tree to load deeper levels",
     "visibility_prefix": "Your company lets team leaders see only",
     "count_and_status": "counts and statuses",
-    "visibility_admin_note": "A company administrator can change this under “Team data visibility” in the admin console",
+    "visibility_admin_note": "A company administrator can change this under “Team Settings” in the admin console",
     "member_no_clients": "This member has no clients in the system yet",
     "link_help": "Anyone opening this link joins your downline without needing the company invite code",
     "pending_approval": "Waiting for your approval to join",

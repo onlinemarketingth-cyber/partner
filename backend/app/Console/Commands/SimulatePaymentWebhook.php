@@ -2,9 +2,10 @@
 
 namespace App\Console\Commands;
 
+use App\Enums\PaymentAccountScope;
 use App\Enums\PaymentProvider;
 use App\Models\Order;
-use App\Services\Payment\CompanyPaymentGatewayService;
+use App\Services\Payment\PaymentAccountService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 
@@ -53,7 +54,7 @@ class SimulatePaymentWebhook extends Command
 
     protected $description = 'Local only: POST a signed gateway webhook to this app, as Omise would.';
 
-    public function handle(CompanyPaymentGatewayService $gateways): int
+    public function handle(PaymentAccountService $accounts): int
     {
         if (! app()->environment('local')) {
             $this->error('This command runs only when APP_ENV=local.');
@@ -74,7 +75,10 @@ class SimulatePaymentWebhook extends Command
         }
 
         $provider = $order->payment_provider ?? PaymentProvider::Manual;
-        $config = $gateways->configFor($order->company, $provider);
+        // ADR-050 — the key the REAL webhook would be signed with: the
+        // platform's for an order stamped payment_account=platform.
+        $config = $accounts->configFor($order, $provider);
+        $isPlatform = $accounts->scopeOf($order) === PaymentAccountScope::Platform;
 
         if ($config === null || ($config['credentials']['webhook_secret'] ?? '') === '') {
             $this->error("Order {$order->order_number} is stamped [{$provider->value}], which has no webhook secret configured for company {$order->company_id}.");
@@ -103,7 +107,7 @@ class SimulatePaymentWebhook extends Command
         $signingSecret = $this->option('forge') ? $secret.'-wrong' : $secret;
 
         $url = rtrim((string) config('app.url'), '/')
-            ."/api/v1/webhooks/payments/{$provider->value}/{$order->company_id}";
+            ."/api/v1/webhooks/payments/{$provider->value}/".($isPlatform ? 'platform' : $order->company_id);
 
         $this->line("POST {$url}");
         $this->line($body);

@@ -87,7 +87,7 @@ class OmiseGateway implements PaymentGateway
      * configuration produces charges that look successful and never settle —
      * a failure whose symptom appears weeks later in a bank statement.
      */
-    public function verifyCredentials(Company $company, array $credentials, bool $isLive): string
+    public function verifyCredentials(?Company $company, array $credentials, bool $isLive): string
     {
         $secret = trim($credentials['secret_key'] ?? '');
         $public = trim($credentials['public_key'] ?? '');

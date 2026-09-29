@@ -6,6 +6,7 @@
 - **Supersedes:** the platform-wide `services.omise.*` block added earlier the same day (now removed)
 - **Related:** ADR-026 §5 Q2 (Omise chosen), ADR-017 (orders), BR-3, BR-6, CLAUDE.md §5, §6
 - **Unblocks:** TASK-139
+- **Superseded in part by [ADR-050](ADR-050-platform-or-per-company-payment-accounts.md) (2026-09-29):** a Super Admin switch can now make every company use the platform's own accounts ("ใช้ค่าเดียวทุกบริษัท"). This ADR remains the per-company mode, and the default. §2's "no platform-level fallback account" still holds: the platform's accounts are never a silent fallback, only an explicit mode.
 
 ---
 

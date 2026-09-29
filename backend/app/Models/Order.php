@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\OrderStatus;
+use App\Enums\PaymentAccountScope;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentProvider;
 use App\Enums\ShippingStatus;
@@ -95,6 +96,9 @@ class Order extends Model
         // asks for because an admin flipped a setting afterwards.
         'payment_provider',
         'gateway_mode',
+        // ADR-050 — whose accounts this order pays into, stamped ONCE by
+        // OrderService at creation and never re-read from the platform switch.
+        'payment_account',
         /*
          * 2026-09-03 — written ONLY by GatewayPaymentService from a
          * signature-verified webhook. Listed here so that service can use
@@ -127,6 +131,7 @@ class Order extends Model
     protected $attributes = [
         'payment_provider' => 'manual',
         'gateway_mode' => 'live',
+        'payment_account' => 'company',
     ];
 
     protected function casts(): array
@@ -135,6 +140,7 @@ class Order extends Model
             'status' => OrderStatus::class,
             'payment_method' => PaymentMethod::class,
             'payment_provider' => PaymentProvider::class,
+            'payment_account' => PaymentAccountScope::class,
             'amount_satang' => 'integer',
             'paid_at' => 'datetime',
             'refunded_at' => 'datetime',

@@ -81,7 +81,8 @@ class PaymentWebhookRecorder
      * @param  array<mixed>  $payload  The decoded body, as it arrived.
      */
     public function record(
-        Company $company,
+        // NULL = the platform's endpoint and no order of ours (ADR-050).
+        ?Company $company,
         PaymentProvider $provider,
         array $payload,
         ?WebhookOutcome $outcome,
@@ -90,7 +91,7 @@ class PaymentWebhookRecorder
     ): void {
         try {
             PaymentWebhookEvent::withoutGlobalScopes()->create([
-                'company_id' => $company->id,
+                'company_id' => $company?->id,
                 'provider' => $provider->value,
                 'event_id' => $this->stringOrNull($payload['id'] ?? null),
                 // The outcome's type is the interpreted one; the payload's is
@@ -109,7 +110,7 @@ class PaymentWebhookRecorder
         } catch (Throwable $e) {
             Log::warning('Could not record the payment webhook payload', [
                 'provider' => $provider->value,
-                'company_id' => $company->id,
+                'company_id' => $company?->id,
                 'reason' => $e->getMessage(),
             ]);
         }

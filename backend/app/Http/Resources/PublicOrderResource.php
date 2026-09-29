@@ -6,8 +6,8 @@ use App\Enums\OrderStatus;
 use App\Http\Resources\Concerns\ResolvesPublicTheme;
 use App\Models\Company;
 use App\Models\Order;
-use App\Services\Payment\CompanyPaymentGatewayService;
 use App\Services\Payment\Gateways\PaymentIntent;
+use App\Services\Payment\PaymentAccountService;
 use App\Services\Payment\PromptPayService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -50,6 +50,10 @@ class PublicOrderResource extends JsonResource
     {
         $company = $this->company;
 
+        // ADR-050 — the accounts THIS order pays into: its company's, or the
+        // platform's when it was created while every company used those.
+        $destination = app(PaymentAccountService::class)->transferDestination($this->resource);
+
         /*
          * 2026-09-03 — THE QR NO LONGER DEPENDS ON WHAT THE AGENT PICKED.
          *
@@ -65,9 +69,9 @@ class PublicOrderResource extends JsonResource
          * no QR.
          */
         $promptpayPayload = '';
-        if ($company?->payment_promptpay_id) {
+        if ($destination['promptpay_id']) {
             $promptpayPayload = app(PromptPayService::class)->payload(
-                $company->payment_promptpay_id,
+                $destination['promptpay_id'],
                 $this->amount_satang,
             );
         }
@@ -87,12 +91,9 @@ class PublicOrderResource extends JsonResource
             // ADR-027 / TASK-139 — which gateway this order is being paid
             // through, and what the page must render for it.
             'gateway' => $this->gatewayBlock($company),
-            'company_payment' => [
-                'bank_name' => $company?->payment_bank_name,
-                'bank_account_number' => $company?->payment_bank_account_number,
-                'bank_account_name' => $company?->payment_bank_account_name,
-                'promptpay_id' => $company?->payment_promptpay_id,
-            ],
+            // Key name kept for the pay page (ADR-017); since ADR-050 it may
+            // be the platform's account rather than the company's.
+            'company_payment' => $destination,
             'promptpay_payload' => $promptpayPayload,
             // ADR-033 (TASK-189) §2.5/D3 — whether the pay page must render
             // the shipping-address form, and the current values so a
@@ -217,8 +218,9 @@ class PublicOrderResource extends JsonResource
         }
 
         // activeConfig() never answers with the manual flow (2026-09-03), so
-        // this is the ONLINE gateway or nothing.
-        $active = app(CompanyPaymentGatewayService::class)->activeConfig($company);
+        // this is the ONLINE gateway or nothing — the platform's for an order
+        // stamped payment_account=platform (ADR-050).
+        $active = app(PaymentAccountService::class)->onlineConfig($order);
 
         if ($active === null) {
             return $block;

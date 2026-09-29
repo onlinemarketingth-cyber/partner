@@ -604,6 +604,15 @@ export const routes: RouteRecordRaw[] = [
       component: () => import('../views/PaymentGatewaySettingsView.vue'),
       meta: { navLabel: 'ช่องทางรับชำระเงิน', requiresSuperAdmin: true },
     },
+    // ADR-050 — the platform switch (ใช้ค่าเดียวทุกบริษัท / แยกรายบริษัท)
+    // and the platform's own channels: the same screen in platform scope.
+    {
+      path: '/platform-payment-settings',
+      name: 'platform-payment-settings',
+      component: () => import('../views/PaymentGatewaySettingsView.vue'),
+      props: { scope: 'platform' },
+      meta: { navLabel: 'ระบบชำระเงินกลาง', requiresSuperAdmin: true },
+    },
 ]
 
 const router = createRouter({

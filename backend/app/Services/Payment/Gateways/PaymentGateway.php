@@ -68,11 +68,15 @@ interface PaymentGateway
      * a settings row would create a second home for one value — the exact
      * drift this interface exists to avoid.
      *
+     * NULL company = the platform's own credentials (ADR-050). The online
+     * drivers never read the company; ManualGateway has nothing to verify for
+     * the platform and refuses.
+     *
      * @param  array<string, string>  $credentials
      *
      * @throws GatewayException when the provider rejects or cannot be reached
      */
-    public function verifyCredentials(Company $company, array $credentials, bool $isLive): string;
+    public function verifyCredentials(?Company $company, array $credentials, bool $isLive): string;
 
     /**
      * Everything the customer's browser needs in order to start paying.

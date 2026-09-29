@@ -57,7 +57,9 @@ class GatewayPaymentService
 {
     public function __construct(
         private readonly OrderService $orders,
-        private readonly CompanyPaymentGatewayService $gateways,
+        // ADR-050 — the order's own scope decides which gateway may charge
+        // it: its company's, or the platform's.
+        private readonly PaymentAccountService $accounts,
         private readonly PaymentGatewayRegistry $registry,
         private readonly NotificationService $notifications,
         private readonly CustomerPaymentConfirmationMailer $confirmationMailer,
@@ -100,8 +102,11 @@ class GatewayPaymentService
          * Still fails CLOSED when the company has no online gateway switched
          * on — a card form must never charge through a route nobody chose —
          * and the customer keeps the transfer instructions either way.
+         *
+         * ADR-050: "the company's" means the one this ORDER pays into — the
+         * platform's gateway for an order stamped payment_account=platform.
          */
-        $config = $this->gateways->activeConfig($order->company);
+        $config = $this->accounts->onlineConfig($order);
 
         if ($config === null) {
             throw new GatewayException('ขณะนี้ร้านค้ายังไม่เปิดรับชำระด้วยบัตร กรุณาโอนเงินตามรายละเอียดในหน้านี้');
@@ -161,7 +166,7 @@ class GatewayPaymentService
             throw new GatewayException('คำสั่งซื้อนี้ไม่อยู่ในสถานะที่ชำระเงินได้');
         }
 
-        $config = $this->gateways->activeConfig($order->company);
+        $config = $this->accounts->onlineConfig($order);
 
         if ($config === null) {
             throw new GatewayException('ขณะนี้ร้านค้ายังไม่เปิดรับชำระด้วยบัตร กรุณาโอนเงินตามรายละเอียดในหน้านี้');
