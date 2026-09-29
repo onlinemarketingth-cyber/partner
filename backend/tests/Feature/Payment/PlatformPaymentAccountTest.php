@@ -43,9 +43,10 @@ class PlatformPaymentAccountTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const COMPANY_SECRET = 'whsec_company_secret';
+    // Base64, as Omise shows its webhook secrets.
+    private const COMPANY_SECRET = 'Y29tcGFueV9zZWNyZXQ=';
 
-    private const PLATFORM_SECRET = 'whsec_platform_secret';
+    private const PLATFORM_SECRET = 'cGxhdGZvcm1fc2VjcmV0';
 
     private const SETTINGS = '/api/v1/platform-payment-settings';
 
@@ -141,7 +142,9 @@ class PlatformPaymentAccountTest extends TestCase
         return $this->call('POST', "/api/v1/webhooks/payments/omise/{$target}", [], [], [], [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_ACCEPT' => 'application/json',
-            'HTTP_X_OMISE_SIGNATURE' => hash_hmac('sha256', $body, $secret),
+            // Omise's documented scheme — see OmiseGateway::verifyWebhook.
+            'HTTP_OMISE_SIGNATURE' => hash_hmac('sha256', time().'.'.$body, base64_decode($secret)),
+            'HTTP_OMISE_SIGNATURE_TIMESTAMP' => (string) time(),
         ], $body);
     }
 
@@ -369,18 +372,31 @@ class PlatformPaymentAccountTest extends TestCase
         $admin = $this->superAdmin();
 
         $response = $this->actingAs($admin)->putJson(self::SETTINGS.'/gateways/omise', [
-            'credentials' => ['public_key' => 'pkey_test_new', 'secret_key' => 'skey_test_new', 'webhook_secret' => 'whsec_new'],
+            'credentials' => ['public_key' => 'pkey_test_new', 'secret_key' => 'skey_test_new', 'webhook_secret' => 'bmV3X3dlYmhvb2tfc2VjcmV0'],
             'is_live' => false,
         ])->assertOk();
 
         $this->assertStringNotContainsString('skey_test_new', $response->getContent());
-        $this->assertStringNotContainsString('whsec_new', $response->getContent());
+        $this->assertStringNotContainsString('bmV3X3dlYmhvb2tfc2VjcmV0', $response->getContent());
         $this->assertTrue(PlatformPaymentGatewaySetting::where('provider', 'omise')->sole()->isVerified());
         $this->assertSame(1, AuditLog::where('action', 'platform_payment.gateway_saved')->count());
 
         $this->actingAs($admin)->postJson(self::SETTINGS.'/gateways/activate', ['provider' => 'omise'])
             ->assertOk()
             ->assertJsonPath('data.active_provider', 'omise');
+    }
+
+    public function test_each_key_field_carries_a_short_line_and_its_steps_for_the_info_button(): void
+    {
+        $gateways = collect($this->actingAs($this->superAdmin())->getJson(self::SETTINGS)->json('data.gateways'))->keyBy('provider');
+
+        foreach (['omise', 'stripe'] as $provider) {
+            $webhook = collect($gateways[$provider]['fields'])->firstWhere('key', 'webhook_secret');
+            $this->assertNotEmpty($webhook['help']);
+            $this->assertStringContainsString('Webhooks', $webhook['info']);
+            // The steps live behind the ⓘ, not under the box (CLAUDE.md §7).
+            $this->assertLessThan(60, mb_strlen($webhook['help']));
+        }
     }
 
     public function test_rejected_platform_keys_are_not_stored(): void

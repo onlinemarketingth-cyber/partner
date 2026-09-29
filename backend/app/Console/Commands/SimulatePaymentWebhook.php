@@ -103,8 +103,11 @@ class SimulatePaymentWebhook extends Command
             ],
         ], JSON_UNESCAPED_SLASHES);
 
-        $secret = (string) $config['credentials']['webhook_secret'];
+        // Omise's documented scheme (see OmiseGateway::verifyWebhook): HMAC of
+        // "<timestamp>.<body>" keyed with the Base64-DECODED secret.
+        $secret = (string) base64_decode((string) $config['credentials']['webhook_secret'], true);
         $signingSecret = $this->option('forge') ? $secret.'-wrong' : $secret;
+        $timestamp = (string) time();
 
         $url = rtrim((string) config('app.url'), '/')
             ."/api/v1/webhooks/payments/{$provider->value}/".($isPlatform ? 'platform' : $order->company_id);
@@ -117,7 +120,8 @@ class SimulatePaymentWebhook extends Command
 
         if (! $this->option('unsigned')) {
             $request = $request->withHeaders([
-                'X-Omise-Signature' => hash_hmac('sha256', $body, $signingSecret),
+                'Omise-Signature' => hash_hmac('sha256', $timestamp.'.'.$body, $signingSecret),
+                'Omise-Signature-Timestamp' => $timestamp,
             ]);
         }
 

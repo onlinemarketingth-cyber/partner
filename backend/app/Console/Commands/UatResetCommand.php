@@ -212,6 +212,8 @@ class UatResetCommand extends Command
         'voucher_redemptions',
         'order_vouchers',
         'payment_webhook_events',
+        // 2026-09-29 — webhook accepted/refused counters (test traffic).
+        'payment_webhook_delivery_stats',
         'orders',
         'pipeline_stage_logs',
         'referrals',

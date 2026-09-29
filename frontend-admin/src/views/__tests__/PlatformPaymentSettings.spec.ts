@@ -41,7 +41,19 @@ const OMISE = {
   is_verified: false,
   verified_at: null,
   verified_note: null,
-  fields: [{ key: 'public_key', label: 'Public key', required: true, secret: false, value: null, is_set: false }],
+  fields: [
+    { key: 'public_key', label: 'Public key', required: true, secret: false, value: null, is_set: false },
+    {
+      key: 'webhook_secret',
+      label: 'Webhook signature secret',
+      required: true,
+      secret: true,
+      help: 'ได้หลังตั้ง webhook ใน Omise',
+      info: 'Omise Dashboard → Settings → Webhooks',
+      value: null,
+      is_set: true,
+    },
+  ],
 }
 const MANUAL = { ...OMISE, provider: 'manual', label: 'โอนเงิน / PromptPay', requires_human_verification: true, always_available: true, fields: [] }
 
@@ -64,7 +76,7 @@ async function mountView(scope: 'company' | 'platform') {
       stubs: {
         HeroHeader: true,
         Icon: true,
-        InfoPopover: { template: '<span class="info"><slot /></span>' },
+        InfoPopover: { props: ['text'], template: '<span class="info">{{ text }}<slot /></span>' },
         RouterLink: { props: ['to'], template: '<a :data-to="to"><slot /></a>' },
         ConfirmDialog: {
           props: ['show', 'title', 'confirmLabel'],
@@ -175,3 +187,102 @@ describe("a company's page while every company uses the platform", () => {
     expect(wrapper.text()).not.toContain('/webhooks/payments/omise/platform')
   })
 })
+
+describe('credential field wording (owner: "คำอธิบายตรงนี้มันตรงไหมสำหรับผู้ใช้")', () => {
+  it('keeps one short line under the box and the steps behind the ⓘ', async () => {
+    get.mockResolvedValue({ data: platformOverview() })
+    const wrapper = await mountView('platform')
+
+    expect(wrapper.text()).toContain('ได้หลังตั้ง webhook ใน Omise')
+    expect(wrapper.find('form .info').text()).toContain('Omise Dashboard → Settings → Webhooks')
+    // A saved secret tells the admin what to do, not why it is hidden.
+    expect(wrapper.text()).toContain('บันทึกไว้แล้ว · เว้นว่างไว้ถ้าไม่ต้องการเปลี่ยน')
+  })
+})
+
+describe('webhook status and the ตรวจสอบ webhook button', () => {
+  const STRIPE_VERIFIED = {
+    ...OMISE,
+    provider: 'stripe',
+    label: 'Stripe (บัตรเครดิต / เดบิต)',
+    is_active: true,
+    is_configured: true,
+    is_verified: true,
+    verified_at: '2026-09-29T05:00:00Z',
+    verified_note: 'เชื่อมต่อสำเร็จ',
+    fields: [{ key: 'publishable_key', label: 'Publishable key', required: true, secret: false, value: 'pk_test_x', is_set: true }],
+    webhook: {
+      accepted_recent: 0,
+      rejected_recent: 2,
+      last_accepted_at: null,
+      last_rejected_at: '2026-09-29T06:00:00Z',
+      window_days: 7,
+      problems: [{ level: 'error', code: 'signature_rejected', message: 'มี webhook ถูกปฏิเสธเพราะลายเซ็นไม่ตรง 2 ครั้งใน 7 วัน' }],
+    },
+  }
+
+  it('warns on the card without pressing anything', async () => {
+    get.mockResolvedValue({ data: platformOverview({ gateways: [MANUAL, STRIPE_VERIFIED] }) })
+    const wrapper = await mountView('platform')
+
+    const problem = wrapper.find('[data-test="webhook-problem"]')
+    expect(problem.text()).toContain('ลายเซ็นไม่ตรง 2 ครั้ง')
+    expect(problem.classes()).toContain('text-rose-700')
+    expect(wrapper.find('[data-test="webhook-status"]').text()).toContain('ยังไม่เคยได้รับ')
+  })
+
+  it('asks the server to check, then shows its answer in place of the summary', async () => {
+    get.mockImplementation(async (path: string) =>
+      path.endsWith('/webhook-check')
+        ? {
+            data: {
+              status: 'ok',
+              setup_checkable: true,
+              setup: { checked: true, endpoint_url: 'https://x.test/api/v1/webhooks/payments/stripe/platform', other_urls: [], missing_events: [] },
+              deliveries: STRIPE_VERIFIED.webhook,
+              problems: [],
+            },
+          }
+        : { data: platformOverview({ gateways: [MANUAL, STRIPE_VERIFIED] }) },
+    )
+    const wrapper = await mountView('platform')
+
+    await wrapper.find('[data-test="check-webhook"]').trigger('click')
+    await flushPromises()
+
+    expect(get).toHaveBeenCalledWith('/platform-payment-settings/gateways/stripe/webhook-check')
+    expect(wrapper.find('[data-test="webhook-result"]').text()).toContain('ไม่พบปัญหา webhook')
+    expect(wrapper.find('[data-test="webhook-result"]').text()).toContain('/stripe/platform')
+    expect(wrapper.find('[data-test="webhook-problem"]').exists()).toBe(false)
+  })
+
+  it('says plainly when the provider dashboard cannot be read', async () => {
+    const omise = { ...STRIPE_VERIFIED, provider: 'omise', label: 'Omise (Opn Payments)', webhook: { ...STRIPE_VERIFIED.webhook, rejected_recent: 0, problems: [] } }
+    get.mockImplementation(async (path: string) =>
+      path.endsWith('/webhook-check')
+        ? { data: { status: 'ok', setup_checkable: false, setup: { checked: false, endpoint_url: null, other_urls: [], missing_events: [] }, deliveries: omise.webhook, problems: [] } }
+        : { data: platformOverview({ gateways: [MANUAL, omise] }) },
+    )
+    const wrapper = await mountView('platform')
+
+    await wrapper.find('[data-test="check-webhook"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="webhook-result"]').text()).toContain('ไม่มีช่องทางให้ระบบอ่านการตั้งค่าใน Dashboard')
+  })
+
+  it('shows no webhook block when the server sends no webhook status', async () => {
+    get.mockResolvedValue({ data: platformOverview({ gateways: [MANUAL, { ...STRIPE_VERIFIED, webhook: null }] }) })
+    const wrapper = await mountView('platform')
+
+    expect(wrapper.find('[data-test="webhook-status"]').exists()).toBe(false)
+  })
+
+  it('shows no webhook block for a gateway that is not set up yet', async () => {
+    get.mockResolvedValue({ data: platformOverview() })
+    const wrapper = await mountView('platform')
+
+    expect(wrapper.find('[data-test="webhook-status"]').exists()).toBe(false)
+  })
+})
+

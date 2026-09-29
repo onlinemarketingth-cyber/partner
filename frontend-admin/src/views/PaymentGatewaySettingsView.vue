@@ -68,7 +68,10 @@ interface GatewayField {
   label: string
   required: boolean
   secret: boolean
+  /** One short line under the box. */
   help?: string
+  /** The longer "where do I find this", behind the ⓘ (CLAUDE.md §7). */
+  info?: string
   /** null for every secret field — see the file docblock. */
   value: string | null
   is_set: boolean
@@ -93,6 +96,33 @@ interface Gateway {
   verified_at: string | null
   verified_note: string | null
   fields: GatewayField[]
+  /**
+   * 2026-09-29 — what actually arrived, for a verified online gateway; null
+   * otherwise. Counted server-side (a refused webhook's body is never kept).
+   */
+  webhook?: WebhookSummary | null
+}
+
+interface WebhookProblem {
+  level: 'error' | 'warning'
+  code: string
+  message: string
+}
+interface WebhookSummary {
+  accepted_recent: number
+  rejected_recent: number
+  last_accepted_at: string | null
+  last_rejected_at: string | null
+  window_days: number
+  problems: WebhookProblem[]
+}
+/** The "ตรวจสอบ webhook" answer. */
+interface WebhookCheck {
+  status: 'ok' | 'warning' | 'error'
+  setup_checkable: boolean
+  setup: { checked: boolean; endpoint_url: string | null; other_urls: string[]; missing_events: string[] }
+  deliveries: WebhookSummary
+  problems: WebhookProblem[]
 }
 
 /**
@@ -293,6 +323,8 @@ function applyOverview(data: Overview): void {
 
   for (const gateway of data.gateways) {
     const draft: Record<string, string> = {}
+    // A fresh overview supersedes an earlier check's answer.
+    delete webhookChecks.value[gateway.provider]
     for (const field of gateway.fields) {
       // Secrets come back null and stay blank. A non-secret (a public key)
       // is pre-filled, because it is visible in the pay page's HTML anyway
@@ -621,6 +653,35 @@ async function copyWebhook(provider: string): Promise<void> {
   }
 }
 
+/*
+ * ── Webhook status (2026-09-29) ──
+ *
+ * Owner: "การตั้งค่า stripe ในบริษัทแยกกันมีปัญหาเรื่อง web hook ไม่ตรงกัน
+ * สามารถขึ้นแจ้งเตือนมีปุ่มทดสอบ webhook ได้ไหม". The card warns on its own
+ * from what the server counted; the button asks the provider how its
+ * dashboard is set up (Stripe) and re-reads the counts. The server decides
+ * what is a problem — this screen only shows it.
+ */
+const webhookChecks = ref<Record<string, WebhookCheck>>({})
+const checkingWebhook = ref<string | null>(null)
+
+function webhookProblems(gateway: Gateway): WebhookProblem[] {
+  return webhookChecks.value[gateway.provider]?.problems ?? gateway.webhook?.problems ?? []
+}
+
+async function checkWebhook(gateway: Gateway): Promise<void> {
+  checkingWebhook.value = gateway.provider
+  errorFor.value[gateway.provider] = ''
+  try {
+    const res = await api.get<{ data: WebhookCheck }>(`${basePath.value}/${gateway.provider}/webhook-check`)
+    webhookChecks.value[gateway.provider] = res.data
+  } catch (e) {
+    errorFor.value[gateway.provider] = messageFrom(e, 'ตรวจสอบ webhook ไม่สำเร็จ')
+  } finally {
+    checkingWebhook.value = null
+  }
+}
+
 function formatVerifiedAt(value: string | null): string {
   if (!value) return ''
   return new Date(value).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
@@ -866,6 +927,72 @@ function formatVerifiedAt(value: string | null): string {
             <span>{{ gateway.verified_note }} ({{ formatVerifiedAt(gateway.verified_at) }})</span>
           </p>
 
+          <!-- 2026-09-29 — is this gateway's webhook arriving? Warns on its
+               own; the button asks the provider how its dashboard is set up. -->
+          <div
+            v-if="gateway.webhook"
+            data-test="webhook-status"
+            class="mt-3 rounded-xl border border-slate-200 p-3 space-y-2"
+          >
+            <p
+              v-for="problem in webhookProblems(gateway)"
+              :key="problem.code"
+              data-test="webhook-problem"
+              class="px-3 py-2 rounded-lg text-xs font-bold flex items-start gap-1.5"
+              :class="problem.level === 'error'
+                ? 'bg-rose-50 border border-rose-200 text-rose-700'
+                : 'bg-amber-50 border border-amber-200 text-amber-700'"
+            >
+              <Icon name="alert" :size="14" class="mt-0.5 shrink-0" />
+              <span>{{ problem.message }}</span>
+            </p>
+
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-xs text-slate-500 flex items-center gap-1">
+                <span>
+                  webhook ล่าสุด:
+                  <span class="font-bold text-slate-700">
+                    {{ gateway.webhook.last_accepted_at ? formatVerifiedAt(gateway.webhook.last_accepted_at) : 'ยังไม่เคยได้รับ' }}
+                  </span>
+                </span>
+                <InfoPopover label="ทดสอบ webhook">
+                  ปุ่ม "ตรวจสอบ webhook" จะเช็กว่าใน Dashboard ของผู้ให้บริการมีปลายทางที่ URL ตรงกับบัญชีนี้
+                  เปิดใช้งานอยู่ และเลือก event ครบ (ทำได้กับ Stripe ส่วน Omise ไม่มีช่องทางให้ระบบอ่านการตั้งค่า)
+                  <br /><br />
+                  ถ้าจะทดสอบว่า webhook ส่งมาถึงจริง: ชำระเงินทดสอบ 1 รายการด้วยบัตรทดสอบของผู้ให้บริการ
+                  แล้วกดตรวจสอบอีกครั้ง — "webhook ล่าสุด" ต้องเปลี่ยนเป็นเวลาปัจจุบัน
+                  <br /><br />
+                  ถ้าขึ้นว่า "ลายเซ็นไม่ตรง" ให้คัดลอก webhook secret จาก Dashboard มาบันทึกใหม่ที่ปุ่ม แก้ไข
+                </InfoPopover>
+              </p>
+              <button
+                type="button"
+                class="btn-secondary"
+                data-test="check-webhook"
+                :disabled="checkingWebhook === gateway.provider"
+                @click="checkWebhook(gateway)"
+              >
+                {{ checkingWebhook === gateway.provider ? 'กำลังตรวจ...' : 'ตรวจสอบ webhook' }}
+              </button>
+            </div>
+
+            <div v-if="webhookChecks[gateway.provider]" data-test="webhook-result" class="text-xs space-y-1">
+              <p
+                v-if="webhookChecks[gateway.provider]?.status === 'ok'"
+                class="font-bold text-emerald-700 flex items-center gap-1.5"
+              >
+                <Icon name="check" :size="14" class="shrink-0" />
+                ไม่พบปัญหา webhook
+              </p>
+              <p v-if="webhookChecks[gateway.provider]?.setup.endpoint_url" class="text-slate-500 break-all">
+                ปลายทางใน Dashboard: {{ webhookChecks[gateway.provider]?.setup.endpoint_url }}
+              </p>
+              <p v-if="!webhookChecks[gateway.provider]?.setup_checkable" class="text-slate-500">
+                {{ gateway.label }} ไม่มีช่องทางให้ระบบอ่านการตั้งค่าใน Dashboard — ตรวจได้จาก webhook ที่ได้รับจริงเท่านั้น
+              </p>
+            </div>
+          </div>
+
           <!--
             2026-09-03 — the manual flow's configuration, edited here.
 
@@ -982,9 +1109,10 @@ function formatVerifiedAt(value: string | null): string {
               แล้วจึงนำคีย์ทั้ง 3 ตัวมากรอกที่นี่พร้อมกัน — ระบบจะบันทึกก็ต่อเมื่อครบและตรวจสอบผ่านทั้งชุด
             </p>
             <div v-for="field in gateway.fields" :key="field.key">
-              <label class="text-xs font-bold text-slate-500 block mb-1">
+              <label class="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1">
                 {{ field.label }}
                 <span v-if="field.required" class="text-rose-500">*</span>
+                <InfoPopover v-if="field.info" :label="field.label" :text="field.info" />
               </label>
               <input
                 v-model="draftFor(gateway.provider)[field.key]"
@@ -998,7 +1126,7 @@ function formatVerifiedAt(value: string | null): string {
               />
               <p v-if="field.help" class="mt-1 text-xs text-slate-400">{{ field.help }}</p>
               <p v-if="field.secret" class="mt-1 text-xs text-slate-400">
-                {{ field.is_set ? 'ตั้งค่าไว้แล้ว — ระบบไม่แสดงค่านี้ออกมาอีก' : 'ยังไม่ได้ตั้งค่า' }}
+                {{ field.is_set ? 'บันทึกไว้แล้ว · เว้นว่างไว้ถ้าไม่ต้องการเปลี่ยน' : 'ยังไม่ได้ตั้งค่า' }}
               </p>
             </div>
 

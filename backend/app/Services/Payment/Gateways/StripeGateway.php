@@ -43,7 +43,7 @@ use Throwable;
  * payment gateway is the most expensive bug available here, and the absence
  * of a conversion is easier to verify than the correctness of one.
  */
-class StripeGateway implements PaymentGateway
+class StripeGateway implements InspectsWebhookEndpoints, PaymentGateway
 {
     private const API = 'https://api.stripe.com/v1';
 
@@ -55,6 +55,22 @@ class StripeGateway implements PaymentGateway
      * indefinitely, so the timestamp is the only thing that expires it.
      */
     private const WEBHOOK_TOLERANCE_SECONDS = 300;
+
+    /**
+     * Every event interpret() acts on. The endpoint must send all of them:
+     * without checkout.session.completed a card payment never turns an order
+     * paid; without the failure / expiry / refund ones the order silently
+     * misses what happened to it.
+     */
+    private const REQUIRED_WEBHOOK_EVENTS = [
+        'checkout.session.completed',
+        'checkout.session.async_payment_succeeded',
+        'checkout.session.async_payment_failed',
+        'checkout.session.expired',
+        'payment_intent.payment_failed',
+        'charge.failed',
+        'charge.refunded',
+    ];
 
     public function provider(): PaymentProvider
     {
@@ -72,26 +88,29 @@ class StripeGateway implements PaymentGateway
                 // Masking it in the admin screen would imply a
                 // confidentiality that does not exist.
                 'secret' => false,
-                'help' => 'คีย์สาธารณะของ Stripe — ไม่ใช่ความลับ',
+                'help' => 'คีย์ที่ขึ้นต้นด้วย pk_test_ หรือ pk_live_',
             ],
             [
                 'key' => 'secret_key',
                 'label' => 'Secret key (sk_)',
                 'required' => true,
                 'secret' => true,
-                'help' => 'เก็บเข้ารหัส และไม่เคยถูกส่งกลับออกมาทาง API อีกเลย',
+                'help' => 'คีย์ที่ขึ้นต้นด้วย sk_test_ หรือ sk_live_',
+                'info' => 'หาได้ที่ Stripe → นักพัฒนา (Developers) → คีย์ API · ระบบเก็บคีย์นี้แบบเข้ารหัส และจะไม่แสดงให้เห็นอีกหลังบันทึก',
             ],
             [
                 'key' => 'webhook_secret',
                 'label' => 'Webhook signing secret (whsec_)',
                 'required' => true,
                 'secret' => true,
-                // Stripe moved webhooks into Workbench, so "Dashboard >
-                // Webhooks" no longer describes anything an admin can find.
-                // The path is spelled out because this is the field people
-                // get stuck on, and the sentence after it is why they cannot
-                // simply be allowed to skip it.
-                'help' => 'Stripe Dashboard → นักพัฒนา (Developers) → Webhook → เลือกปลายทางที่สร้างไว้ → คีย์ลับลงนาม (Signing secret) → กดรูปตาเพื่อเปิดเผย · ถ้าไม่มีค่านี้ ใครก็ส่ง webhook ปลอมมาสั่งให้ออเดอร์กลายเป็นจ่ายแล้วได้',
+                // 2026-09-29 (owner: "คำอธิบายตรงนี้มันตรงไหมสำหรับผู้ใช้") —
+                // one short line under the box, the steps behind its ⓘ (§7).
+                // The old sentence about forged webhooks is gone: the field
+                // is required, so it described a risk the admin cannot take.
+                // Path per docs.stripe.com/webhooks/signature: open the
+                // endpoint, "Reveal secret".
+                'help' => 'ค่าที่ขึ้นต้นด้วย whsec_ — ได้หลังสร้าง webhook ใน Stripe',
+                'info' => 'Stripe → นักพัฒนา (Developers) → Webhooks → เลือกปลายทางที่สร้างด้วย Webhook URL ด้านล่าง → ช่อง Signing secret กด "Reveal / เปิดเผย" แล้วคัดลอกมาวาง · โหมดทดสอบและใช้งานจริงมีค่าแยกกัน',
             ],
         ];
     }
@@ -673,5 +692,59 @@ class StripeGateway implements PaymentGateway
         }
 
         return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function requiredWebhookEvents(): array
+    {
+        return self::REQUIRED_WEBHOOK_EVENTS;
+    }
+
+    /**
+     * Ask Stripe how this account's webhook endpoints are set up.
+     *
+     * The key's own mode decides which endpoints come back — a test key lists
+     * test endpoints — so "is it in the right mode" needs no separate check.
+     *
+     * @param  array<string, string>  $credentials
+     * @return list<array{url: string, enabled: bool, events: list<string>}>
+     *
+     * @throws GatewayException
+     */
+    public function webhookEndpoints(array $credentials): array
+    {
+        try {
+            $response = Http::withToken(trim($credentials['secret_key'] ?? ''))
+                ->timeout(15)
+                ->acceptJson()
+                ->get(self::API.'/webhook_endpoints', ['limit' => 100]);
+        } catch (Throwable $e) {
+            throw new GatewayException('เชื่อมต่อ Stripe ไม่สำเร็จ: '.$e->getMessage());
+        }
+
+        if ($response->status() === 401) {
+            throw new GatewayException('Stripe ปฏิเสธ secret key ที่บันทึกไว้');
+        }
+
+        if (! $response->successful()) {
+            throw new GatewayException('Stripe ตอบกลับผิดพลาด (HTTP '.$response->status().')');
+        }
+
+        $endpoints = [];
+        foreach ((array) $response->json('data', []) as $endpoint) {
+            if (! is_array($endpoint)) {
+                continue;
+            }
+
+            $endpoints[] = [
+                'url' => (string) ($endpoint['url'] ?? ''),
+                'enabled' => ($endpoint['status'] ?? '') === 'enabled',
+                'events' => array_values(array_map('strval', (array) ($endpoint['enabled_events'] ?? []))),
+            ];
+        }
+
+        return $endpoints;
     }
 }

@@ -90,6 +90,14 @@ class PlatformPaymentSettingController extends Controller
         return $this->overview();
     }
 
+    /** 2026-09-29 — "ตรวจสอบ webhook" for the platform's own gateway. */
+    public function checkWebhook(Request $request, string $provider): JsonResponse
+    {
+        $this->authorizeGateway($request);
+
+        return response()->json(['data' => $this->gateways->checkPlatformWebhook($this->providerOr404($provider))]);
+    }
+
     private function overview(?string $message = null): JsonResponse
     {
         $settings = PlatformPaymentSetting::current();

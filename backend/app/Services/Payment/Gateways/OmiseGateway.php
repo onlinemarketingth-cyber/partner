@@ -39,6 +39,12 @@ class OmiseGateway implements PaymentGateway
 {
     private const API = 'https://api.omise.co';
 
+    /**
+     * How far a webhook's own timestamp may be from now — the same five
+     * minutes StripeGateway allows, for the same reason (replay).
+     */
+    private const WEBHOOK_TOLERANCE_SECONDS = 300;
+
     public function provider(): PaymentProvider
     {
         return PaymentProvider::Omise;
@@ -55,21 +61,25 @@ class OmiseGateway implements PaymentGateway
                 // customer's browser can read it. Masking it in the admin
                 // screen would imply a confidentiality that does not exist.
                 'secret' => false,
-                'help' => 'ใช้ในเบราว์เซอร์ของลูกค้า — เลขบัตรจึงไม่เคยผ่านเซิร์ฟเวอร์เรา',
+                'help' => 'คีย์ที่ขึ้นต้นด้วย pkey_ (โหมดทดสอบคือ pkey_test_)',
             ],
             [
                 'key' => 'secret_key',
                 'label' => 'Secret key (skey_)',
                 'required' => true,
                 'secret' => true,
-                'help' => 'เก็บเข้ารหัส และไม่เคยถูกส่งกลับออกมาทาง API อีกเลย',
+                'help' => 'คีย์ที่ขึ้นต้นด้วย skey_ (โหมดทดสอบคือ skey_test_)',
+                'info' => 'หาได้ที่ Omise Dashboard → Keys · ระบบเก็บคีย์นี้แบบเข้ารหัส และจะไม่แสดงให้เห็นอีกหลังบันทึก',
             ],
             [
                 'key' => 'webhook_secret',
                 'label' => 'Webhook signature secret',
                 'required' => true,
                 'secret' => true,
-                'help' => 'ถ้าไม่มี ใครก็ส่ง webhook ปลอมมาสั่งให้ออเดอร์กลายเป็นจ่ายแล้วได้',
+                // 2026-09-29 — short line + steps behind ⓘ (§7). Location per
+                // docs.omise.co/api-webhooks ("Webhooks Settings").
+                'help' => 'ได้หลังตั้ง webhook ใน Omise',
+                'info' => 'Omise Dashboard → Settings → Webhooks · ใส่ Webhook URL ด้านล่างเป็นปลายทาง แล้วคัดลอก webhook secret ของหน้านั้นมาวาง · โหมดทดสอบและใช้งานจริงมีค่าแยกกัน',
             ],
         ];
     }
@@ -94,6 +104,15 @@ class OmiseGateway implements PaymentGateway
 
         $this->assertKeyMode($secret, 'skey', $isLive, 'secret_key');
         $this->assertKeyMode($public, 'pkey', $isLive, 'public_key');
+
+        // Caught here rather than at the first webhook, where a wrong secret
+        // fails silently: charges succeed and no event is ever accepted.
+        if (self::decodeWebhookSecret((string) ($credentials['webhook_secret'] ?? '')) === null) {
+            throw new GatewayException(
+                'Webhook secret ของ Omise ไม่ใช่รูปแบบที่ Omise ให้มา — คัดลอกจาก Omise Dashboard → Settings → Webhooks อีกครั้ง',
+                'webhook_secret',
+            );
+        }
 
         try {
             $response = Http::withBasicAuth($secret, '')
@@ -259,23 +278,60 @@ class OmiseGateway implements PaymentGateway
     /**
      * Omise signs each webhook; an unsigned or mis-signed one is not ours.
      *
-     * hash_equals, not `===`: string comparison that short-circuits on the
-     * first differing byte leaks the signature one character at a time to
-     * anyone willing to measure. Cheap to do right, and the thing being
-     * protected is "can a stranger mark orders paid".
+     * 2026-09-29 — REWRITTEN TO OMISE'S DOCUMENTED SCHEME
+     * (docs.omise.co/api-webhooks). The previous version read an
+     * `X-Omise-Signature` header and HMAC'd the body alone with the secret
+     * as typed; Omise sends neither, so every real Omise webhook was refused
+     * as forged. What Omise actually does:
+     *
+     *   Omise-Signature            hex HMAC-SHA256, two comma-separated
+     *                              values while a secret is being rotated
+     *   Omise-Signature-Timestamp  Unix seconds
+     *   signed payload             "<timestamp>.<raw body>"
+     *   key                        the webhook secret BASE64-DECODED
+     *
+     * The timestamp is also held to WEBHOOK_TOLERANCE_SECONDS, as Stripe's is:
+     * a signature stays valid maths forever, so a captured webhook could
+     * otherwise be replayed at will.
+     *
+     * hash_equals, not `===`: comparison that stops at the first differing
+     * byte leaks the signature to anyone willing to measure.
      */
     public function verifyWebhook(Request $request, array $credentials): bool
     {
-        $secret = trim($credentials['webhook_secret'] ?? '');
-        $signature = (string) $request->header('X-Omise-Signature', '');
+        $key = self::decodeWebhookSecret((string) ($credentials['webhook_secret'] ?? ''));
+        $header = (string) $request->header('Omise-Signature', '');
+        $timestamp = (string) $request->header('Omise-Signature-Timestamp', '');
 
-        if ($secret === '' || $signature === '') {
+        if ($key === null || $header === '' || ! ctype_digit($timestamp)) {
             return false;
         }
 
-        $expected = hash_hmac('sha256', $request->getContent(), $secret);
+        if (abs(time() - (int) $timestamp) > self::WEBHOOK_TOLERANCE_SECONDS) {
+            return false;
+        }
 
-        return hash_equals($expected, $signature);
+        $expected = hash_hmac('sha256', $timestamp.'.'.$request->getContent(), $key);
+
+        foreach (explode(',', $header) as $candidate) {
+            if (hash_equals($expected, strtolower(trim($candidate)))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The HMAC key: Omise shows the webhook secret Base64-encoded. Null when
+     * the stored value is not Base64 at all — most often a Stripe `whsec_`
+     * pasted into the Omise card, which verifyCredentials() now refuses.
+     */
+    private static function decodeWebhookSecret(string $secret): ?string
+    {
+        $decoded = base64_decode(trim($secret), true);
+
+        return $decoded === false || $decoded === '' ? null : $decoded;
     }
 
     /**

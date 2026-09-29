@@ -19,6 +19,7 @@ use App\Services\Payment\Gateways\WebhookOutcome;
 use App\Services\Payment\Gateways\WebhookResult;
 use App\Services\Payment\PaymentGatewayRegistry;
 use App\Services\Payment\PaymentWebhookRecorder;
+use App\Services\Payment\WebhookHealthService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -68,6 +69,7 @@ class PaymentWebhookController extends Controller
         GatewayPaymentService $payments,
         PaymentGatewayRegistry $registry,
         PaymentWebhookRecorder $recorder,
+        WebhookHealthService $health,
     ): JsonResponse {
         $paymentProvider = PaymentProvider::tryFrom($provider);
         // No TenantScope — there is no authenticated user on a webhook, and
@@ -90,7 +92,7 @@ class PaymentWebhookController extends Controller
             return response()->json(['message' => 'ไม่พบปลายทาง'], 404);
         }
 
-        return $this->process($paymentProvider, $tenant, $config, $request, $payments, $registry, $recorder);
+        return $this->process($paymentProvider, $tenant, $config, $request, $payments, $registry, $recorder, $health);
     }
 
     /**
@@ -109,6 +111,7 @@ class PaymentWebhookController extends Controller
         GatewayPaymentService $payments,
         PaymentGatewayRegistry $registry,
         PaymentWebhookRecorder $recorder,
+        WebhookHealthService $health,
     ): JsonResponse {
         $paymentProvider = PaymentProvider::tryFrom($provider);
         $config = $paymentProvider === null ? null : $gateways->platformConfigFor($paymentProvider);
@@ -117,7 +120,7 @@ class PaymentWebhookController extends Controller
             return response()->json(['message' => 'ไม่พบปลายทาง'], 404);
         }
 
-        return $this->process($paymentProvider, null, $config, $request, $payments, $registry, $recorder);
+        return $this->process($paymentProvider, null, $config, $request, $payments, $registry, $recorder, $health);
     }
 
     /**
@@ -136,6 +139,7 @@ class PaymentWebhookController extends Controller
         GatewayPaymentService $payments,
         PaymentGatewayRegistry $registry,
         PaymentWebhookRecorder $recorder,
+        WebhookHealthService $health,
     ): JsonResponse {
         $driver = $registry->driver($paymentProvider);
 
@@ -155,8 +159,18 @@ class PaymentWebhookController extends Controller
                 'ip' => $request->ip(),
             ]);
 
+            // 2026-09-29 — counted (never stored: the body is unverified),
+            // so the settings screen and the Super Admins can see that the
+            // secret no longer matches. Before this a wrong secret was a log
+            // line nobody read.
+            $health->recordRejected($tenant, $paymentProvider);
+
             return response()->json(['message' => 'ลายเซ็นไม่ถูกต้อง'], 401);
         }
+
+        // Keyed on the URL's account (NULL = the platform's), not the order's:
+        // this is about whether THIS account's webhook works.
+        $health->recordAccepted($tenant, $paymentProvider);
 
         /*
          * 2026-09-11 — THE BODY IS KEPT FROM HERE ON.

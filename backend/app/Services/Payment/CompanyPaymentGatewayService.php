@@ -11,6 +11,7 @@ use App\Models\PlatformPaymentGatewaySetting;
 use App\Models\PlatformPaymentSetting;
 use App\Models\User;
 use App\Services\Payment\Gateways\GatewayException;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
 
@@ -51,7 +52,11 @@ use Illuminate\Validation\ValidationException;
  */
 class CompanyPaymentGatewayService
 {
-    public function __construct(private readonly PaymentGatewayRegistry $registry) {}
+    public function __construct(
+        private readonly PaymentGatewayRegistry $registry,
+        // 2026-09-29 — each card shows whether its webhook is arriving.
+        private readonly WebhookHealthService $webhookHealth,
+    ) {}
 
     /**
      * Every provider, with its fields and whether this company has set it up.
@@ -69,7 +74,7 @@ class CompanyPaymentGatewayService
             ->get()
             ->keyBy(fn (CompanyPaymentGatewaySetting $s) => $s->provider->value);
 
-        return $this->describe($rows, $company->payment_provider);
+        return $this->describe($rows, $company->payment_provider, $company);
     }
 
     /**
@@ -83,16 +88,16 @@ class CompanyPaymentGatewayService
             ->get()
             ->keyBy(fn (PlatformPaymentGatewaySetting $s) => $s->provider->value);
 
-        return $this->describe($rows, PlatformPaymentSetting::current()->payment_provider);
+        return $this->describe($rows, PlatformPaymentSetting::current()->payment_provider, null);
     }
 
     /**
      * @param  Collection<string, CompanyPaymentGatewaySetting|PlatformPaymentGatewaySetting>  $rows
      * @return array<int, array<string, mixed>>
      */
-    private function describe(Collection $rows, ?string $activeProvider): array
+    private function describe(Collection $rows, ?string $activeProvider, ?Company $owner): array
     {
-        return array_map(function (PaymentProvider $provider) use ($rows, $activeProvider) {
+        return array_map(function (PaymentProvider $provider) use ($rows, $activeProvider, $owner) {
             $row = $rows->get($provider->value);
             $driver = $this->registry->driver($provider);
             $stored = $row?->credentials ?? [];
@@ -117,6 +122,16 @@ class CompanyPaymentGatewayService
                 'is_verified' => (bool) $row?->isVerified(),
                 'verified_at' => $row?->verified_at,
                 'verified_note' => $row?->verified_note,
+                /*
+                 * 2026-09-29 — what actually arrived, for every verified
+                 * online gateway: a card that says "ตั้งค่าแล้ว" while every
+                 * webhook is being refused for a bad secret is the exact
+                 * failure the owner hit. No network call here; the full check
+                 * (including the provider's own dashboard) is the button's.
+                 */
+                'webhook' => ($row?->isVerified() && ! $provider->requiresHumanVerification())
+                    ? $this->webhookSummary($owner, $provider, $row->verified_at)
+                    : null,
                 'fields' => array_map(function (array $field) use ($stored) {
                     $value = $stored[$field['key']] ?? null;
 
@@ -537,5 +552,65 @@ class CompanyPaymentGatewayService
             'credentials' => $row->credentials ?? [],
             'is_live' => (bool) $row->is_live,
         ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function webhookSummary(?Company $owner, PaymentProvider $provider, ?Carbon $verifiedAt): array
+    {
+        $deliveries = $this->webhookHealth->deliveries($owner, $provider);
+
+        return [
+            ...$deliveries,
+            'problems' => $this->webhookHealth->deliveryProblems($deliveries, $verifiedAt),
+        ];
+    }
+
+    /**
+     * 2026-09-29 — the "ตรวจสอบ webhook" button, for a company's gateway.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws ValidationException when the gateway has no verified keys yet
+     */
+    public function checkWebhook(Company $company, PaymentProvider $provider): array
+    {
+        $row = CompanyPaymentGatewaySetting::withoutGlobalScopes()
+            ->where('company_id', $company->id)
+            ->where('provider', $provider->value)
+            ->first();
+
+        return $this->webhookHealth->check($company, $this->configForCheck($provider, $row), $row?->verified_at);
+    }
+
+    /**
+     * 2026-09-29 — the same button for the platform's own gateway (ADR-050).
+     *
+     * @return array<string, mixed>
+     *
+     * @throws ValidationException
+     */
+    public function checkPlatformWebhook(PaymentProvider $provider): array
+    {
+        $row = PlatformPaymentGatewaySetting::query()->where('provider', $provider->value)->first();
+
+        return $this->webhookHealth->check(null, $this->configForCheck($provider, $row), $row?->verified_at);
+    }
+
+    /**
+     * @return array{provider: PaymentProvider, credentials: array<string, string>, is_live: bool}
+     *
+     * @throws ValidationException
+     */
+    private function configForCheck(PaymentProvider $provider, CompanyPaymentGatewaySetting|PlatformPaymentGatewaySetting|null $row): array
+    {
+        if ($provider->requiresHumanVerification() || $row === null || ! $row->isVerified()) {
+            throw ValidationException::withMessages([
+                'provider' => 'ต้องบันทึกและตรวจสอบคีย์ของช่องทางนี้ให้ผ่านก่อน จึงจะตรวจ webhook ได้',
+            ]);
+        }
+
+        return ['provider' => $provider, 'credentials' => $row->credentials ?? [], 'is_live' => (bool) $row->is_live];
     }
 }

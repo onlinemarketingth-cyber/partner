@@ -111,6 +111,17 @@ class CompanyPaymentGatewayController extends Controller
     }
 
     /**
+     * 2026-09-29 — "ตรวจสอบ webhook": is this company's webhook set up and
+     * arriving? Read-only; asks the provider's API where it can (Stripe).
+     */
+    public function checkWebhook(Request $request, Company $company, string $provider): JsonResponse
+    {
+        $this->authorizeGateway($request);
+
+        return response()->json(['data' => $this->service->checkWebhook($company, $this->providerOr404($provider))]);
+    }
+
+    /**
      * 404 for an unknown provider, never a fallback.
      *
      * Defaulting to Manual here would let a typo in a URL quietly reconfigure

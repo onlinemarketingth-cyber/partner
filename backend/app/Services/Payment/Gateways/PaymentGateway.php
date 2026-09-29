@@ -45,7 +45,10 @@ interface PaymentGateway
      * whether one is set, exactly as PlatformMailSettingService does for the
      * SMTP password.
      *
-     * @return array<int, array{key: string, label: string, required: bool, secret: bool, help?: string}>
+     * `help` is the one short line under the box; `info` (optional) is the
+     * longer "where do I find this" shown behind the field's ⓘ (CLAUDE.md §7).
+     *
+     * @return array<int, array{key: string, label: string, required: bool, secret: bool, help?: string, info?: string}>
      */
     public function credentialFields(): array;
 

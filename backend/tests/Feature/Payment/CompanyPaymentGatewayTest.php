@@ -72,7 +72,8 @@ class CompanyPaymentGatewayTest extends TestCase
         return [
             'public_key' => 'pkey_test_abc123',
             'secret_key' => 'skey_test_abc123',
-            'webhook_secret' => 'whsec_abc123',
+            // Omise shows its webhook secret Base64-encoded (2026-09-29).
+            'webhook_secret' => 'b21pc2Utd2ViaG9vay1zZWNyZXQtYWJjMTIz',
             ...$overrides,
         ];
     }
@@ -122,7 +123,7 @@ class CompanyPaymentGatewayTest extends TestCase
         $body = $this->actingAs($superAdmin)->getJson($path)->assertOk()->getContent();
 
         $this->assertStringNotContainsString('skey_test_abc123', $body);
-        $this->assertStringNotContainsString('whsec_abc123', $body);
+        $this->assertStringNotContainsString('b21pc2Utd2ViaG9vay1zZWNyZXQtYWJjMTIz', $body);
         // The PUBLIC key does come back — it is in the pay page's HTML for
         // every customer to read, and hiding it from the admin who has to
         // check it is right would be theatre.

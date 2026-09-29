@@ -67,7 +67,8 @@ class GatewayChargeAndWebhookTest extends TestCase
 {
     use RefreshDatabase;
 
-    private const SECRET = 'whsec_test_shared_secret';
+    /** Base64, as Omise shows it: "omise_test_shared_secret". */
+    private const SECRET = 'b21pc2VfdGVzdF9zaGFyZWRfc2VjcmV0';
 
     // ── Fixtures ─────────────────────────────────────────────────────────
 
@@ -166,8 +167,19 @@ class GatewayChargeAndWebhookTest extends TestCase
         return json_encode(['key' => $key, 'data' => $charge], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
-    private function postWebhook(Company $company, string $body, ?string $signature = null, string $provider = 'omise'): TestResponse
+    /**
+     * Omise's documented signature (docs.omise.co/api-webhooks): hex
+     * HMAC-SHA256 of "<timestamp>.<body>" keyed with the Base64-DECODED secret.
+     */
+    private function omiseSignature(string $body, string $secretBase64 = self::SECRET, ?int $timestamp = null): string
     {
+        return hash_hmac('sha256', ($timestamp ?? time()).'.'.$body, base64_decode($secretBase64));
+    }
+
+    private function postWebhook(Company $company, string $body, ?string $signature = null, string $provider = 'omise', ?int $timestamp = null): TestResponse
+    {
+        $timestamp ??= time();
+
         return $this->call(
             'POST',
             "/api/v1/webhooks/payments/{$provider}/{$company->id}",
@@ -177,7 +189,8 @@ class GatewayChargeAndWebhookTest extends TestCase
             [
                 'CONTENT_TYPE' => 'application/json',
                 'HTTP_ACCEPT' => 'application/json',
-                'HTTP_X_OMISE_SIGNATURE' => $signature ?? hash_hmac('sha256', $body, self::SECRET),
+                'HTTP_OMISE_SIGNATURE' => $signature ?? $this->omiseSignature($body, self::SECRET, $timestamp),
+                'HTTP_OMISE_SIGNATURE_TIMESTAMP' => (string) $timestamp,
             ],
             $body,
         );
@@ -481,7 +494,7 @@ class GatewayChargeAndWebhookTest extends TestCase
         $order = $this->payableOrder($company);
         $body = $this->webhookBody(['id' => 'chrg_x', 'status' => 'successful', 'amount' => 890000, 'metadata' => ['order_token' => $order->public_token]]);
 
-        $this->postWebhook($company, $body, signature: hash_hmac('sha256', $body, 'whsec_attacker_guess'))
+        $this->postWebhook($company, $body, signature: $this->omiseSignature($body, base64_encode('attacker_guess')))
             ->assertStatus(401);
 
         $this->assertSame(OrderStatus::Pending, $order->refresh()->status);
@@ -498,10 +511,53 @@ class GatewayChargeAndWebhookTest extends TestCase
         $honest = $this->webhookBody(['id' => 'chrg_x', 'status' => 'failed', 'amount' => 100, 'metadata' => ['order_token' => $order->public_token]]);
         $tampered = $this->webhookBody(['id' => 'chrg_x', 'status' => 'successful', 'amount' => 890000, 'metadata' => ['order_token' => $order->public_token]]);
 
-        $this->postWebhook($company, $tampered, signature: hash_hmac('sha256', $honest, self::SECRET))
+        $this->postWebhook($company, $tampered, signature: $this->omiseSignature($honest))
             ->assertStatus(401);
 
         $this->assertSame(OrderStatus::Pending, $order->refresh()->status);
+    }
+
+    public function test_a_webhook_with_an_old_timestamp_is_refused_even_when_correctly_signed(): void
+    {
+        // A captured webhook replayed later: the signature is still valid
+        // maths, so the timestamp is the only thing that expires it.
+        $company = $this->omiseCompany();
+        $order = $this->payableOrder($company);
+        $body = $this->webhookBody(['id' => 'chrg_old', 'status' => 'successful', 'amount' => 890000, 'metadata' => ['order_token' => $order->public_token]]);
+        $old = time() - 3600;
+
+        $this->postWebhook($company, $body, $this->omiseSignature($body, self::SECRET, $old), timestamp: $old)->assertStatus(401);
+
+        $this->assertSame(OrderStatus::Pending, $order->fresh()->status);
+    }
+
+    public function test_a_webhook_signed_during_secret_rotation_is_accepted_by_either_signature(): void
+    {
+        // Omise sends two comma-separated signatures while a secret rotates.
+        $company = $this->omiseCompany();
+        $order = $this->payableOrder($company);
+        $body = $this->webhookBody(['id' => 'chrg_rot', 'status' => 'successful', 'amount' => 890000, 'metadata' => ['order_token' => $order->public_token]]);
+        $ts = time();
+
+        $this->postWebhook($company, $body, $this->omiseSignature($body, base64_encode('the_old_secret'), $ts).','.$this->omiseSignature($body, self::SECRET, $ts), timestamp: $ts)
+            ->assertOk();
+
+        $this->assertSame(OrderStatus::Paid, $order->fresh()->status);
+    }
+
+    public function test_a_webhook_carrying_the_old_x_omise_header_only_is_refused(): void
+    {
+        // The header this code used to read. Omise never sends it, so
+        // accepting it would only ever accept somebody else's forgery.
+        $company = $this->omiseCompany();
+        $order = $this->payableOrder($company);
+        $body = $this->webhookBody(['id' => 'chrg_x', 'status' => 'successful', 'amount' => 890000, 'metadata' => ['order_token' => $order->public_token]]);
+
+        $this->call('POST', "/api/v1/webhooks/payments/omise/{$company->id}", [], [], [], [
+            'CONTENT_TYPE' => 'application/json',
+            'HTTP_ACCEPT' => 'application/json',
+            'HTTP_X_OMISE_SIGNATURE' => hash_hmac('sha256', $body, base64_decode(self::SECRET)),
+        ], $body)->assertStatus(401);
     }
 
     public function test_a_valid_webhook_confirms_the_order(): void
@@ -599,7 +655,8 @@ class GatewayChargeAndWebhookTest extends TestCase
         $this->call('POST', '/api/v1/webhooks/payments/omise/999999', [], [], [], [
             'CONTENT_TYPE' => 'application/json',
             'HTTP_ACCEPT' => 'application/json',
-            'HTTP_X_OMISE_SIGNATURE' => hash_hmac('sha256', $body, self::SECRET),
+            'HTTP_OMISE_SIGNATURE' => $this->omiseSignature($body),
+            'HTTP_OMISE_SIGNATURE_TIMESTAMP' => (string) time(),
         ], $body)->assertNotFound();
     }
 

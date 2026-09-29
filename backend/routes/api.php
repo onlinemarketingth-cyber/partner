@@ -1407,6 +1407,8 @@ Route::prefix('v1')->group(function () {
         // 2026-09-03 — "no online gateway" is a real setting, not the absence
         // of one, and bank transfer keeps working either way.
         Route::post('/companies/{company}/payment-gateways/deactivate', [CompanyPaymentGatewayController::class, 'deactivate']);
+        // 2026-09-29 — "ตรวจสอบ webhook" (read-only).
+        Route::get('/companies/{company}/payment-gateways/{provider}/webhook-check', [CompanyPaymentGatewayController::class, 'checkWebhook']);
 
         // ADR-050 — the platform switch ("ใช้ค่าเดียวทุกบริษัท / แยกรายบริษัท")
         // and the platform's own channels. Super Admin only, read included.
@@ -1416,6 +1418,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/platform-payment-settings/gateways/activate', [PlatformPaymentSettingController::class, 'activateGateway']);
         Route::post('/platform-payment-settings/gateways/deactivate', [PlatformPaymentSettingController::class, 'deactivateGateway']);
         Route::put('/platform-payment-settings/gateways/{provider}', [PlatformPaymentSettingController::class, 'updateGateway']);
+        Route::get('/platform-payment-settings/gateways/{provider}/webhook-check', [PlatformPaymentSettingController::class, 'checkWebhook']);
 
         Route::get('/platform/mail-settings', [PlatformMailSettingController::class, 'show']);
         Route::put('/platform/mail-settings', [PlatformMailSettingController::class, 'update']);
