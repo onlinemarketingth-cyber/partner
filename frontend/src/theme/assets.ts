@@ -83,14 +83,31 @@ export function applyGoogleFont(family: string, weights?: number[] | null, id = 
   link.href = `https://fonts.googleapis.com/css2?family=${famParam}:wght@${w}&display=swap`
 }
 
-/** Set or replace <link rel="icon"> to the company favicon URL. */
+/**
+ * The favicon index.html shipped with, captured the first time a company
+ * replaces it, so a company with no favicon of its own gets that back.
+ */
+let shippedFavicon: string | null = null
+
+/**
+ * Set or replace <link rel="icon"> to the company favicon URL.
+ *
+ * 2026-10-01 — a company WITHOUT a favicon restores the shipped one. It used
+ * to return early and leave the previous company's icon in the tab: the same
+ * cross-company leak as the colours (theme.ts `loadedForUserId`), in the one
+ * place the portal shows a company's mark outside the page.
+ */
 export function applyFavicon(url: string | null | undefined): void {
-  if (!url) return
   let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+  if (!url) {
+    if (link && shippedFavicon !== null) link.href = shippedFavicon
+    return
+  }
   if (!link) {
     link = document.createElement('link')
     link.rel = 'icon'
     document.head.appendChild(link)
   }
+  if (shippedFavicon === null) shippedFavicon = link.getAttribute('href') ?? ''
   link.href = url
 }

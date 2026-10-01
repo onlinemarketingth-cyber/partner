@@ -162,6 +162,39 @@ export const useThemeStore = defineStore('theme', () => {
   const applied = ref(false)
   const contrastAudit = ref<ContrastAudit[]>([])
 
+  /*
+   * 2026-10-01 (human: "ผมไป setup บริษัท samsung ซึ่งพอ frontend เข้าด้วย
+   * ผู้ใช้ของ SWS ต้องแสดง theme ของ sws แต่ดันแสดงผลของ samsung").
+   *
+   * WHOSE theme is on screen. The id of the signed-in user whose company
+   * theme was last requested through loadForMe(), or null while the screen
+   * wears a PUBLIC theme (a login page's ?company=<slug>, the slug cached in
+   * localStorage, or a customer token page's payload).
+   *
+   * The bug it ends: the portal only ever asked "which company am I?" ONCE,
+   * from the router guard on the very first navigation of a page load. A
+   * person who signed in on the login screen arrived with the session
+   * already marked checked, so the guard never asked again — and the portal
+   * kept whatever the LOGIN PAGE was wearing. That page wears the last slug
+   * this browser saw, which for an admin who has just opened Samsung's
+   * branded login link from the theme screen is Samsung. Every SWS agent
+   * who then signed in on that browser was shown Samsung's brand until they
+   * pressed F5.
+   *
+   * The router guard now compares this with the signed-in user on every
+   * navigation and reloads when they differ, so the answer cannot go stale.
+   */
+  const loadedForUserId = ref<number | null>(null)
+
+  /*
+   * Every theme load and every adoption bumps this, and a response applies
+   * only if nothing newer started while it was in flight. Without it the
+   * boot-time public load (the cached slug — possibly ANOTHER company's) and
+   * the signed-in load race, and whichever lands last wins: the same wrong
+   * brand, intermittently, even after a refresh.
+   */
+  let loadSeq = 0
+
   // --- Logo URL getters (null fallback → components use built-in AppLogo) --
   const navLogo = computed(() => theme.value?.logos?.nav_url ?? null)
   const loginLogo = computed(() => theme.value?.logos?.login_url ?? null)
@@ -682,6 +715,10 @@ export const useThemeStore = defineStore('theme', () => {
       root.style.setProperty('--app-font', stack.join(', '))
       if (latin) applyGoogleFont(latin, t.font_weights, 'sv-theme-font-latin')
       if (thai && thai !== latin) applyGoogleFont(thai, t.font_weights, 'sv-theme-font-thai')
+    } else {
+      // Like every colour above: a company with no font of its own must
+      // not keep the previous company's.
+      root.style.removeProperty('--app-font')
     }
 
     applyFavicon(t.logos?.favicon_url)
@@ -701,10 +738,14 @@ export const useThemeStore = defineStore('theme', () => {
    * endpoint fails; the neutral defaults simply remain.
    */
   async function loadPublic(): Promise<void> {
+    // Signed in: the person's own company decides, never a cached slug.
+    if (loadedForUserId.value !== null) return
     const slug = resolveSlug()
     if (!slug) return
+    const seq = ++loadSeq
     try {
       const res = await api.get<{ data: Theme }>(`/public/theme/${encodeURIComponent(slug)}`)
+      if (seq !== loadSeq || loadedForUserId.value !== null) return
       theme.value = res.data
       apply()
       cacheSplashBoot()
@@ -738,6 +779,10 @@ export const useThemeStore = defineStore('theme', () => {
    */
   function applyResolved(next: Theme | null | undefined): void {
     if (!next) return
+    ++loadSeq
+    // The screen now wears the company behind a customer link, not the
+    // signed-in user's — so the next portal navigation reloads theirs.
+    loadedForUserId.value = null
     theme.value = next
     apply()
   }
@@ -746,9 +791,14 @@ export const useThemeStore = defineStore('theme', () => {
    * Authenticated load: GET /me/theme → cache slug → apply. Called after
    * auth is known (router guard). Also resilient (never throws).
    */
-  async function loadForMe(): Promise<void> {
+  async function loadForMe(userId: number | null = null): Promise<void> {
+    // Recorded BEFORE the request: one attempt per signed-in person, so a
+    // failing /me/theme is not re-requested on every navigation.
+    if (userId !== null) loadedForUserId.value = userId
+    const seq = ++loadSeq
     try {
       const res = await api.get<{ data: Theme }>('/me/theme')
+      if (seq !== loadSeq) return
       theme.value = res.data
       const slug = res.data?.company?.slug
       if (slug) {
@@ -763,6 +813,15 @@ export const useThemeStore = defineStore('theme', () => {
     } catch {
       // leave whatever public theme / defaults are already applied
     }
+  }
+
+  /**
+   * Signed out: the screen still wears the departing person's company (on
+   * purpose — loginRouteLocation() sends them to its branded login), but it
+   * no longer belongs to anyone, so a public load may replace it again.
+   */
+  function releaseSignedInTheme(): void {
+    loadedForUserId.value = null
   }
 
   /**
@@ -799,6 +858,8 @@ export const useThemeStore = defineStore('theme', () => {
     applyResolved,
     loadPublic,
     loadForMe,
+    loadedForUserId,
+    releaseSignedInTheme,
     loginRouteLocation,
   }
 })

@@ -321,12 +321,24 @@ router.beforeEach(async (to) => {
   // one shared request (see stores/auth.ts), so this costs no extra call.
   if (authStore.status !== 'ready') {
     await authStore.fetchUser()
-    // TASK-055 / ADR-018 — once we know the authenticated company, load its
-    // theme (corrects/overrides the pre-login public theme). Fire-and-forget
-    // + resilient: never block navigation, never throw.
-    if (authStore.isAuthenticated) {
-      void useThemeStore().loadForMe()
+  }
+
+  // TASK-055 / ADR-018 — once we know the authenticated company, load its
+  // theme (corrects/overrides the pre-login public theme). Fire-and-forget
+  // + resilient: never block navigation, never throw.
+  //
+  // 2026-10-01 — checked on EVERY navigation, not only the first one of a
+  // page load. Signing in on the login screen never passed through the
+  // branch above (the session was already "checked": nobody), so the portal
+  // kept the login page's theme — the last company this browser saw — for
+  // somebody from a different company. See theme.ts `loadedForUserId`.
+  const themeStore = useThemeStore()
+  if (authStore.user) {
+    if (themeStore.loadedForUserId !== authStore.user.id) {
+      void themeStore.loadForMe(authStore.user.id)
     }
+  } else if (themeStore.loadedForUserId !== null) {
+    themeStore.releaseSignedInTheme()
   }
 
   if (!to.meta.public && !authStore.isAuthenticated) {
