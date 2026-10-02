@@ -9,6 +9,7 @@ import { setUnauthorizedHandler } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useThemeStore } from './stores/theme'
 import { installStaleAssetRecovery } from './utils/staleAssets'
+import { isPublicLinkPage, startLinkPrefetch } from './utils/bootPrefetch'
 
 const app = createApp(App)
 
@@ -107,9 +108,15 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
   return Promise.race([promise, new Promise<void>((resolve) => window.setTimeout(resolve, ms))])
 }
 
+// 2026-10-02 — a signup link is checked NOW, alongside the two boot calls,
+// instead of after the splash by the page itself (utils/bootPrefetch.ts).
+// The page picks up this same request; nothing is asked twice.
+const linkPrefetch = startLinkPrefetch()
+
 await Promise.allSettled([
   withTimeout(themeStore.loadPublic(), 8000).then(() => bumpSplash(55)),
   withTimeout(bootAuthStore.fetchUser(), 8000).then(() => bumpSplash(90)),
+  ...(linkPrefetch ? [withTimeout(linkPrefetch.then(() => undefined), 8000)] : []),
 ])
 bumpSplash(100)
 
@@ -139,7 +146,11 @@ if (splash) {
 
 // Hold the splash open for the remainder of the 3000ms floor (boot work
 // above may have finished in well under that).
-const remainingMs = SPLASH_MIN_MS - (performance.now() - bootStartedAt)
+//
+// 2026-10-02 (owner decision) — NOT for a page a recruit or customer opens
+// from a shared link: for them the splash is only as long as the loading.
+const splashFloorMs = isPublicLinkPage(window.location.pathname) ? 0 : SPLASH_MIN_MS
+const remainingMs = splashFloorMs - (performance.now() - bootStartedAt)
 if (remainingMs > 0) await new Promise((resolve) => window.setTimeout(resolve, remainingMs))
 window.clearInterval(splashTicker)
 if (splashBar) splashBar.style.width = '100%'

@@ -53,6 +53,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { api, ApiError, ensureCsrfCookie } from '@/api/client'
+import { takePrefetchedCompanyCode, takePrefetchedTeamLink } from '@/utils/bootPrefetch'
 // Only used for the one-off "you are previewing your own link" toast — this
 // view never gates on the session, and an anonymous recruit never triggers it.
 import { useAuthStore } from '@/stores/auth'
@@ -236,11 +237,15 @@ onMounted(async () => {
     // Same reason submitInviteCode() below needs it: Sanctum applies CSRF
     // verification to every request from the SPA's stateful domain, so the
     // first POST a visitor makes has to obtain the cookie first.
-    await ensureCsrfCookie()
-    const res = await api.post<{ company_name: string; inviter_name: string; theme?: Theme | null }>(
-      '/register/resolve-ref-token',
-      { ref_token: token },
-    )
+    // 2026-10-02 — main.ts started this exact request during the splash
+    // (utils/bootPrefetch.ts); take that one rather than starting over.
+    const res = await (takePrefetchedTeamLink(token) ?? (async () => {
+      await ensureCsrfCookie()
+      return api.post<{ company_name: string; inviter_name: string; theme?: Theme | null }>(
+        '/register/resolve-ref-token',
+        { ref_token: token },
+      )
+    })())
     refToken.value = token
     refCompanyName.value = res.company_name
     refInviterName.value = res.inviter_name
@@ -359,10 +364,16 @@ async function submitInviteCode() {
     // applies CSRF verification to every request from the SPA's
     // stateful domain, not just authenticated ones, so the very first
     // POST a visitor makes (before any cookie exists) always 419'd.
-    await ensureCsrfCookie()
-    const res = await api.post<{ company_name: string; theme?: Theme | null }>('/register/resolve-invite-code', {
-      invite_code: inviteCode.value.trim(),
-    })
+    // 2026-10-02 — a /c/<code> link was already checked during the splash
+    // (utils/bootPrefetch.ts). Taken once: a code retyped by hand later is
+    // always asked afresh.
+    const code = inviteCode.value.trim()
+    const res = await (takePrefetchedCompanyCode(code) ?? (async () => {
+      await ensureCsrfCookie()
+      return api.post<{ company_name: string; theme?: Theme | null }>('/register/resolve-invite-code', {
+        invite_code: code,
+      })
+    })())
     resolvedCompanyName.value = res.company_name
     applyLinkTheme(res.theme)
     step.value = 'form'
