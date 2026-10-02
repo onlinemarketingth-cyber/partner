@@ -43,6 +43,8 @@
  */
 import { computed, ref, watch } from 'vue'
 import { api, ApiError } from '@/api/client'
+// ADR-052 — the 2-second "บันทึกแล้ว" flash became the app's one saved dialog.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import Icon from './Icon.vue'
 
 const props = defineProps<{
@@ -101,7 +103,6 @@ const isEnabled = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
-const savedFlash = ref(false)
 
 /**
  * Spec §6, the whole point of this card: "turning it back ON must not be a
@@ -123,10 +124,15 @@ const aboutToEnable = computed(() => isEnabled.value && !saved.value.is_enabled)
  */
 const pendingCount = computed(() => saved.value.pending_referrals_with_stored_split)
 
-async function load(): Promise<void> {
-  if (!ready.value) return
+/**
+ * Read the setting and put it on screen — or, on failure, fail closed, say
+ * so, and THROW. load() swallows the throw (a card that could not read must
+ * not break its page); save() lets it reach confirmSaved(), so a write that
+ * landed but could not be read back is reported as "saved, screen may be
+ * behind" rather than as a plain success over a fail-closed OFF.
+ */
+async function readBack(): Promise<void> {
   loading.value = true
-  errorMessage.value = ''
   try {
     const path =
       props.isSuperAdmin && props.companyId !== null
@@ -144,8 +150,19 @@ async function load(): Promise<void> {
       e instanceof ApiError
         ? `โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ (${e.status})`
         : 'โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ'
+    throw e
   } finally {
     loading.value = false
+  }
+}
+
+async function load(): Promise<void> {
+  if (!ready.value) return
+  errorMessage.value = ''
+  try {
+    await readBack()
+  } catch {
+    // readBack() has already put the fail-closed state and its message on screen.
   }
 }
 
@@ -157,21 +174,24 @@ async function save(): Promise<void> {
   }
   saving.value = true
   errorMessage.value = ''
-  savedFlash.value = false
   try {
-    // company_id is only accepted from a Super Admin; for a Company Admin the
-    // backend ignores it entirely and scopes the write to their own row
-    // (BR-6, and UpdateCommissionSplitSettingRequest re-checks the role).
-    await api.put('/commission-split-settings', {
-      ...(props.isSuperAdmin && props.companyId !== null ? { company_id: props.companyId } : {}),
-      is_enabled: isEnabled.value,
-    })
-    savedFlash.value = true
-    setTimeout(() => (savedFlash.value = false), 2000)
-    // Re-read rather than assume: the PUT response carries a FRESH §6 count,
-    // and the next thing the admin may do is flip it back — a stale count
-    // under a live switch is the one number on this card that must never lie.
-    await load()
+    await confirmSaved(
+      // company_id is only accepted from a Super Admin; for a Company Admin the
+      // backend ignores it entirely and scopes the write to their own row
+      // (BR-6, and UpdateCommissionSplitSettingRequest re-checks the role).
+      () => api.put('/commission-split-settings', {
+        ...(props.isSuperAdmin && props.companyId !== null ? { company_id: props.companyId } : {}),
+        is_enabled: isEnabled.value,
+      }),
+      {
+        // Re-read rather than assume: the PUT response carries a FRESH §6 count,
+        // and the next thing the admin may do is flip it back — a stale count
+        // under a live switch is the one number on this card that must never lie.
+        apply: () => readBack(),
+        // The state the re-read returned, not the switch position that was sent.
+        message: () => (saved.value.is_enabled ? 'เปิดการแบ่งค่าแนะนำกับสมาชิกร่วมแล้ว' : 'ปิดการแบ่งค่าแนะนำกับสมาชิกร่วมแล้ว'),
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -294,7 +314,6 @@ watch(() => props.companyId, load, { immediate: true })
         </div>
 
         <div class="flex items-center justify-end gap-2">
-          <span v-if="savedFlash" class="text-xs font-bold text-emerald-600">บันทึกแล้ว</span>
           <button type="submit" :disabled="saving" class="btn-primary">
             {{ saving ? 'กำลังบันทึก...' : 'บันทึกการแบ่งคอมฯ' }}
           </button>

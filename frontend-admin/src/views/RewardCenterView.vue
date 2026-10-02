@@ -21,6 +21,9 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { useI18n } from '@/composables/useI18n'
+// ADR-052 — one "saved" dialog per write, raised only after the server
+// answered and the screen shows what it stored.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const { td } = useI18n()
 
@@ -29,7 +32,10 @@ function apiErrorMessage(e: unknown, fallback: string): string {
   return e.message && e.message !== `API error ${e.status}` ? e.message : `${fallback} (${e.status})`
 }
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
+  // toLocaleString, not toLocaleDateString: the Date-only variant throws
+  // "Invalid option : timeStyle" (ECMA-402), which blanked the whole
+  // redemption queue the moment it had a row to render.
+  return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 const auth = useAuthStore()
@@ -78,6 +84,17 @@ async function loadRewardItems() {
     loadingItems.value = false
     itemsLoadedOnce.value = true
   }
+}
+
+/*
+ * ADR-052 — re-read after a write. The loaders report failure through their
+ * error ref rather than throwing; this turns it back into a throw so
+ * confirmSaved() says "saved, but the screen may be behind" instead of a
+ * plain success over a list that did not reload.
+ */
+async function reloadItemsAfterWrite(): Promise<void> {
+  await loadRewardItems()
+  if (itemsError.value) throw new Error(itemsError.value)
 }
 
 const showItemForm = ref(false)
@@ -144,13 +161,24 @@ async function submitItemForm() {
       is_active: itemForm.value.is_active,
       reward_type: itemForm.value.reward_type,
     }
-    if (editingItemId.value) {
-      await api.put(`/reward-items/${editingItemId.value}`, payload)
-    } else {
-      await api.post('/reward-items', payload)
-    }
-    closeItemForm()
-    await loadRewardItems()
+    const editing = editingItemId.value
+    await confirmSaved(
+      () =>
+        editing
+          ? api.put<{ data: RewardItem }>(`/reward-items/${editing}`, payload)
+          : api.post<{ data: RewardItem }>('/reward-items', payload),
+      {
+        apply: async () => {
+          closeItemForm()
+          await reloadItemsAfterWrite()
+        },
+        message: (res) => {
+          const name = res?.data?.name ? ` "${res.data.name}"` : ''
+
+          return editing ? `บันทึกของรางวัล${name} แล้ว` : `เพิ่มของรางวัล${name} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     itemFormError.value = apiErrorMessage(e, td('common.save_failed'))
   } finally {
@@ -167,8 +195,12 @@ async function confirmDeleteItem() {
   const item = pendingDeleteItem.value
   if (!item) return
   try {
-    await api.delete(`/reward-items/${item.id}`)
-    rewardItems.value = rewardItems.value.filter((x) => x.id !== item.id)
+    await confirmSaved(() => api.delete(`/reward-items/${item.id}`), {
+      apply: () => {
+        rewardItems.value = rewardItems.value.filter((x) => x.id !== item.id)
+      },
+      message: `ลบของรางวัล "${item.name}" แล้ว`,
+    })
   } catch (e) {
     itemsError.value = apiErrorMessage(e, td('common.delete_failed'))
   } finally {
@@ -255,17 +287,70 @@ function cancelDecision() {
   decidingStatus.value = null
   decisionNote.value = ''
 }
+async function reloadRedemptionsAfterWrite(): Promise<void> {
+  await loadRedemptions()
+  if (redemptionsError.value) throw new Error(redemptionsError.value)
+}
+/*
+ * 2026-10-02 (owner decision) — a REJECT from the panel asks first.
+ *
+ * The note typed in the panel is the reason the agent reads, and a rejection
+ * is final (pending → rejected is terminal, see the docblock at the top). So
+ * the panel's ยืนยัน opens a ConfirmDialog naming the request and quoting the
+ * note, and only its confirm sends — the SAME request as before. Approve and
+ * fulfil still send straight from the panel. Cancel sends nothing and leaves
+ * the panel open with the note as typed.
+ */
+const pendingRejectRedemption = ref<RedemptionItem | null>(null)
+const rejectRedemptionConfirmBody = computed(() => {
+  const item = pendingRejectRedemption.value
+  if (!item) return ''
+
+  return `ปฏิเสธคำขอแลก "${item.reward_item_name}" ของ ${item.agent_name} — เหตุผล: ${decisionNote.value.trim() || 'ไม่ระบุ'}`
+})
 async function submitDecision(item: RedemptionItem) {
+  if (!decidingStatus.value) return
+  if (decidingStatus.value === 'rejected') {
+    pendingRejectRedemption.value = item
+    return
+  }
+  await sendDecision(item)
+}
+async function confirmRejectRedemption() {
+  const item = pendingRejectRedemption.value
+  if (!item) return
+  await sendDecision(item)
+  // Closed either way: the saved dialog or the queue's error line takes over.
+  pendingRejectRedemption.value = null
+}
+async function sendDecision(item: RedemptionItem) {
   if (!decidingStatus.value) return
   deciding.value = true
   redemptionsError.value = ''
   try {
-    await api.post(`/reward-redemptions/${item.id}/decide`, {
-      status: decidingStatus.value,
-      decision_note: decisionNote.value || null,
-    })
-    cancelDecision()
-    await loadRedemptions()
+    await confirmSaved(
+      () =>
+        api.post<{ data: RedemptionItem }>(`/reward-redemptions/${item.id}/decide`, {
+          status: decidingStatus.value,
+          decision_note: decisionNote.value || null,
+        }),
+      {
+        apply: async () => {
+          cancelDecision()
+          await reloadRedemptionsAfterWrite()
+        },
+        // The STORED status and names: from the response, or the re-read row.
+        message: (res) => {
+          const stored = redemptions.value.find((r) => r.id === item.id)
+          const status = res?.data?.status ?? stored?.status
+          const agent = res?.data?.agent_name ?? stored?.agent_name
+          const reward = res?.data?.reward_item_name ?? stored?.reward_item_name
+          const what = `คำขอแลก${reward ? ` "${reward}"` : ''}${agent ? ` ของ ${agent}` : ''}`
+
+          return status ? `${what} — ${redemptionStatusLabel(status)}` : `บันทึก${what}แล้ว`
+        },
+      },
+    )
   } catch (e) {
     redemptionsError.value = apiErrorMessage(e, td('reward.decision_failed'))
   } finally {
@@ -302,11 +387,19 @@ async function saveTracking(item: RedemptionItem) {
   savingTracking.value = true
   redemptionsError.value = ''
   try {
-    const res = await api.patch<{ data: RedemptionItem }>(`/reward-redemptions/${item.id}/tracking-number`, {
-      tracking_number: trackingInput.value || null,
-    })
-    item.tracking_number = res.data.tracking_number
-    cancelTrackingEdit()
+    await confirmSaved(
+      () =>
+        api.patch<{ data: RedemptionItem }>(`/reward-redemptions/${item.id}/tracking-number`, {
+          tracking_number: trackingInput.value || null,
+        }),
+      {
+        apply: (res) => {
+          item.tracking_number = res.data.tracking_number
+          cancelTrackingEdit()
+        },
+        message: (res) => (res.data.tracking_number ? `บันทึกเลขพัสดุ ${res.data.tracking_number} แล้ว` : 'ล้างเลขพัสดุแล้ว'),
+      },
+    )
   } catch (e) {
     redemptionsError.value = apiErrorMessage(e, td('reward.tracking_failed'))
   } finally {
@@ -583,6 +676,17 @@ watch(() => activeCompany.companyId, () => { loadRewardItems() })
       :body="pendingDeleteItem ? td('reward.delete_confirm', '', { name: pendingDeleteItem.name }) : ''"
       @confirm="confirmDeleteItem"
       @update:show="(v) => { if (!v) pendingDeleteItem = null }"
+    />
+
+    <!-- 2026-10-02 — the second step of rejecting a redemption (see submitDecision()). -->
+    <ConfirmDialog
+      :show="pendingRejectRedemption !== null"
+      variant="danger"
+      title="ยืนยันปฏิเสธ"
+      :body="rejectRedemptionConfirmBody"
+      :busy="deciding"
+      @confirm="confirmRejectRedemption"
+      @update:show="(v) => { if (!v) pendingRejectRedemption = null }"
     />
   </main>
 </template>

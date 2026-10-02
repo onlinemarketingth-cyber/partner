@@ -73,6 +73,9 @@ interface AffiliateLinkItem {
   clicks_count: number
   conversions_count: number
   created_at: string
+  /** 2026-10-02 — the list never contains a revoked link; show() still reports one. */
+  revoked_at?: string | null
+  is_usable?: boolean
 }
 interface AttributionSetting {
   attribution_window_days: number
@@ -187,20 +190,45 @@ function askRevoke(linkId: number) {
   showRevokeConfirm.value = true
 }
 
+/**
+ * ADR-052 — after a 2xx the list is RE-READ from the server rather than
+ * trimmed locally, so the KPIs and every other row on screen are what the
+ * server holds now. The success toast fires only after that.
+ *
+ * The list is taken AS THE SERVER RETURNS IT: since 2026-10-02
+ * GET /affiliate-links leaves revoked links out (AffiliateLinkController::
+ * index), so the screen and a page refresh agree. The temporary client-side
+ * filter that stood in for that is gone.
+ *
+ * If the re-read itself fails, the revoke DID succeed — that is said as an
+ * info toast, never as a failed revoke.
+ */
 async function confirmRevoke() {
   if (!revokeTargetId.value) return
+  const revokedId = revokeTargetId.value
   revoking.value = true
   try {
-    await api.delete(`/affiliate-links/${revokeTargetId.value}`)
-    links.value = links.value.filter((l) => l.id !== revokeTargetId.value)
-    showRevokeConfirm.value = false
-    toast.success('ยกเลิกลิงก์แล้ว')
+    await api.delete(`/affiliate-links/${revokedId}`)
   } catch (e) {
     // Toast, not just the banner: the ConfirmDialog is still open on the
     // failure path and covers the top-of-page banner entirely.
     const message = apiErrorMessage(e, 'ยกเลิกลิงก์ไม่สำเร็จ')
     errorMessage.value = message
     toast.error(message)
+    revoking.value = false
+    revokeTargetId.value = null
+    return
+  }
+
+  try {
+    const res = await api.get<{ data: AffiliateLinkItem[] }>('/affiliate-links')
+    links.value = res.data
+    showRevokeConfirm.value = false
+    toast.success('ยกเลิกลิงก์แล้ว')
+  } catch {
+    links.value = links.value.filter((l) => l.id !== revokedId)
+    showRevokeConfirm.value = false
+    toast.info('ยกเลิกลิงก์แล้ว แต่โหลดรายการใหม่ไม่สำเร็จ — ข้อมูลบนหน้าจออาจไม่เป็นปัจจุบัน')
   } finally {
     revoking.value = false
     revokeTargetId.value = null
@@ -302,13 +330,11 @@ function formatDate(iso: string): string {
              `space-y-2` is gone too.
 
              NO GROUP HEADERS HERE, deliberately: the four other list screens
-             group by a status field, but AffiliateLinkItem carries no
-             active/revoked (or expiry) field at all — revoke DELETEs the row
-             and it simply leaves `links`, so every link in this array is by
-             definition live. Inventing a group would mean inventing data, so
-             this screen stays one ungrouped list. If the backend ever grows
-             a revoked_at here (ClientsView's share links already have one),
-             this is where "ใช้งานได้ / ยกเลิกแล้ว" headers would go. -->
+             group by a status field, but this list only ever holds live
+             links: GET /affiliate-links leaves revoked ones out (2026-10-02),
+             so there is nothing to group. If revoked links are ever shown
+             here (the resource now carries revoked_at / is_usable), this is
+             where "ใช้งานได้ / ยกเลิกแล้ว" headers would go. -->
         <AppList v-else class="mt-4">
           <!-- No `tag`: TransitionGroup renders as a fragment so the rows
                stay DIRECT children of AppList, which its

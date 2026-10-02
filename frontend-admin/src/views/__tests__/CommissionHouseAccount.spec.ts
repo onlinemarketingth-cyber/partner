@@ -50,6 +50,14 @@ vi.mock('vue-router', () => ({
 import CommissionPlansView from '../CommissionPlansView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
+
+/** ADR-052 — switching the seat off asks first; press the dialog's confirm button. */
+async function confirmDialog(wrapper: { get: (s: string) => { findAll: (s: string) => { trigger: (e: string) => Promise<void> }[] } }) {
+  const buttons = wrapper.get('[data-test="delete-confirm"]').findAll('button')
+  await buttons[buttons.length - 1]!.trigger('click')
+  await flushPromises()
+}
 
 const AIA = { id: 2, name: 'Thai Life insurance', slug: 'thai-life' }
 
@@ -235,6 +243,9 @@ describe('no seat yet', () => {
 
     expect(post).toHaveBeenCalledWith('/commission-house-account', { display_name: 'ไทยประกันชีวิต', company_id: AIA.id })
     expect(wrapper.get('[data-test="house-account-name-shown"]').text()).toBe('ไทยประกันชีวิต')
+    // ADR-052 — the dialog quotes the name the SERVER stored.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe('ให้บริษัทรับค่าแนะนำหัวหน้าทีมแล้ว — บัญชี "ไทยประกันชีวิต"')
   })
 
   it('takes the new chain depth from the answer, not from a guess', async () => {
@@ -294,8 +305,17 @@ describe('the seat exists', () => {
     await wrapper.get('[data-test="house-account-disable"]').trigger('click')
     await flushPromises()
 
+    // ADR-052 — a DELETE that detaches every agent under the seat asks first.
+    expect(del).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-test="delete-confirm"]').text()).toContain('ค่าแนะนำที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม')
+    expect(saveFeedbackState.show).toBe(false)
+
+    await confirmDialog(wrapper)
+
     expect(del).toHaveBeenCalledWith('/commission-house-account', { company_id: AIA.id })
     expect(wrapper.get('[data-test="house-account-state"]').text()).toBe('เฉพาะหัวหน้าทีมที่เป็นคนจริง')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe('ปิดการให้บริษัทรับค่าแนะนำหัวหน้าทีมแล้ว')
   })
 
   it('says so in a visible line when the write fails, and does not lie about the state', async () => {
@@ -305,9 +325,11 @@ describe('the seat exists', () => {
 
     await wrapper.get('[data-test="house-account-disable"]').trigger('click')
     await flushPromises()
+    await confirmDialog(wrapper)
 
     expect(wrapper.get('[data-test="house-account-error"]').text()).toContain('ปิดบัญชีบริษัทไม่สำเร็จ')
     expect(wrapper.get('[data-test="house-account-state"]').text()).toBe('บริษัทรับด้วย')
+    expect(saveFeedbackState.show).toBe(false)
   })
 })
 
@@ -407,6 +429,8 @@ describe('renaming the seat', () => {
     // the name are money facts and must never be left showing a stale pair
     // next to a fresh label.
     expect(wrapper.get('[data-test="house-account-agents"]').text()).toBe('4 คน')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('"ไทยประกันชีวิต"')
   })
 
   it('refuses to send an empty name rather than blanking the row', async () => {
@@ -433,6 +457,7 @@ describe('renaming the seat', () => {
 
     expect(wrapper.get('[data-test="house-account-error"]').text()).toContain('เปลี่ยนชื่อบัญชีบริษัทไม่สำเร็จ')
     expect(wrapper.get('[data-test="house-account-name-shown"]').text()).toBe('ชื่อเก่า')
+    expect(saveFeedbackState.show).toBe(false)
   })
 
   it('is not offered to a Company Admin', async () => {

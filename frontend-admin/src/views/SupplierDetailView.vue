@@ -35,6 +35,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import SupplierForm from './supplier/SupplierForm.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import {
   type SupplierFormValue,
   emptySupplier,
@@ -108,13 +109,19 @@ const draft = ref<SupplierFormValue>(emptySupplier())
 const loading = ref(true)
 const saving = ref(false)
 const errorMessage = ref('')
-const savedNotice = ref('')
 const formErrors = ref<Record<string, string[]>>({})
 
 const products = ref<SupplierProduct[]>([])
 const settlements = ref<SettlementRow[]>([])
 const users = ref<SupplierUser[]>([])
 const tabLoading = ref(false)
+
+/** The fields of POST /users' UserResource this screen quotes back. */
+interface CreatedUser {
+  id: number
+  name?: string | null
+  email?: string | null
+}
 
 /** The create-a-login form on the accounts tab. */
 const newUser = ref({ first_name: '', last_name: '', email: '', phone: '', password: '' })
@@ -167,15 +174,19 @@ async function save(): Promise<void> {
   saving.value = true
   formErrors.value = {}
   errorMessage.value = ''
-  savedNotice.value = ''
   try {
-    const res = await api.put<{ data: SupplierDetail }>(`/suppliers/${supplierId.value}`, draft.value)
-    // Re-seeded from the response rather than left as typed: the server is
-    // what decides what was stored, and a form that keeps showing the typed
-    // value after a partial save is a form that lies.
-    supplier.value = { ...supplier.value, ...res.data } as SupplierDetail
-    draft.value = toFormValue(res.data)
-    savedNotice.value = 'บันทึกแล้ว'
+    // ADR-052 — the inline "บันทึกแล้ว" became the dialog, raised after the
+    // form was re-seeded from the server's answer.
+    await confirmSaved(() => api.put<{ data: SupplierDetail }>(`/suppliers/${supplierId.value}`, draft.value), {
+      apply: (res) => {
+        // Re-seeded from the response rather than left as typed: the server is
+        // what decides what was stored, and a form that keeps showing the typed
+        // value after a partial save is a form that lies.
+        supplier.value = { ...supplier.value, ...res.data } as SupplierDetail
+        draft.value = toFormValue(res.data)
+      },
+      message: (res) => `บันทึกข้อมูลคู่ค้า ${res.data.name} แล้ว`,
+    })
   } catch (e) {
     const fields = fieldErrors(e)
     if (fields) {
@@ -188,8 +199,8 @@ async function save(): Promise<void> {
   }
 }
 
-async function loadTab(which: Tab): Promise<void> {
-  if (which === 'overview') return
+async function loadTab(which: Tab): Promise<boolean> {
+  if (which === 'overview') return true
 
   tabLoading.value = true
   errorMessage.value = ''
@@ -201,8 +212,10 @@ async function loadTab(which: Tab): Promise<void> {
     } else {
       users.value = (await api.get<{ data: SupplierUser[] }>(`/suppliers/${supplierId.value}/users`)).data
     }
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     tabLoading.value = false
   }
@@ -212,25 +225,35 @@ async function createUser(): Promise<void> {
   creatingUser.value = true
   userErrors.value = {}
   userNotice.value = ''
+  const body = {
+    supplier_id: supplierId.value,
+    role: 'company_partner',
+    first_name: newUser.value.first_name,
+    last_name: newUser.value.last_name,
+    email: newUser.value.email,
+    phone: newUser.value.phone || undefined,
+    password: newUser.value.password,
+  }
   try {
-    await api.post('/users', {
-      supplier_id: supplierId.value,
-      role: 'company_partner',
-      first_name: newUser.value.first_name,
-      last_name: newUser.value.last_name,
-      email: newUser.value.email,
-      phone: newUser.value.phone || undefined,
-      password: newUser.value.password,
-    })
     /*
-     * The password is cleared and NEVER echoed back. Whoever created the
-     * account has it on screen once, gives it to the supplier out of band and
-     * that is the end of it — the same handling every other account creation
-     * in this console uses.
+     * ADR-052 — the dialog says it was created, quoting the account the SERVER
+     * stored, after the accounts list was re-read. The inline line stays as
+     * the next step the admin still has to take (hand over the password).
      */
-    newUser.value = { first_name: '', last_name: '', email: '', phone: '', password: '' }
-    userNotice.value = 'สร้างบัญชีแล้ว — แจ้งรหัสผ่านให้คู่ค้าทราบ แล้วให้เปลี่ยนรหัสเมื่อเข้าใช้ครั้งแรก'
-    await loadTab('users')
+    await confirmSaved(() => api.post<{ data: CreatedUser }>('/users', body), {
+      apply: async (res) => {
+        /*
+         * The password is cleared and NEVER echoed back. Whoever created the
+         * account has it on screen once, gives it to the supplier out of band and
+         * that is the end of it — the same handling every other account creation
+         * in this console uses.
+         */
+        newUser.value = { first_name: '', last_name: '', email: '', phone: '', password: '' }
+        userNotice.value = `ขั้นต่อไป: แจ้งรหัสผ่านให้ ${res.data.email ?? 'คู่ค้า'} ทราบ แล้วให้เปลี่ยนรหัสเมื่อเข้าใช้ครั้งแรก`
+        if (!(await loadTab('users'))) throw new Error('accounts list re-read failed')
+      },
+      message: (res) => `สร้างบัญชีผู้ใช้ ${res.data.name ?? ''}${res.data.email ? ` (${res.data.email})` : ''} แล้ว`,
+    })
   } catch (e) {
     const fields = fieldErrors(e)
     if (fields) {
@@ -334,7 +357,6 @@ const inputClass = 'min-h-[40px] w-full px-3 rounded-lg border border-slate-300 
             class="min-h-[40px] px-4 rounded-lg bg-brand-600 text-white text-sm font-bold hover:bg-brand-700 disabled:opacity-60 transition"
             @click="save"
           >{{ saving ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข' }}</button>
-          <span v-if="savedNotice" data-test="saved-notice" class="text-sm text-emerald-700">{{ savedNotice }}</span>
         </div>
       </section>
 

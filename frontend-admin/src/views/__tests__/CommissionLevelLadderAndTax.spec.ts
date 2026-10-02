@@ -57,6 +57,7 @@ import CommissionPlansView from '../CommissionPlansView.vue'
 import CommissionWithdrawalsView from '../CommissionWithdrawalsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -235,6 +236,8 @@ describe('the level ladder (Unilevel)', () => {
      * field whose empty state already means the second one.
      */
     mockApi({ maxOverrideDepth: 3 })
+    // The server answers with the whole setting, cap cleared.
+    put.mockResolvedValue({ data: { max_override_depth: null } })
 
     const wrapper = await mountStep4()
     await wrapper.get('[data-test="override-depth-input"]').setValue('')
@@ -242,7 +245,10 @@ describe('the level ladder (Unilevel)', () => {
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/commission-settings', { company_id: 2, max_override_depth: null })
-    expect(wrapper.get('[data-test="override-depth-message"]').text()).toContain('ทั้งสาย')
+    // ADR-052 — the inline "บันทึกแล้ว" line became the saved dialog.
+    expect(wrapper.find('[data-test="override-depth-message"]').exists()).toBe(false)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ทั้งสาย')
   })
 
   it('refuses a cap of zero without calling the server', async () => {
@@ -399,6 +405,7 @@ describe('withholding tax', () => {
 
   it('an emptied field clears the rate rather than saving zero', async () => {
     mockApi({ whtRate: 300 })
+    put.mockResolvedValue({ company_id: 2, min_withdrawal_satang: 100000, wht_rate: null })
 
     const wrapper = await mountStep4()
     await wrapper.get('[data-test="wht-input"]').setValue('')
@@ -409,7 +416,10 @@ describe('withholding tax', () => {
       min_withdrawal_satang: 100000,
       wht_rate: null,
     })
-    expect(wrapper.get('[data-test="wht-message"]').text()).toContain('ไม่หักภาษี')
+    // ADR-052 — the inline "บันทึกแล้ว" line became the saved dialog.
+    expect(wrapper.find('[data-test="wht-message"]').exists()).toBe(false)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ไม่หักภาษี')
   })
 
   it('refuses a rate above 100% without calling the server', async () => {

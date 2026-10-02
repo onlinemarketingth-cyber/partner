@@ -23,8 +23,10 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 type WithdrawalStatus = 'pending_review' | 'approved' | 'rejected' | 'cancelled' | 'transferred'
 
@@ -175,7 +177,7 @@ function statusClass(status: WithdrawalStatus): string {
   return 'bg-amber-50 text-amber-700'
 }
 
-async function load(): Promise<void> {
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -191,8 +193,10 @@ async function load(): Promise<void> {
       activeCompany.scopedPath(`/commission-withdrawals${query}`),
     )
     requests.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? 'โหลดข้อมูลไม่สำเร็จ' : 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้'
+    return false
   } finally {
     loading.value = false
   }
@@ -208,13 +212,26 @@ function selectTab(value: '' | WithdrawalStatus): void {
  * handling and the reload can never be wired up three slightly different
  * ways for three buttons that all move money.
  */
-async function act(id: number, path: string, body?: Record<string, unknown>): Promise<void> {
+async function act(
+  id: number,
+  path: string,
+  body: Record<string, unknown> | undefined,
+  describe: (stored: WithdrawalRequest) => string,
+): Promise<void> {
   if (busyId.value !== null) return
   busyId.value = id
   errorMessage.value = ''
   try {
-    await api.post(`/commission-withdrawals/${id}/${path}`, body)
-    await load()
+    // ADR-052 — the list is re-read first; the dialog then quotes the row the
+    // SERVER returned (its payee, its amounts — BR-3 satang), not the clicked one.
+    await confirmSaved(() => api.post<{ data: WithdrawalRequest }>(`/commission-withdrawals/${id}/${path}`, body), {
+      apply: async () => {
+        openPanel.value = null
+        panelText.value = ''
+        if (!(await load())) throw new Error('queue re-read failed')
+      },
+      message: (res) => describe(res.data),
+    })
   } catch (e) {
     const parsed = e instanceof ApiError ? (e.body as { errors?: Record<string, string[]>; message?: string }) : null
     errorMessage.value =
@@ -225,45 +242,131 @@ async function act(id: number, path: string, body?: Record<string, unknown>): Pr
 }
 
 function approve(r: WithdrawalRequest): void {
-  void act(r.id, 'approve')
+  void act(r.id, 'approve', undefined, (w) => `อนุมัติคำขอถอนของ ${w.agent_name ?? 'สมาชิก'} ${formatSatang(w.amount_satang)} แล้ว`)
+}
+
+/*
+ * ADR-052 follow-up — the reason and the reference are asked for IN THE ROW,
+ * not in window.prompt: a prompt is one unwrapped line with no sight of the
+ * request it is about, and the reason is shown to the agent verbatim. Same
+ * shape as the reject panel on จ่ายเงิน (CommissionPayoutsView). One panel at
+ * a time; it closes only once the server accepted the decision.
+ */
+const openPanel = ref<{ id: number; kind: 'reject' | 'transfer' } | null>(null)
+const panelText = ref('')
+/** The panel action waiting on the ConfirmDialog (2026-10-02, see confirmPanelAction()). */
+const pendingAction = ref<{ kind: 'reject' | 'transfer'; request: WithdrawalRequest } | null>(null)
+
+function togglePanel(r: WithdrawalRequest, kind: 'reject' | 'transfer'): void {
+  const same = openPanel.value?.id === r.id && openPanel.value.kind === kind
+  openPanel.value = same ? null : { id: r.id, kind }
+  panelText.value = ''
+  errorMessage.value = ''
+}
+
+function isPanelOpen(r: WithdrawalRequest, kind: 'reject' | 'transfer'): boolean {
+  return openPanel.value?.id === r.id && openPanel.value.kind === kind
 }
 
 function reject(r: WithdrawalRequest): void {
+  togglePanel(r, 'reject')
+}
+
+function submitReject(r: WithdrawalRequest): void {
   // A reason is REQUIRED by the server, and it is shown to the agent
   // verbatim — so it is asked for here rather than sent blank and rejected.
-  const reason = window.prompt(`เหตุผลที่ไม่อนุมัติคำขอของ ${r.agent_name ?? 'สมาชิก'}`)
-
-  if (reason === null) return
-
-  if (!reason.trim()) {
+  const reason = panelText.value.trim()
+  if (!reason) {
     errorMessage.value = 'กรุณาระบุเหตุผลที่ไม่อนุมัติ'
 
     return
   }
 
-  void act(r.id, 'reject', { rejection_reason: reason.trim() })
+  // 2026-10-02 (owner decision) — checked above, then asked; see confirmPanelAction().
+  pendingAction.value = { kind: 'reject', request: r }
+}
+
+function sendReject(r: WithdrawalRequest): Promise<void> {
+  return act(r.id, 'reject', { rejection_reason: panelText.value.trim() }, (w) => `ไม่อนุมัติคำขอถอนของ ${w.agent_name ?? 'สมาชิก'} แล้ว`)
 }
 
 function markTransferred(r: WithdrawalRequest): void {
-  // Optional on purpose (see MarkWithdrawalTransferredRequest): an empty
-  // answer is a transfer with no reference worth recording, not a mistake.
-  /*
-   * 2026-09-19 — the prompt names the NET, not the gross.
-   *
-   * This is the moment an admin is recording a transfer they are about to
-   * make (or just made) in their banking app, so the number in front of them
-   * has to be the one that actually leaves the account. Showing the gross
-   * here was correct while nothing was withheld and is a wrong instruction
-   * the moment something is.
-   */
+  togglePanel(r, 'transfer')
+}
+
+/*
+ * 2026-09-19 — the panel names the NET, not the gross.
+ *
+ * This is the moment an admin is recording a transfer they are about to
+ * make (or just made) in their banking app, so the number in front of them
+ * has to be the one that actually leaves the account. Showing the gross
+ * here was correct while nothing was withheld and is a wrong instruction
+ * the moment something is.
+ */
+function transferPrompt(r: WithdrawalRequest): string {
   const withheld = r.wht_satang > 0
     ? ` (ยอดเต็ม ${formatSatang(r.amount_satang)} − ภาษี ${formatSatang(r.wht_satang)})`
     : ''
-  const reference = window.prompt(`เลขอ้างอิงการโอน (ไม่บังคับ) — โอนจริง ${formatSatang(r.net_transfer_satang)}${withheld}`)
 
-  if (reference === null) return
+  return `โอนจริง ${formatSatang(r.net_transfer_satang)}${withheld}`
+}
 
-  void act(r.id, 'mark-transferred', { transfer_reference: reference.trim() || null })
+function submitTransfer(r: WithdrawalRequest): void {
+  pendingAction.value = { kind: 'transfer', request: r }
+}
+
+function sendTransfer(r: WithdrawalRequest): Promise<void> {
+  // Optional on purpose (see MarkWithdrawalTransferredRequest): an empty
+  // answer is a transfer with no reference worth recording, not a mistake.
+  return act(
+    r.id,
+    'mark-transferred',
+    { transfer_reference: panelText.value.trim() || null },
+    (w) => `บันทึกว่าโอนให้ ${w.agent_name ?? 'สมาชิก'} แล้ว — โอนจริง ${formatSatang(w.net_transfer_satang)}`,
+  )
+}
+
+/*
+ * 2026-10-02 (owner decision) — neither panel's button sends any more.
+ *
+ * ไม่อนุมัติ is final and the agent reads the reason verbatim; บันทึกการโอน
+ * settles ledger rows and closes the request for good. Both now open a
+ * ConfirmDialog that names the payee, the amount and what was typed, and only
+ * its confirm sends — the SAME request the button used to send. Cancel sends
+ * nothing and leaves the panel open with the text as typed.
+ *
+ * Reject is `danger`. The transfer is `warning`: it destroys nothing, but it
+ * cannot be taken back.
+ */
+const pendingActionDialog = computed(() => {
+  const pending = pendingAction.value
+  if (!pending) return { title: '', body: '', variant: 'danger' }
+  const r = pending.request
+  const name = r.agent_name ?? 'สมาชิก'
+  if (pending.kind === 'reject') {
+    return {
+      title: 'ยืนยันไม่อนุมัติ',
+      body: `ไม่อนุมัติคำขอถอนของ ${name} ${formatSatang(r.amount_satang)} — เหตุผล: ${panelText.value.trim()}`,
+      variant: 'danger',
+    }
+  }
+
+  return {
+    title: 'ยืนยันบันทึกการโอนเงิน',
+    body: `บันทึกว่าโอนให้ ${name} แล้ว — ${transferPrompt(r)}\n`
+      + `เลขอ้างอิงการโอน: ${panelText.value.trim() || 'ไม่ระบุ'}\n`
+      + 'บันทึกแล้วแก้กลับไม่ได้',
+    variant: 'warning',
+  }
+})
+
+async function confirmPanelAction(): Promise<void> {
+  const pending = pendingAction.value
+  if (!pending) return
+  if (pending.kind === 'reject') await sendReject(pending.request)
+  else await sendTransfer(pending.request)
+  // Closed either way: the saved dialog or the error line takes over.
+  pendingAction.value = null
 }
 
 onMounted(async () => {
@@ -394,7 +497,8 @@ watch(() => activeCompany.companyId, () => {
       <div
         v-for="r in requests"
         :key="r.id"
-        class="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3"
+        class="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:flex-wrap sm:items-start sm:justify-between gap-3"
+        :data-test="`withdrawal-row-${r.id}`"
       >
         <div class="min-w-0">
           <div class="flex items-center gap-2">
@@ -459,6 +563,7 @@ watch(() => activeCompany.companyId, () => {
               type="button"
               :disabled="busyId !== null"
               class="px-3 py-2 rounded-xl border border-rose-200 text-rose-700 text-xs font-bold disabled:opacity-50"
+              :data-test="`withdrawal-reject-${r.id}`"
               @click="reject(r)"
             >
               ไม่อนุมัติ
@@ -472,12 +577,80 @@ watch(() => activeCompany.companyId, () => {
             type="button"
             :disabled="busyId !== null"
             class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold disabled:opacity-50"
+            :data-test="`withdrawal-transfer-${r.id}`"
             @click="markTransferred(r)"
           >
             บันทึกการโอนเงิน
           </button>
         </div>
+
+        <!-- The reason (required) / the reference (optional), asked in the row. -->
+        <div
+          v-if="isPanelOpen(r, 'reject')"
+          class="basis-full w-full rounded-xl border border-rose-200 bg-rose-50/60 p-3"
+          :data-test="`withdrawal-reject-panel-${r.id}`"
+        >
+          <label class="block text-xs font-bold text-rose-700 mb-1">
+            เหตุผลที่ไม่อนุมัติคำขอของ {{ r.agent_name ?? 'สมาชิก' }} (สมาชิกจะเห็นข้อความนี้)
+          </label>
+          <textarea
+            v-model="panelText"
+            rows="2"
+            class="w-full px-3 py-2 rounded-lg border border-rose-200 text-sm bg-white"
+            :data-test="`withdrawal-reject-reason-${r.id}`"
+          />
+          <div class="mt-2 flex justify-end gap-2">
+            <button type="button" class="btn-secondary" :disabled="busyId !== null" @click="togglePanel(r, 'reject')">ยกเลิก</button>
+            <button
+              type="button"
+              class="px-3 py-2 rounded-xl bg-rose-600 text-white text-xs font-bold disabled:opacity-50"
+              :disabled="busyId !== null"
+              :data-test="`withdrawal-reject-submit-${r.id}`"
+              @click="submitReject(r)"
+            >
+              {{ busyId === r.id ? 'กำลังบันทึก…' : 'ยืนยันไม่อนุมัติ' }}
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-if="isPanelOpen(r, 'transfer')"
+          class="basis-full w-full rounded-xl border border-emerald-200 bg-emerald-50/60 p-3"
+          :data-test="`withdrawal-transfer-panel-${r.id}`"
+        >
+          <p class="text-sm font-bold text-emerald-800">{{ transferPrompt(r) }}</p>
+          <label class="block text-xs font-bold text-slate-600 mt-2 mb-1">เลขอ้างอิงการโอน (ไม่บังคับ)</label>
+          <input
+            v-model="panelText"
+            type="text"
+            class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white"
+            :data-test="`withdrawal-transfer-reference-${r.id}`"
+          />
+          <div class="mt-2 flex justify-end gap-2">
+            <button type="button" class="btn-secondary" :disabled="busyId !== null" @click="togglePanel(r, 'transfer')">ยกเลิก</button>
+            <button
+              type="button"
+              class="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold disabled:opacity-50"
+              :disabled="busyId !== null"
+              :data-test="`withdrawal-transfer-submit-${r.id}`"
+              @click="submitTransfer(r)"
+            >
+              {{ busyId === r.id ? 'กำลังบันทึก…' : 'ยืนยันบันทึกการโอน' }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
+
+    <!-- 2026-10-02 — the second step of both panels (see confirmPanelAction()). -->
+    <ConfirmDialog
+      :show="pendingAction !== null"
+      :variant="pendingActionDialog.variant"
+      :title="pendingActionDialog.title"
+      :body="pendingActionDialog.body"
+      :busy="busyId !== null"
+      @confirm="confirmPanelAction"
+      @update:show="(v) => { if (!v) pendingAction = null }"
+    />
   </main>
 </template>

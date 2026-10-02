@@ -35,6 +35,9 @@ import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+// ADR-052 — one "saved" dialog per write, raised only after the server
+// answered and the list was re-read from it.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -147,6 +150,17 @@ async function loadPromotions() {
     promoLoading.value = false
     promoLoadedOnce.value = true
   }
+}
+
+/*
+ * ADR-052 — the re-read after a write. loadPromotions() reports a failure
+ * through promoError instead of throwing; turning that back into a throw lets
+ * confirmSaved() say "saved, but the screen may be behind" rather than a
+ * plain success over a list that did not reload.
+ */
+async function reloadPromotionsAfterWrite(): Promise<void> {
+  await loadPromotions()
+  if (promoError.value) throw new Error(promoError.value)
 }
 
 // ── Lazily-loaded lookups for the create/edit form (same pattern as
@@ -283,13 +297,27 @@ async function submitForm() {
       starts_at: form.value.starts_at,
       ends_at: form.value.ends_at || null,
     }
-    if (editingId.value) {
-      await api.put(`/product-price-promotions/${editingId.value}`, payload)
-    } else {
-      await api.post('/product-price-promotions', payload)
-    }
-    closeForm()
-    await loadPromotions()
+    const editing = editingId.value
+    await confirmSaved(
+      () =>
+        editing
+          ? api.put<{ data: PricePromotion }>(`/product-price-promotions/${editing}`, payload)
+          : api.post<{ data: PricePromotion }>('/product-price-promotions', payload),
+      {
+        apply: async () => {
+          closeForm()
+          await reloadPromotionsAfterWrite()
+        },
+        // Quotes the product and price the SERVER stored, not the form.
+        message: (res) => {
+          const saved = res?.data
+          const what = saved?.product_name ? `ส่วนลดของ "${saved.product_name}"` : 'ส่วนลด'
+          const price = typeof saved?.discounted_price_satang === 'number' ? ` (${formatSatang(saved.discounted_price_satang)})` : ''
+
+          return `${editing ? 'บันทึก' : 'สร้าง'}${what}${price} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     formError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -307,8 +335,12 @@ async function confirmDeletePromotion() {
   const p = pendingDeletePromotion.value
   if (!p) return
   try {
-    await api.delete(`/product-price-promotions/${p.id}`)
-    promotions.value = promotions.value.filter((x) => x.id !== p.id)
+    await confirmSaved(() => api.delete(`/product-price-promotions/${p.id}`), {
+      apply: () => {
+        promotions.value = promotions.value.filter((x) => x.id !== p.id)
+      },
+      message: `ลบส่วนลดของ "${p.product_name}" แล้ว`,
+    })
   } catch (e) {
     promoError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   } finally {

@@ -50,6 +50,7 @@ import CommissionPlansView from '../CommissionPlansView.vue'
 import CommissionWithdrawalsView from '../CommissionWithdrawalsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const AIA = { id: 2, name: 'AIA', slug: 'aia' }
 
@@ -184,6 +185,7 @@ describe('step 4.4 — the withdrawal floor is set here now', () => {
      * same on screen and is a different promise to every agent.
      */
     mockApi(100000)
+    put.mockResolvedValue({ company_id: 2, min_withdrawal_satang: null, wht_rate: null })
 
     const wrapper = await mountStep4()
     await wrapper.get('[data-test="withdrawal-min-input"]').setValue('')
@@ -191,7 +193,10 @@ describe('step 4.4 — the withdrawal floor is set here now', () => {
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/commission-withdrawal-settings?company_id=2', { min_withdrawal_satang: null })
-    expect(wrapper.get('[data-test="withdrawal-min-message"]').text()).toContain('ไม่มีขั้นต่ำ')
+    // ADR-052 — the inline "บันทึกแล้ว" line became the saved dialog.
+    expect(wrapper.find('[data-test="withdrawal-min-message"]').exists()).toBe(false)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ไม่มีขั้นต่ำ')
   })
 
   it('converts baht to satang without a float creeping in', async () => {

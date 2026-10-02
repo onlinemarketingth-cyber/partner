@@ -160,7 +160,12 @@ await Promise.resolve()
 await Promise.resolve()
 await new Promise((resolve) => setTimeout(resolve, 0))
 
+// ADR-052 — the "saved" dialog is a module singleton, so a notice raised in
+// one test must not still be showing in the next.
+const { resetSaveFeedback } = await import('./src/composables/useSaveFeedback')
+
 beforeEach(() => {
+  resetSaveFeedback()
   const pinia = createPinia()
 
   // setActivePinia covers stores reached OUTSIDE a component (a composable

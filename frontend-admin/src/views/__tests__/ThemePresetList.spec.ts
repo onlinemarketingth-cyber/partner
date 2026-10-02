@@ -60,6 +60,7 @@ vi.mock('@/utils/imageCompression', () => ({ compressImage: vi.fn() }))
 
 import ThemeSettingsView from '../ThemeSettingsView.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const THEME = {
   company: { name: 'GENESENN', slug: 'genesenn' },
@@ -257,7 +258,9 @@ describe('ThemeSettingsView — saving a colour set says so', () => {
     await wrapper.findAll('button').find((b) => b.text().includes('บันทึกสีปัจจุบันเป็นชุด'))!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="preset-saved"]').text()).toContain('โทนหลักบริษัท')
+    // ADR-052 — the confirmation by name is now the "saved" dialog.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('โทนหลักบริษัท')
     expect(rowOrder(wrapper)[0]).toBe('โทนหลักบริษัท')
   })
 })
@@ -588,7 +591,9 @@ describe('ThemeSettingsView — applying a set says what happened', () => {
     await (wrapper.vm as unknown as { applyPendingPreset: () => Promise<void> }).applyPendingPreset()
     await flushPromises()
 
-    expect(wrapper.find('[data-test="preset-applied"]').text()).toContain('Live to 100 Club')
+    // ADR-052 — the confirmation by name is now the "saved" dialog.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('Live to 100 Club')
   })
 
   it('marks the set the company is currently wearing', async () => {

@@ -44,6 +44,7 @@ vi.mock('@/utils/qrCode', () => ({ generateQrDataUrl: vi.fn().mockResolvedValue(
 import AgentRosterView from '../AgentRosterView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const ALL = { update: true, deactivate: true, restore: true, move_company: true }
 
@@ -125,8 +126,10 @@ async function mountView() {
           name: 'ConfirmDialog',
           props: ['show', 'title', 'body', 'confirmLabel', 'variant', 'busy'],
           template:
-            '<div v-if="show" data-test="confirm"><p>{{ title }}</p><p>{{ body }}</p>'
-            + '<button data-test="confirm-yes" @click="$emit(\'confirm\')">ok</button></div>',
+            '<div v-if="show" data-test="confirm" :data-variant="variant" :data-busy="busy ? \'yes\' : \'no\'">'
+            + '<p data-test="confirm-title">{{ title }}</p><p data-test="confirm-body">{{ body }}</p>'
+            + '<button data-test="confirm-yes" @click="$emit(\'confirm\')">ok</button>'
+            + '<button data-test="confirm-no" @click="$emit(\'update:show\', false); $emit(\'cancel\')">no</button></div>',
         },
         RouterLink: { props: ['to'], template: '<a><slot /></a>' },
       },
@@ -461,6 +464,8 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
     await flushPromises()
     await at(wrapper, 'reject-reason').setValue('ข้อมูลไม่ครบ')
     await at(wrapper, 'reject-confirm').trigger('click')
+    // 2026-10-02 — the row's button asks first; the dialog's confirm sends.
+    await at(wrapper, 'confirm-yes').trigger('click')
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/agent-approvals/7/reject', { reason: 'ข้อมูลไม่ครบ' })
@@ -477,9 +482,90 @@ describe('AgentRosterView — deciding on a registration from the list', () => {
     await flushPromises()
     await at(wrapper, 'reject-reason').setValue('   ')
     await at(wrapper, 'reject-confirm').trigger('click')
+    await at(wrapper, 'confirm-yes').trigger('click')
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/agent-approvals/7/reject', { reason: undefined })
+  })
+})
+
+/*
+ * 2026-10-02 (owner decision) — ยืนยันไม่อนุมัติ in the row only ASKS. A
+ * ConfirmDialog names the applicant and quotes the reason; its confirm sends
+ * exactly what the row used to send.
+ */
+describe('AgentRosterView — ไม่อนุมัติ asks a ConfirmDialog first', () => {
+  async function typeReasonAndPress(reason: string) {
+    mockRoster([applicant({ permissions: { ...ALL, reject_registration: true } })])
+    const wrapper = await mountView()
+    await openMenu(wrapper)
+    inMenu('reject-applicant')!.click()
+    await flushPromises()
+    await at(wrapper, 'reject-reason').setValue(reason)
+    await at(wrapper, 'reject-confirm').trigger('click')
+    await flushPromises()
+
+    return wrapper
+  }
+
+  it('sends nothing on the row button and opens a danger dialog quoting the reason', async () => {
+    const wrapper = await typeReasonAndPress('ข้อมูลไม่ครบ')
+
+    expect(put).not.toHaveBeenCalled()
+    expect(at(wrapper, 'confirm').attributes('data-variant')).toBe('danger')
+    expect(at(wrapper, 'confirm-title').text()).toBe('ยืนยันไม่อนุมัติ')
+    expect(at(wrapper, 'confirm-body').text()).toBe('ไม่อนุมัติ ทดสอบสมัครใหม่ นามสกุล — เหตุผล: ข้อมูลไม่ครบ')
+  })
+
+  it('cancel sends nothing and keeps the reason box open with the text', async () => {
+    const wrapper = await typeReasonAndPress('ข้อมูลไม่ครบ')
+
+    await at(wrapper, 'confirm-no').trigger('click')
+    await flushPromises()
+
+    expect(put).not.toHaveBeenCalled()
+    expect(at(wrapper, 'confirm').exists()).toBe(false)
+    expect((at(wrapper, 'reject-reason').element as HTMLInputElement).value).toBe('ข้อมูลไม่ครบ')
+  })
+
+  it('confirm sends the row\'s exact payload once, then the saved dialog', async () => {
+    put.mockResolvedValue({ data: applicant({ name: 'ทดสอบ (server)', agent_approval_status: 'rejected' }) })
+    const wrapper = await typeReasonAndPress('  ข้อมูลไม่ครบ ')
+
+    await at(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledTimes(1)
+    expect(put).toHaveBeenCalledWith('/agent-approvals/7/reject', { reason: 'ข้อมูลไม่ครบ' })
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe('บันทึกว่าไม่อนุมัติ ทดสอบ (server) แล้ว')
+    expect(at(wrapper, 'confirm').exists()).toBe(false)
+  })
+
+  it('is busy while the request is in flight', async () => {
+    let release: (v: unknown) => void = () => {}
+    put.mockImplementation(() => new Promise((r) => { release = r }))
+    const wrapper = await typeReasonAndPress('ข้อมูลไม่ครบ')
+
+    await at(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+    expect(at(wrapper, 'confirm').attributes('data-busy')).toBe('yes')
+
+    release({ data: {} })
+    await flushPromises()
+    expect(at(wrapper, 'confirm').exists()).toBe(false)
+  })
+
+  it('a refusal closes the dialog and raises no saved dialog', async () => {
+    put.mockRejectedValue(new Error('refused'))
+    const wrapper = await typeReasonAndPress('ข้อมูลไม่ครบ')
+
+    await at(wrapper, 'confirm-yes').trigger('click')
+    await flushPromises()
+
+    expect(at(wrapper, 'confirm').exists()).toBe(false)
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ไม่อนุมัติไม่สำเร็จ')
   })
 })
 

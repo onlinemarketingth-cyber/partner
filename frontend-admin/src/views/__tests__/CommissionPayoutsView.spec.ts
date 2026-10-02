@@ -40,6 +40,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const put = vi.fn()
@@ -247,6 +248,22 @@ async function mountView(world: World, open: 'payable' | 'blocked' | 'review' | 
  * money on it. The leading boundary requires the zero to be the WHOLE amount.
  */
 const STANDALONE_ZERO_BAHT = /(^|[^\d])0 บาท/
+
+type Wrapper = Awaited<ReturnType<typeof mountView>>
+
+/** The ConfirmDialog currently open (it renders with `v-if`), if any. */
+function openDialog(w: Wrapper) {
+  return w.findAllComponents({ name: 'ConfirmDialog' }).find((d) => d.props('show') === true)
+}
+
+/** Press the open dialog's confirm (its last button) or cancel (its first). */
+async function answerDialog(w: Wrapper, answer: 'confirm' | 'cancel') {
+  const dialog = openDialog(w)
+  expect(dialog, 'an open ConfirmDialog').toBeDefined()
+  const buttons = dialog!.findAll('button')
+  await (answer === 'confirm' ? buttons[buttons.length - 1] : buttons[0])!.trigger('click')
+  await flushPromises()
+}
 
 beforeEach(() => {
   get.mockReset()
@@ -731,11 +748,79 @@ describe('step ② — approving what agents asked for', () => {
     await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
     await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('ยอดไม่ตรงกับที่ตรวจสอบ')
     await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
-    await flushPromises()
+    // 2026-10-02 — the row's button asks first; the dialog's confirm sends.
+    await answerDialog(wrapper, 'confirm')
 
     expect(post).toHaveBeenCalledWith('/commission-withdrawals/601/reject', {
       rejection_reason: 'ยอดไม่ตรงกับที่ตรวจสอบ',
     })
+  })
+
+  it('will not open the confirmation without a reason', async () => {
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+
+    await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
+    await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('   ')
+    await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
+    await flushPromises()
+
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('2026-10-02 — the row button sends nothing and opens a danger dialog naming payee, amount and reason', async () => {
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+
+    await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
+    await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('ยอดไม่ตรงกับที่ตรวจสอบ')
+    await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
+    await flushPromises()
+
+    expect(post).not.toHaveBeenCalled()
+    const dialog = openDialog(wrapper)!
+    expect(dialog.props('variant')).toBe('danger')
+    expect(dialog.props('title')).toBe('ยืนยันไม่อนุมัติ')
+    expect(dialog.props('body')).toBe('ไม่อนุมัติคำขอถอนของ ขอเอง 2,000 บาท — เหตุผล: ยอดไม่ตรงกับที่ตรวจสอบ')
+  })
+
+  it('2026-10-02 — cancel sends nothing and keeps the panel open with the reason', async () => {
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+
+    await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
+    await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('ยอดไม่ตรงกับที่ตรวจสอบ')
+    await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
+    await flushPromises()
+    await answerDialog(wrapper, 'cancel')
+
+    expect(post).not.toHaveBeenCalled()
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(
+      (wrapper.get('[data-test="payout-reject-reason-601"]').element as HTMLTextAreaElement).value,
+    ).toBe('ยอดไม่ตรงกับที่ตรวจสอบ')
+  })
+
+  it('2026-10-02 — confirm sends the exact old payload once, busy while in flight, then the saved dialog', async () => {
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+    let release: (v: unknown) => void = () => {}
+    post.mockImplementationOnce(() => new Promise((r) => { release = r }))
+
+    await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
+    await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('  ยอดไม่ตรง ')
+    await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
+    await flushPromises()
+    await answerDialog(wrapper, 'confirm')
+
+    expect(openDialog(wrapper)!.props('busy')).toBe(true)
+    expect(saveFeedbackState.show).toBe(false)
+
+    release({ data: { ...ASKED, status: 'rejected', agent_name: 'ขอเอง (ชื่อจริง)', amount_satang: 77_700 } })
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith('/commission-withdrawals/601/reject', { rejection_reason: 'ยอดไม่ตรง' })
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe('ไม่อนุมัติคำขอถอนของ ขอเอง (ชื่อจริง) 777 บาท แล้ว')
   })
 
   it('offers no ticking at all — this step is decided one at a time', async () => {
@@ -992,5 +1077,154 @@ describe('finding out that you have to select', () => {
 
     expect(wrapper.get('[data-test="payout-batch-confirm"]').text()).toContain('1 คน')
     expect(wrapper.get('[data-test="payout-selection-total"]').text()).toContain('1,500 บาท')
+  })
+})
+
+/**
+ * ══════════════════════════════════════════════════════════════════════════
+ * ADR-052 — "saved" is said once, by the dialog, and only when it is true.
+ * ══════════════════════════════════════════════════════════════════════════
+ */
+describe('ADR-052 — the saved dialog quotes the server, never the selection', () => {
+  it('raise payouts: the dialog counts and totals the rows the SERVER raised, after the re-read', async () => {
+    /*
+     * The old inline line used the count and total captured BEFORE the request.
+     * Two were ticked; the server raised one (the other was raised by someone
+     * else a moment earlier) — the dialog must say one, and its amount.
+     */
+    const wrapper = await mountView({
+      people: [
+        makeRow({ agent_id: 42, total_pending_satang: TWO_THOUSAND_BAHT }),
+        makeRow({ agent_id: 43, agent_name: 'สมหญิง', total_pending_satang: FIFTEEN_HUNDRED_BAHT }),
+      ],
+    })
+    let resolvePost: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (resolvePost = r)))
+
+    await wrapper.get('[data-test="payout-select-42"]').trigger('change')
+    await wrapper.get('[data-test="payout-select-43"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    const getsBefore = get.mock.calls.length
+    resolvePost({ data: [makeRequest({ id: 900, agent_id: 42, status: 'approved', amount_satang: 123_400 })] })
+    await flushPromises()
+
+    expect(get.mock.calls.length).toBeGreaterThan(getsBefore)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ตั้งจ่าย 1 คน')
+    expect(saveFeedbackState.body).toContain('1,234 บาท')
+    expect(saveFeedbackState.body).not.toContain('3,500')
+    expect(wrapper.find('[data-test="payout-batch-done"]').exists()).toBe(false)
+  })
+
+  it('raise payouts: a refused batch raises no dialog and keeps the server’s error in the confirmation', async () => {
+    const wrapper = await mountView({ people: [makeRow({ agent_id: 42 })] })
+    post.mockRejectedValueOnce(new FakeApiError(422, { message: 'ยอดไม่ตรง กรุณารีเฟรชหน้าจอ' }))
+
+    await wrapper.get('[data-test="payout-select-42"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.get('[data-test="payout-batch-error"]').text()).toContain('กรุณารีเฟรชหน้าจอ')
+  })
+
+  it('mark transferred: the dialog uses the settled rows the server returned', async () => {
+    const A = makeRequest({ id: 701, agent_name: 'รายแรก', amount_satang: TWO_THOUSAND_BAHT })
+    const B = makeRequest({ id: 702, agent_name: 'รายสอง', amount_satang: FIFTEEN_HUNDRED_BAHT })
+    const wrapper = await mountView({ transfer: [A, B] }, 'transfer')
+    post.mockResolvedValueOnce({ data: [{ ...A, status: 'transferred' }, { ...B, status: 'transferred' }] })
+
+    await wrapper.get('[data-test="payout-request-select-701"]').trigger('change')
+    await wrapper.get('[data-test="payout-request-select-702"]').trigger('change')
+    await wrapper.get('[data-test="payout-batch-submit"]').trigger('click')
+    await wrapper.get('[data-test="payout-batch-confirm-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('บันทึกว่าโอนแล้ว 2 ใบ')
+    expect(saveFeedbackState.body).toContain('3,500 บาท')
+  })
+
+  it('approve: dialog after the queue was re-read, naming the server’s payee and amount', async () => {
+    const ASKED = makeRequest({ id: 601, agent_name: 'ขอเอง', status: 'pending_review', source: 'agent_request' })
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+    post.mockResolvedValueOnce({ data: { ...ASKED, status: 'approved', agent_name: 'ขอเอง (ชื่อจริง)', amount_satang: 77_700 } })
+
+    await wrapper.get('[data-test="payout-approve-601"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('อนุมัติ')
+    expect(saveFeedbackState.body).toContain('ขอเอง (ชื่อจริง)')
+    expect(saveFeedbackState.body).toContain('777 บาท')
+  })
+
+  it('reject: a refused decision raises no dialog and shows the server’s sentence', async () => {
+    const ASKED = makeRequest({ id: 601, agent_name: 'ขอเอง', status: 'pending_review', source: 'agent_request' })
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+    post.mockRejectedValueOnce(new FakeApiError(409, { message: 'คำขอนี้ถูกตัดสินไปแล้ว' }))
+
+    await wrapper.get('[data-test="payout-reject-601"]').trigger('click')
+    await wrapper.get('[data-test="payout-reject-reason-601"]').setValue('ไม่ตรง')
+    await wrapper.get('[data-test="payout-reject-submit-601"]').trigger('click')
+    await flushPromises()
+    await answerDialog(wrapper, 'confirm')
+
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.get('[data-test="payout-error"]').text()).toContain('คำขอนี้ถูกตัดสินไปแล้ว')
+  })
+
+  it('bank account: the form and the dialog show the STORED number, not the typed one', async () => {
+    const NO_BANK = makeRow({ agent_id: 3, agent_name: 'ไม่มีบัญชี', payout_details_complete: false, bank_account_number: null })
+    const wrapper = await mountView({ people: [NO_BANK] }, 'blocked')
+    put.mockResolvedValueOnce({
+      data: { name: 'ไม่มีบัญชี', bank_name: 'ไทยพาณิชย์', bank_account_number: '111-2-33333-4', bank_account_holder_name: 'นาย ก' },
+    })
+
+    await wrapper.get('[data-test="payout-fix-bank-3"]').trigger('click')
+    const inputs = wrapper.findAll('input[placeholder="เลขที่บัญชี"]')
+    await inputs[0]!.setValue(' 1112333334 ')
+    await wrapper.findAll('button').find((b) => b.text() === 'บันทึกบัญชีธนาคาร')!.trigger('click')
+    await flushPromises()
+
+    expect(put).toHaveBeenCalledWith('/users/3', expect.objectContaining({ bank_account_number: '1112333334' }))
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('111-2-33333-4')
+    // the editor is still open (the payee is still blocked in this world) and holds the stored value
+    expect((wrapper.get('input[placeholder="เลขที่บัญชี"]').element as HTMLInputElement).value).toBe('111-2-33333-4')
+    expect(wrapper.text()).not.toContain('บันทึกสำเร็จ — เลขที่บัญชี')
+  })
+
+  it('bank account: a refused save raises no dialog and shows the error', async () => {
+    const NO_BANK = makeRow({ agent_id: 3, agent_name: 'ไม่มีบัญชี', payout_details_complete: false, bank_account_number: null })
+    const wrapper = await mountView({ people: [NO_BANK] }, 'blocked')
+    put.mockRejectedValueOnce(new FakeApiError(422, {}))
+
+    await wrapper.get('[data-test="payout-fix-bank-3"]').trigger('click')
+    await wrapper.findAll('button').find((b) => b.text() === 'บันทึกบัญชีธนาคาร')!.trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.get('[data-test="payout-error"]').text()).toContain('บันทึกบัญชีธนาคารไม่สำเร็จ')
+  })
+
+  it('approve landed but the lists could not be re-read: the dialog says the screen may be stale', async () => {
+    const ASKED = makeRequest({ id: 601, agent_name: 'ขอเอง', status: 'pending_review', source: 'agent_request' })
+    const wrapper = await mountView({ review: [ASKED] }, 'review')
+    post.mockResolvedValueOnce({ data: { ...ASKED, status: 'approved' } })
+    get.mockImplementation(() => Promise.reject(new FakeApiError(500, {})))
+
+    await wrapper.get('[data-test="payout-approve-601"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.get('[data-test="payout-error"]').text()).toContain('โหลดข้อมูลไม่สำเร็จ')
   })
 })

@@ -32,11 +32,16 @@
  * box" needs the refetch to have LANDED before the focus call, or the input
  * it focuses is the one about to be replaced.
  */
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { api, ApiError } from '@/api/client'
 import Icon from './Icon.vue'
 import EmptyState from './EmptyState.vue'
 import InfoPopover from './InfoPopover.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
+// ADR-052 — every write here ends in the shared "saved" dialog, raised only
+// after the server answered 2xx AND `reload` has put the server's list back
+// on screen. Both callers (the lesson panel and the library) get it for free.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import { QUIZ_NO_CORRECT_ANSWER_HOWTO } from '@/constants/academyBuilderCopy'
 
 interface EditorOption {
@@ -77,9 +82,13 @@ async function addQuestion() {
   addingQuestion.value = true
   errorMessage.value = ''
   try {
-    await api.post(props.addQuestionPath, { question_text: text })
-    newQuestionText.value = ''
-    await props.reload()
+    await confirmSaved(() => api.post(props.addQuestionPath, { question_text: text }), {
+      apply: async () => {
+        newQuestionText.value = ''
+        await props.reload()
+      },
+      message: 'เพิ่มคำถามแล้ว',
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'เพิ่มคำถามไม่สำเร็จ'
   } finally {
@@ -87,13 +96,41 @@ async function addQuestion() {
   }
 }
 
-async function deleteQuestion(questionId: number) {
+/*
+ * ADR-052 — deleting a question (and its options) used to fire straight off
+ * the trash icon. It now asks first, like every other delete in this app.
+ */
+const pendingDeleteQuestion = ref<EditorQuestion | null>(null)
+const pendingDeleteOption = ref<EditorOption | null>(null)
+const deleting = ref(false)
+
+const deleteQuestionBody = computed(() => {
+  const q = pendingDeleteQuestion.value
+  if (!q) return ''
+  const options = q.options.length ? ` พร้อมตัวเลือก ${q.options.length} ข้อ` : ''
+
+  return `ลบคำถาม “${q.question_text}”${options} ยืนยันหรือไม่?`
+})
+
+function requestDeleteQuestion(q: EditorQuestion) {
+  pendingDeleteQuestion.value = q
+}
+
+async function confirmDeleteQuestion() {
+  const q = pendingDeleteQuestion.value
+  if (!q) return
+  deleting.value = true
   errorMessage.value = ''
   try {
-    await api.delete(`/module-lesson-quiz-questions/${questionId}`)
-    await props.reload()
+    await confirmSaved(() => api.delete(`/module-lesson-quiz-questions/${q.id}`), {
+      apply: () => props.reload(),
+      message: 'ลบคำถามแล้ว',
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'ลบคำถามไม่สำเร็จ'
+  } finally {
+    deleting.value = false
+    pendingDeleteQuestion.value = null
   }
 }
 
@@ -112,13 +149,17 @@ async function addOption(questionId: number) {
   addingOptionFor.value = questionId
   errorMessage.value = ''
   try {
-    await api.post(`/module-lesson-quiz-questions/${questionId}/options`, { option_text: text })
-    newOptionText.value[questionId] = ''
-    await props.reload()
-    // Keep the cursor where the admin is typing — adding four options in a
-    // row should not mean four trips back to the mouse.
-    await nextTick()
-    optionInputEls[questionId]?.focus()
+    await confirmSaved(() => api.post(`/module-lesson-quiz-questions/${questionId}/options`, { option_text: text }), {
+      apply: async () => {
+        newOptionText.value[questionId] = ''
+        await props.reload()
+        // Keep the cursor where the admin is typing — adding four options in a
+        // row should not mean four trips back to the mouse.
+        await nextTick()
+        optionInputEls[questionId]?.focus()
+      },
+      message: 'เพิ่มตัวเลือกแล้ว',
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'เพิ่มตัวเลือกไม่สำเร็จ'
   } finally {
@@ -135,20 +176,39 @@ async function addOption(questionId: number) {
 async function markOptionCorrect(optionId: number) {
   errorMessage.value = ''
   try {
-    await api.put(`/module-lesson-quiz-options/${optionId}`, { is_correct: true })
-    await props.reload()
+    await confirmSaved(
+      () => api.put<{ data?: { option_text?: string } }>(`/module-lesson-quiz-options/${optionId}`, { is_correct: true }),
+      {
+        apply: () => props.reload(),
+        // Quoted from the server's answer, not from the row that was clicked.
+        message: (res) =>
+          res?.data?.option_text ? `ตั้ง “${res.data.option_text}” เป็นคำตอบที่ถูกต้องแล้ว` : 'บันทึกคำตอบที่ถูกต้องแล้ว',
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'บันทึกไม่สำเร็จ'
   }
 }
 
-async function deleteOption(optionId: number) {
+function requestDeleteOption(opt: EditorOption) {
+  pendingDeleteOption.value = opt
+}
+
+async function confirmDeleteOption() {
+  const opt = pendingDeleteOption.value
+  if (!opt) return
+  deleting.value = true
   errorMessage.value = ''
   try {
-    await api.delete(`/module-lesson-quiz-options/${optionId}`)
-    await props.reload()
+    await confirmSaved(() => api.delete(`/module-lesson-quiz-options/${opt.id}`), {
+      apply: () => props.reload(),
+      message: 'ลบตัวเลือกแล้ว',
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'ลบตัวเลือกไม่สำเร็จ'
+  } finally {
+    deleting.value = false
+    pendingDeleteOption.value = null
   }
 }
 </script>
@@ -162,7 +222,7 @@ async function deleteOption(optionId: number) {
       <div v-for="q in questions" :key="q.id" class="p-3 rounded-lg bg-white border border-slate-100">
         <div class="flex items-start justify-between gap-2 mb-1.5">
           <p class="text-sm font-bold text-slate-700 min-w-0 break-words">{{ q.question_text }}</p>
-          <button class="text-rose-500 hover:text-rose-700 shrink-0" title="ลบคำถาม" @click="deleteQuestion(q.id)">
+          <button class="text-rose-500 hover:text-rose-700 shrink-0" title="ลบคำถาม" data-test="quiz-delete-question" @click="requestDeleteQuestion(q)">
             <Icon name="trash" :size="14" />
           </button>
         </div>
@@ -177,7 +237,7 @@ async function deleteOption(optionId: number) {
               <Icon v-if="opt.is_correct" name="check" :size="9" class="text-white" />
             </button>
             <span :class="opt.is_correct ? 'font-bold text-emerald-700' : 'text-slate-600'" class="flex-1 min-w-0 break-words">{{ opt.option_text }}</span>
-            <button class="text-slate-300 hover:text-rose-600 shrink-0" title="ลบตัวเลือก" @click="deleteOption(opt.id)">
+            <button class="text-slate-300 hover:text-rose-600 shrink-0" title="ลบตัวเลือก" data-test="quiz-delete-option" @click="requestDeleteOption(opt)">
               <Icon name="x" :size="12" />
             </button>
           </div>
@@ -221,5 +281,24 @@ async function deleteOption(optionId: number) {
         + เพิ่มคำถาม
       </button>
     </div>
+
+    <ConfirmDialog
+      :show="pendingDeleteQuestion !== null"
+      variant="danger"
+      title="ลบคำถาม"
+      :body="deleteQuestionBody"
+      :busy="deleting"
+      @confirm="confirmDeleteQuestion"
+      @update:show="(v: boolean) => { if (!v) pendingDeleteQuestion = null }"
+    />
+    <ConfirmDialog
+      :show="pendingDeleteOption !== null"
+      variant="danger"
+      title="ลบตัวเลือก"
+      :body="pendingDeleteOption ? `ลบตัวเลือก “${pendingDeleteOption.option_text}” ยืนยันหรือไม่?` : ''"
+      :busy="deleting"
+      @confirm="confirmDeleteOption"
+      @update:show="(v: boolean) => { if (!v) pendingDeleteOption = null }"
+    />
   </div>
 </template>

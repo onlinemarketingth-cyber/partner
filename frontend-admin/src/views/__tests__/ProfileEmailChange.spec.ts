@@ -63,6 +63,7 @@ vi.mock('vue-router', () => ({
 
 import ProfileSettingsView from '../ProfileSettingsView.vue'
 import { ApiError } from '@/api/client'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 async function mountView() {
   const wrapper = mount(ProfileSettingsView, {
@@ -139,7 +140,9 @@ describe('ProfileSettingsView — my own login address', () => {
     await changeEmail(wrapper, 'new@example.com', 'Str0ngPassword')
 
     expect(setUser).toHaveBeenCalledWith(saved)
-    expect(wrapper.text()).toContain('ครั้งถัดไปให้เข้าสู่ระบบด้วยอีเมลนี้')
+    // ADR-052 — the inline success line became the "saved" dialog.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ครั้งถัดไปให้เข้าสู่ระบบด้วยอีเมลนี้')
   })
 
   it('clears the password box after a successful save', async () => {

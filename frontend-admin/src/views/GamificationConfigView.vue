@@ -31,6 +31,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { fetchAllPages } from './agentEdit'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 interface GamificationRule {
   id: number
@@ -100,7 +102,12 @@ const agents = ref<AgentOption[]>([])
 const awardedBadges = ref<UserBadgeItem[]>([])
 const levelThresholds = ref<LevelThresholdItem[]>([])
 
-async function loadAll() {
+/**
+ * Resolves false when the re-read failed (the error is already on screen).
+ * ADR-052 — a write's `apply` step turns that into a throw, so the "saved"
+ * dialog says the screen may be behind instead of claiming fresh data.
+ */
+async function loadAll(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -122,14 +129,26 @@ async function loadAll() {
     agents.value = u.filter((a) => a.role === 'agent' && a.is_active)
     awardedBadges.value = ub.data
     levelThresholds.value = lt.data.sort((a, z) => a.level_number - z.level_number)
+
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
   }
 }
 onMounted(loadAll)
+
+/**
+ * ADR-052 — every write here re-reads the lists from the server (the
+ * `apply` step of confirmSaved) before the "saved" dialog appears.
+ */
+async function reloadAfterWrite(): Promise<void> {
+  if (!(await loadAll())) throw new Error('reload failed')
+}
 
 // ── Level threshold form (Super Admin only — see LevelThresholdPolicy) ──
 const showLevelForm = ref(false)
@@ -151,25 +170,48 @@ async function submitLevel() {
   errorMessage.value = ''
   try {
     const payload = { level_number: Number(levelForm.value.level_number), xp_required: Number(levelForm.value.xp_required) }
-    if (editingLevelId.value) {
-      await api.put(`/level-thresholds/${editingLevelId.value}`, payload)
-    } else {
-      await api.post('/level-thresholds', payload)
-    }
-    showLevelForm.value = false
-    await loadAll()
+    const editingId = editingLevelId.value
+    await confirmSaved(
+      () =>
+        editingId
+          ? api.put<{ data: LevelThresholdItem }>(`/level-thresholds/${editingId}`, payload)
+          : api.post<{ data: LevelThresholdItem }>('/level-thresholds', payload),
+      {
+        apply: async () => {
+          showLevelForm.value = false
+          await reloadAfterWrite()
+        },
+        message: (res) => `บันทึก Level ${res.data.level_number} แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status}) — เลข level อาจซ้ำ` : 'บันทึกไม่สำเร็จ'
   } finally {
     savingLevel.value = false
   }
 }
-async function deleteLevel(lt: LevelThresholdItem) {
+// ADR-052 — deleting a level asks first (it had no confirmation at all).
+// deleteLevel() opens the dialog; confirmDeleteLevel() does the delete.
+const pendingDeleteLevel = ref<LevelThresholdItem | null>(null)
+const deletingLevel = ref(false)
+function deleteLevel(lt: LevelThresholdItem) {
+  pendingDeleteLevel.value = lt
+}
+async function confirmDeleteLevel() {
+  const lt = pendingDeleteLevel.value
+  if (!lt) return
+  deletingLevel.value = true
+  errorMessage.value = ''
   try {
-    await api.delete(`/level-thresholds/${lt.id}`)
-    await loadAll()
+    await confirmSaved(() => api.delete(`/level-thresholds/${lt.id}`), {
+      apply: reloadAfterWrite,
+      message: `ลบ Level ${lt.level_number} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
+  } finally {
+    deletingLevel.value = false
+    pendingDeleteLevel.value = null
   }
 }
 
@@ -181,14 +223,22 @@ async function submitRule() {
   savingRule.value = true
   errorMessage.value = ''
   try {
-    await api.post('/gamification-rules', {
-      source_type: ruleForm.value.source_type,
-      xp_value: Number(ruleForm.value.xp_value),
-      ...(isSuperAdmin.value && ruleForm.value.company_wide ? { company_id: null } : {}),
-    })
-    ruleForm.value = { source_type: 'module_completed', xp_value: '10', company_wide: false }
-    showRuleForm.value = false
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.post<{ data: GamificationRule }>('/gamification-rules', {
+          source_type: ruleForm.value.source_type,
+          xp_value: Number(ruleForm.value.xp_value),
+          ...(isSuperAdmin.value && ruleForm.value.company_wide ? { company_id: null } : {}),
+        }),
+      {
+        apply: async () => {
+          ruleForm.value = { source_type: 'module_completed', xp_value: '10', company_wide: false }
+          showRuleForm.value = false
+          await reloadAfterWrite()
+        },
+        message: (res) => `บันทึกอัตรา XP "${sourceLabel(res.data.source_type)}" ${res.data.xp_value} XP แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status}) — อาจมี rule ที่ active อยู่แล้วสำหรับ event นี้` : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -196,9 +246,16 @@ async function submitRule() {
   }
 }
 async function toggleRuleActive(rule: GamificationRule) {
+  errorMessage.value = ''
   try {
-    await api.put(`/gamification-rules/${rule.id}`, { is_active: !rule.is_active })
-    await loadAll()
+    await confirmSaved(
+      () => api.put<{ data: GamificationRule }>(`/gamification-rules/${rule.id}`, { is_active: !rule.is_active }),
+      {
+        apply: reloadAfterWrite,
+        message: (res) =>
+          `${res.data.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}อัตรา XP "${sourceLabel(res.data.source_type)}" แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'
   }
@@ -260,37 +317,59 @@ async function submitBadge() {
     const conditionConfig = badgeForm.value.conditions.length
       ? badgeForm.value.conditions.map((c) => ({ metric: c.metric, operator: c.operator, value: Number(c.value) }))
       : null
-    if (editingBadgeId.value) {
-      await api.put(`/badges/${editingBadgeId.value}`, {
-        name: badgeForm.value.name,
-        description: badgeForm.value.description,
-        icon: badgeForm.value.icon,
-        condition_config: conditionConfig,
-      })
-    } else {
-      await api.post('/badges', {
-        key: badgeForm.value.key,
-        name: badgeForm.value.name,
-        description: badgeForm.value.description,
-        icon: badgeForm.value.icon,
-        condition_config: conditionConfig,
-        ...(isSuperAdmin.value && badgeForm.value.company_wide ? { company_id: null } : {}),
-      })
-    }
-    showBadgeForm.value = false
-    await loadAll()
+    const editingId = editingBadgeId.value
+    await confirmSaved(
+      () =>
+        editingId
+          ? api.put<{ data: Badge }>(`/badges/${editingId}`, {
+              name: badgeForm.value.name,
+              description: badgeForm.value.description,
+              icon: badgeForm.value.icon,
+              condition_config: conditionConfig,
+            })
+          : api.post<{ data: Badge }>('/badges', {
+              key: badgeForm.value.key,
+              name: badgeForm.value.name,
+              description: badgeForm.value.description,
+              icon: badgeForm.value.icon,
+              condition_config: conditionConfig,
+              ...(isSuperAdmin.value && badgeForm.value.company_wide ? { company_id: null } : {}),
+            }),
+      {
+        apply: async () => {
+          showBadgeForm.value = false
+          await reloadAfterWrite()
+        },
+        message: (res) => `บันทึก Badge "${res.data.name}" แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status}) — key อาจซ้ำ หรือเงื่อนไขไม่ถูกต้อง` : 'บันทึกไม่สำเร็จ'
   } finally {
     savingBadge.value = false
   }
 }
-async function deleteBadge(b: Badge) {
+// ADR-052 — deleting a badge asks first (it had no confirmation at all).
+const pendingDeleteBadge = ref<Badge | null>(null)
+const deletingBadge = ref(false)
+function deleteBadge(b: Badge) {
+  pendingDeleteBadge.value = b
+}
+async function confirmDeleteBadge() {
+  const b = pendingDeleteBadge.value
+  if (!b) return
+  deletingBadge.value = true
+  errorMessage.value = ''
   try {
-    await api.delete(`/badges/${b.id}`)
-    await loadAll()
+    await confirmSaved(() => api.delete(`/badges/${b.id}`), {
+      apply: reloadAfterWrite,
+      message: `ลบ Badge "${b.name}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
+  } finally {
+    deletingBadge.value = false
+    pendingDeleteBadge.value = null
   }
 }
 
@@ -303,10 +382,21 @@ async function submitAward() {
   awarding.value = true
   errorMessage.value = ''
   try {
-    await api.post('/user-badges', { user_id: Number(awardForm.value.user_id), badge_id: Number(awardForm.value.badge_id) })
-    awardForm.value = { user_id: '', badge_id: '' }
-    showAwardForm.value = false
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.post<{ data: UserBadgeItem }>('/user-badges', {
+          user_id: Number(awardForm.value.user_id),
+          badge_id: Number(awardForm.value.badge_id),
+        }),
+      {
+        apply: async () => {
+          awardForm.value = { user_id: '', badge_id: '' }
+          showAwardForm.value = false
+          await reloadAfterWrite()
+        },
+        message: (res) => `มอบ Badge "${res.data.badge?.name ?? ''}" ให้ ${res.data.user?.name ?? ''} แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `มอบ badge ไม่สำเร็จ (${e.status})` : 'มอบ badge ไม่สำเร็จ'
   } finally {
@@ -563,5 +653,26 @@ watch(() => activeCompany.companyId, () => { loadAll() })
         </TransitionGroup>
       </section>
     </template>
+
+    <!-- ADR-052 — deletes ask first. Inside <main> so the template stays
+         single-root (see AcademyManagementView's TASK-066 note). -->
+    <ConfirmDialog
+      :show="pendingDeleteLevel !== null"
+      variant="danger"
+      title="ลบ Level"
+      :body="pendingDeleteLevel ? `ลบ Level ${pendingDeleteLevel.level_number} (${pendingDeleteLevel.xp_required.toLocaleString('th-TH')} XP) ออกจากตารางเลื่อนเลเวล ยืนยันหรือไม่?` : ''"
+      :busy="deletingLevel"
+      @confirm="confirmDeleteLevel"
+      @update:show="(v: boolean) => { if (!v) pendingDeleteLevel = null }"
+    />
+    <ConfirmDialog
+      :show="pendingDeleteBadge !== null"
+      variant="danger"
+      title="ลบ Badge"
+      :body="pendingDeleteBadge ? `ลบ Badge ${pendingDeleteBadge.name} ยืนยันหรือไม่?` : ''"
+      :busy="deletingBadge"
+      @confirm="confirmDeleteBadge"
+      @update:show="(v: boolean) => { if (!v) pendingDeleteBadge = null }"
+    />
   </main>
 </template>

@@ -34,6 +34,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { type AgentItem, fetchAllPages } from './agentEdit'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const auth = useAuthStore()
 // TASK-209 — the header company scope (ADR-038).
@@ -57,18 +59,32 @@ const approvalStatusTabs: Array<{ id: ApprovalStatusFilter; label: string }> = [
   { id: 'rejected', label: 'ถูกปฏิเสธ' },
 ]
 
-async function loadPendingApprovals() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function loadPendingApprovals(): Promise<boolean> {
   loadingPending.value = true
   try {
     // fetchAllPages, not a bare GET: /agent-approvals paginates at 15 and an
     // approved list is unbounded — page 1 alone would quietly hide most of
     // what an admin came here to review.
     approvalRows.value = await fetchAllPages<AgentItem>(`/agent-approvals?status=${approvalStatus.value}`)
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดคิวอนุมัติไม่สำเร็จ (${e.status})` : 'โหลดคิวอนุมัติไม่สำเร็จ'
+    return false
   } finally {
     loadingPending.value = false
   }
+}
+
+/**
+ * ADR-052 — step 3 of every decision below: close the sheet, re-read the
+ * queue, and throw when that re-read failed so confirmSaved() says the
+ * decision landed but the list may be behind (never a plain success over a
+ * list still showing the person as waiting).
+ */
+async function reloadQueueAfterDecision(): Promise<void> {
+  detailItem.value = null
+  if (!(await loadPendingApprovals())) throw new Error('queue reload failed')
 }
 
 watch(approvalStatus, () => {
@@ -242,11 +258,13 @@ async function approvePending(item: AgentItem) {
   decidingId.value = item.id
   errorMessage.value = ''
   try {
-    await api.put(`/agent-approvals/${item.id}/approve`)
     // Closed on success only. Leaving it open over a stale row would show
-    // "รออนุมัติ" next to a person who has just been admitted.
-    detailItem.value = null
-    await loadPendingApprovals()
+    // "รออนุมัติ" next to a person who has just been admitted. The name in the
+    // dialog is the one on the row the SERVER returned.
+    await confirmSaved(() => api.put<{ data: AgentItem }>(`/agent-approvals/${item.id}/approve`), {
+      apply: reloadQueueAfterDecision,
+      message: (res) => `อนุมัติ ${res?.data?.name ?? item.name} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = decisionError(e, 'อนุมัติไม่สำเร็จ')
     detailItem.value = null
@@ -262,11 +280,17 @@ async function submitReject(item: AgentItem) {
   decidingId.value = item.id
   errorMessage.value = ''
   try {
-    await api.put(`/agent-approvals/${item.id}/reject`, { reason: rejectReason.value || undefined })
-    rejectingId.value = null
-    rejectReason.value = ''
-    detailItem.value = null
-    await loadPendingApprovals()
+    await confirmSaved(
+      () => api.put<{ data: AgentItem }>(`/agent-approvals/${item.id}/reject`, { reason: rejectReason.value || undefined }),
+      {
+        apply: async () => {
+          rejectingId.value = null
+          rejectReason.value = ''
+          await reloadQueueAfterDecision()
+        },
+        message: (res) => `ปฏิเสธ ${res?.data?.name ?? item.name} แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = decisionError(e, 'ปฏิเสธไม่สำเร็จ')
     detailItem.value = null
@@ -277,9 +301,10 @@ async function submitReject(item: AgentItem) {
 }
 
 // TASK-117 / ADR-025 §7 — reversing an approval, including one a team leader
-// made. Same inline-reason pattern as reject() above rather than a
-// ConfirmDialog, because the payload is the same (RejectAgentRequest) and a
-// dialog cannot take a free-text reason. Server semantics
+// made. Same inline-reason pattern as reject() above, because the payload is
+// the same (RejectAgentRequest) and a dialog cannot take a free-text reason —
+// the panel collects the reason, then a ConfirmDialog asks (2026-10-02, see
+// askRevokeApproval()). Server semantics
 // (AgentApprovalService::revoke): the user goes back to REJECTED, not to
 // pending, and the login gate (TASK-115) locks them out again immediately.
 const revokingApprovalId = ref<number | null>(null)
@@ -292,11 +317,17 @@ async function submitRevokeApproval(item: AgentItem) {
   decidingId.value = item.id
   errorMessage.value = ''
   try {
-    await api.put(`/agent-approvals/${item.id}/revoke`, { reason: revokeReason.value || undefined })
-    revokingApprovalId.value = null
-    revokeReason.value = ''
-    detailItem.value = null
-    await loadPendingApprovals()
+    await confirmSaved(
+      () => api.put<{ data: AgentItem }>(`/agent-approvals/${item.id}/revoke`, { reason: revokeReason.value || undefined }),
+      {
+        apply: async () => {
+          revokingApprovalId.value = null
+          revokeReason.value = ''
+          await reloadQueueAfterDecision()
+        },
+        message: (res) => `เพิกถอนการอนุมัติของ ${res?.data?.name ?? item.name} แล้ว — เข้าสู่ระบบไม่ได้ทันที`,
+      },
+    )
   } catch (e) {
     errorMessage.value = decisionError(e, 'เพิกถอนการอนุมัติไม่สำเร็จ')
     detailItem.value = null
@@ -304,6 +335,59 @@ async function submitRevokeApproval(item: AgentItem) {
   } finally {
     decidingId.value = null
   }
+}
+
+/*
+ * 2026-10-02 (owner decision) — the panel's button no longer sends.
+ *
+ * Reject and revoke both write a decision the applicant reads verbatim and
+ * that locks them out of the system, and a reason box with a button beside
+ * it was one stray click away from sending it. The panel still collects the
+ * reason; its button now opens a ConfirmDialog that names the person and
+ * quotes that reason, and only the dialog's confirm sends — the SAME request
+ * submitReject()/submitRevokeApproval() always sent. Cancel sends nothing and
+ * leaves the panel open with the reason as typed.
+ */
+const pendingDecision = ref<{ kind: 'reject' | 'revoke'; item: AgentItem } | null>(null)
+
+function askReject(item: AgentItem): void {
+  if (decidingId.value !== null) return
+  pendingDecision.value = { kind: 'reject', item }
+}
+
+function askRevokeApproval(item: AgentItem): void {
+  if (decidingId.value !== null) return
+  pendingDecision.value = { kind: 'revoke', item }
+}
+
+/** The reason as it will be sent, or a plain "none given" — never a blank line. */
+function quotedReason(reason: string): string {
+  return reason.trim() || 'ไม่ระบุ'
+}
+
+const decisionConfirmTitle = computed(() =>
+  pendingDecision.value?.kind === 'revoke' ? 'ยืนยันเพิกถอนการอนุมัติ' : 'ยืนยันปฏิเสธ',
+)
+
+const decisionConfirmBody = computed(() => {
+  const pending = pendingDecision.value
+  if (!pending) return ''
+  if (pending.kind === 'revoke') {
+    return `เพิกถอนการอนุมัติของ ${pending.item.name} — สถานะจะกลับไปเป็น "ถูกปฏิเสธ" และเข้าสู่ระบบไม่ได้ทันที\n`
+      + `เหตุผล: ${quotedReason(revokeReason.value)}`
+  }
+
+  return `ปฏิเสธ ${pending.item.name} — เหตุผล: ${quotedReason(rejectReason.value)}`
+})
+
+async function confirmPendingDecision(): Promise<void> {
+  const pending = pendingDecision.value
+  if (!pending) return
+  if (pending.kind === 'reject') await submitReject(pending.item)
+  else await submitRevokeApproval(pending.item)
+  // Closed whichever way it went: on success the saved dialog takes over, on
+  // a refusal the error banner above the queue says why.
+  pendingDecision.value = null
 }
 
 // TASK-209 — every list above is scoped server-side, so a change of the
@@ -448,6 +532,7 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
                 type="button"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 :disabled="decidingId !== null"
+                data-test="reject"
                 @click="rejectingId = rejectingId === p.id ? null : p.id"
               >
                 <Icon name="x" :size="14" />
@@ -457,6 +542,7 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
             <button
               v-else-if="approvalStatus === 'approved'"
               class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1"
+              data-test="revoke"
               @click="revokingApprovalId = revokingApprovalId === p.id ? null : p.id"
             >
               เพิกถอนการอนุมัติ
@@ -470,7 +556,7 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
             placeholder="เหตุผล (ไม่บังคับ)"
             class="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-sm"
           />
-          <button class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700" @click="submitReject(p)">
+          <button class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700" data-test="submit-reject" @click="askReject(p)">
             ยืนยันปฏิเสธ
           </button>
         </div>
@@ -488,7 +574,8 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
             />
             <button
               class="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700"
-              @click="submitRevokeApproval(p)"
+              data-test="submit-revoke"
+              @click="askRevokeApproval(p)"
             >
               ยืนยันเพิกถอน
             </button>
@@ -643,5 +730,18 @@ watch(() => activeCompany.companyId, () => { loadPendingApprovals() })
         </div>
       </div>
     </Teleport>
+
+    <!-- 2026-10-02 — the second step of reject / revoke (see askReject()).
+         Inside <main>: a sibling would make the template a multi-root
+         Fragment and break App.vue's <Transition mode="out-in">. -->
+    <ConfirmDialog
+      :show="pendingDecision !== null"
+      variant="danger"
+      :title="decisionConfirmTitle"
+      :body="decisionConfirmBody"
+      :busy="decidingId !== null"
+      @confirm="confirmPendingDecision"
+      @update:show="(v) => { if (!v) pendingDecision = null }"
+    />
   </main>
 </template>

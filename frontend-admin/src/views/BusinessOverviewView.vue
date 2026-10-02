@@ -37,6 +37,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { RouterLink } from 'vue-router'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const activeCompany = useActiveCompanyStore()
 
@@ -136,7 +137,7 @@ function choosePreset(p: Preset): void {
   void load()
 }
 
-async function load(): Promise<void> {
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -149,11 +150,13 @@ async function load(): Promise<void> {
       activeCompany.scopedPath(`/business-overview${query ? `?${query}` : ''}`),
     )
     data.value = res.data
+    return true
   } catch (e) {
     // The whole page is one request, so a failure leaves NOTHING rendered
     // rather than a half-filled dashboard whose blank tiles read as zeros.
     data.value = null
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -251,21 +254,28 @@ const disclosures = computed(() => {
  */
 const backfilling = ref(false)
 const confirmingBackfill = ref(false)
-const backfillDone = ref<number | null>(null)
 
+/*
+ * ADR-052 — the result used to be an inline green line. It is now the "saved"
+ * dialog, raised after the report has been re-read, quoting the count the
+ * SERVER says it updated.
+ */
 async function runBackfill(): Promise<void> {
   if (backfilling.value) return
 
   backfilling.value = true
   errorMessage.value = ''
   try {
-    const res = await api.post<{ data: { orders_updated: number } }>(
-      activeCompany.scopedPath('/business-overview/backfill-cost'),
-      {},
+    await confirmSaved(
+      () => api.post<{ data: { orders_updated: number } }>(activeCompany.scopedPath('/business-overview/backfill-cost'), {}),
+      {
+        apply: async () => {
+          confirmingBackfill.value = false
+          if (!(await load())) throw new Error('overview re-read failed')
+        },
+        message: (res) => `ใส่ต้นทุนย้อนหลังให้ ${res.data.orders_updated} รายการเรียบร้อย — กำไรขั้นต้นคำนวณใหม่แล้ว`,
+      },
     )
-    backfillDone.value = res.data.orders_updated
-    confirmingBackfill.value = false
-    await load()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ใส่ต้นทุนย้อนหลังไม่สำเร็จ (${e.status})` : 'ใส่ต้นทุนย้อนหลังไม่สำเร็จ'
   } finally {
@@ -474,14 +484,6 @@ const kpis = computed(() => {
           </div>
         </div>
       </div>
-
-      <p
-        v-if="backfillDone !== null"
-        class="mt-3 px-4 py-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-[13px] font-bold text-emerald-700"
-        data-test="overview-backfill-done"
-      >
-        ใส่ต้นทุนย้อนหลังให้ {{ backfillDone }} รายการเรียบร้อย — กำไรขั้นต้นด้านบนคำนวณใหม่แล้ว
-      </p>
 
       <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
         <!-- ═══ 2. ยอดขายรายเดือน ═══ -->

@@ -40,7 +40,6 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
-import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import RowActions, { type RowAction, type RowPrimaryAction } from '@/design-system/components/RowActions.vue'
 import AgentEditModal from './AgentEditModal.vue'
@@ -56,6 +55,7 @@ import {
 } from './agentEdit'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved, notifySaved, SAVED_BUT_STALE_BODY } from '@/composables/useSaveFeedback'
 
 interface CompanyOption {
   id: number
@@ -156,6 +156,17 @@ async function loadAgents() {
   }
 }
 
+/**
+ * ADR-052 — the re-read after a write. loadAgents() reports its own failure
+ * in `errorMessage` instead of throwing; this turns that back into a throw so
+ * confirmSaved() tells the admin the save landed but the list may be behind,
+ * rather than announcing success over a list that was never refreshed.
+ */
+async function reloadAfterWrite(): Promise<void> {
+  await loadAgents()
+  if (errorMessage.value) throw new Error(errorMessage.value)
+}
+
 async function search() {
   searching.value = true
   try {
@@ -252,7 +263,6 @@ const grantTargets = ref<AgentItem[] | null>(null)
 const grantTierId = ref<number | null>(null)
 const granting = ref(false)
 const grantDialogError = ref('')
-const grantResult = ref<{ tierName: string; granted: number; alreadyHeld: number } | null>(null)
 
 function openGrant(targets: AgentItem[]): void {
   if (targets.length === 0) return
@@ -283,18 +293,29 @@ async function confirmGrant(): Promise<void> {
   granting.value = true
   grantDialogError.value = ''
   try {
-    const res = await api.post<{ data: { cert_tier: CertTierOption; granted_user_ids: number[]; already_held_user_ids: number[] } }>(
-      '/user-certifications/bulk',
-      { user_ids: grantTargets.value.map((a) => a.id), cert_tier_id: grantTierId.value },
+    const userIds = grantTargets.value.map((a) => a.id)
+    const tierId = grantTierId.value
+    // ADR-052 — the counts in the dialog are the SERVER's (who it actually
+    // granted, who it found already holding the tier), never the preview's.
+    await confirmSaved(
+      () =>
+        api.post<{ data: { cert_tier: CertTierOption; granted_user_ids: number[]; already_held_user_ids: number[] } }>(
+          '/user-certifications/bulk',
+          { user_ids: userIds, cert_tier_id: tierId },
+        ),
+      {
+        apply: async () => {
+          grantTargets.value = null
+          clearSelection()
+          await reloadAfterWrite()
+        },
+        message: (res) => {
+          const skipped = res.data.already_held_user_ids.length
+          return `อนุมัติ ${res.data.cert_tier.name} ให้ ${res.data.granted_user_ids.length} คนแล้ว`
+            + (skipped ? ` · ข้าม ${skipped} คน (มีระดับนี้อยู่แล้ว)` : '')
+        },
+      },
     )
-    grantResult.value = {
-      tierName: res.data.cert_tier.name,
-      granted: res.data.granted_user_ids.length,
-      alreadyHeld: res.data.already_held_user_ids.length,
-    }
-    grantTargets.value = null
-    clearSelection()
-    await loadAgents()
   } catch (e) {
     grantDialogError.value = e instanceof ApiError ? `อนุมัติไม่สำเร็จ: ${e.message}` : 'อนุมัติไม่สำเร็จ'
   } finally {
@@ -343,7 +364,7 @@ async function submitCreate() {
   errorMessage.value = ''
   const documentNumber = normalizeIdNumber(createForm.value.id_document_type, createForm.value.national_id)
   try {
-    await api.post('/users', {
+    const created = await api.post<{ data: AgentItem }>('/users', {
       first_name: createForm.value.first_name,
       last_name: createForm.value.last_name,
       email: createForm.value.email,
@@ -364,7 +385,15 @@ async function submitCreate() {
       national_id: '',
     }
     showCreateForm.value = false
-    await loadAgents()
+    // ADR-052 — the new row is on the list before the dialog names it, and the
+    // name is the one the server stored.
+    try {
+      await reloadAfterWrite()
+    } catch {
+      notifySaved(SAVED_BUT_STALE_BODY)
+      return
+    }
+    notifySaved(`สร้างบัญชี ${created?.data?.name ?? 'สมาชิกใหม่'} แล้ว`)
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { errors?: Record<string, string[]> }
@@ -404,17 +433,19 @@ const editingAgentId = ref<number | null>(null)
 // TASK-210 (human, 2026-08-19: "กดบันทึก หากบันทึกสำเร็จให้ขึ้นปิดหน้าจอ modal
 // นี้ และขึ้น modal ใหม่ว่าบันทึกสำเร็จ"). The confirmation is raised HERE and
 // not inside the edit modal because the edit modal closes itself on success —
-// anything it rendered goes with it.
-const savedMessage = ref('')
-const showSavedDialog = ref(false)
-
-async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string }) {
-  if (payload.successMessage) {
-    savedMessage.value = payload.successMessage
-    showSavedDialog.value = true
+// anything it rendered goes with it. ADR-052: it is the one global dialog now,
+// raised only AFTER the roster has been re-read, so the row behind it already
+// shows what the server stored.
+async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string; successTitle?: string }) {
+  try {
+    await reloadAfterWrite()
+  } catch {
+    notifySaved(SAVED_BUT_STALE_BODY)
+    return
+  } finally {
+    if (payload.leaderChanged) await loadInviteLinks()
   }
-  await loadAgents()
-  if (payload.leaderChanged) await loadInviteLinks()
+  notifySaved(payload.successMessage ?? 'บันทึกข้อมูลสมาชิกแล้ว', payload.successTitle)
 }
 
 /*
@@ -485,20 +516,24 @@ function canReject(a: AgentItem): boolean {
  * server refuses a decision made twice, which reads as the first one having
  * failed.
  */
-async function decide(a: AgentItem, run: () => Promise<void>, fallback: string, done: string): Promise<void> {
+async function decide(
+  a: AgentItem,
+  run: () => Promise<{ data?: AgentItem } | undefined>,
+  fallback: string,
+  done: (name: string) => string,
+): Promise<void> {
   if (decidingId.value !== null) return
   decidingId.value = a.id
   errorMessage.value = ''
   try {
-    await run()
-    await loadAgents()
-    savedMessage.value = done
-    showSavedDialog.value = true
+    // ADR-052 — reload first, then the dialog, naming the row the SERVER returned.
+    await confirmSaved(run, { apply: reloadAfterWrite, message: (res) => done(res?.data?.name ?? a.name) })
   } catch (e) {
-    errorMessage.value = decisionError(e, fallback)
     // A refusal here almost always means the decision was already made, so the
-    // row on screen is the stale half of the contradiction.
+    // row on screen is the stale half of the contradiction. Re-read FIRST —
+    // loadAgents() clears `errorMessage` — so the refusal stays on screen.
     await loadAgents()
+    errorMessage.value = decisionError(e, fallback)
   } finally {
     decidingId.value = null
   }
@@ -507,9 +542,9 @@ async function decide(a: AgentItem, run: () => Promise<void>, fallback: string, 
 async function approveApplicant(a: AgentItem): Promise<void> {
   await decide(
     a,
-    () => api.put(`/agent-approvals/${a.id}/approve`),
+    () => api.put<{ data: AgentItem }>(`/agent-approvals/${a.id}/approve`),
     'อนุมัติไม่สำเร็จ',
-    `อนุมัติ ${a.name} แล้ว — เข้าใช้งานได้เมื่อยืนยันอีเมลเรียบร้อย`,
+    (name) => `อนุมัติ ${name} แล้ว — เข้าใช้งานได้เมื่อยืนยันอีเมลเรียบร้อย`,
   )
 }
 
@@ -517,12 +552,40 @@ async function submitRejectApplicant(a: AgentItem): Promise<void> {
   const reason = rejectReason.value.trim()
   await decide(
     a,
-    () => api.put(`/agent-approvals/${a.id}/reject`, { reason: reason || undefined }),
+    () => api.put<{ data: AgentItem }>(`/agent-approvals/${a.id}/reject`, { reason: reason || undefined }),
     'ไม่อนุมัติไม่สำเร็จ',
-    `บันทึกว่าไม่อนุมัติ ${a.name} แล้ว`,
+    (name) => `บันทึกว่าไม่อนุมัติ ${name} แล้ว`,
   )
   rejectingId.value = null
   rejectReason.value = ''
+}
+
+/*
+ * 2026-10-02 (owner decision) — ยืนยันไม่อนุมัติ in the row no longer sends.
+ *
+ * It opens a ConfirmDialog naming the applicant and quoting the reason they
+ * will read; only the dialog's confirm calls submitRejectApplicant(), which
+ * sends exactly what it always sent. Cancel sends nothing and leaves the
+ * reason box open with the text as typed.
+ */
+const pendingRejectApplicant = ref<AgentItem | null>(null)
+
+function askRejectApplicant(a: AgentItem): void {
+  if (decidingId.value !== null) return
+  pendingRejectApplicant.value = a
+}
+
+const rejectApplicantConfirmBody = computed(() =>
+  pendingRejectApplicant.value
+    ? `ไม่อนุมัติ ${pendingRejectApplicant.value.name} — เหตุผล: ${rejectReason.value.trim() || 'ไม่ระบุ'}`
+    : '',
+)
+
+async function confirmRejectApplicant(): Promise<void> {
+  const a = pendingRejectApplicant.value
+  if (!a) return
+  await submitRejectApplicant(a)
+  pendingRejectApplicant.value = null
 }
 
 /** Only where the server would allow it, and only for an unfinished sign-up. */
@@ -689,15 +752,18 @@ async function confirmRemoveMember(): Promise<void> {
     // edit modal's ปิดใช้งาน performs against the same endpoint. The server
     // re-checks that the account is untouched before honouring it, so this
     // flag cannot widen anything on its own — see UserService::deactivate.
-    await api.delete(`/users/${target.id}`, { release_email: true })
-    pendingRemoveMember.value = null
-    await loadAgents()
     // The email release is decided by the SERVER at the moment of deletion
     // (UserService::deactivate), from the same activity check this screen
     // read a moment ago — so the sentence is written for the case the
     // button was enabled for, and never promises a release it did not see.
-    savedMessage.value = `ลบ ${target.name} แล้ว — อีเมล ${target.email} ว่างให้สมัครใหม่ได้ และยังกู้คืนบัญชีนี้ได้ที่แท็บ "ปิดใช้งาน"`
-    showSavedDialog.value = true
+    // ADR-052 — the row has left the list before the dialog says so.
+    await confirmSaved(() => api.delete(`/users/${target.id}`, { release_email: true }), {
+      apply: async () => {
+        pendingRemoveMember.value = null
+        await reloadAfterWrite()
+      },
+      message: `ลบ ${target.name} แล้ว — อีเมล ${target.email} ว่างให้สมัครใหม่ได้ และยังกู้คืนบัญชีนี้ได้ที่แท็บ "ปิดใช้งาน"`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
     pendingRemoveMember.value = null
@@ -710,10 +776,10 @@ async function restoreApplicant(a: AgentItem): Promise<void> {
   rowActionBusy.value = true
   errorMessage.value = ''
   try {
-    await api.post(`/users/${a.id}/restore`, {})
-    await loadAgents()
-    savedMessage.value = `กู้คืน ${a.name} แล้ว — กลับไปอยู่ในแท็บ "ใช้งานอยู่"`
-    showSavedDialog.value = true
+    await confirmSaved(() => api.post<{ data: AgentItem }>(`/users/${a.id}/restore`, {}), {
+      apply: reloadAfterWrite,
+      message: (res) => `กู้คืน ${res?.data?.name ?? a.name} แล้ว — กลับไปอยู่ในแท็บ "ใช้งานอยู่"`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `กู้คืนไม่สำเร็จ (${e.status})` : 'กู้คืนไม่สำเร็จ'
   } finally {
@@ -763,6 +829,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       <template #actions>
         <button
           class="btn-primary"
+          data-test="open-create-agent"
           @click="showCreateForm = !showCreateForm"
         >
           + เพิ่มสมาชิก
@@ -831,13 +898,14 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       </p>
     </div>
 
-    <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
+    <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700" data-test="roster-error">
       {{ errorMessage }}
     </div>
 
     <form
       v-if="showCreateForm"
       class="mt-4 p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3"
+      data-test="create-agent-form"
       @submit.prevent="submitCreate"
     >
       <div v-if="isSuperAdmin" class="col-span-2">
@@ -849,19 +917,19 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">ชื่อ</label>
-        <input v-model="createForm.first_name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        <input v-model="createForm.first_name" required data-test="create-first-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">นามสกุล</label>
-        <input v-model="createForm.last_name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        <input v-model="createForm.last_name" required data-test="create-last-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">อีเมล</label>
-        <input v-model="createForm.email" type="email" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        <input v-model="createForm.email" type="email" required data-test="create-email" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">รหัสผ่านชั่วคราว (8 ตัวขึ้นไป มีพิมพ์ใหญ่ พิมพ์เล็ก ตัวเลข)</label>
-        <input v-model="createForm.password" type="text" minlength="8" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+        <input v-model="createForm.password" type="text" minlength="8" required data-test="create-password" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
       </div>
       <div>
         <label class="text-xs font-bold text-slate-500">บทบาท</label>
@@ -908,20 +976,6 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
     <LoadingSkeleton v-if="loading && !hasLoadedOnce" type="list" :rows="4" class="mt-4" />
     <template v-else>
       <!-- ── อนุมัติการเรียน (2026-09-28) ─────────────────────────────── -->
-      <div
-        v-if="grantResult"
-        data-test="grant-result"
-        class="mt-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800"
-      >
-        <Icon name="check_circle" :size="18" class="shrink-0" />
-        <p class="flex-1">
-          <b>อนุมัติ {{ grantResult.tierName }} ให้ {{ grantResult.granted }} คนแล้ว</b>
-          <span v-if="grantResult.alreadyHeld"> · ข้าม {{ grantResult.alreadyHeld }} คน (มีระดับนี้อยู่แล้ว)</span>
-        </p>
-        <button type="button" class="p-1 rounded hover:bg-emerald-100" aria-label="ปิดข้อความ" @click="grantResult = null">
-          <Icon name="x" :size="16" />
-        </button>
-      </div>
 
       <div v-if="rosterFilter === 'active'" class="mt-4 flex flex-wrap items-center gap-2" data-test="basic-filter">
         <button
@@ -1102,7 +1156,7 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
                 class="btn-secondary text-rose-600 hover:bg-rose-50 disabled:opacity-50"
                 data-test="reject-confirm"
                 :disabled="decidingId !== null"
-                @click="submitRejectApplicant(a)"
+                @click="askRejectApplicant(a)"
               >
                 ยืนยันไม่อนุมัติ
               </button>
@@ -1131,8 +1185,6 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
       @show-links="showLinksForAgent"
     />
 
-    <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
-    <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
 
     <!-- อนุมัติการเรียน — pick the tier, see who is granted and who already
          holds it, confirm. A modal of its own: ConfirmDialog has no room for
@@ -1232,6 +1284,17 @@ watch(() => activeCompany.companyId, () => { loadAgents() })
         : ''"
       @confirm="confirmRemoveMember"
       @update:show="(v) => { if (!v) pendingRemoveMember = null }"
+    />
+
+    <!-- 2026-10-02 — the second step of ไม่อนุมัติ (see askRejectApplicant()). -->
+    <ConfirmDialog
+      :show="pendingRejectApplicant !== null"
+      variant="danger"
+      :busy="decidingId !== null"
+      title="ยืนยันไม่อนุมัติ"
+      :body="rejectApplicantConfirmBody"
+      @confirm="confirmRejectApplicant"
+      @update:show="(v) => { if (!v) pendingRejectApplicant = null }"
     />
   </main>
 </template>

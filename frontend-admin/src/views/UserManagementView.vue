@@ -43,9 +43,9 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
-import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import { RouterLink } from 'vue-router'
 
 const auth = useAuthStore()
@@ -161,7 +161,13 @@ const rows = ref<UserRow[]>([])
 const loading = ref(false)
 const loadedOnce = ref(false)
 const errorMessage = ref('')
-const successMessage = ref('')
+/*
+ * ADR-052 — there is no `successMessage` banner any more. It used to be one
+ * sticky line shared by all ten writes and never cleared, so a success from
+ * five minutes ago sat beside the error of the write that just failed. Every
+ * write now raises the one global "บันทึกสำเร็จ" dialog (confirmSaved), only
+ * after the list has been re-read, and a failure raises nothing.
+ */
 
 const filters = ref({ role: '' as '' | ManageableRole, q: '', include_inactive: true })
 
@@ -197,18 +203,30 @@ function queryString(): string {
   return params.toString()
 }
 
-async function load() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: UserRow[] }>(`/users?${queryString()}`)
     rows.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดรายชื่อผู้ใช้ไม่สำเร็จ')
+    return false
   } finally {
     loading.value = false
     loadedOnce.value = true
   }
+}
+
+/**
+ * ADR-052 — step 3 after every write here: re-read the list, and throw when
+ * that failed so confirmSaved() says "saved, but the screen may be behind"
+ * instead of a plain success over rows that were never refreshed.
+ */
+async function reloadAfterWrite(): Promise<void> {
+  if (!(await load())) throw new Error('user list reload failed')
 }
 
 // ── Role change ────────────────────────────────────────────────────────
@@ -251,10 +269,13 @@ async function confirmRoleChange() {
   const pending = pendingRoleChange.value
   if (!pending) return
 
+  errorMessage.value = ''
   try {
-    await api.put(`/users/${pending.user.id}`, { role: pending.role })
-    successMessage.value = `${pending.user.name} เป็น${roleLabel(pending.role)}แล้ว`
-    await load()
+    // The role named is the one the SERVER stored, not the one that was asked for.
+    await confirmSaved(() => api.put<{ data: UserRow }>(`/users/${pending.user.id}`, { role: pending.role }), {
+      apply: reloadAfterWrite,
+      message: (res) => `${res?.data?.name ?? pending.user.name} เป็น${roleLabel(res?.data?.role ?? pending.role)}แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'เปลี่ยนบทบาทไม่สำเร็จ')
   } finally {
@@ -285,10 +306,14 @@ async function confirmSuperAdminGrant(): Promise<void> {
   grantingSuperAdmin.value = true
   errorMessage.value = ''
   try {
-    await api.put(`/users/${user.id}`, { role: 'super_admin' })
-    successMessage.value = `${user.name} เป็น Super Admin แล้ว — ไม่สังกัดบริษัทใดอีกต่อไป และถูกถอนการเข้าใช้งานเดิมทั้งหมด`
-    pendingSuperAdminGrant.value = null
-    await load()
+    await confirmSaved(() => api.put<{ data: UserRow }>(`/users/${user.id}`, { role: 'super_admin' }), {
+      apply: async () => {
+        pendingSuperAdminGrant.value = null
+        await reloadAfterWrite()
+      },
+      message: (res) =>
+        `${res?.data?.name ?? user.name} เป็น Super Admin แล้ว — ไม่สังกัดบริษัทใดอีกต่อไป และถูกถอนการเข้าใช้งานเดิมทั้งหมด`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ให้สิทธิ์ Super Admin ไม่สำเร็จ')
     pendingSuperAdminGrant.value = null
@@ -341,11 +366,20 @@ async function submitDemote(): Promise<void> {
   try {
     // `company_id` travels WITH the role. The server requires it on exactly
     // this path and prohibits it everywhere else — see UpdateUserRequest.
-    await api.put(`/users/${user.id}`, { role: 'company_admin', company_id: demoteCompanyId.value })
-    const target = activeCompany.companies.find((c) => c.id === demoteCompanyId.value)
-    successMessage.value = `ถอดสิทธิ์ Super Admin ของ ${user.name} แล้ว — เป็นผู้ดูแลบริษัท ${target?.name ?? `#${demoteCompanyId.value}`}`
-    demoting.value = null
-    await load()
+    // ADR-052 — the company named is the one on the row the server returned,
+    // not the option picked in the dropdown.
+    await confirmSaved(
+      () => api.put<{ data: UserRow }>(`/users/${user.id}`, { role: 'company_admin', company_id: demoteCompanyId.value }),
+      {
+        apply: async () => {
+          demoting.value = null
+          await reloadAfterWrite()
+        },
+        message: (res) =>
+          `ถอดสิทธิ์ Super Admin ของ ${res?.data?.name ?? user.name} แล้ว`
+          + (res?.data?.company ? ` — เป็นผู้ดูแลบริษัท ${res.data.company.name}` : ''),
+      },
+    )
   } catch (e) {
     demoteError.value = apiErrorMessage(e, 'ถอดสิทธิ์ไม่สำเร็จ')
   } finally {
@@ -360,10 +394,12 @@ async function confirmDeactivate() {
   const user = pendingDeactivate.value
   if (!user) return
 
+  errorMessage.value = ''
   try {
-    await api.delete(`/users/${user.id}`)
-    successMessage.value = `ปิดบัญชี ${user.name} แล้ว — เข้าระบบไม่ได้ทันที`
-    await load()
+    await confirmSaved(() => api.delete(`/users/${user.id}`), {
+      apply: reloadAfterWrite,
+      message: `ปิดบัญชี ${user.name} แล้ว — เข้าระบบไม่ได้ทันที`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ปิดบัญชีไม่สำเร็จ')
   } finally {
@@ -372,10 +408,12 @@ async function confirmDeactivate() {
 }
 
 async function restore(user: UserRow) {
+  errorMessage.value = ''
   try {
-    await api.post(`/users/${user.id}/restore`)
-    successMessage.value = `กู้คืนบัญชี ${user.name} แล้ว`
-    await load()
+    await confirmSaved(() => api.post<{ data: UserRow }>(`/users/${user.id}/restore`), {
+      apply: reloadAfterWrite,
+      message: (res) => `กู้คืนบัญชี ${res?.data?.name ?? user.name} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'กู้คืนบัญชีไม่สำเร็จ')
   }
@@ -408,11 +446,21 @@ async function submitReset() {
     return
   }
 
+  resetError.value = ''
   try {
-    await api.post(`/users/${user.id}/reset-password`, { password: newPassword.value })
-    successMessage.value = `ตั้งรหัสผ่านใหม่ให้ ${user.name} แล้ว — ระบบถอนการเข้าใช้งานเดิมทั้งหมดของบัญชีนี้`
-    resetting.value = null
-    newPassword.value = ''
+    // Nothing on the list changes (the password is never shown), so step 3 is
+    // only closing the form and forgetting the typed value.
+    await confirmSaved(
+      () => api.post<{ data: UserRow }>(`/users/${user.id}/reset-password`, { password: newPassword.value }),
+      {
+        apply: () => {
+          resetting.value = null
+          newPassword.value = ''
+        },
+        message: (res) =>
+          `ตั้งรหัสผ่านใหม่ให้ ${res?.data?.name ?? user.name} แล้ว — ระบบถอนการเข้าใช้งานเดิมทั้งหมดของบัญชีนี้`,
+      },
+    )
   } catch (e) {
     resetError.value = apiErrorMessage(e, 'ตั้งรหัสผ่านใหม่ไม่สำเร็จ')
   }
@@ -504,7 +552,7 @@ async function doCreate(): Promise<void> {
   creating.value = true
   createError.value = ''
   try {
-    const created = await api.post<{ data: UserRow }>('/users', {
+    const payload = {
       ...createForm.value,
       // Only a Super Admin may send it, and must; a Company Admin sending it
       // is a 422 by rule, not an oversight.
@@ -513,14 +561,21 @@ async function doCreate(): Promise<void> {
       // has no tenant, and StoreUserRequest prohibits the key rather than
       // ignoring it, so sending null here would be a 422 too.
       ...(isSuperAdmin.value && !creatingSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
-    })
+    }
     // The password is deliberately absent from this sentence — it was typed a
     // second ago by the person reading it, and repeating a live credential on
     // screen is how it ends up in a screenshot.
-    successMessage.value = `สร้างบัญชี ${created.data.name} (${roleLabel(created.data.role)}) แล้ว — ส่งรหัสผ่านให้เจ้าตัวโดยตรง`
-    showCreate.value = false
-    createForm.value.password = ''
-    await load()
+    await confirmSaved(() => api.post<{ data: UserRow }>('/users', payload), {
+      apply: async () => {
+        showCreate.value = false
+        createForm.value.password = ''
+        await reloadAfterWrite()
+      },
+      message: (created) =>
+        created?.data
+          ? `สร้างบัญชี ${created.data.name} (${roleLabel(created.data.role)}) แล้ว — ส่งรหัสผ่านให้เจ้าตัวโดยตรง`
+          : 'สร้างบัญชีแล้ว — ส่งรหัสผ่านให้เจ้าตัวโดยตรง',
+    })
   } catch (e) {
     createError.value = apiErrorMessage(e, 'สร้างผู้ใช้ไม่สำเร็จ')
   } finally {
@@ -561,17 +616,23 @@ async function submitEdit(): Promise<void> {
   savingEdit.value = true
   editError.value = ''
   try {
-    await api.put(`/users/${user.id}`, {
+    const payload = {
       first_name: editForm.value.first_name,
       last_name: editForm.value.last_name,
       email: editForm.value.email,
       // Empty means "no phone", which is a value; '' would fail the string
       // rule, so it is sent as the null the column actually holds.
       phone: editForm.value.phone.trim() === '' ? null : editForm.value.phone.trim(),
+    }
+    // ADR-052 — named from the SERVER's row: `name` is derived server-side from
+    // the pair just saved, so neither the old row nor the form has it right.
+    await confirmSaved(() => api.put<{ data: UserRow }>(`/users/${user.id}`, payload), {
+      apply: async () => {
+        editing.value = null
+        await reloadAfterWrite()
+      },
+      message: (res) => `แก้ไขข้อมูลของ ${res?.data?.name ?? user.name} แล้ว`,
     })
-    successMessage.value = `แก้ไขข้อมูลของ ${user.name} แล้ว`
-    editing.value = null
-    await load()
   } catch (e) {
     editError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -611,11 +672,19 @@ async function submitMove(): Promise<void> {
   savingMove.value = true
   moveError.value = ''
   try {
-    await api.post(`/users/${user.id}/move-company`, { company_id: moveCompanyId.value })
-    const target = activeCompany.companies.find((c) => c.id === moveCompanyId.value)
-    successMessage.value = `ย้าย ${user.name} ไปบริษัท ${target?.name ?? `#${moveCompanyId.value}`} แล้ว`
-    moving.value = null
-    await load()
+    await confirmSaved(
+      () => api.post<{ data: UserRow }>(`/users/${user.id}/move-company`, { company_id: moveCompanyId.value }),
+      {
+        apply: async () => {
+          moving.value = null
+          await reloadAfterWrite()
+        },
+        message: (res) =>
+          res?.data?.company
+            ? `ย้าย ${res.data.name} ไปบริษัท ${res.data.company.name} แล้ว`
+            : `ย้ายบริษัทของ ${user.name} แล้ว`,
+      },
+    )
   } catch (e) {
     moveError.value = apiErrorMessage(e, 'ย้ายบริษัทไม่สำเร็จ')
   } finally {
@@ -670,14 +739,28 @@ async function submitGrants(): Promise<void> {
   savingGrant.value = true
   grantError.value = ''
   try {
-    await api.put(`/users/${user.id}/abilities`, {
-      abilities: grantRedeem.value ? [VOUCHER_REDEEM] : [],
-    })
-    successMessage.value = grantRedeem.value
-      ? `${user.name} ตัดสิทธิ์บัตรกำนัลได้แล้ว`
-      : `ยกเลิกสิทธิ์ตัดบัตรกำนัลของ ${user.name} แล้ว`
-    grantingTo.value = null
-    await load()
+    // ADR-052 — the sentence follows what the SERVER now holds for this
+    // person (the response's granted set when it carries one, else the
+    // re-read row), never the checkbox.
+    await confirmSaved(
+      () =>
+        api.put<{ data: UserRow }>(`/users/${user.id}/abilities`, {
+          abilities: grantRedeem.value ? [VOUCHER_REDEEM] : [],
+        }),
+      {
+        apply: async () => {
+          grantingTo.value = null
+          await reloadAfterWrite()
+        },
+        message: (res) => {
+          const stored = res?.data?.granted_abilities ?? rows.value.find((r) => r.id === user.id)?.granted_abilities ?? []
+          const name = res?.data?.name ?? user.name
+          return stored.includes(VOUCHER_REDEEM)
+            ? `${name} ตัดสิทธิ์บัตรกำนัลได้แล้ว`
+            : `ยกเลิกสิทธิ์ตัดบัตรกำนัลของ ${name} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     grantError.value = apiErrorMessage(e, 'บันทึกสิทธิ์ไม่สำเร็จ')
   } finally {
@@ -758,7 +841,6 @@ onMounted(() => {
       </button>
     </div>
 
-    <div v-if="successMessage" class="mb-3 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm text-emerald-800" data-test="success">{{ successMessage }}</div>
     <div v-if="errorMessage" class="mb-3 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700" data-test="error">{{ errorMessage }}</div>
 
     <LoadingSkeleton v-if="loading && !loadedOnce" type="list" :rows="5" />

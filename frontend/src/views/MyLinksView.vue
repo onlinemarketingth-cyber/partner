@@ -27,6 +27,9 @@ import { api, ApiError } from '@/api/client'
 import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import { useToastStore } from '@/stores/toast'
+
+const toast = useToastStore()
 
 /** TrackedLinkResource, field for field. */
 interface TrackedLink {
@@ -119,14 +122,26 @@ function startEditLabel(link: TrackedLink) {
   labelDraft.value = link.label ?? ''
 }
 
+/**
+ * ADR-052: the label on screen is the one the SERVER stored (it may trim
+ * or cap it), never the draft that was typed. The row is replaced with the
+ * response, and only then does the success toast fire. On failure the
+ * edit box stays open with the draft so the agent can retry, and the row
+ * keeps showing the label that is actually stored.
+ */
 async function saveLabel(link: TrackedLink) {
   savingLabel.value = true
   try {
-    await api.put(`/tracked-links/${link.id}`, { label: labelDraft.value.trim() || null })
-    link.label = labelDraft.value.trim() || null
+    const res = await api.put<{ data: TrackedLink }>(`/tracked-links/${link.id}`, {
+      label: labelDraft.value.trim() || null,
+    })
+    const saved = res.data
+    const index = links.value.findIndex((l) => l.id === saved.id)
+    if (index !== -1) links.value[index] = saved
     editingId.value = null
+    toast.success(saved.label ? `บันทึกชื่อ "${saved.label}" แล้ว` : 'ลบชื่อแคมเปญแล้ว')
   } catch (e) {
-    errorMessage.value = e instanceof ApiError ? `บันทึกชื่อไม่สำเร็จ (${e.status})` : 'บันทึกชื่อไม่สำเร็จ'
+    toast.error(e instanceof ApiError ? `บันทึกชื่อไม่สำเร็จ (${e.status})` : 'บันทึกชื่อไม่สำเร็จ')
   } finally {
     savingLabel.value = false
   }

@@ -121,7 +121,12 @@ async function saveName(): Promise<void> {
       last_name: lastName.value,
     })
     auth.setUser(res.data)
-    toast.success('บันทึกชื่อแล้ว')
+    // ADR-052 — the inputs were seeded once at setup and never watched, so
+    // without this they keep what was TYPED (untrimmed, pre-normalisation)
+    // and look stored when they may not be. Re-read them from the server.
+    firstName.value = res.data.first_name ?? ''
+    lastName.value = res.data.last_name ?? ''
+    toast.success(`บันทึกชื่อ "${res.data.name}" แล้ว`)
   } catch (e) {
     nameError.value = e instanceof ApiError ? 'บันทึกไม่สำเร็จ — กรุณากรอกทั้งชื่อและนามสกุล' : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -191,6 +196,10 @@ async function saveBankAccount(): Promise<void> {
       bank_account_holder_name: bankAccountHolderName.value || null,
     })
     auth.setUser(res.data)
+    // ADR-052 — show what the server stored, not what was typed (see saveName).
+    bankName.value = res.data.bank_name ?? ''
+    bankAccountNumber.value = res.data.bank_account_number ?? ''
+    bankAccountHolderName.value = res.data.bank_account_holder_name ?? ''
     toast.success('บันทึกบัญชีธนาคารแล้ว')
   } catch (e) {
     bankError.value = e instanceof ApiError ? 'บันทึกไม่สำเร็จ — ตรวจสอบข้อมูลที่กรอก' : 'บันทึกไม่สำเร็จ'
@@ -243,6 +252,12 @@ async function saveIdDocument(): Promise<void> {
       national_id: isThaiIdDocument.value ? nationalId.value.trim() : nationalId.value.trim().toUpperCase(),
     })
     auth.setUser(res.data)
+    // ADR-052 — show what the server stored, not what was typed (see saveName).
+    // Assigned directly, NOT through selectIdDocumentType(): that clears the
+    // number on a type change, which is right for a person switching tabs
+    // and wrong for a sync.
+    idDocumentType.value = res.data.id_document_type ?? idDocumentType.value
+    nationalId.value = res.data.national_id ?? ''
     toast.success(td('payout.id_saved'))
   } catch (e) {
     // The server's own message when it has one — it carries the two cases

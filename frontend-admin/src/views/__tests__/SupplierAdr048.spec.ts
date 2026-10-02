@@ -12,6 +12,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -58,6 +59,22 @@ function mountView(component: unknown) {
   return mount(component as never, { global: { stubs: STUBS } })
 }
 
+type Wrapper = ReturnType<typeof mountView>
+
+/** The ConfirmDialog currently open (it renders with `v-if`), if any. */
+function openDialog(w: Wrapper) {
+  return w.findAllComponents({ name: 'ConfirmDialog' }).find((d) => d.props('show') === true)
+}
+
+/** Press the open dialog's confirm (its last button) or cancel (its first). */
+async function answerDialog(w: Wrapper, answer: 'confirm' | 'cancel') {
+  const dialog = openDialog(w)
+  expect(dialog, 'an open ConfirmDialog').toBeDefined()
+  const buttons = dialog!.findAll('button')
+  await (answer === 'confirm' ? buttons[buttons.length - 1] : buttons[0])!.trigger('click')
+  await flushPromises()
+}
+
 beforeEach(() => {
   get.mockReset()
   post.mockReset()
@@ -99,9 +116,80 @@ describe('cancelling a raised payout', () => {
     await wrapper.find('[data-test="cancel-reason"]').setValue('โอนไม่สำเร็จ')
     post.mockResolvedValue({ data: {} })
     await wrapper.find('[data-test="confirm-cancel-payout"]').trigger('click')
-    await flushPromises()
+    // 2026-10-02 — the panel's button asks first; the dialog's confirm sends.
+    await answerDialog(wrapper, 'confirm')
 
     expect(post).toHaveBeenCalledWith('/supplier-payouts/5/cancel', { reason: 'โอนไม่สำเร็จ' })
+  })
+
+  /*
+   * 2026-10-02 (owner decision) — ยืนยันยกเลิก in the panel only ASKS. A
+   * danger ConfirmDialog names the supplier and the amount and quotes the
+   * reason; only its confirm sends, with exactly the old payload.
+   */
+  async function pressCancel(reason: string) {
+    mockPayouts()
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+    await wrapper.find('[data-test="open-cancel-payout"]').trigger('click')
+    await wrapper.find('[data-test="cancel-reason"]').setValue(reason)
+    await wrapper.find('[data-test="confirm-cancel-payout"]').trigger('click')
+    await flushPromises()
+
+    return wrapper
+  }
+
+  it('2026-10-02 — the panel button sends nothing and opens a danger dialog with supplier, amount and reason', async () => {
+    const wrapper = await pressCancel('โอนไม่สำเร็จ')
+
+    expect(post).not.toHaveBeenCalled()
+    const dialog = openDialog(wrapper)!
+    expect(dialog.props('variant')).toBe('danger')
+    expect(dialog.props('title')).toBe('ยืนยันยกเลิกการตั้งจ่าย')
+    expect(dialog.props('body')).toContain('ยกเลิกการตั้งจ่ายให้ บริษัท ซัพพลายเออร์ จำกัด ฿1,000.00 — เหตุผล: โอนไม่สำเร็จ')
+  })
+
+  it('2026-10-02 — cancel sends nothing and keeps the panel open with the reason', async () => {
+    const wrapper = await pressCancel('โอนไม่สำเร็จ')
+
+    await answerDialog(wrapper, 'cancel')
+
+    expect(post).not.toHaveBeenCalled()
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(wrapper.find('[data-test="cancel-panel"]').exists()).toBe(true)
+    expect((wrapper.find('[data-test="cancel-reason"]').element as HTMLInputElement).value).toBe('โอนไม่สำเร็จ')
+  })
+
+  it('2026-10-02 — confirm sends the old payload once, busy while in flight, then the saved dialog', async () => {
+    let release: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (release = r)))
+    const wrapper = await pressCancel('  โอนไม่สำเร็จ ')
+
+    await answerDialog(wrapper, 'confirm')
+    expect(openDialog(wrapper)!.props('busy')).toBe(true)
+    expect(saveFeedbackState.show).toBe(false)
+
+    mockPayouts([{ ...REQUEST, status: 'cancelled', cancel_reason: 'โอนไม่สำเร็จ' }])
+    release({ data: { ...REQUEST, status: 'cancelled', gross_satang: 90000 } })
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith('/supplier-payouts/5/cancel', { reason: 'โอนไม่สำเร็จ' })
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ยกเลิกรายการตั้งจ่าย บริษัท ซัพพลายเออร์ จำกัด ฿900.00 แล้ว')
+  })
+
+  it('2026-10-02 — a refusal closes the dialog, shows the error and raises no saved dialog', async () => {
+    post.mockRejectedValue(new ApiErrorStub('รายการนี้โอนไปแล้ว'))
+    const wrapper = await pressCancel('โอนไม่สำเร็จ')
+
+    await answerDialog(wrapper, 'confirm')
+
+    expect(openDialog(wrapper)).toBeUndefined()
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ยกเลิกไม่สำเร็จ: รายการนี้โอนไปแล้ว')
+    expect(wrapper.find('[data-test="cancel-panel"]').exists()).toBe(true)
   })
 
   it('shows why a cancelled payout was cancelled in the history', async () => {
@@ -184,7 +272,8 @@ describe('receipt, not shipping', () => {
     get.mockImplementation(async (path: string) =>
       path === '/supplier-settings' ? { data: { auto_receive_days: 15 } } : { data: [], meta: { total: 0 } },
     )
-    put.mockResolvedValue({ data: { auto_receive_days: 10 } })
+    // The server's answer differs from what was typed: it is what must show.
+    put.mockResolvedValue({ data: { auto_receive_days: 12 } })
     const wrapper = mountView(SupplierManagementView)
     await flushPromises()
 
@@ -197,7 +286,29 @@ describe('receipt, not shipping', () => {
     await flushPromises()
 
     expect(put).toHaveBeenCalledWith('/supplier-settings', { auto_receive_days: 10 })
-    expect(wrapper.find('[data-test="auto-receive-message"]').text()).toBe('บันทึกแล้ว')
+    // ADR-052 — the grey inline "บันทึกแล้ว" became the dialog, quoting the stored value.
+    expect((wrapper.find('[data-test="auto-receive-days"]').element as HTMLInputElement).value).toBe('12')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('12 วัน')
+    expect(wrapper.find('[data-test="auto-receive-error"]').exists()).toBe(false)
+  })
+
+  it('ADR-052: a refused auto-receive save raises no dialog and shows the failure in the error colour', async () => {
+    get.mockImplementation(async (path: string) =>
+      path === '/supplier-settings' ? { data: { auto_receive_days: 15 } } : { data: [], meta: { total: 0 } },
+    )
+    put.mockRejectedValue(new ApiErrorStub('ต้องอยู่ระหว่าง 1–365'))
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="auto-receive-days"]').setValue('999')
+    await wrapper.find('[data-test="save-auto-receive"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    const error = wrapper.find('[data-test="auto-receive-error"]')
+    expect(error.text()).toContain('บันทึกไม่สำเร็จ')
+    expect(error.classes()).toContain('text-rose-600')
   })
 })
 

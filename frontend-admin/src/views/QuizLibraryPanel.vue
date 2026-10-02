@@ -38,6 +38,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import QuizQuestionEditor from '@/design-system/components/QuizQuestionEditor.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import {
   QUIZ_LIBRARY_CREATE_EXPLANATION,
   QUIZ_LIBRARY_EXPLANATION,
@@ -102,6 +103,23 @@ async function loadQuizzes() {
 }
 onMounted(loadQuizzes)
 
+/**
+ * ADR-052 — the re-read after a write. loadQuizzes() keeps its own failure in
+ * `listError` rather than throwing (it is also the mount loader), so this
+ * turns that back into a throw: confirmSaved() then tells the admin the save
+ * landed but the list may be behind, instead of a plain "saved" over a list
+ * that did not refresh.
+ */
+async function reloadQuizzes(): Promise<void> {
+  await loadQuizzes()
+  if (listError.value) throw new Error(listError.value)
+}
+
+/** ` “title”` when the server named it, nothing when it did not — never a pair of empty quotes. */
+function quoted(title: string | null | undefined): string {
+  return title ? ` “${title}”` : ''
+}
+
 function setFilter(value: boolean) {
   if (unattachedOnly.value === value) return
   unattachedOnly.value = value
@@ -137,15 +155,23 @@ async function createQuiz() {
   creating.value = true
   createError.value = ''
   try {
-    await api.post('/quizzes', {
-      title,
-      ...(props.isSuperAdmin ? { company_id: props.selectedCompanyId } : {}),
-    })
-    newQuizTitle.value = ''
-    showCreateForm.value = false
-    page.value = 1
-    await loadQuizzes()
-    emit('changed')
+    await confirmSaved(
+      () =>
+        api.post<{ data?: QuizRow }>('/quizzes', {
+          title,
+          ...(props.isSuperAdmin ? { company_id: props.selectedCompanyId } : {}),
+        }),
+      {
+        apply: async () => {
+          newQuizTitle.value = ''
+          showCreateForm.value = false
+          page.value = 1
+          await reloadQuizzes()
+          emit('changed')
+        },
+        message: (res) => `สร้างแบบทดสอบ${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     createError.value = e instanceof ApiError ? e.message : 'สร้างแบบทดสอบไม่สำเร็จ'
   } finally {
@@ -173,10 +199,15 @@ async function saveRename(quizId: number) {
   savingRename.value = true
   rowError.value = ''
   try {
-    await api.put(`/quizzes/${quizId}`, { title })
-    renamingId.value = null
-    await loadQuizzes()
-    emit('changed')
+    await confirmSaved(() => api.put<{ data?: QuizRow }>(`/quizzes/${quizId}`, { title }), {
+      apply: async () => {
+        renamingId.value = null
+        await reloadQuizzes()
+        emit('changed')
+      },
+      // The name the SERVER stored (it trims and may normalise), not the input.
+      message: (res) => `เปลี่ยนชื่อแบบทดสอบเป็น${quoted(res?.data?.title)} แล้ว`,
+    })
   } catch (e) {
     rowError.value = e instanceof ApiError ? e.message : 'เปลี่ยนชื่อไม่สำเร็จ'
   } finally {
@@ -221,7 +252,10 @@ async function reloadOpenQuiz(): Promise<void> {
   const quizId = expandedQuizId.value
   if (quizId === null) return
   await loadQuestions(quizId)
-  await loadQuizzes()
+  // ADR-052 — both loaders swallow their errors; the editor's confirmSaved()
+  // needs a failed re-read to throw so it can say the screen may be behind.
+  if (questionsError.value) throw new Error(questionsError.value)
+  await reloadQuizzes()
 }
 
 // ── Delete (refused while attached — §2.4) ──────────────────────────
@@ -250,13 +284,18 @@ async function confirmDelete() {
   deleting.value = true
   rowError.value = ''
   try {
-    await api.delete(`/quizzes/${quiz.id}`)
-    if (expandedQuizId.value === quiz.id) expandedQuizId.value = null
-    // A page can empty out under a delete; step back rather than show a
-    // blank page-3 with a "ก่อนหน้า" button as the only way out.
-    if (quizzes.value.length === 1 && page.value > 1) page.value -= 1
-    await loadQuizzes()
-    emit('changed')
+    await confirmSaved(() => api.delete(`/quizzes/${quiz.id}`), {
+      apply: async () => {
+        if (expandedQuizId.value === quiz.id) expandedQuizId.value = null
+        // A page can empty out under a delete; step back rather than show a
+        // blank page-3 with a "ก่อนหน้า" button as the only way out.
+        if (quizzes.value.length === 1 && page.value > 1) page.value -= 1
+        await reloadQuizzes()
+        emit('changed')
+      },
+      // The title is the stored row's (it came from GET /quizzes), not typed.
+      message: `ลบแบบทดสอบ${quoted(quiz.title)} แล้ว`,
+    })
   } catch (e) {
     rowError.value = e instanceof ApiError ? e.message : 'ลบไม่สำเร็จ'
   } finally {

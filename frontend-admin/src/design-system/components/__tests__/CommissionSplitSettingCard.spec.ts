@@ -59,6 +59,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 import CommissionSplitSettingCard from '../CommissionSplitSettingCard.vue'
+import { saveFeedbackState, SAVED_BUT_STALE_BODY } from '@/composables/useSaveFeedback'
 
 const WARNING_HEADLINE = 'กำลังจะเปิดกลับมา'
 
@@ -257,5 +258,67 @@ describe('CommissionSplitSettingCard — read-only (2026-09-12)', () => {
 
     expect(wrapper.find('[data-test="split-readonly"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('บันทึกการแบ่งคอมฯ')
+  })
+})
+
+/**
+ * ADR-052 — the 2-second "บันทึกแล้ว" flash is gone; the app's one saved
+ * dialog replaces it, raised only after the PUT answered AND the card has
+ * re-read what the server holds.
+ */
+describe('CommissionSplitSettingCard — saved dialog (ADR-052)', () => {
+  beforeEach(() => {
+    get.mockReset()
+    put.mockReset()
+    put.mockResolvedValue({ data: {} })
+  })
+
+  it('says so only after the write answered, quoting the state it re-read', async () => {
+    const wrapper = await mountCard({ is_enabled: false, pending_referrals_with_stored_split: 2 })
+    await toggle(wrapper).trigger('click')
+
+    let answer!: (value: unknown) => void
+    put.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    // The server's own answer on re-read: still OFF (e.g. another admin turned
+    // it back off in between). The card must follow the server, not the switch.
+    get.mockResolvedValue({ data: { is_enabled: false, pending_referrals_with_stored_split: 2 } })
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    answer({ data: { is_enabled: true } })
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe('ปิดการแบ่งค่าแนะนำกับสมาชิกร่วมแล้ว')
+    expect(toggle(wrapper).attributes('title')).toBe('ปิดใช้งาน')
+    // No inline success line any more.
+    expect(wrapper.text()).not.toContain('บันทึกแล้ว')
+  })
+
+  it('raises nothing when the server refuses, and says why on the card', async () => {
+    const wrapper = await mountCard({ is_enabled: false })
+    await toggle(wrapper).trigger('click')
+    put.mockRejectedValueOnce(new FakeApiError(422, null))
+
+    await save(wrapper)
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('บันทึกไม่สำเร็จ (422)')
+  })
+
+  it('reports a landed write whose re-read failed as saved-but-behind, never a plain success', async () => {
+    const wrapper = await mountCard({ is_enabled: false })
+    await toggle(wrapper).trigger('click')
+    put.mockResolvedValueOnce({ data: { is_enabled: true } })
+    get.mockRejectedValueOnce(new FakeApiError(500, null))
+
+    await save(wrapper)
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    // And the card itself fails closed, saying it could not read.
+    expect(wrapper.text()).toContain('โหลดค่าตั้งการแบ่งค่าแนะนำไม่สำเร็จ')
   })
 })

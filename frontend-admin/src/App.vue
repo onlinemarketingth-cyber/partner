@@ -7,6 +7,8 @@ import AdminNavigation from '@/design-system/components/AdminNavigation.vue'
 // sentence, and mounted ONCE so "every page" costs one request per session
 // rather than one per navigation — the component guards its own visibility.
 import CommissionReadinessBanner from '@/design-system/components/CommissionReadinessBanner.vue'
+// ADR-052 — the one "บันทึกสำเร็จ" dialog every write in this app raises.
+import SaveFeedbackHost from '@/design-system/components/SaveFeedbackHost.vue'
 import { useAuthStore } from '@/stores/auth'
 import { resolveBackgroundStyle } from '@/utils/userBackground'
 
@@ -42,4 +44,5 @@ const backgroundStyle = computed(() => resolveBackgroundStyle(auth.user?.backgro
   <RouterView v-slot="{ Component, route: r }">
     <component :is="Component" :key="r.path" />
   </RouterView>
+  <SaveFeedbackHost />
 </template>

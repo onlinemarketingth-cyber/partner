@@ -40,7 +40,9 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 interface SupplierRow {
   supplier_id: number
@@ -94,7 +96,7 @@ const errorMessage = ref('')
 const raisingId = ref<number | null>(null)
 
 /** The two halves are independent — a failure in one must not blank the other. */
-async function loadAll(): Promise<void> {
+async function loadAll(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -104,10 +106,12 @@ async function loadAll(): Promise<void> {
     ])
     suppliers.value = balances.data
     requests.value = queue.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError
       ? `โหลดข้อมูลไม่สำเร็จ (${e.status})`
       : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -149,8 +153,15 @@ async function raisePayout(row: SupplierRow): Promise<void> {
   raisingId.value = row.supplier_id
   errorMessage.value = ''
   try {
-    await api.post('/supplier-payouts', { supplier_id: row.supplier_id })
-    await loadAll()
+    // ADR-052 — both lists re-read first; the dialog quotes the payout the
+    // SERVER raised (its net, BR-3 satang), not the balance on the row.
+    await confirmSaved(() => api.post<{ data: PayoutRequest }>('/supplier-payouts', { supplier_id: row.supplier_id }), {
+      apply: async () => {
+        if (!(await loadAll())) throw new Error('payout lists re-read failed')
+      },
+      message: (res) =>
+        `ตั้งจ่าย ${res.data.supplier_name ?? 'คู่ค้า'} ยอดโอนสุทธิ ฿${formatMoney(res.data.net_satang)} แล้ว — รอฝ่ายบัญชีโอน`,
+    })
   } catch (e) {
     // Shown in full: the server's refusal names the actual problem (terms
     // missing, nothing released, net negative) and flattening it throws away
@@ -179,13 +190,19 @@ async function confirmTransfer(): Promise<void> {
   if (!transferTarget.value) return
   transferring.value = true
   errorMessage.value = ''
+  const path = `/supplier-payouts/${transferTarget.value.id}/mark-transferred`
+  const body = {
+    transfer_reference: transferReference.value.trim() || null,
+    wht_certificate_no: certificateNo.value.trim() || null,
+  }
   try {
-    await api.post(`/supplier-payouts/${transferTarget.value.id}/mark-transferred`, {
-      transfer_reference: transferReference.value.trim() || null,
-      wht_certificate_no: certificateNo.value.trim() || null,
+    await confirmSaved(() => api.post<{ data: PayoutRequest }>(path, body), {
+      apply: async () => {
+        transferTarget.value = null
+        if (!(await loadAll())) throw new Error('payout lists re-read failed')
+      },
+      message: (res) => `บันทึกการโอนให้ ${res.data.supplier_name ?? 'คู่ค้า'} ฿${formatMoney(res.data.net_satang)} แล้ว`,
     })
-    transferTarget.value = null
-    await loadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError
       ? `บันทึกการโอนไม่สำเร็จ: ${e.message}`
@@ -203,6 +220,8 @@ async function confirmTransfer(): Promise<void> {
 const cancelTarget = ref<PayoutRequest | null>(null)
 const cancelReason = ref('')
 const cancelling = ref(false)
+/** 2026-10-02 — the panel's ยืนยันยกเลิก asks a ConfirmDialog first (see askCancel()). */
+const cancelConfirmOpen = ref(false)
 
 function openCancel(request: PayoutRequest): void {
   transferTarget.value = null
@@ -210,14 +229,48 @@ function openCancel(request: PayoutRequest): void {
   cancelReason.value = ''
 }
 
+/*
+ * 2026-10-02 (owner decision) — the panel's button no longer sends.
+ *
+ * Same required-reason check as before, THEN a ConfirmDialog naming the
+ * supplier and the amount and quoting the reason; only its confirm calls
+ * confirmCancel(), which sends what it always sent. Cancel sends nothing and
+ * leaves the panel open with the reason as typed.
+ */
+function askCancel(): void {
+  if (!cancelTarget.value || !cancelReason.value.trim()) return
+  cancelConfirmOpen.value = true
+}
+
+const cancelConfirmBody = computed(() => {
+  const target = cancelTarget.value
+  if (!target) return ''
+
+  return `ยกเลิกการตั้งจ่ายให้ ${target.supplier_name ?? 'คู่ค้า'} ฿${formatMoney(target.net_satang)} — เหตุผล: ${cancelReason.value.trim()}\n`
+    + 'ยอดจะกลับไปอยู่ที่ "ตั้งจ่ายได้" ตามเดิม'
+})
+
+async function confirmCancelFromDialog(): Promise<void> {
+  await confirmCancel()
+  // Closed either way: the saved dialog or the error line takes over.
+  cancelConfirmOpen.value = false
+}
+
 async function confirmCancel(): Promise<void> {
   if (!cancelTarget.value || !cancelReason.value.trim()) return
   cancelling.value = true
   errorMessage.value = ''
+  const path = `/supplier-payouts/${cancelTarget.value.id}/cancel`
+  const body = { reason: cancelReason.value.trim() }
   try {
-    await api.post(`/supplier-payouts/${cancelTarget.value.id}/cancel`, { reason: cancelReason.value.trim() })
-    cancelTarget.value = null
-    await loadAll()
+    await confirmSaved(() => api.post<{ data: PayoutRequest }>(path, body), {
+      apply: async () => {
+        cancelTarget.value = null
+        if (!(await loadAll())) throw new Error('payout lists re-read failed')
+      },
+      message: (res) =>
+        `ยกเลิกรายการตั้งจ่าย ${res.data.supplier_name ?? 'คู่ค้า'} ฿${formatMoney(res.data.gross_satang)} แล้ว — ยอดกลับไปตั้งจ่ายได้อีกครั้ง`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ยกเลิกไม่สำเร็จ: ${e.message}` : 'ยกเลิกไม่สำเร็จ'
   } finally {
@@ -482,7 +535,7 @@ function statusLabel(status: string): string {
                       data-test="confirm-cancel-payout"
                       :disabled="cancelling || !cancelReason.trim()"
                       class="min-h-[38px] px-4 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 disabled:opacity-60 transition"
-                      @click="confirmCancel"
+                      @click="askCancel"
                     >{{ cancelling ? 'กำลังยกเลิก...' : 'ยืนยันยกเลิก' }}</button>
                     <button
                       type="button"
@@ -542,5 +595,15 @@ function statusLabel(status: string): string {
       </div>
     </section>
 
+    <!-- 2026-10-02 — the second step of ยกเลิกการตั้งจ่าย (see askCancel()). -->
+    <ConfirmDialog
+      :show="cancelConfirmOpen"
+      variant="danger"
+      title="ยืนยันยกเลิกการตั้งจ่าย"
+      :body="cancelConfirmBody"
+      :busy="cancelling"
+      @confirm="confirmCancelFromDialog"
+      @update:show="(v) => { if (!v) cancelConfirmOpen = false }"
+    />
   </main>
 </template>

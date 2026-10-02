@@ -1,3 +1,20 @@
+<script lang="ts">
+/*
+ * ADR-052 — the "created" notice has to cross a page change.
+ *
+ * Creating a product POSTs and then routes to product-edit, and App.vue keys
+ * <RouterView> by path, so a NEW instance of this view mounts and loads the
+ * stored product on its own. A dialog raised by the creating instance would
+ * appear over a page that has not loaded anything yet. Instead the creating
+ * instance leaves the notice here, and the instance that mounts for that id
+ * raises it once its loadInitialData() has the stored product on screen.
+ *
+ * Module scope, one slot, consumed (and cleared) by the next mount: a notice
+ * meant for product 12 is never shown on product 13's page.
+ */
+let createdNotice: { productId: number; body: string } | null = null
+</script>
+
 <script setup lang="ts">
 /**
  * ProductEditView — consolidated full-page product create/edit screen
@@ -21,7 +38,7 @@
  * spec-attachments/commission/materials) only make sense once a product
  * id exists, so they're hidden entirely in create mode.
  */
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, type Ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
@@ -47,6 +64,10 @@ import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import { useCommissionRateCapGuard } from '@/composables/useCommissionRateCap'
 import { useCompanySwitchGuard } from '@/composables/useCompanySwitchGuard'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+// ADR-052 — every write on this page ends in ONE "saved" dialog, raised only
+// after the server answered 2xx and the section on screen was re-read from it.
+import { confirmSaved, notifySaved, SAVED_BUT_STALE_BODY } from '@/composables/useSaveFeedback'
+
 // 2026-09-09 — the description fields became rich text; the editor and the
 // read-only renderer are one pair (see either component's docblock).
 import RichTextEditor from '@/design-system/components/RichTextEditor.vue'
@@ -58,6 +79,9 @@ import { PAYMENT_STAGE_KEY, stageLabelTh, type PipelineStageRef } from '@/utils/
 // YouTube links get the recognizable red-badge logo instead so agents can
 // tell at a glance which embeds are YouTube.
 import { isYoutubeUrl } from '@/utils/embedUrl'
+
+/** ADR-052 — the dialog title when a chained button stored only its first part. */
+const PARTIAL_SAVED_TITLE = 'บันทึกแล้วบางส่วน'
 
 const route = useRoute()
 const router = useRouter()
@@ -565,10 +589,16 @@ async function linkToCatalogItem(item: ProductCatalogItemOption) {
   linkingCatalogItemId.value = item.id
   catalogLinkError.value = ''
   try {
-    const res = await api.post<{ data: Product }>(`/products/${product.value.id}/catalog-link`, { catalog_item_id: item.id })
-    product.value = res.data
-    syncBasicsFormFromProduct(res.data)
-    showCatalogLinkPicker.value = false
+    const productId = product.value.id
+    await confirmSaved(() => api.post<{ data: Product }>(`/products/${productId}/catalog-link`, { catalog_item_id: item.id }), {
+      apply: (res) => {
+        product.value = res.data
+        syncBasicsFormFromProduct(res.data)
+        showCatalogLinkPicker.value = false
+      },
+      // The name the product now RESOLVES to — from the server, not the picker row.
+      message: (res) => `เชื่อมกับแคตตาล็อกกลางแล้ว — สินค้านี้ใช้ชื่อ "${res.data.name}"`,
+    })
   } catch (e) {
     catalogLinkError.value = apiErrorMessage(e, 'เชื่อมกับแคตตาล็อกกลางไม่สำเร็จ')
   } finally {
@@ -601,16 +631,25 @@ async function confirmUnlinkCatalog() {
   unlinkingCatalog.value = true
   unlinkError.value = ''
   try {
-    const res = await api.delete<{ data: Product }>(`/products/${product.value.id}/catalog-link`, {
-      name: unlinkForm.value.name,
-      brand_id: Number(unlinkForm.value.brand_id),
-      category_id: Number(unlinkForm.value.category_id),
-      description: unlinkForm.value.description || undefined,
-      spec_description: unlinkForm.value.spec_description || undefined,
-    })
-    product.value = res.data
-    syncBasicsFormFromProduct(res.data)
-    showCatalogUnlinkForm.value = false
+    const productId = product.value.id
+    await confirmSaved(
+      () =>
+        api.delete<{ data: Product }>(`/products/${productId}/catalog-link`, {
+          name: unlinkForm.value.name,
+          brand_id: Number(unlinkForm.value.brand_id),
+          category_id: Number(unlinkForm.value.category_id),
+          description: unlinkForm.value.description || undefined,
+          spec_description: unlinkForm.value.spec_description || undefined,
+        }),
+      {
+        apply: (res) => {
+          product.value = res.data
+          syncBasicsFormFromProduct(res.data)
+          showCatalogUnlinkForm.value = false
+        },
+        message: (res) => `ยกเลิกการเชื่อมแคตตาล็อกกลางแล้ว — สินค้านี้ใช้ชื่อ "${res.data.name}"`,
+      },
+    )
   } catch (e) {
     unlinkError.value = apiErrorMessage(e, 'ยกเลิกการเชื่อมไม่สำเร็จ')
   } finally {
@@ -626,6 +665,50 @@ async function confirmUnlinkCatalog() {
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
   return e.message && e.message !== `API error ${e.status}` ? e.message : `${fallback} (${e.status})`
+}
+
+/*
+ * ADR-052 — a section's re-read after a write, used as confirmSaved()'s
+ * `apply`. Every loader on this page reports its failure through its own error
+ * ref instead of throwing; this turns that back into a throw, so the dialog
+ * says "saved, but the screen may be behind" (SAVED_BUT_STALE_BODY) rather
+ * than a plain success over a list that did not reload.
+ */
+async function reloadOrThrow(load: () => Promise<void>, error: Ref<string>): Promise<void> {
+  error.value = ''
+  await load()
+  if (error.value) throw new Error(error.value)
+}
+
+/*
+ * ADR-052 rule 5 — every delete (and the share-link revoke) asks first.
+ *
+ * One dialog for the whole page rather than six copies of the same markup:
+ * each destructive action hands over its own wording and the write to run.
+ * `run` owns its own error handling (the section's error line), so a refusal
+ * still lands next to the thing that was refused.
+ */
+interface PendingDestructive {
+  title: string
+  body: string
+  confirmLabel: string
+  run: () => Promise<void>
+}
+const pendingDestructive = ref<PendingDestructive | null>(null)
+const runningDestructive = ref(false)
+function askBeforeDestroying(action: PendingDestructive): void {
+  pendingDestructive.value = action
+}
+async function confirmDestructive(): Promise<void> {
+  const action = pendingDestructive.value
+  if (!action || runningDestructive.value) return
+  runningDestructive.value = true
+  try {
+    await action.run()
+  } finally {
+    runningDestructive.value = false
+    pendingDestructive.value = null
+  }
 }
 
 // ── Section A — basics (name/price/brand/category/is_active) ──
@@ -1080,19 +1163,28 @@ function stampBasicsSnapshot(): void {
   basicsSnapshot.value = JSON.stringify(basicsForm.value)
 }
 
-async function saveBasics() {
+/**
+ * ADR-052 — the basics write WITHOUT the dialog: the server's product row on
+ * success, null on any failure (the error is already on screen).
+ *
+ * Split out of saveBasics() because two buttons chain it with another write
+ * (saveBasicsAndPin, saveCommissionTab). Those must stop at the first failure
+ * and raise ONE dialog for the whole button — which they cannot do while the
+ * basics save swallows its own error and reports nothing back.
+ */
+async function persistBasics(): Promise<Product | null> {
   // A platform product has no company to pick, so the header scope is not a
   // precondition for it — only for a product being made FOR a company.
   if (isCreateMode.value && !createAsPlatform.value && activeCompany.requiresCompanyPick) {
     errorMessage.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
-    return
+    return null
   }
   if (isCreateMode.value && createAsPlatform.value && !basicsForm.value.commission_plan_type) {
     // Product::effectivePlanType() THROWS for a platform product with no plan
     // type rather than guess — the guess would land in a ledger that cannot be
     // corrected (BR-2/BR-4). Asked here, and again in StoreProductRequest.
     errorMessage.value = 'สินค้ากลางต้องเลือกรูปแบบค่าแนะนำก่อนบันทึก'
-    return
+    return null
   }
   savingBasics.value = true
   errorMessage.value = ''
@@ -1196,28 +1288,57 @@ async function saveBasics() {
       const res = await api.post<{ data: Product }>('/products', payload)
       // Nested sections (media/specs/commission/materials) all need a
       // product id — redirect straight into edit mode (ADR-008 §7).
-      router.push({ name: 'product-edit', params: { id: res.data.id } })
-    } else {
-      const res = await api.put<{ data: Product }>(`/products/${product.value!.id}`, payload)
-      product.value = res.data
-      syncBasicsFormFromProduct(res.data)
+      // ADR-052 — the new page raises the notice once it has loaded the
+      // stored product (see createdNotice at the top of this file).
+      createdNotice = { productId: res.data.id, body: basicsSavedMessage(res.data, true) }
+      await router.push({ name: 'product-edit', params: { id: res.data.id } })
+
+      return res.data
     }
+    const res = await api.put<{ data: Product }>(`/products/${product.value!.id}`, payload)
+    product.value = res.data
+    syncBasicsFormFromProduct(res.data)
+
+    return res.data
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'บันทึกข้อมูลสินค้าไม่สำเร็จ')
+
+    return null
   } finally {
     savingBasics.value = false
   }
 }
 
+/** The dialog text for a basics save — the name the SERVER stored. */
+function basicsSavedMessage(saved: Product, created: boolean): string {
+  return created ? `สร้างสินค้า "${saved.name}" แล้ว` : `บันทึกข้อมูลสินค้า "${saved.name}" แล้ว`
+}
+
+/** Tab 3's own บันทึก button — the basics write on its own. */
+async function saveBasics() {
+  const created = isCreateMode.value
+  const saved = await persistBasics()
+  // A create is announced by the page it lands on (createdNotice).
+  if (saved && !created) notifySaved(basicsSavedMessage(saved, false))
+}
+
+/*
+ * ADR-052 — the header's เปิดใช้งาน/ปิดใช้งาน label is a STATUS, so it reads
+ * the saved product, not the switch beside it. The switch is the form's
+ * control (saved by บันทึก below); when it differs from what is stored, the
+ * header says so instead of claiming a state the server does not hold.
+ */
+const savedIsActive = computed(() => (product.value ? product.value.is_active : basicsForm.value.is_active))
+const isActiveUnsaved = computed(() => !!product.value && basicsForm.value.is_active !== product.value.is_active)
+
 // 2026-08-17 — human request: one "บันทึก" button for the whole "ข้อมูล
 // สินค้า" section instead of two (basics + the recommendation pin's own
-// separate button below it). savePin() itself is unchanged (still its own
-// try/catch/pinError, still a no-op when never-pinned-and-staying-unpinned)
-// — this just chains it after saveBasics() behind the single submit
-// button. Pin save is skipped in create mode: savePin() reads
-// product.value, which doesn't exist until saveBasics() has redirected
-// into edit mode on a fresh create (see saveBasics()'s isCreateMode branch
-// above), so there is nothing to pin yet on that first submit.
+// separate button below it). persistPin() keeps its own try/catch/pinError
+// and is still a no-op when never-pinned-and-staying-unpinned — this chains
+// it after persistBasics() behind the single submit button. Pin save is
+// skipped in create mode: persistPin() reads product.value, which doesn't
+// exist until persistBasics() has redirected into edit mode on a fresh
+// create, so there is nothing to pin yet on that first submit.
 async function saveBasicsAndPin() {
   /*
    * 2026-09-09 — the two halves are now separately permitted.
@@ -1229,8 +1350,33 @@ async function saveBasicsAndPin() {
    * that comes back 403 and put an error on screen for a change the person
    * never made.
    */
-  if (!readOnlyForCompanyAdmin.value) await saveBasics()
-  if (!isCreateMode.value && canPin.value) await savePin()
+  // ADR-052 — stop at the first failure (its error is already on screen),
+  // and raise ONE dialog for the button only when every part succeeded.
+  const created = isCreateMode.value
+  let saved: Product | null = null
+  if (!readOnlyForCompanyAdmin.value) {
+    saved = await persistBasics()
+    if (!saved) return
+  }
+  // A create is announced by the page it lands on (createdNotice), and has no pin yet.
+  if (created) return
+  let pin: RecommendationPinItem | 'unchanged' | null = 'unchanged'
+  if (canPin.value) {
+    pin = await persistPin()
+    if (pin === null) {
+      // The product row IS stored — say exactly that, and leave pinError
+      // next to the pin control for the part that was not.
+      if (saved) notifySaved(`บันทึกข้อมูลสินค้า "${saved.name}" แล้ว — แต่การปักหมุดแนะนำยังไม่ได้บันทึก`, PARTIAL_SAVED_TITLE)
+
+      return
+    }
+  }
+
+  if (saved && pin !== 'unchanged') notifySaved(`บันทึกข้อมูลสินค้า "${saved.name}" และการปักหมุดแนะนำแล้ว`)
+  else if (saved) notifySaved(basicsSavedMessage(saved, false))
+  else if (pin !== 'unchanged') notifySaved(pinSavedMessage(pin))
+  // else: nothing was written (read-only basics, and a pin that was never on
+  // and is staying off) — there is no stored change to report.
 }
 
 // ── Section C — description (pencil-edit toggle) ──
@@ -1249,11 +1395,14 @@ async function saveDescription() {
   savingDescription.value = true
   errorMessage.value = ''
   try {
-    const res = await api.put<{ data: Product }>(`/products/${product.value.id}`, {
-      description: descriptionDraft.value || null,
+    const productId = product.value.id
+    await confirmSaved(() => api.put<{ data: Product }>(`/products/${productId}`, { description: descriptionDraft.value || null }), {
+      apply: (res) => {
+        product.value = res.data
+        editingDescription.value = false
+      },
+      message: 'บันทึกคำอธิบายสินค้าแล้ว',
     })
-    product.value = res.data
-    editingDescription.value = false
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'บันทึกคำอธิบายไม่สำเร็จ')
   } finally {
@@ -1277,11 +1426,14 @@ async function saveSpecDescription() {
   savingSpecDescription.value = true
   errorMessage.value = ''
   try {
-    const res = await api.put<{ data: Product }>(`/products/${product.value.id}`, {
-      spec_description: specDescriptionDraft.value || null,
+    const productId = product.value.id
+    await confirmSaved(() => api.put<{ data: Product }>(`/products/${productId}`, { spec_description: specDescriptionDraft.value || null }), {
+      apply: (res) => {
+        product.value = res.data
+        editingSpecDescription.value = false
+      },
+      message: 'บันทึกคำอธิบายสเปคแล้ว',
     })
-    product.value = res.data
-    editingSpecDescription.value = false
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'บันทึกคำอธิบายสเปคไม่สำเร็จ')
   } finally {
@@ -1316,7 +1468,13 @@ async function addProductVideoEmbed(url: string) {
     source_type: 'embed',
     embed_url: url,
   })
-  await loadMedia()
+  // ADR-052 — no reload or dialog here: MediaUploadModal awaits `refresh`
+  // (reloadMediaAfterWrite) and then raises the one dialog for this action.
+}
+
+/** MediaUploadModal's `refresh` — the gallery re-read before its "saved" dialog. */
+function reloadMediaAfterWrite(): Promise<void> {
+  return reloadOrThrow(loadMedia, mediaError)
 }
 
 // Hero + 3×3 grid layout (redesign, human-confirmed 2026-07-19,
@@ -1446,6 +1604,7 @@ async function onCoverFilesSelected(event: Event) {
   coverUploading.value = true
   coverQueueTotal.value = files.length
   coverQueueDone.value = 0
+  let failed = false
 
   try {
     for (const file of files) {
@@ -1461,14 +1620,32 @@ async function onCoverFilesSelected(event: Event) {
       coverQueueDone.value += 1
     }
   } catch (e) {
+    failed = true
     mediaError.value = apiErrorMessage(e, 'อัปโหลดรูปสินค้าไม่สำเร็จ')
   } finally {
     coverUploading.value = false
+  }
+
+  if (failed) {
     // Refresh even on failure: earlier files in the queue may already
     // have been created, and leaving them invisible would invite the
-    // admin to upload duplicates.
+    // admin to upload duplicates. The upload error stays on screen.
     await loadMedia()
+
+    return
   }
+
+  // ADR-052 — one dialog for the whole pick, only when every file landed, and
+  // only after the gallery was re-read. A re-read that failed is said as such
+  // (loadMedia swallows its own failure, so reloadMediaAfterWrite checks).
+  try {
+    await reloadMediaAfterWrite()
+  } catch {
+    notifySaved(SAVED_BUT_STALE_BODY)
+
+    return
+  }
+  notifySaved(`อัปโหลดรูปสินค้า ${coverQueueDone.value} รูปแล้ว`)
 }
 
 /**
@@ -1487,8 +1664,10 @@ async function setPrimaryMedia(item: ProductMediaItem) {
   settingPrimaryId.value = item.id
   mediaError.value = ''
   try {
-    await api.put(`/product-media/${item.id}`, { is_primary: true })
-    await loadMedia()
+    await confirmSaved(() => api.put(`/product-media/${item.id}`, { is_primary: true }), {
+      apply: reloadMediaAfterWrite,
+      message: 'ตั้งเป็นรูปหลักแล้ว',
+    })
   } catch (e) {
     mediaError.value = apiErrorMessage(e, 'ตั้งรูปหลักไม่สำเร็จ')
   } finally {
@@ -1496,13 +1675,26 @@ async function setPrimaryMedia(item: ProductMediaItem) {
   }
 }
 
-async function deleteMedia(mediaId: number) {
-  try {
-    await api.delete(`/product-media/${mediaId}`)
-    media.value = media.value.filter((m) => m.id !== mediaId)
-  } catch (e) {
-    mediaError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
-  }
+function deleteMedia(mediaId: number) {
+  const item = media.value.find((m) => m.id === mediaId)
+  const what = item?.media_type === 'video' ? 'วิดีโอ' : 'รูป'
+  askBeforeDestroying({
+    title: `ลบ${what}นี้?`,
+    body: `${what}นี้จะถูกลบออกจากสินค้า "${product.value?.name ?? ''}"`,
+    confirmLabel: 'ลบ',
+    run: async () => {
+      try {
+        await confirmSaved(() => api.delete(`/product-media/${mediaId}`), {
+          apply: () => {
+            media.value = media.value.filter((m) => m.id !== mediaId)
+          },
+          message: `ลบ${what}แล้ว`,
+        })
+      } catch (e) {
+        mediaError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 /** Download icon on every image/video tile (human-requested 2026-07-19) — excludes embed items, there's no file to save, embed_url IS the content at an external host. */
@@ -1585,13 +1777,22 @@ async function addSpec() {
   addingSpec.value = true
   specError.value = ''
   try {
-    await api.post(`/products/${product.value.id}/specs`, {
-      spec_group: specForm.value.spec_group || undefined,
-      spec_key: specForm.value.spec_key,
-      spec_value: specForm.value.spec_value,
-    })
-    specForm.value = { spec_group: '', spec_key: '', spec_value: '' }
-    await loadSpecs()
+    const productId = product.value.id
+    await confirmSaved(
+      () =>
+        api.post<{ data?: ProductSpecItem }>(`/products/${productId}/specs`, {
+          spec_group: specForm.value.spec_group || undefined,
+          spec_key: specForm.value.spec_key,
+          spec_value: specForm.value.spec_value,
+        }),
+      {
+        apply: async () => {
+          specForm.value = { spec_group: '', spec_key: '', spec_value: '' }
+          await reloadOrThrow(loadSpecs, specError)
+        },
+        message: (res) => (res?.data?.spec_key ? `เพิ่มสเปค "${res.data.spec_key}" แล้ว` : 'เพิ่มสเปคแล้ว'),
+      },
+    )
   } catch (e) {
     specError.value = apiErrorMessage(e, 'เพิ่มสเปคไม่สำเร็จ')
   } finally {
@@ -1609,24 +1810,44 @@ function cancelEditSpec() {
 async function saveEditSpec(specId: number) {
   specError.value = ''
   try {
-    await api.put(`/product-specs/${specId}`, {
-      spec_group: editSpecForm.value.spec_group || undefined,
-      spec_key: editSpecForm.value.spec_key,
-      spec_value: editSpecForm.value.spec_value,
-    })
-    editingSpecId.value = null
-    await loadSpecs()
+    await confirmSaved(
+      () =>
+        api.put<{ data?: ProductSpecItem }>(`/product-specs/${specId}`, {
+          spec_group: editSpecForm.value.spec_group || undefined,
+          spec_key: editSpecForm.value.spec_key,
+          spec_value: editSpecForm.value.spec_value,
+        }),
+      {
+        apply: async () => {
+          editingSpecId.value = null
+          await reloadOrThrow(loadSpecs, specError)
+        },
+        message: (res) => (res?.data?.spec_key ? `บันทึกสเปค "${res.data.spec_key}" แล้ว` : 'บันทึกสเปคแล้ว'),
+      },
+    )
   } catch (e) {
     specError.value = apiErrorMessage(e, 'บันทึกสเปคไม่สำเร็จ')
   }
 }
-async function deleteSpec(specId: number) {
-  try {
-    await api.delete(`/product-specs/${specId}`)
-    specs.value = specs.value.filter((s) => s.id !== specId)
-  } catch (e) {
-    specError.value = apiErrorMessage(e, 'ลบสเปคไม่สำเร็จ')
-  }
+function deleteSpec(specId: number) {
+  const spec = specs.value.find((s) => s.id === specId)
+  askBeforeDestroying({
+    title: 'ลบสเปคนี้?',
+    body: spec ? `ลบสเปค "${spec.spec_key}: ${spec.spec_value}" ออกจากสินค้านี้` : 'ลบสเปคนี้ออกจากสินค้า',
+    confirmLabel: 'ลบสเปค',
+    run: async () => {
+      try {
+        await confirmSaved(() => api.delete(`/product-specs/${specId}`), {
+          apply: () => {
+            specs.value = specs.value.filter((s) => s.id !== specId)
+          },
+          message: spec ? `ลบสเปค "${spec.spec_key}" แล้ว` : 'ลบสเปคแล้ว',
+        })
+      } catch (e) {
+        specError.value = apiErrorMessage(e, 'ลบสเปคไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 // ── Section G — spec-attachment gallery (ADR-008 Decision 2: new
@@ -1694,16 +1915,32 @@ async function addSpecAttachmentEmbedLink(url: string) {
     source_type: 'embed',
     embed_url: url,
   })
-  await loadSpecAttachments()
+  // ADR-052 — MediaUploadModal awaits `refresh` and raises the dialog.
 }
 
-async function deleteSpecAttachment(attachmentId: number) {
-  try {
-    await api.delete(`/product-spec-attachments/${attachmentId}`)
-    specAttachments.value = specAttachments.value.filter((a) => a.id !== attachmentId)
-  } catch (e) {
-    specAttachmentError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
-  }
+/** MediaUploadModal's `refresh` for the spec-attachment gallery. */
+function reloadSpecAttachmentsAfterWrite(): Promise<void> {
+  return reloadOrThrow(loadSpecAttachments, specAttachmentError)
+}
+
+function deleteSpecAttachment(attachmentId: number) {
+  askBeforeDestroying({
+    title: 'ลบไฟล์แนบสเปคนี้?',
+    body: 'ไฟล์แนบนี้จะถูกลบออกจากสเปคของสินค้า',
+    confirmLabel: 'ลบ',
+    run: async () => {
+      try {
+        await confirmSaved(() => api.delete(`/product-spec-attachments/${attachmentId}`), {
+          apply: () => {
+            specAttachments.value = specAttachments.value.filter((a) => a.id !== attachmentId)
+          },
+          message: 'ลบไฟล์แนบสเปคแล้ว',
+        })
+      } catch (e) {
+        specAttachmentError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 /** Download icon on every image/PDF tile (human-requested 2026-07-19) — excludes embed items, same reasoning as downloadMediaItem. */
@@ -1799,14 +2036,32 @@ function openMoreMaterials(groupLabel: string) {
   showMoreMaterialsModal.value = true
 }
 
+/*
+ * ADR-052 — the group shown afterwards is the one the SERVER stored (the
+ * response row, or a re-read when the response carries none), never the value
+ * that was sent. And the picker stays open on a failure, with the error, so
+ * the move can be retried instead of silently looking done.
+ */
 async function updateMaterialGroup(material: SalesMaterialItem, newGroup: string | null) {
+  materialError.value = ''
   try {
-    await api.patch(`/sales-materials/${material.id}`, { material_group: newGroup })
-    material.material_group = newGroup
+    await confirmSaved(() => api.patch<{ data?: SalesMaterialItem }>(`/sales-materials/${material.id}`, { material_group: newGroup }), {
+      apply: async (res) => {
+        editingMaterialGroupId.value = null
+        const stored = res?.data
+        if (stored && stored.id === material.id) {
+          materials.value = materials.value.map((m) => (m.id === stored.id ? stored : m))
+        } else {
+          await reloadOrThrow(loadMaterials, materialError)
+        }
+      },
+      message: () => {
+        const group = materials.value.find((m) => m.id === material.id)?.material_group
+        return group ? `ย้ายไปกลุ่ม "${group}" แล้ว` : 'ย้ายออกจากกลุ่มแล้ว'
+      },
+    })
   } catch (e) {
     materialError.value = apiErrorMessage(e, 'แก้ไขกลุ่มไม่สำเร็จ')
-  } finally {
-    editingMaterialGroupId.value = null
   }
 }
 
@@ -1852,7 +2107,12 @@ async function addMaterialEmbedLink(url: string) {
     embed_url: url,
     material_group: materialUploadTargetGroup.value || undefined,
   })
-  await loadMaterials()
+  // ADR-052 — MediaUploadModal awaits `refresh` and raises the dialog.
+}
+
+/** MediaUploadModal's `refresh` for the sales-materials grid. */
+function reloadMaterialsAfterWrite(): Promise<void> {
+  return reloadOrThrow(loadMaterials, materialError)
 }
 
 // Bottom "เพิ่มกลุ่มใหม่ / ไม่มีกลุ่ม" card's own group picker — separate
@@ -1860,13 +2120,26 @@ async function addMaterialEmbedLink(url: string) {
 // actually clicked; this one is just the combobox's current draft value).
 const newMaterialGroupDraft = ref<string | null>(null)
 
-async function deleteMaterial(materialId: number) {
-  try {
-    await api.delete(`/sales-materials/${materialId}`)
-    materials.value = materials.value.filter((m) => m.id !== materialId)
-  } catch (e) {
-    materialError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
-  }
+function deleteMaterial(materialId: number) {
+  const material = materials.value.find((m) => m.id === materialId)
+  const name = material?.original_filename ? ` "${material.original_filename}"` : ''
+  askBeforeDestroying({
+    title: 'ลบสื่อการขายนี้?',
+    body: `ลบสื่อการขาย${name} ออกจากสินค้านี้ — ลิงก์แชร์ภายนอกของสื่อนี้จะใช้ไม่ได้อีก`,
+    confirmLabel: 'ลบ',
+    run: async () => {
+      try {
+        await confirmSaved(() => api.delete(`/sales-materials/${materialId}`), {
+          apply: () => {
+            materials.value = materials.value.filter((m) => m.id !== materialId)
+          },
+          message: `ลบสื่อการขาย${name} แล้ว`,
+        })
+      } catch (e) {
+        materialError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 async function downloadMaterial(material: SalesMaterialItem) {
@@ -1940,8 +2213,15 @@ async function createShareLink(materialId: number) {
   creatingShareLinkFor.value = materialId
   shareError.value = ''
   try {
-    await api.post(`/sales-materials/${materialId}/share-links`, { expires_in_days: shareLinkExpiryDays.value })
-    await loadShareLinksFor(materialId)
+    await confirmSaved(() => api.post<{ data?: ShareLinkItem }>(`/sales-materials/${materialId}/share-links`, { expires_in_days: shareLinkExpiryDays.value }), {
+      // The new link itself stays listed in the modal — it is the thing the
+      // admin came for. The dialog only confirms it exists.
+      apply: () => reloadOrThrow(() => loadShareLinksFor(materialId), shareError),
+      message: (res) =>
+        res?.data?.expires_at
+          ? `สร้างลิงก์แชร์แล้ว — ใช้ได้ถึง ${new Date(res.data.expires_at).toLocaleDateString('th-TH', { dateStyle: 'medium' })}`
+          : 'สร้างลิงก์แชร์แล้ว',
+    })
   } catch (e) {
     shareError.value = apiErrorMessage(e, 'สร้างลิงก์แชร์ไม่สำเร็จ')
   } finally {
@@ -1949,13 +2229,23 @@ async function createShareLink(materialId: number) {
   }
 }
 
-async function revokeShareLink(materialId: number, linkId: number) {
-  try {
-    await api.delete(`/share-links/${linkId}`)
-    await loadShareLinksFor(materialId)
-  } catch (e) {
-    shareError.value = apiErrorMessage(e, 'ยกเลิกลิงก์ไม่สำเร็จ')
-  }
+function revokeShareLink(materialId: number, linkId: number) {
+  const link = shareLinksByMaterial.value[materialId]?.find((l) => l.id === linkId)
+  askBeforeDestroying({
+    title: 'ยกเลิกลิงก์แชร์นี้?',
+    body: `${link ? `${link.short_url ?? link.share_url}\n\n` : ''}คนที่ได้รับลิงก์นี้ไปแล้วจะเปิดไม่ได้อีก และเปิดใช้ลิงก์เดิมกลับมาไม่ได้`,
+    confirmLabel: 'ยกเลิกลิงก์',
+    run: async () => {
+      try {
+        await confirmSaved(() => api.delete(`/share-links/${linkId}`), {
+          apply: () => reloadOrThrow(() => loadShareLinksFor(materialId), shareError),
+          message: 'ยกเลิกลิงก์แชร์แล้ว',
+        })
+      } catch (e) {
+        shareError.value = apiErrorMessage(e, 'ยกเลิกลิงก์ไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 async function copyShareLink(link: ShareLinkItem) {
@@ -2023,18 +2313,28 @@ async function loadRecommendationPins() {
   }
 }
 
-async function savePin() {
-  if (!product.value) return
+/**
+ * ADR-052 — the pin write WITHOUT the dialog (saveBasicsAndPin raises one for
+ * the whole button). Returns the row the SERVER stored, 'unchanged' when there
+ * was nothing to write, or null on failure (pinError already shows why).
+ *
+ * The form is re-read from that row afterwards: the toggle and sort order on
+ * screen are what the server holds, not what was typed.
+ */
+async function persistPin(): Promise<RecommendationPinItem | 'unchanged' | null> {
+  if (!product.value) return 'unchanged'
   savingPin.value = true
   pinError.value = ''
   try {
     const pin = currentPin.value
+    let stored: RecommendationPinItem | null = null
     if (pin) {
       const res = await api.put<{ data: RecommendationPinItem }>(`/product-recommendation-pins/${pin.id}`, {
         sort_order: pinForm.value.sort_order,
         is_active: pinForm.value.is_pinned,
       })
       recommendationPins.value = recommendationPins.value.map((p) => (p.id === pin.id ? res.data : p))
+      stored = res.data
     } else if (pinForm.value.is_pinned) {
       const res = await api.post<{ data: RecommendationPinItem }>('/product-recommendation-pins', {
         product_id: product.value.id,
@@ -2048,13 +2348,24 @@ async function savePin() {
         ...(isSuperAdmin.value ? { company_id: decisionCompanyId.value } : {}),
       })
       recommendationPins.value = [...recommendationPins.value, res.data]
+      stored = res.data
     }
     // else: never pinned and staying unpinned — nothing to persist.
+    if (!stored) return 'unchanged'
+    pinForm.value = { is_pinned: stored.is_active, sort_order: stored.sort_order }
+
+    return stored
   } catch (e) {
     pinError.value = apiErrorMessage(e, 'บันทึกการปักหมุดแนะนำไม่สำเร็จ')
+
+    return null
   } finally {
     savingPin.value = false
   }
+}
+
+function pinSavedMessage(pin: RecommendationPinItem): string {
+  return pin.is_active ? `ปักหมุดแนะนำแล้ว (ลำดับ ${pin.sort_order})` : 'เลิกปักหมุดแนะนำแล้ว'
 }
 
 function formatSatang(satang: number): string {
@@ -2094,9 +2405,21 @@ const savingRule = ref(false)
 // saveCommissionTab()). Prefer the live, unsaved dropdown pick first so
 // the label/preview tracks what the admin just selected; fall back to the
 // persisted value, then 'percentage', for the untouched/"inherit" case.
-const resolvedRuleRateType = computed<CommissionRateType>(
-  () => basicsForm.value.commission_rate_type || product.value?.commission_rate_type || 'percentage',
+const resolvedRuleRateType = computed<CommissionRateType>(() =>
+  // ADR-052 — the live pick is a PREVIEW of what this tab's บันทึก will store,
+  // so it only leads when that button will actually save the dropdown (a
+  // Company Admin on a สินค้ากลาง saves the rate but not the product row).
+  (!readOnlyForCompanyAdmin.value && basicsForm.value.commission_rate_type) || savedRuleRateType.value,
 )
+
+/*
+ * ADR-052 — the format the SERVER holds for this product. What every rule
+ * write sends, and what a rule row being edited on its own is labelled with:
+ * editing one row saves that row only, so an unsaved pick in the settings
+ * dropdown above must not leak into it (the server would refuse the mismatch,
+ * §2.2 — or worse, the label would promise a format the row will not get).
+ */
+const savedRuleRateType = computed<CommissionRateType>(() => product.value?.commission_rate_type || 'percentage')
 
 // Same conversion for both directions — % -> basis points and THB -> satang
 // are both "multiply by 100, round" (mirrors CommissionPlansView.vue's
@@ -2143,18 +2466,33 @@ function resetRuleForm() {
   createRuleCapGuard.reset()
 }
 
-async function submitRule() {
-  if (!product.value) return
+/**
+ * ADR-052 — the rule write WITHOUT the dialog (saveCommissionTab raises one
+ * for the whole button). The stored rule on success, null on failure.
+ */
+/** What persistRule() stored, and whether re-reading the page after it failed. */
+interface PersistedRule {
+  rule: CommissionRule | null
+  /** The rule IS stored, but the re-read after it failed — the screen may be behind. */
+  stale: boolean
+}
+
+async function persistRule(): Promise<PersistedRule | null> {
+  if (!product.value) return null
   // TASK-196 §3.2 — the Save button is already disabled while over the cap;
   // this defensive re-check covers e.g. an Enter-to-submit keypress
   // bypassing a disabled button in some browsers.
   recheckCreateRuleCap()
-  if (createRuleCapGuard.isOverCap.value) return
+  if (createRuleCapGuard.isOverCap.value) return null
   savingRule.value = true
   ruleError.value = ''
-  const submittedRateType = resolvedRuleRateType.value
+  // The format the server holds — after saveCommissionTab's basics save this
+  // already includes the dropdown's pick, read back from the response.
+  const submittedRateType = savedRuleRateType.value
+  const productId = product.value.id
+  let res: { data?: CommissionRule } | undefined
   try {
-    await api.post('/commission-rules', {
+    res = await api.post<{ data?: CommissionRule }>('/commission-rules', {
       product_id: product.value.id,
       rate_type: submittedRateType,
       rate_value: rateValueToBasisOrSatang(ruleForm.value.rate_value_input),
@@ -2171,22 +2509,43 @@ async function submitRule() {
       // company's decision even about a shared product, so decisionCompanyId.
       ...(isSuperAdmin.value ? { company_id: decisionCompanyId.value } : {}),
     })
-    // TASK-197 §2.2 — the FIRST rule for a product sets its
-    // commission_rate_type server-side as a side effect. Patch it
-    // locally rather than a whole extra GET /products/{id} round-trip:
-    // the settings block above and every subsequent "+ เพิ่มอัตราคอมตาม
-    // tier" open now correctly see it as locked in, without a reload.
-    if (product.value && product.value.commission_rate_type === null) {
-      product.value = { ...product.value, commission_rate_type: submittedRateType }
-      basicsForm.value.commission_rate_type = submittedRateType
-    }
-    resetRuleForm()
-    await loadCommissionRules()
   } catch (e) {
     ruleError.value = apiErrorMessage(e, 'บันทึกอัตราค่าแนะนำไม่สำเร็จ')
+    savingRule.value = false
+
+    return null
+  }
+
+  // ADR-052 — from here the rule IS stored. Nothing below may report it as a
+  // failed save: a re-read that fails only makes the screen stale.
+  resetRuleForm()
+  let stale = false
+  try {
+    /*
+     * TASK-197 §2.2 — the FIRST rule for a product sets its
+     * commission_rate_type server-side as a side effect.
+     *
+     * ADR-052 — re-READ it rather than patching in the value that was sent:
+     * the settings block's "ค่าที่ใช้จริงตอนนี้" must say what the server
+     * stored. An untouched basics form follows the product; one with unsaved
+     * typing keeps that typing and only takes the stored format.
+     */
+    if (product.value && product.value.commission_rate_type === null) {
+      const fresh = await api.get<{ data: Product }>(`/products/${productId}`)
+      const formWasClean = !basicsChanged.value
+      product.value = fresh.data
+      if (formWasClean) syncBasicsFormFromProduct(fresh.data)
+      else basicsForm.value.commission_rate_type = fresh.data.commission_rate_type ?? ''
+    }
+    // loadCommissionRules() swallows its own failure; this makes it throw.
+    await reloadOrThrow(loadCommissionRules, errorMessage)
+  } catch {
+    stale = true
   } finally {
     savingRule.value = false
   }
+
+  return { rule: res?.data ?? null, stale }
 }
 
 // 2026-08-18 — human request: one "บันทึก" button for the whole
@@ -2201,10 +2560,41 @@ async function submitRule() {
 // is just tweaking rate_type/affiliate mode on a product that already
 // has its rates set up.
 async function saveCommissionTab() {
-  await saveBasics()
-  if (ruleForm.value.rate_value_input !== '') {
-    await submitRule()
+  /*
+   * ADR-052 — stop at the first failure; one dialog for the button, raised
+   * only when every part it ran succeeded.
+   *
+   * The basics half is skipped for a Company Admin on a สินค้ากลาง, exactly as
+   * saveBasicsAndPin() does: their rates are theirs (canSetCommissionRule),
+   * the product row is not, and a PUT that comes back 403 must not now also
+   * stop the rate they are allowed to add.
+   */
+  let saved: Product | null = null
+  if (!readOnlyForCompanyAdmin.value) {
+    saved = await persistBasics()
+    if (!saved) return
   }
+  let added: PersistedRule | null = null
+  if (ruleForm.value.rate_value_input !== '') {
+    added = await persistRule()
+    if (!added) {
+      // The settings ARE stored — say exactly that; the rate's own error (or
+      // the cap warning) stays next to the rate field.
+      if (saved) notifySaved('บันทึกการตั้งค่าค่าแนะนำแล้ว — แต่ยังไม่ได้เพิ่มอัตราค่าแนะนำ', PARTIAL_SAVED_TITLE)
+
+      return
+    }
+    if (added.stale) {
+      notifySaved(SAVED_BUT_STALE_BODY)
+
+      return
+    }
+  }
+
+  const rate = added?.rule ? ` ${formatRate(added.rule)}` : ''
+  if (added && saved) notifySaved(`บันทึกการตั้งค่าค่าแนะนำและเพิ่มอัตรา${rate} แล้ว`)
+  else if (added) notifySaved(`เพิ่มอัตราค่าแนะนำ${rate} แล้ว`)
+  else if (saved) notifySaved('บันทึกการตั้งค่าค่าแนะนำแล้ว')
 }
 
 // Inline edit-in-place (ADR-008 — new capability; the old tab was
@@ -2225,10 +2615,10 @@ const editRuleForm = ref({
 // a new row starts editing.
 const editRuleCapGuard = useCommissionRateCapGuard()
 function recheckEditRuleCap(): void {
-  editRuleCapGuard.recheck(resolvedRuleRateType.value, rateValueToBasisOrSatang(editRuleForm.value.rate_value_input), product.value?.price_satang ?? null)
+  editRuleCapGuard.recheck(savedRuleRateType.value, rateValueToBasisOrSatang(editRuleForm.value.rate_value_input), product.value?.price_satang ?? null)
 }
 function recheckEditRuleCapDebounced(): void {
-  editRuleCapGuard.recheckDebounced(resolvedRuleRateType.value, rateValueToBasisOrSatang(editRuleForm.value.rate_value_input), product.value?.price_satang ?? null)
+  editRuleCapGuard.recheckDebounced(savedRuleRateType.value, rateValueToBasisOrSatang(editRuleForm.value.rate_value_input), product.value?.price_satang ?? null)
 }
 function startEditRule(rule: CommissionRule) {
   editingRuleId.value = rule.id
@@ -2251,37 +2641,63 @@ function cancelEditRule() {
 }
 async function saveEditRule(rule: CommissionRule) {
   ruleError.value = ''
-  // TASK-196 §3.2 — same defensive re-check as submitRule() above.
+  // TASK-196 §3.2 — same defensive re-check as persistRule() above.
   recheckEditRuleCap()
   if (editRuleCapGuard.isOverCap.value) return
   try {
-    await api.put(`/commission-rules/${rule.id}`, {
-      rate_type: resolvedRuleRateType.value,
-      rate_value: rateValueToBasisOrSatang(editRuleForm.value.rate_value_input),
-      effective_from: editRuleForm.value.effective_from,
-      effective_to: editRuleForm.value.effective_to || null,
-      ...renewalPayloadFields({
-        rate_value_input: '',
-        effective_from: '',
-        effective_to: '',
-        renewal_rate_percent: editRuleForm.value.renewal_rate_percent,
-        renewal_recurs: editRuleForm.value.renewal_recurs,
-      }),
-    })
-    editingRuleId.value = null
-    await loadCommissionRules()
+    await confirmSaved(
+      () =>
+        api.put<{ data?: CommissionRule }>(`/commission-rules/${rule.id}`, {
+          // ADR-052 — the format the server holds, never an unsaved dropdown pick.
+          rate_type: savedRuleRateType.value,
+          rate_value: rateValueToBasisOrSatang(editRuleForm.value.rate_value_input),
+          effective_from: editRuleForm.value.effective_from,
+          effective_to: editRuleForm.value.effective_to || null,
+          ...renewalPayloadFields({
+            rate_value_input: '',
+            effective_from: '',
+            effective_to: '',
+            renewal_rate_percent: editRuleForm.value.renewal_rate_percent,
+            renewal_recurs: editRuleForm.value.renewal_recurs,
+          }),
+        }),
+      {
+        apply: async () => {
+          editingRuleId.value = null
+          await reloadOrThrow(loadCommissionRules, errorMessage)
+        },
+        // The rate as the RE-READ list holds it.
+        message: () => {
+          const stored = commissionRules.value.find((r) => r.id === rule.id)
+          return stored ? `บันทึกอัตราค่าแนะนำ ${formatRate(stored)} แล้ว` : 'บันทึกอัตราค่าแนะนำแล้ว'
+        },
+      },
+    )
   } catch (e) {
     ruleError.value = apiErrorMessage(e, 'บันทึกอัตราค่าแนะนำไม่สำเร็จ')
   }
 }
-async function deleteRule(ruleId: number) {
-  ruleError.value = ''
-  try {
-    await api.delete(`/commission-rules/${ruleId}`)
-    commissionRules.value = commissionRules.value.filter((r) => r.id !== ruleId)
-  } catch (e) {
-    ruleError.value = apiErrorMessage(e, 'ลบอัตราค่าแนะนำไม่สำเร็จ')
-  }
+function deleteRule(ruleId: number) {
+  const rule = commissionRules.value.find((r) => r.id === ruleId)
+  const rate = rule ? ` ${formatRate(rule)}` : ''
+  askBeforeDestroying({
+    title: 'ลบอัตราค่าแนะนำนี้?',
+    body: `ลบอัตราค่าแนะนำ${rate}${rule ? ` (มีผลตั้งแต่ ${rule.effective_from})` : ''} ของสินค้านี้`,
+    confirmLabel: 'ลบอัตรา',
+    run: async () => {
+      ruleError.value = ''
+      try {
+        await confirmSaved(() => api.delete(`/commission-rules/${ruleId}`), {
+          apply: () => {
+            commissionRules.value = commissionRules.value.filter((r) => r.id !== ruleId)
+          },
+          message: `ลบอัตราค่าแนะนำ${rate} แล้ว`,
+        })
+      } catch (e) {
+        ruleError.value = apiErrorMessage(e, 'ลบอัตราค่าแนะนำไม่สำเร็จ')
+      }
+    },
+  })
 }
 
 /*
@@ -2362,7 +2778,14 @@ async function loadInitialData() {
 }
 
 onMounted(async () => {
+  // ADR-052 — taken before the load, so a notice is never left behind for a
+  // later page; raised after it, once the stored product is on screen.
+  const notice = createdNotice
+  createdNotice = null
   await loadInitialData()
+  if (notice && notice.productId === productId.value) {
+    notifySaved(product.value?.id === notice.productId ? notice.body : SAVED_BUT_STALE_BODY)
+  }
   void loadSupplierOptions()
   // CREATE mode never calls syncBasicsFormFromProduct (there is no product
   // to sync from), so without this the blank form reads as "changed" and a
@@ -2435,8 +2858,13 @@ function goToVideoSettings() {
              both those buttons and the "บันทึก" button in the form below (same
              column, still on the header row — no row/height change). -->
         <div class="flex items-center gap-2">
-          <span class="text-xs font-bold whitespace-nowrap" :class="basicsForm.is_active ? 'text-brand-600' : 'text-slate-400'">
-            {{ basicsForm.is_active ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}
+          <!-- ADR-052 — the status reads the SAVED product; the switch beside
+               it is the form's control, and an unsaved flip is said as such. -->
+          <span data-test="saved-active-status" class="text-xs font-bold whitespace-nowrap" :class="savedIsActive ? 'text-brand-600' : 'text-slate-400'">
+            {{ savedIsActive ? 'เปิดใช้งาน' : 'ปิดใช้งาน' }}
+          </span>
+          <span v-if="isActiveUnsaved" data-test="active-unsaved" class="text-[11px] font-bold text-amber-600 whitespace-nowrap">
+            → {{ basicsForm.is_active ? 'เปิด' : 'ปิด' }} (ยังไม่บันทึก)
           </span>
           <button
             type="button"
@@ -3238,7 +3666,7 @@ function goToVideoSettings() {
               <template v-if="editingRuleId === r.id">
                 <div class="grid grid-cols-2 gap-3">
                   <div>
-                    <label class="text-sm font-bold text-slate-500">{{ resolvedRuleRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
+                    <label class="text-sm font-bold text-slate-500">{{ savedRuleRateType === 'percentage' ? 'อัตรา (%)' : 'จำนวน (บาท)' }}</label>
                     <input
                       v-model="editRuleForm.rate_value_input"
                       type="number"
@@ -3252,7 +3680,7 @@ function goToVideoSettings() {
                          above: this row's own historical rate_type is
                          NEVER rewritten (§1), but re-saving it submits
                          the product's current resolved format. -->
-                    <p class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ commissionRateTypeLabels[resolvedRuleRateType] }}</p>
+                    <p class="mt-1 text-xs text-slate-400">จะบันทึกเป็น: {{ commissionRateTypeLabels[savedRuleRateType] }}</p>
                     <p v-if="editRuleCapGuard.isOverCap.value" class="mt-1 text-xs font-bold text-rose-600">เกินเพดานค่าแนะนำที่กำหนด</p>
                   </div>
                   <div>
@@ -4170,6 +4598,7 @@ function goToVideoSettings() {
       hint="รูป: JPG/PNG/WEBP ไม่เกิน 15MB · วิดีโอ: ตามขนาดที่บริษัทกำหนด"
       :upload-fn="uploadMediaFile"
       :embed-fn="addProductVideoEmbed"
+      :refresh="reloadMediaAfterWrite"
       embed-placeholder="วางลิงก์วิดีโอ (YouTube/Vimeo embed URL)"
       @uploaded="loadMedia"
       @close="showMediaUploadModal = false"
@@ -4183,6 +4612,7 @@ function goToVideoSettings() {
       hint="รูป: JPG/PNG/WEBP · PDF — ไม่เกินขนาดที่บริษัทกำหนด"
       :upload-fn="uploadSpecAttachmentFile"
       :embed-fn="addSpecAttachmentEmbedLink"
+      :refresh="reloadSpecAttachmentsAfterWrite"
       embed-placeholder="วางลิงก์ไฟล์ภายนอก (รูป หรือ PDF)"
       @uploaded="loadSpecAttachments"
       @close="showSpecAttachmentUploadModal = false"
@@ -4198,6 +4628,7 @@ function goToVideoSettings() {
       hint="รูป/PDF: ไม่เกินขนาดที่บริษัทกำหนด · วิดีโอ: ตามขนาดที่บริษัทกำหนด"
       :upload-fn="uploadMaterialFile"
       :embed-fn="addMaterialEmbedLink"
+      :refresh="reloadMaterialsAfterWrite"
       embed-placeholder="วางลิงก์วิดีโอ (YouTube/Vimeo) หรือไฟล์ภายนอก"
       @uploaded="loadMaterials"
       @close="showMaterialUploadModal = false"
@@ -4467,6 +4898,19 @@ function goToVideoSettings() {
       cancel-label="แก้ไขต่อ"
       @confirm="leaveForNewCompany"
       @cancel="keepEditing"
+    />
+
+    <!-- ADR-052 rule 5 — every delete on this page, and the share-link
+         revoke, asks here first (see askBeforeDestroying). -->
+    <ConfirmDialog
+      :show="pendingDestructive !== null"
+      variant="danger"
+      :title="pendingDestructive?.title ?? ''"
+      :body="pendingDestructive?.body ?? ''"
+      :confirm-label="pendingDestructive?.confirmLabel ?? ''"
+      :busy="runningDestructive"
+      @confirm="confirmDestructive"
+      @update:show="(v: boolean) => { if (!v && !runningDestructive) pendingDestructive = null }"
     />
   </main>
 </template>

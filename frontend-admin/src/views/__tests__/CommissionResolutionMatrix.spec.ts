@@ -303,8 +303,11 @@ describe('the table never guesses', () => {
     await goToStep(wrapper, 3)
     const before = get.mock.calls.filter((c) => String(c[0]).startsWith('/commission-resolution')).length
 
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     await wrapper.get('[data-test="company-default-rule-10"]').findAll('button')[1]!.trigger('click')
+    await flushPromises()
+    // ADR-052 — the delete asks first, in the screen's own dialog.
+    const confirmButtons = wrapper.get('[data-test="delete-confirm"]').findAll('button')
+    await confirmButtons[confirmButtons.length - 1]!.trigger('click')
     await flushPromises()
 
     const after = get.mock.calls.filter((c) => String(c[0]).startsWith('/commission-resolution')).length

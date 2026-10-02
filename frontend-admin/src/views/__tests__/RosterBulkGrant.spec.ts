@@ -37,6 +37,7 @@ vi.mock('@/utils/qrCode', () => ({ generateQrDataUrl: vi.fn().mockResolvedValue(
 
 import AgentRosterView from '../AgentRosterView.vue'
 import { useAuthStore } from '@/stores/auth'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 function person(id: number, name: string, over: Record<string, unknown> = {}) {
   return {
@@ -174,7 +175,12 @@ describe('the grant dialog', () => {
 
     expect(post).toHaveBeenCalledTimes(1)
     expect(post).toHaveBeenCalledWith('/user-certifications/bulk', { user_ids: [2, 3, 4], cert_tier_id: 10 })
-    expect(wrapper.find('[data-test="grant-result"]').text()).toContain('อนุมัติ Basic ให้ 2 คนแล้ว')
+    // ADR-052 — the result is the global "saved" dialog now, with the SERVER's
+    // counts (granted 2, already held 1), not an inline banner.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('อนุมัติ Basic ให้ 2 คนแล้ว')
+    expect(saveFeedbackState.body).toContain('ข้าม 1 คน')
+    expect(wrapper.find('[data-test="grant-result"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="grant-dialog"]').exists()).toBe(false)
   })
 

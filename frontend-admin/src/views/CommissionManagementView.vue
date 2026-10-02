@@ -19,6 +19,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const route = useRoute()
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
@@ -118,14 +119,16 @@ const kpis = computed(() => {
   ]
 })
 
-async function loadAll() {
+async function loadAll(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: LedgerItem[] }>(activeCompany.scopedPath('/commission-ledger'))
     entries.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -190,8 +193,15 @@ async function markPaid(entry: LedgerItem) {
   marking.value = entry.id
   errorMessage.value = ''
   try {
-    await api.post(`/commission-ledger/${entry.id}/mark-paid`)
-    await loadAll()
+    // ADR-052 — the list is re-read before the dialog; the amount and payee
+    // quoted are the ones the server returned for the row it marked (BR-3).
+    await confirmSaved(() => api.post<{ data: LedgerItem }>(`/commission-ledger/${entry.id}/mark-paid`), {
+      apply: async () => {
+        if (!(await loadAll())) throw new Error('ledger re-read failed')
+      },
+      message: (res) =>
+        `บันทึกจ่ายค่าคอม ${formatSatang(res.data.amount_satang)}${res.data.agent ? ` ให้ ${res.data.agent.name}` : ''} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   } finally {

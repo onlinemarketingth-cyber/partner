@@ -26,6 +26,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { api, ApiError } from '@/api/client'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import { useAuthStore } from '@/stores/auth'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -67,7 +68,6 @@ const loading = ref(false)
 const loadError = ref('')
 const saving = ref(false)
 const saveError = ref('')
-const saveSuccess = ref(false)
 const passwordSet = ref(false)
 const showPassword = ref(false)
 
@@ -149,7 +149,6 @@ async function loadSettings(): Promise<void> {
 async function saveSettings(): Promise<void> {
   saving.value = true
   saveError.value = ''
-  saveSuccess.value = false
   try {
     const payload: Record<string, unknown> = {
       smtp_host: form.value.smtp_host,
@@ -168,9 +167,12 @@ async function saveSettings(): Promise<void> {
       payload.password = form.value.password
     }
 
-    const res = await api.put<{ data: MailSettings }>('/platform/mail-settings', payload)
-    applySettings(res.data)
-    saveSuccess.value = true
+    // ADR-052 — the form is re-read from what the server stored, then the
+    // dialog (replacing the inline "บันทึกสำเร็จ") says it saved.
+    await confirmSaved(() => api.put<{ data: MailSettings }>('/platform/mail-settings', payload), {
+      apply: (res) => applySettings(res.data),
+      message: 'บันทึกการตั้งค่า Email SMTP แล้ว',
+    })
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const errors = (e.body as { errors?: Record<string, string[]> } | undefined)?.errors
@@ -374,7 +376,6 @@ onMounted(loadSettings)
           </button>
         </div>
         <p v-if="isDirty" class="text-right text-xs text-slate-400">บันทึกการตั้งค่าก่อน จึงจะทดสอบด้วยค่าล่าสุดได้</p>
-        <p v-if="saveSuccess" class="text-xs font-bold text-emerald-600">บันทึกสำเร็จ</p>
         <p v-if="saveError" class="text-xs font-bold text-rose-600">{{ saveError }}</p>
         <p v-if="testMessage" class="text-xs font-bold" :class="testMessageIsError ? 'text-rose-600' : 'text-emerald-600'">{{ testMessage }}</p>
       </div>

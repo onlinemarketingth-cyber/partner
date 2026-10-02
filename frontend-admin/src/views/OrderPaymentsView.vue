@@ -42,6 +42,7 @@ import OrderDetailModal from '@/design-system/components/OrderDetailModal.vue'
 import SlipViewerModal from '@/design-system/components/SlipViewerModal.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 interface OrderRow {
   id: number
@@ -263,7 +264,7 @@ const activeTab = computed(() => TABS.find((t) => t.status === activeStatus.valu
  */
 const activeCompany = useActiveCompanyStore()
 
-async function loadSummary(): Promise<void> {
+async function loadSummary(): Promise<boolean> {
   try {
     const res = await api.get<{ data: SummaryRow[]; needs_attention?: number }>(
       activeCompany.scopedPath('/orders/summary'),
@@ -274,15 +275,17 @@ async function loadSummary(): Promise<void> {
     // the honest answer when the server does not report this yet is zero,
     // not a blank.
     needsAttentionCount.value = res.needs_attention ?? 0
+    return true
   } catch {
     // A failed count is a missing badge, not a broken page. The list below
     // carries the real content and reports its own errors.
     summary.value = []
     needsAttentionCount.value = 0
+    return false
   }
 }
 
-async function loadOrders(): Promise<void> {
+async function loadOrders(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -291,9 +294,11 @@ async function loadOrders(): Promise<void> {
       activeStatus.value === NEEDS_ATTENTION ? 'needs_attention=1' : `status=${activeStatus.value}`
     const res = await api.get<{ data: OrderRow[] }>(activeCompany.scopedPath(`/orders?${query}`))
     orders.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดคำสั่งซื้อไม่สำเร็จ (${e.status})` : 'โหลดคำสั่งซื้อไม่สำเร็จ'
     orders.value = []
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -370,11 +375,17 @@ async function confirmPayment(order: OrderRow): Promise<void> {
   errorMessage.value = ''
 
   try {
-    await api.post(`/orders/${order.id}/confirm`)
     // BOTH, not just the list: the tab would otherwise keep saying 4 over
     // three rows — the count/list disagreement the server-side scope exists
     // to prevent, reintroduced on the client.
-    await refreshAll()
+    // ADR-052 — dialog after the re-read; order number and amount are the
+    // server's (BR-3 satang, formatted only here).
+    await confirmSaved(() => api.post<{ data: OrderRow }>(`/orders/${order.id}/confirm`), {
+      apply: async () => {
+        if (!(await refreshAll())) throw new Error('orders re-read failed')
+      },
+      message: (res) => `อนุมัติการชำระเงินคำสั่งซื้อ ${res.data.order_number} ยอด ${formatMoney(res.data.amount_satang)} บาท แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError
       ? `ยืนยันการชำระเงินไม่สำเร็จ: ${e.message}`
@@ -446,8 +457,12 @@ async function uploadSlip(event: Event): Promise<void> {
   try {
     const form = new FormData()
     form.append('slip', file)
-    await api.postForm(`/orders/${orderId}/slip`, form)
-    await refreshAll()
+    await confirmSaved(() => api.postForm<{ data: OrderRow }>(`/orders/${orderId}/slip`, form), {
+      apply: async () => {
+        if (!(await refreshAll())) throw new Error('orders re-read failed')
+      },
+      message: (res) => `แนบสลิปให้คำสั่งซื้อ ${res.data.order_number} แล้ว — สถานะตอนนี้: ${res.data.status_label}`,
+    })
   } catch (e) {
     // Shown in full for the same reason confirmPayment's is: the server's
     // refusal names the actual problem ("อัปโหลดสลิปได้เฉพาะคำสั่งซื้อที่ยัง
@@ -470,8 +485,10 @@ async function uploadSlip(event: Event): Promise<void> {
  * rows — the exact count/list disagreement the shared server-side scope was
  * built to prevent, reintroduced on the client.
  */
-async function refreshAll(): Promise<void> {
-  await Promise.all([loadSummary(), loadOrders()])
+async function refreshAll(): Promise<boolean> {
+  const [summaryOk, ordersOk] = await Promise.all([loadSummary(), loadOrders()])
+
+  return summaryOk && ordersOk
 }
 
 function tabClasses(status: TabStatus, tone: string): string {

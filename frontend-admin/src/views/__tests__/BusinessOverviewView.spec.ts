@@ -15,6 +15,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -325,7 +326,62 @@ describe('giving past sales a cost', () => {
 
     expect(post).toHaveBeenCalledWith('/business-overview/backfill-cost', {})
     expect(get).toHaveBeenCalled()
-    expect(wrapper.get('[data-test="overview-backfill-done"]').text()).toContain('4 รายการ')
+    // ADR-052 — the inline result line became the "saved" dialog.
+    expect(wrapper.find('[data-test="overview-backfill-done"]').exists()).toBe(false)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('4 รายการ')
+  })
+
+  it('ADR-052: the dialog quotes the count the SERVER updated, and only after the report was re-read', async () => {
+    // The confirm step promised 4; the server says it actually updated 3.
+    post.mockResolvedValue({ data: { orders_updated: 3 } })
+    const wrapper = await mountView(withBackfillable(4))
+    const afterBackfill = withBackfillable(0, { orders_without_cost: 1, orders_with_estimated_cost: 3 })
+    let reReadSeenBeforeDialog = false
+    get.mockImplementation(async () => {
+      reReadSeenBeforeDialog = saveFeedbackState.show === false
+      return { data: afterBackfill }
+    })
+
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+    await wrapper.get('[data-test="overview-backfill-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(reReadSeenBeforeDialog).toBe(true)
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('3 รายการ')
+    expect(saveFeedbackState.body).not.toContain('4 รายการ')
+    // the screen is the re-read one: nothing left to backfill
+    expect(wrapper.find('[data-test="overview-backfill"]').exists()).toBe(false)
+  })
+
+  it('ADR-052: the backfill landed but the report could not be re-read — the dialog says so', async () => {
+    const wrapper = await mountView(withBackfillable(4))
+    get.mockImplementation(async () => {
+      throw new Error('down')
+    })
+
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+    await wrapper.get('[data-test="overview-backfill-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.text()).toContain('โหลดข้อมูลไม่สำเร็จ')
+  })
+
+  it('ADR-052: a refused backfill raises no dialog and shows the error', async () => {
+    post.mockRejectedValue(new Error('boom'))
+    const wrapper = await mountView(withBackfillable(4))
+
+    await wrapper.get('[data-test="overview-backfill"]').trigger('click')
+    await wrapper.get('[data-test="overview-backfill-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ใส่ต้นทุนย้อนหลังไม่สำเร็จ')
+    // still offered, because nothing was written
+    expect(wrapper.find('[data-test="overview-backfill-confirm"]').exists()).toBe(true)
   })
 
   it('keeps saying which margins rest on an estimate, every time the page is read', async () => {

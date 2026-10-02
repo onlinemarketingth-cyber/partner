@@ -33,6 +33,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
@@ -125,7 +126,6 @@ const teamVisibilityForm = ref<TeamVisibilitySettings>({ ...TEAM_VISIBILITY_DEFA
 const loadingTeamVisibility = ref(false)
 const savingTeamVisibility = ref(false)
 const teamVisibilityError = ref('')
-const teamVisibilitySaved = ref(false)
 
 async function loadTeamVisibilitySettings(): Promise<void> {
   if (activeCompany.requiresCompanyPick) return
@@ -156,16 +156,24 @@ async function saveTeamVisibilitySettings(): Promise<void> {
   }
   savingTeamVisibility.value = true
   teamVisibilityError.value = ''
-  teamVisibilitySaved.value = false
   try {
     // company_id is only accepted from a Super Admin; for a Company Admin the
     // backend ignores it entirely and scopes the write to their own row (BR-6).
-    await api.put('/team-visibility-settings', {
-      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
-      ...teamVisibilityForm.value,
-    })
-    teamVisibilitySaved.value = true
-    setTimeout(() => (teamVisibilitySaved.value = false), 2000)
+    // ADR-052 — the form is re-read from the row the server stored (same
+    // defaults-spread as the load), then the dialog says it saved.
+    await confirmSaved(
+      () =>
+        api.put<{ data: Partial<TeamVisibilitySettings> }>('/team-visibility-settings', {
+          ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
+          ...teamVisibilityForm.value,
+        }),
+      {
+        apply: (res) => {
+          teamVisibilityForm.value = { ...TEAM_VISIBILITY_DEFAULTS, ...res.data }
+        },
+        message: 'บันทึกการตั้งค่าทีมแล้ว',
+      },
+    )
   } catch (e) {
     teamVisibilityError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -315,7 +323,6 @@ onMounted(loadTeamVisibilitySettings)
           </div>
 
           <div class="flex items-center justify-end gap-2">
-            <span v-if="teamVisibilitySaved" class="text-xs font-bold text-emerald-600">บันทึกแล้ว</span>
             <button type="submit" :disabled="savingTeamVisibility" class="btn-primary">
               {{ savingTeamVisibility ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่าทีม' }}
             </button>

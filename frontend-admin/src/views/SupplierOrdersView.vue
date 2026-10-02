@@ -30,6 +30,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { formatDateTime, formatMoney } from '@/composables/useClientFile'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 interface SupplierOrder {
   id: number
@@ -67,18 +68,20 @@ const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
 const onlyPending = ref(true)
 
-async function load(): Promise<void> {
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const query = onlyPending.value ? '?shipping_status=pending' : ''
     const res = await api.get<{ data: SupplierOrder[] }>(`/supplier/orders${query}`)
     orders.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError
       ? `โหลดคำสั่งซื้อไม่สำเร็จ (${e.status})`
       : 'โหลดคำสั่งซื้อไม่สำเร็จ'
     orders.value = []
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -108,12 +111,19 @@ async function confirmShip(): Promise<void> {
   if (shipTargetId.value === null) return
   shipping.value = true
   errorMessage.value = ''
+  const path = `/supplier/orders/${shipTargetId.value}/ship`
+  const body = { tracking_number: trackingInput.value.trim() }
   try {
-    await api.post(`/supplier/orders/${shipTargetId.value}/ship`, {
-      tracking_number: trackingInput.value.trim(),
+    // ADR-052 — list re-read first; the dialog quotes the order and tracking
+    // number the SERVER recorded.
+    await confirmSaved(() => api.post<{ data: SupplierOrder }>(path, body), {
+      apply: async () => {
+        shipTargetId.value = null
+        if (!(await load())) throw new Error('orders re-read failed')
+      },
+      message: (res) =>
+        `บันทึกการจัดส่งคำสั่งซื้อ ${res.data.order_number} แล้ว${res.data.tracking_number ? ` — เลขพัสดุ ${res.data.tracking_number}` : ''}`,
     })
-    shipTargetId.value = null
-    await load()
   } catch (e) {
     // In full — the server's refusal names which of the three conditions
     // failed (not shippable, not paid, already sent), and each has a

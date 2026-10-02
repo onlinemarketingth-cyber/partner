@@ -25,9 +25,20 @@ class AffiliateLinkController extends Controller
         $this->authorizeResource(AffiliateLink::class, 'affiliate_link');
     }
 
+    /**
+     * 2026-10-02 (owner: "แก้เลย") — revoked links are left out.
+     *
+     * destroy() has been a SOFT revoke (revoked_at) for some time, and this
+     * list never followed it: a link revoked a moment ago came straight back
+     * on the next load looking live, so an agent could copy and hand out a
+     * URL that resolves to nothing. The portal was hiding the just-revoked id
+     * by hand as a stopgap. The rows stay in the table for history and
+     * attribution; they are simply not "my links" any more.
+     */
     public function index(Request $request): AnonymousResourceCollection
     {
-        $query = AffiliateLink::withCount(['clicks', 'attributedReferrals']);
+        $query = AffiliateLink::withCount(['clicks', 'attributedReferrals'])
+            ->whereNull('revoked_at');
 
         if ($request->user()->isAgent()) {
             $query->where('agent_id', $request->user()->id);

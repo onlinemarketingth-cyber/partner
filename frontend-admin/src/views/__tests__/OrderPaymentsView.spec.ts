@@ -26,6 +26,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -576,6 +577,8 @@ describe('OrderPaymentsView — attaching a slip on the customer\'s behalf', () 
     post.mockReset()
     postForm.mockReset()
     localStorage.clear()
+    // The real answer: OrderResource for the order, now waiting for a check.
+    postForm.mockResolvedValue({ data: { ...PAYABLE, status: 'awaiting_verification', status_label: 'รอตรวจสอบสลิป', has_slip: true } })
 
     const auth = useAuthStore()
     auth.user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
@@ -689,5 +692,104 @@ describe('OrderPaymentsView — attaching a slip on the customer\'s behalf', () 
     await pickFile(wrapper)
 
     expect((wrapper.find('[data-test="slip-file-input"]').element as HTMLInputElement).value).toBe('')
+  })
+})
+
+/**
+ * ADR-052 — approving a payment and attaching a slip each raise the "saved"
+ * dialog, after both halves of the screen were re-read, quoting the server.
+ */
+describe('OrderPaymentsView — ADR-052 save feedback', () => {
+  beforeEach(() => {
+    get.mockReset()
+    post.mockReset()
+    postForm.mockReset()
+    localStorage.clear()
+    useAuthStore().user = { id: 1, name: 'ผู้ดูแล', role: 'super_admin' } as never
+  })
+
+  it('confirm payment: dialog only after the POST and the re-read, quoting the SERVER’s order and amount', async () => {
+    let orders: unknown[] = [{ ...ORDER, permissions: { confirm: true } }]
+    get.mockImplementation(async (path: string) => (path.startsWith('/orders/summary') ? { data: SUMMARY } : { data: orders }))
+    let resolvePost: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (resolvePost = r)))
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="confirm-payment"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    orders = []
+    resolvePost({ data: { ...ORDER, status: 'paid', status_label: 'ชำระเงินแล้ว', order_number: 'ORD-SRV-9', amount_satang: 990000 } })
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ORD-SRV-9')
+    expect(saveFeedbackState.body).toContain('9,900.00')
+    // the re-read list no longer has the row to confirm
+    expect(wrapper.find('[data-test="confirm-payment"]').exists()).toBe(false)
+  })
+
+  it('confirm payment: a refusal raises no dialog and shows the server’s sentence', async () => {
+    mockApi([{ ...ORDER, permissions: { confirm: true } }])
+    post.mockRejectedValueOnce(new ApiErrorStub('ต้องผ่านขั้นก่อนหน้าก่อน'))
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="confirm-payment"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ต้องผ่านขั้นก่อนหน้าก่อน')
+  })
+
+  it('upload slip: dialog names the order and the status the SERVER moved it to', async () => {
+    const PAYABLE = { ...ORDER, status: 'pending', status_label: 'รอชำระเงิน', has_slip: false, permissions: { confirm: false, upload_slip: true } }
+    mockApi([PAYABLE])
+    postForm.mockResolvedValue({ data: { ...PAYABLE, order_number: 'ORD-0001', status: 'awaiting_verification', status_label: 'รอตรวจสอบสลิป', has_slip: true } })
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="upload-slip"]').trigger('click')
+    const input = wrapper.find('[data-test="slip-file-input"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['x'], 'slip.jpg', { type: 'image/jpeg' })], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ORD-0001')
+    expect(saveFeedbackState.body).toContain('รอตรวจสอบสลิป')
+  })
+
+  it('upload slip: a refused upload raises no dialog', async () => {
+    const PAYABLE = { ...ORDER, status: 'pending', has_slip: false, permissions: { confirm: false, upload_slip: true } }
+    mockApi([PAYABLE])
+    postForm.mockRejectedValueOnce(new ApiErrorStub('ไฟล์ใหญ่เกิน'))
+    const wrapper = await mountView()
+
+    await wrapper.find('[data-test="upload-slip"]').trigger('click')
+    const input = wrapper.find('[data-test="slip-file-input"]')
+    Object.defineProperty(input.element, 'files', { value: [new File(['x'], 'slip.jpg', { type: 'image/jpeg' })], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ไฟล์ใหญ่เกิน')
+  })
+
+  it('confirm landed but the queue could not be re-read: the dialog says the screen may be stale', async () => {
+    mockApi([{ ...ORDER, permissions: { confirm: true } }])
+    post.mockResolvedValue({ data: { ...ORDER, status: 'paid' } })
+    const wrapper = await mountView()
+    get.mockImplementation(async (path: string) => {
+      if (path.startsWith('/orders')) throw new ApiErrorStub('down')
+
+      return { data: [] }
+    })
+
+    await wrapper.find('[data-test="confirm-payment"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.text()).toContain('โหลดคำสั่งซื้อไม่สำเร็จ')
   })
 })

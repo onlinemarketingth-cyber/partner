@@ -94,6 +94,16 @@ export type CardId =
  * Plain data on purpose. The view owns the refs and the requests; this module
  * owns the rules. A card that reached for a store would be untestable and
  * would tie the question list to one screen's lifecycle.
+ *
+ * EVERY FIELD IS A SAVED VALUE — what the server holds, never what a form is
+ * holding while somebody types (ADR-052). A card's status is a claim about the
+ * company's configuration; built from a draft it turns green over settings
+ * that do not exist. That is the bug of 2026-10-01: `rankSettings` was mapped
+ * from the rank form, the rail read "ตั้งแล้ว" after typing alone, and a UAT
+ * run failed a day later on "company has no rank settings". The view maps
+ * saved refs only (CommissionPlansView's `cardContext`); live previews that
+ * deliberately follow the typing (the ladder chart) read the draft
+ * themselves and never come through here.
  */
 export interface CardContext {
   planType: CommissionPlanType

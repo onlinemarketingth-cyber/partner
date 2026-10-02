@@ -34,6 +34,7 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { api, ApiError } from '@/api/client'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { notifySaved } from '@/composables/useSaveFeedback'
 import {
   type AgentItem,
   type IdDocumentTypeChoice,
@@ -110,15 +111,18 @@ const emit = defineEmits<{
    * admitting recruits (RegistrationService::resolveActiveInviter), so those
    * rows need re-reading — see AgentManagementView's handler.
    *
-   * `successMessage` is present ONLY on the writes that also close the modal
-   * (TASK-210). Those are the ones with no other way to report themselves:
-   * the modal carrying the inline "บันทึกแล้ว" line is gone by the time the
-   * admin could read it. The host shows it in <SuccessDialog>. Actions that
-   * leave the modal open (granting a tier) omit it on purpose — they already
-   * report inline, and a dialog on top of the form they are still using would
-   * be in the way.
+   * ADR-052 — `successMessage` is present on EVERY write, and is built from
+   * the SERVER's answer (never from the form). The host re-reads its own
+   * lists first and only then calls notifySaved(successMessage), so the one
+   * global "บันทึกสำเร็จ" dialog appears over a screen that already shows
+   * what was stored. The modal never raises that dialog for a write it
+   * reports through `saved` — one write, one dialog.
+   *
+   * `successTitle` is set only for a PARTIAL save (the person was stored, one
+   * or more targets were not): the host shows it as the dialog title
+   * ('บันทึกแล้วบางส่วน') instead of the default 'บันทึกสำเร็จ'.
    */
-  saved: [payload: { leaderChanged: boolean; successMessage?: string }]
+  saved: [payload: { leaderChanged: boolean; successMessage?: string; successTitle?: string }]
   /** The "ดูในแท็บ ลิงก์ชวนทีม" shortcut — only a host with such a tab acts on it. */
   'show-links': [agentId: number]
 }>()
@@ -313,8 +317,6 @@ const subjectCompanyRunsBinary = computed(() => {
   return known.find((c) => c.id === id)?.commission_plan_type === 'binary'
 })
 const uplineIsVisible = computed(() => uplineIsEditable.value || uplineIsHouseAccount.value)
-/** This row IS the company's seat — nothing in this modal applies to it. */
-const subjectIsHouseAccount = computed(() => agent.value?.is_commission_house_account === true)
 
 // ── Opening ──────────────────────────────────────────────────────────
 
@@ -425,7 +427,6 @@ function resetModalState(): void {
   editForm.value = blankEditForm()
   editOriginal.value = blankEditForm()
   resetPasswordValue.value = ''
-  resetPasswordMessage.value = ''
   resetPasswordError.value = ''
   moveCompanyTarget.value = ''
   moveCompanyError.value = ''
@@ -675,12 +676,30 @@ function buildUserPatch(): Record<string, unknown> {
  * read as a real target of zero on the agent's goal ring. A blanked field
  * is therefore left alone; the copy under the section says so.
  */
+/**
+ * One target upsert, with enough attached to say WHICH one failed and to mark
+ * the ones that landed as stored (their `original` is moved to the sent value
+ * so a retry does not re-send them).
+ */
+interface TargetJob {
+  label: string
+  run: () => Promise<unknown>
+  markStored: () => void
+}
+
+const TARGET_METRIC_LABELS: Record<keyof AgentTargetsForm, string> = {
+  sales_baht: 'ยอดขาย',
+  deals: 'จำนวนดีล',
+  clients: 'จำนวนลูกค้า',
+}
+
 function targetJobsForPeriod(
   subject: AgentItem,
   period: string,
+  periodLabel: string,
   form: AgentTargetsForm,
   original: AgentTargetsForm,
-): Array<() => Promise<unknown>> {
+): TargetJob[] {
   /*
    * TASK-131 QA — these are THUNKS, not promises, and that is the whole point.
    *
@@ -691,35 +710,41 @@ function targetJobsForPeriod(
    * agent_targets rows, so the targets moved and the person did not. Whoever
    * reads this next: keep the `() =>`.
    */
-  const jobs: Array<() => Promise<unknown>> = []
+  const jobs: TargetJob[] = []
   const companyId = subject.company?.id
-  const push = (metric: string, value: number) => {
-    jobs.push(() =>
-      api.post('/agent-targets', {
-        agent_id: subject.id,
-        period,
-        metric,
-        target_value: value,
-        ...(companyId ? { company_id: companyId } : {}),
-      }),
-    )
+  const push = (field: keyof AgentTargetsForm, metric: string, value: number) => {
+    const sent = form[field]
+    jobs.push({
+      label: `เป้า${TARGET_METRIC_LABELS[field]}${periodLabel}`,
+      run: () =>
+        api.post('/agent-targets', {
+          agent_id: subject.id,
+          period,
+          metric,
+          target_value: value,
+          ...(companyId ? { company_id: companyId } : {}),
+        }),
+      markStored: () => {
+        original[field] = sent
+      },
+    })
   }
   if (form.sales_baht !== original.sales_baht && form.sales_baht !== '') {
     // BR-3 — baht in the box, integer satang on the wire. Unchanged from
     // TASK-053: the input is now digits-only (TASK-130 §3), so Number() here
     // is a whole number and ×100 cannot produce a fractional satang.
-    push('sales_satang', Math.round(Number(form.sales_baht) * 100))
+    push('sales_baht', 'sales_satang', Math.round(Number(form.sales_baht) * 100))
   }
-  if (form.deals !== original.deals && form.deals !== '') push('deals', Math.round(Number(form.deals)))
-  if (form.clients !== original.clients && form.clients !== '') push('clients', Math.round(Number(form.clients)))
+  if (form.deals !== original.deals && form.deals !== '') push('deals', 'deals', Math.round(Number(form.deals)))
+  if (form.clients !== original.clients && form.clients !== '') push('clients', 'clients', Math.round(Number(form.clients)))
   return jobs
 }
 
 /** Both groups — current month ('YYYY-MM') and current year ('YYYY'). */
-function buildTargetJobs(subject: AgentItem): Array<() => Promise<unknown>> {
+function buildTargetJobs(subject: AgentItem): TargetJob[] {
   return [
-    ...targetJobsForPeriod(subject, monthlyPeriod.value, targetsMonthlyForm.value, targetsMonthlyOriginal.value),
-    ...targetJobsForPeriod(subject, yearlyPeriod.value, targetsYearlyForm.value, targetsYearlyOriginal.value),
+    ...targetJobsForPeriod(subject, monthlyPeriod.value, 'รายเดือน', targetsMonthlyForm.value, targetsMonthlyOriginal.value),
+    ...targetJobsForPeriod(subject, yearlyPeriod.value, 'รายปี', targetsYearlyForm.value, targetsYearlyOriginal.value),
   ]
 }
 
@@ -781,19 +806,6 @@ function validateEdit(): boolean {
   return Object.keys(errors).length === 0
 }
 
-/**
- * The name to put in the success dialog. Built from the form because the
- * name is one of the things a save can change; `subject.name` is derived
- * server-side (User::booted()'s saving() hook) and the local copy is still
- * the pre-save one. Falls back to whatever the row already said rather than
- * rendering an empty string.
- */
-function savedSubjectName(subject: AgentItem): string {
-  const typed = `${editForm.value.first_name.trim()} ${editForm.value.last_name.trim()}`.trim()
-
-  return typed || subject.name
-}
-
 async function submitEdit(): Promise<void> {
   const subject = agent.value
   if (!subject || editIsReadOnly.value) return
@@ -813,20 +825,58 @@ async function submitEdit(): Promise<void> {
     // ONE call for the person. Targets are a different resource with its own
     // endpoint (no /users field can carry them), so they follow as their own
     // upserts — still triggered by the same single "บันทึก".
-    if (Object.keys(patch).length) await api.put(`/users/${subject.id}`, patch)
+    // ADR-052 — the stored row comes back from the PUT; its `name` is the one
+    // the server derived (User::booted()'s saving() hook), so the dialog quotes
+    // what was STORED, not what was typed. A targets-only save sends no PUT,
+    // and the name it quotes is then the unchanged server row.
+    const patchSent = Object.keys(patch).length > 0
+    const stored = patchSent
+      ? (await api.put<{ data: AgentItem }>(`/users/${subject.id}`, patch)).data
+      : subject
     // Only NOW are the target requests started — see targetJobsForPeriod().
-    if (targetJobs.length) await Promise.all(targetJobs.map((job) => job()))
+    // allSettled, not all: once the PUT above has landed the person IS saved,
+    // and one refused target must not make the whole save read as a failure.
+    const results = await Promise.allSettled(targetJobs.map((job) => job.run()))
+    const failedTargets: string[] = []
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') targetJobs[i]!.markStored()
+      else failedTargets.push(targetJobs[i]!.label)
+    })
 
     const leaderChanged = Object.prototype.hasOwnProperty.call(patch, 'is_team_leader')
+    const name = stored?.name ?? subject.name
+
+    if (failedTargets.length) {
+      const anyStored = patchSent || failedTargets.length < targetJobs.length
+      // Nothing landed at all: an ordinary failure, reported inline only.
+      if (!anyStored) {
+        editFormError.value = `บันทึกไม่สำเร็จ: ${failedTargets.join(', ')}`
+        return
+      }
+      // ADR-052 — PARTIAL save. Part of this is on the server, so the host
+      // must still re-read and say so (title 'บันทึกแล้วบางส่วน'); the modal
+      // stays OPEN with the failed targets named inline so they can be
+      // retried. The person half of the form is re-filled from the stored
+      // row, so a retry does not re-send what already landed.
+      if (patchSent && stored) {
+        agent.value = stored
+        applySubject(stored)
+      }
+      editFormError.value = `บันทึกเป้าหมายไม่สำเร็จ: ${failedTargets.join(', ')} — แก้แล้วกดบันทึกอีกครั้ง`
+      emit('saved', {
+        leaderChanged,
+        successTitle: 'บันทึกแล้วบางส่วน',
+        successMessage: `${patchSent ? `บันทึกข้อมูลของ ${name} แล้ว` : `บันทึกเป้าหมายบางส่วนของ ${name} แล้ว`} — แต่บันทึกไม่สำเร็จ: ${failedTargets.join(', ')}`,
+      })
+      return
+    }
     // The host owns its own lists — it reloads them (and, when the leader
-    // flag moved, its recruit links) off this event. It also raises the
+    // flag moved, its recruit links) off this event, and then raises the
     // success dialog: this modal is about to close, so it cannot report its
-    // own result (TASK-210).
+    // own result (TASK-210 / ADR-052).
     emit('saved', {
       leaderChanged,
-      // Named from the FORM, not from `subject.name`: the name is exactly
-      // what may have just changed, and `subject` is still the pre-save row.
-      successMessage: `บันทึกข้อมูลของ ${savedSubjectName(subject)} เรียบร้อยแล้ว`,
+      successMessage: `บันทึกข้อมูลของ ${name} เรียบร้อยแล้ว`,
     })
     closeModal()
   } catch (e) {
@@ -855,24 +905,26 @@ async function submitEdit(): Promise<void> {
 
 const resetPasswordValue = ref('')
 const resetPasswordSaving = ref(false)
-const resetPasswordMessage = ref('')
 const resetPasswordError = ref('')
 async function submitResetPassword(): Promise<void> {
   const subject = agent.value
   if (!subject) return
   resetPasswordError.value = ''
-  resetPasswordMessage.value = ''
   if (resetPasswordValue.value.length < 8) {
     resetPasswordError.value = 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร'
     return
   }
   resetPasswordSaving.value = true
   try {
-    await api.post(`/users/${subject.id}/reset-password`, { password: resetPasswordValue.value })
+    const res = await api.post<{ data: AgentItem }>(`/users/${subject.id}/reset-password`, {
+      password: resetPasswordValue.value,
+    })
     // The typed value stays on screen on purpose: there is no email system
     // anywhere in this codebase, so the admin has to read this password back
-    // out to the agent themselves.
-    resetPasswordMessage.value = 'ตั้งรหัสผ่านใหม่สำเร็จ — แจ้งรหัสนี้ให้สมาชิกด้วยตนเอง'
+    // out to the agent themselves. ADR-052 — the result is the global dialog,
+    // raised here because this action never closes the modal and the host has
+    // nothing of its own to re-read.
+    notifySaved(`ตั้งรหัสผ่านใหม่ให้ ${res?.data?.name ?? subject.name} แล้ว — แจ้งรหัสนี้ให้สมาชิกด้วยตนเอง`)
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { errors?: Record<string, string[]> }
@@ -922,8 +974,11 @@ async function restoreAgent(): Promise<void> {
   accountActionSaving.value = true
   editFormError.value = ''
   try {
-    await api.post(`/users/${subject.id}/restore`)
-    emit('saved', { leaderChanged: false, successMessage: `กู้คืนบัญชีของ ${subject.name} เรียบร้อยแล้ว` })
+    const res = await api.post<{ data: AgentItem }>(`/users/${subject.id}/restore`)
+    emit('saved', {
+      leaderChanged: false,
+      successMessage: `กู้คืนบัญชีของ ${res?.data?.name ?? subject.name} เรียบร้อยแล้ว`,
+    })
     closeModal()
   } catch (e) {
     editFormError.value = e instanceof ApiError ? `กู้คืนไม่สำเร็จ (${e.status})` : 'กู้คืนไม่สำเร็จ'
@@ -944,13 +999,17 @@ async function submitMoveCompany(): Promise<void> {
   moveCompanySaving.value = true
   moveCompanyError.value = ''
   try {
-    const target = companies.value.find((c) => c.id === Number(moveCompanyTarget.value))
-    await api.post(`/users/${subject.id}/move-company`, { company_id: Number(moveCompanyTarget.value) })
+    const res = await api.post<{ data: AgentItem }>(`/users/${subject.id}/move-company`, {
+      company_id: Number(moveCompanyTarget.value),
+    })
     moveCompanyTarget.value = ''
+    // ADR-052 — the company named is the one the SERVER now has on the row,
+    // not the option that was picked in the dropdown.
+    const moved = res?.data ?? null
     emit('saved', {
       leaderChanged: false,
-      successMessage: target
-        ? `ย้าย ${subject.name} ไปบริษัท ${target.name} เรียบร้อยแล้ว`
+      successMessage: moved?.company
+        ? `ย้าย ${moved.name} ไปบริษัท ${moved.company.name} เรียบร้อยแล้ว`
         : `ย้ายบริษัทของ ${subject.name} เรียบร้อยแล้ว`,
     })
     closeModal()
@@ -1002,16 +1061,27 @@ async function confirmGrantCertification(): Promise<void> {
   grantingTierKey.value = key
   grantError.value = ''
   try {
-    await api.post('/user-certifications', { user_id: subject.id, cert_tier_id: tier.id })
+    const res = await api.post<{ data: UserCertificationItem }>('/user-certifications', {
+      user_id: subject.id,
+      cert_tier_id: tier.id,
+    })
     // Granting a tier does NOT close the modal (an admin often grants two in a
-    // row), so what it changed has to be re-read: the host's copies via
-    // `saved`, and — when this component owns them — its own.
-    emit('saved', { leaderChanged: false })
+    // row), so what it changed has to be re-read: this component's own copies
+    // FIRST (when it owns them), then the host's via `saved` — the host raises
+    // the dialog once its reload has landed (ADR-052).
     if (!props.certifications) {
-      const res = await api.get<{ data: UserCertificationItem[] }>('/user-certifications')
-      ownCertifications.value = res.data
+      try {
+        const certs = await api.get<{ data: UserCertificationItem[] }>('/user-certifications')
+        ownCertifications.value = certs.data
+      } catch {
+        /* the grant itself landed; the host's reload below still runs */
+      }
     }
     await resyncSubject()
+    emit('saved', {
+      leaderChanged: false,
+      successMessage: `อนุมัติ ${res?.data?.cert_tier?.name ?? tier.name} ให้ ${subject.name} แล้ว`,
+    })
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { errors?: Record<string, string[]> }
@@ -1207,6 +1277,7 @@ watch(
                 <label class="text-xs font-bold text-slate-500">ชื่อ</label>
                 <input
                   v-model="editForm.first_name"
+                  data-test="edit-first-name"
                   type="text"
                   :disabled="editIsReadOnly"
                   class="mt-1 w-full px-3 py-2 rounded-lg border text-sm disabled:bg-slate-50 disabled:text-slate-400"
@@ -1663,6 +1734,7 @@ watch(
                   <label class="text-xs font-bold text-slate-500">ยอดขาย (บาท)</label>
                   <input
                     :value="targetsMonthlyForm.sales_baht"
+                    data-test="target-monthly-sales"
                     type="text"
                     inputmode="numeric"
                     placeholder="เช่น 50000"
@@ -1675,6 +1747,7 @@ watch(
                   <label class="text-xs font-bold text-slate-500">จำนวนดีล</label>
                   <input
                     :value="targetsMonthlyForm.deals"
+                    data-test="target-monthly-deals"
                     type="text"
                     inputmode="numeric"
                     placeholder="เช่น 10"
@@ -1712,6 +1785,7 @@ watch(
                   <label class="text-xs font-bold text-slate-500">ยอดขาย (บาท)</label>
                   <input
                     :value="targetsYearlyForm.sales_baht"
+                    data-test="target-yearly-sales"
                     type="text"
                     inputmode="numeric"
                     placeholder="เช่น 600000"
@@ -1724,6 +1798,7 @@ watch(
                   <label class="text-xs font-bold text-slate-500">จำนวนดีล</label>
                   <input
                     :value="targetsYearlyForm.deals"
+                    data-test="target-yearly-deals"
                     type="text"
                     inputmode="numeric"
                     placeholder="เช่น 120"
@@ -1792,6 +1867,7 @@ watch(
               <div class="mt-1.5 flex flex-col sm:flex-row gap-2">
                 <input
                   v-model="resetPasswordValue"
+                  data-test="reset-password-input"
                   type="text"
                   minlength="8"
                   placeholder="รหัสผ่านชั่วคราวใหม่ (8 ตัวขึ้นไป มีพิมพ์ใหญ่ พิมพ์เล็ก ตัวเลข)"
@@ -1801,15 +1877,13 @@ watch(
                   type="button"
                   :disabled="resetPasswordSaving"
                   class="btn-secondary shrink-0"
+                  data-test="submit-reset-password"
                   @click="submitResetPassword"
                 >
                   {{ resetPasswordSaving ? 'กำลังตั้ง...' : 'ตั้งรหัสผ่านใหม่' }}
                 </button>
               </div>
-              <p v-if="resetPasswordError" class="text-[11px] text-rose-600 mt-1">{{ resetPasswordError }}</p>
-              <p v-else-if="resetPasswordMessage" class="text-[11px] font-bold text-emerald-600 mt-1">
-                {{ resetPasswordMessage }}
-              </p>
+              <p v-if="resetPasswordError" class="text-[11px] text-rose-600 mt-1" data-test="reset-password-error">{{ resetPasswordError }}</p>
             </div>
 
             <!-- Grant cert without exam (TASK-058/061). No XP awarded — see
@@ -1824,6 +1898,7 @@ watch(
                   type="button"
                   :disabled="grantingTierKey === `${agent.id}:${t.id}`"
                   class="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-[11px] font-bold text-slate-600 hover:border-brand-400 hover:text-brand-600 disabled:opacity-50"
+                  data-test="grant-tier"
                   @click="grantCertFromModal(t)"
                 >
                   {{ grantingTierKey === `${agent.id}:${t.id}` ? 'กำลังอนุมัติ...' : `+ อนุมัติ ${t.name}` }}
@@ -1839,7 +1914,7 @@ watch(
                 ประวัติค่าแนะนำ/XP เดิมจะยังผูกกับบริษัทเดิม — การย้ายมีผลกับข้อมูลใหม่ตั้งแต่นี้ไปเท่านั้น
               </p>
               <div class="mt-1.5 flex flex-col sm:flex-row gap-2">
-                <select v-model="moveCompanyTarget" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                <select v-model="moveCompanyTarget" data-test="move-company-select" class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
                   <option value="" disabled>เลือกบริษัทปลายทาง</option>
                   <option v-for="c in editMoveCompanyOptions" :key="c.id" :value="c.id">{{ c.name }}</option>
                 </select>
@@ -1847,6 +1922,7 @@ watch(
                   type="button"
                   :disabled="!moveCompanyTarget || moveCompanySaving"
                   class="btn-secondary shrink-0"
+                  data-test="submit-move-company"
                   @click="submitMoveCompany"
                 >
                   {{ moveCompanySaving ? 'กำลังย้าย...' : 'ยืนยันย้ายบริษัท' }}
@@ -1903,6 +1979,7 @@ watch(
           <p
             v-if="editFormError || hasFieldErrors"
             class="flex-1 min-w-0 text-xs font-bold text-rose-600 leading-snug"
+            data-test="edit-footer-error"
           >
             {{ editFormError || 'มีช่องที่กรอกไม่ถูกต้อง — เลื่อนขึ้นไปดูช่องที่ขึ้นสีแดง' }}
           </p>
@@ -1913,7 +1990,7 @@ watch(
             {{ editSavedMessage }}
           </p>
           <button type="button" class="btn-secondary" @click="closeModal">ยกเลิก</button>
-          <button type="button" :disabled="editSaving || editIsReadOnly" class="btn-primary" @click="submitEdit">
+          <button type="button" :disabled="editSaving || editIsReadOnly" class="btn-primary" data-test="save-agent" @click="submitEdit">
             {{ editSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
           </button>
         </div>

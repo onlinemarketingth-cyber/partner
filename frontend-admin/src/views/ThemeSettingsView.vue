@@ -23,6 +23,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
+import { confirmSaved, notifySaved } from '@/composables/useSaveFeedback'
 import { compressImage } from '@/utils/imageCompression'
 import { generateQrDataUrl } from '@/utils/qrCode'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -511,9 +512,19 @@ const mintingShortLink = ref(false)
 
 async function mintShortLoginLink() {
   mintingShortLink.value = true
+  shortLinkError.value = ''
   try {
-    const res = await api.post<{ data: { login_short_link: string } }>('/company-login-link', (activeCompany.companyId !== null ? { company_id: activeCompany.companyId } : {}))
-    mintedShortLoginLink.value = res.data.login_short_link
+    // ADR-052 — the minted link stays on screen (the admin needs it) and the
+    // dialog quotes the link the server minted.
+    await confirmSaved(
+      () => api.post<{ data: { login_short_link: string } }>('/company-login-link', (activeCompany.companyId !== null ? { company_id: activeCompany.companyId } : {})),
+      {
+        apply: (res) => {
+          mintedShortLoginLink.value = res.data.login_short_link
+        },
+        message: (res) => `สร้างลิงก์เข้าสู่ระบบแบบสั้นแล้ว — ${res.data.login_short_link}`,
+      },
+    )
   } catch (e) {
     shortLinkError.value = e instanceof ApiError ? `ย่อลิงก์ไม่สำเร็จ (${e.status})` : 'ย่อลิงก์ไม่สำเร็จ'
   } finally {
@@ -580,7 +591,6 @@ function resetCardText(): void { cardText.value = null }
 // ── Save (presentational fields only — never logo paths) ──────────────────
 const saving = ref(false)
 const saveError = ref('')
-const saved = ref(false)
 
 function buildLabelOverrides(): Record<string, string> {
   const out: Record<string, string> = {}
@@ -628,10 +638,19 @@ function buildNavBgConfig(): Record<string, unknown> | null {
   return { color1: navGradientColor1.value, color2: navGradientColor2.value, angle: navGradientAngle.value }
 }
 
+/** The header button. ADR-052 — announces the save with the dialog. */
 async function save(): Promise<void> {
+  await saveTheme(true)
+}
+
+/**
+ * The one theme write. Never throws — it traps into `saveError` (savePreset
+ * relies on that). `announce` is false only when savePreset chains its own
+ * write after this one and raises ONE dialog for both.
+ */
+async function saveTheme(announce: boolean): Promise<void> {
   saving.value = true
   saveError.value = ''
-  saved.value = false
   try {
     const payload: Record<string, unknown> = {
       primary_hex: primaryHex.value,
@@ -669,9 +688,14 @@ async function save(): Promise<void> {
     }
     if (isSuperAdmin.value && selectedCompanyId.value) payload.company_id = selectedCompanyId.value
 
-    const res = await api.put<{ data: Theme }>('/company-theme', payload)
-    populateForm(res.data)
-    saved.value = true
+    // ADR-052 — the form is re-read from the theme the server stored
+    // (populateForm), then the dialog replaces the old "บันทึกแล้ว" flash.
+    const write = () => api.put<{ data: Theme }>('/company-theme', payload)
+    if (announce) {
+      await confirmSaved(write, { apply: (res) => populateForm(res.data), message: 'บันทึกการตั้งค่าธีมแล้ว' })
+    } else {
+      populateForm((await write()).data)
+    }
   } catch (e) {
     saveError.value = e instanceof ApiError ? e.message : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -705,13 +729,48 @@ async function uploadAsset(slot: AssetSlot, file: File): Promise<void> {
     if (isSuperAdmin.value && selectedCompanyId.value) {
       formData.append('company_id', String(selectedCompanyId.value))
     }
-    const res = await api.postForm<{ data: Theme }>('/company-theme/asset', formData)
-    populateForm(res.data)
+    /*
+     * ADR-052 — an upload writes ONE asset column (ThemeService::storeAsset),
+     * so only the saved snapshot (`theme`, which the logo tiles and the
+     * background-image preview read) takes the response. populateForm() used
+     * to run here and silently threw away every unsaved edit on the page —
+     * colours, fonts, labels — under a successful upload.
+     */
+    await confirmSaved(() => api.postForm<{ data: Theme }>('/company-theme/asset', formData), {
+      apply: (res) => applyUploadedAsset(res.data),
+      message: `อัปโหลด${ASSET_SLOT_CAPTIONS[slot]}แล้ว`,
+    })
   } catch (e) {
     uploadError.value = e instanceof ApiError ? e.message : 'อัปโหลดไม่สำเร็จ'
   } finally {
     uploadingSlot.value = null
   }
+}
+
+/**
+ * Take ONLY the asset fields from an upload's response. Everything else in
+ * `theme` stays as last saved — and the editable form refs are not touched,
+ * so unsaved edits elsewhere on the page survive the upload.
+ */
+function applyUploadedAsset(t: Theme): void {
+  if (!theme.value) {
+    theme.value = t
+
+    return
+  }
+  theme.value = {
+    ...theme.value,
+    logos: { ...t.logos },
+    background: { ...theme.value.background, image_url: t.background.image_url },
+  }
+}
+
+const ASSET_SLOT_CAPTIONS: Record<AssetSlot, string> = {
+  nav: 'โลโก้แถบเมนู',
+  login: 'โลโก้หน้าเข้าสู่ระบบ',
+  favicon: 'Favicon',
+  loading: 'โลโก้หน้าโหลด',
+  background: 'รูปพื้นหลัง',
 }
 
 const logoTiles: { slot: AssetSlot; caption: string; urlKey: keyof Theme['logos'] }[] = [
@@ -936,9 +995,18 @@ const presetsError = ref('')
  *
  * So the list is split, own-first, and a save says so by name.
  */
-const presetSaved = ref('')
-/** Same idea for "ใช้ชุดนี้", which used to succeed in silence. */
-const presetApplied = ref('')
+// ADR-052 — the confirmation-by-name now lives in the "saved" dialog
+// (savePreset / applyPendingPreset), not in an inline line.
+
+/**
+ * Re-list after a preset write. loadPresets() traps its own failure into
+ * `presetsError`; inside confirmSaved's `apply` that has to become a throw,
+ * so the dialog says the list may be behind instead of claiming it is fresh.
+ */
+async function reloadPresetsAfterWrite(): Promise<void> {
+  await loadPresets()
+  if (presetsError.value) throw new Error(presetsError.value)
+}
 
 /**
  * Two labelled groups, own first.
@@ -1187,8 +1255,6 @@ async function savePreset(): Promise<void> {
   }
   savingPreset.value = true
   presetsError.value = ''
-  presetSaved.value = ''
-  presetApplied.value = ''
   try {
     /*
      * TASK-163 — SAVE THE FORM FIRST, THEN SNAPSHOT.
@@ -1216,10 +1282,11 @@ async function savePreset(): Promise<void> {
      * pressed a button labelled "save the current colours" already believes
      * is happening.
      *
-     * `save()` never throws — it traps into `saveError` (see its catch) — so
-     * this checks the flag rather than relying on an exception.
+     * `saveTheme()` never throws — it traps into `saveError` (see its catch) —
+     * so this checks the flag rather than relying on an exception. It runs
+     * WITHOUT its own dialog: one dialog below reports both writes.
      */
-    await save()
+    await saveTheme(false)
     if (saveError.value) {
       presetsError.value = `บันทึกการตั้งค่าไม่สำเร็จ จึงยังไม่ได้สร้างชุดสี — ${saveError.value}`
 
@@ -1228,24 +1295,43 @@ async function savePreset(): Promise<void> {
 
     // Name (+ the company for a Super Admin) only — the server reads the
     // colours itself, and they are now the ones just written above.
-    await api.post('/theme-presets', {
-      name,
-      ...presetCompanyPayload(),
-      // TASK-217 — Super-Admin-only. Sent only when actually checked, so a
-      // Company Admin's request is byte-for-byte what it was before this
-      // task; the server strips the key for them regardless.
-      ...(isSuperAdmin.value && newPresetShared.value ? { is_shared: true } : {}),
-    })
-    newPresetName.value = ''
-    newPresetShared.value = false
-    // Re-list rather than push the create response: the list endpoint is
-    // the one shape this screen actually depends on.
-    await loadPresets()
-    // By NAME. "บันทึกแล้ว" alone still leaves the reader looking for the row;
-    // naming it tells them which of the rows below is theirs.
-    presetSaved.value = `บันทึกชุดสี "${name}" แล้ว — อยู่ในรายการด้านล่าง`
+    await confirmSaved(
+      () =>
+        api.post<{ data: ThemePreset }>('/theme-presets', {
+          name,
+          ...presetCompanyPayload(),
+          // TASK-217 — Super-Admin-only. Sent only when actually checked, so a
+          // Company Admin's request is byte-for-byte what it was before this
+          // task; the server strips the key for them regardless.
+          ...(isSuperAdmin.value && newPresetShared.value ? { is_shared: true } : {}),
+        }),
+      {
+        apply: async () => {
+          newPresetName.value = ''
+          newPresetShared.value = false
+          // Re-list rather than push the create response: the list endpoint
+          // is the one shape this screen actually depends on.
+          await reloadPresetsAfterWrite()
+        },
+        // By NAME — the name the server stored. "บันทึกแล้ว" alone still
+        // leaves the reader looking for the row; naming it tells them which
+        // of the rows below is theirs.
+        message: (res) =>
+          `บันทึกการตั้งค่าธีมและชุดสี "${res?.data?.name ?? name}" แล้ว — อยู่ในรายการด้านล่าง`,
+      },
+    )
   } catch (e) {
-    presetsError.value = presetErrorMessage(e, 'บันทึกชุดสีไม่สำเร็จ')
+    // The theme itself was saved above (saveError is empty here, and
+    // populateForm already put the stored theme on screen); only the snapshot
+    // failed. ADR-052 — a real save gets the dialog even when the step after
+    // it failed: titled as partial, saying exactly which half landed, so
+    // nobody re-does the theme edits. The inline error stays for the detail.
+    const reason = presetErrorMessage(e, 'บันทึกชุดสีไม่สำเร็จ')
+    presetsError.value = `บันทึกการตั้งค่าธีมแล้ว แต่${reason}`
+    notifySaved(
+      `บันทึกการตั้งค่าธีมแล้ว แต่ยังไม่ได้บันทึกชุดสี "${name}" — ${reason}`,
+      'บันทึกแล้วบางส่วน',
+    )
   } finally {
     savingPreset.value = false
   }
@@ -1260,19 +1346,22 @@ async function applyPendingPreset(): Promise<void> {
     // §5.2 — a Super Admin states which company they are acting in; the
     // server refuses if the preset belongs to a different one, so this can
     // never silently theme the wrong tenant.
-    presetApplied.value = ''
-    await api.post(`/theme-presets/${preset.id}/apply`, presetCompanyPayload())
-    // The apply endpoint writes company_theme_settings in one transaction
-    // (§3.2); re-reading the theme is what makes the form + live preview
-    // show the applied colours, and it works whatever that endpoint
-    // chooses to return.
-    await loadTheme()
-    // By NAME, like the save confirmation above it. Before this, applying a
-    // preset changed some colours on the left and said nothing — and when the
-    // re-read was stale (see loadTheme) it changed nothing at all, with no way
-    // on screen to tell those two apart.
-    presetApplied.value = `ใช้ชุดสี "${preset.name}" แล้ว — สีด้านซ้ายและตัวอย่างอัปเดตแล้ว`
-    pendingApplyPreset.value = null
+    await confirmSaved(() => api.post(`/theme-presets/${preset.id}/apply`, presetCompanyPayload()), {
+      // The apply endpoint writes company_theme_settings in one transaction
+      // (§3.2); re-reading the theme is what makes the form + live preview
+      // show the applied colours, and it works whatever that endpoint
+      // chooses to return. loadTheme() traps its own failure into loadError.
+      apply: async () => {
+        pendingApplyPreset.value = null
+        await loadTheme()
+        if (loadError.value) throw new Error(loadError.value)
+        // The "ใช้อยู่ตอนนี้" chip compares against the re-read theme.
+      },
+      // By NAME. Before this, applying a preset changed some colours on the
+      // left and said nothing — and when the re-read was stale (see loadTheme)
+      // it changed nothing at all, with no way on screen to tell those apart.
+      message: `ใช้ชุดสี "${preset.name}" แล้ว — สีด้านซ้ายและตัวอย่างอัปเดตแล้ว`,
+    })
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'ใช้ชุดสีไม่สำเร็จ')
     pendingApplyPreset.value = null
@@ -1304,9 +1393,13 @@ async function submitRenamePreset(preset: ThemePreset): Promise<void> {
   }
   presetsError.value = ''
   try {
-    await api.put(`/theme-presets/${preset.id}`, { name })
-    cancelRenamePreset()
-    await loadPresets()
+    await confirmSaved(() => api.put<{ data: ThemePreset }>(`/theme-presets/${preset.id}`, { name }), {
+      apply: async () => {
+        cancelRenamePreset()
+        await reloadPresetsAfterWrite()
+      },
+      message: (res) => `เปลี่ยนชื่อชุดสีเป็น "${res?.data?.name ?? name}" แล้ว`,
+    })
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'เปลี่ยนชื่อชุดสีไม่สำเร็จ')
   }
@@ -1342,9 +1435,16 @@ async function confirmSharePreset(): Promise<void> {
   try {
     // `name` too: PUT has always required it, and sending the name it already
     // has keeps this one request rather than inventing a second endpoint.
-    await api.put(`/theme-presets/${preset.id}`, { name: preset.name, is_shared: true })
-    pendingSharePreset.value = null
-    await loadPresets()
+    await confirmSaved(
+      () => api.put<{ data: ThemePreset }>(`/theme-presets/${preset.id}`, { name: preset.name, is_shared: true }),
+      {
+        apply: async () => {
+          pendingSharePreset.value = null
+          await reloadPresetsAfterWrite()
+        },
+        message: (res) => `ตั้งชุดสี "${res?.data?.name ?? preset.name}" เป็นชุดกลางทุกบริษัทแล้ว`,
+      },
+    )
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'ตั้งเป็นชุดกลางไม่สำเร็จ')
     pendingSharePreset.value = null
@@ -1397,15 +1497,31 @@ async function confirmDefaultPreset(): Promise<void> {
   savingDefaultPreset.value = true
   presetsError.value = ''
   try {
-    await api.put(`/theme-presets/${preset.id}`, {
-      name: preset.name,
-      is_default_for_new_companies: defaultPresetIntent(preset),
-    })
-    pendingDefaultPreset.value = null
-    // Reload rather than patching the row in place: starring one palette
-    // UNSTARS another on the server, and a local edit would leave two stars on
-    // screen until the next visit.
-    await loadPresets()
+    const intent = defaultPresetIntent(preset)
+    await confirmSaved(
+      () =>
+        api.put<{ data: ThemePreset }>(`/theme-presets/${preset.id}`, {
+          name: preset.name,
+          is_default_for_new_companies: intent,
+        }),
+      {
+        // Reload rather than patching the row in place: starring one palette
+        // UNSTARS another on the server, and a local edit would leave two
+        // stars on screen until the next visit.
+        apply: async () => {
+          pendingDefaultPreset.value = null
+          await reloadPresetsAfterWrite()
+        },
+        message: (res) => {
+          const stored = res?.data?.is_default_for_new_companies ?? intent
+          const presetName = res?.data?.name ?? preset.name
+
+          return stored
+            ? `ตั้ง "${presetName}" เป็นชุดสีเริ่มต้นของบริษัทใหม่แล้ว`
+            : `ยกเลิก "${presetName}" จากชุดสีเริ่มต้นของบริษัทใหม่แล้ว`
+        },
+      },
+    )
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'ตั้งชุดสีเริ่มต้นของบริษัทใหม่ไม่สำเร็จ')
     pendingDefaultPreset.value = null
@@ -1420,9 +1536,15 @@ async function deletePendingPreset(): Promise<void> {
   deletingPreset.value = true
   presetsError.value = ''
   try {
-    await api.delete(`/theme-presets/${preset.id}`)
-    presets.value = presets.value.filter((p) => p.id !== preset.id)
-    pendingDeletePreset.value = null
+    // ADR-052 — re-list from the server rather than filtering locally, then
+    // the dialog. (The ConfirmDialog in front of this already asked first.)
+    await confirmSaved(() => api.delete(`/theme-presets/${preset.id}`), {
+      apply: async () => {
+        pendingDeletePreset.value = null
+        await reloadPresetsAfterWrite()
+      },
+      message: `ลบชุดสี "${preset.name}" แล้ว`,
+    })
   } catch (e) {
     presetsError.value = presetErrorMessage(e, 'ลบชุดสีไม่สำเร็จ')
     pendingDeletePreset.value = null
@@ -1451,7 +1573,6 @@ onMounted(loadPresets)
       storage-key="admin-theme-settings"
     >
       <template #actions>
-        <span v-if="saved" class="text-xs font-bold text-emerald-600 whitespace-nowrap">บันทึกแล้ว</span>
         <button
           type="button"
           :disabled="saving || loading"
@@ -1802,9 +1923,8 @@ onMounted(loadPresets)
               <p v-if="presetsError" class="mb-3 text-xs font-bold text-rose-600">{{ presetsError }}</p>
               <!-- 2026-09-07 — saving used to clear the name box and say
                    nothing else; on a list whose visible rows did not change,
-                   "nothing happened" was a fair reading. -->
-              <p v-if="presetSaved" class="mb-3 text-xs font-bold text-emerald-600" data-test="preset-saved">{{ presetSaved }}</p>
-              <p v-if="presetApplied" class="mb-3 text-xs font-bold text-emerald-600" data-test="preset-applied">{{ presetApplied }}</p>
+                   "nothing happened" was a fair reading. ADR-052 — that
+                   confirmation-by-name is now the "saved" dialog. -->
 
               <!-- Save current colours as a preset -->
               <div class="flex items-center gap-2 mb-4">

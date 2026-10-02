@@ -48,7 +48,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
-import SuccessDialog from '@/design-system/components/SuccessDialog.vue'
+import { confirmSaved, notifySaved, SAVED_BUT_STALE_BODY } from '@/composables/useSaveFeedback'
 import SalesTeamGrid from './SalesTeamGrid.vue'
 import SalesTeamTable from './SalesTeamTable.vue'
 // TASK-129 — the SAME edit form จัดการตัวแทน uses, mounted here so the card's
@@ -351,18 +351,36 @@ const pendingGrant = ref<{ agentId: number; agentName: string | null; tier: Cert
 function grantCertification(agentId: number, agentName: string | null, tier: CertTierOption) {
   pendingGrant.value = { agentId, agentName, tier }
 }
+/** ADR-052 — the certifications list the passed-tier chips read, re-read from the server. */
+async function reloadCertifications(): Promise<void> {
+  const res = await api.get<{ data: CertificationRow[] }>(activeCompany.scopedPath('/user-certifications'))
+  certifications.value = res.data
+}
+
+/** A name for the dialog, read from the server's rows (never from a form). */
+function agentNameOf(agentId: number | null, fallback: string | null = null): string {
+  if (agentId === null) return fallback ?? ''
+  return agents.value.find((a) => a.agent_id === agentId)?.agent_name ?? fallback ?? `#${agentId}`
+}
+
 async function confirmGrantCertification() {
   const pending = pendingGrant.value
   if (!pending) return
-  const { agentId, tier } = pending
+  const { agentId, agentName, tier } = pending
   const key = `${agentId}:${tier.id}`
   grantingTierKey.value = key
   grantError.value = ''
   grantErrorAgentId.value = null
   try {
-    await api.post('/user-certifications', { user_id: agentId, cert_tier_id: tier.id })
-    const res = await api.get<{ data: CertificationRow[] }>(activeCompany.scopedPath('/user-certifications'))
-    certifications.value = res.data
+    // ADR-052 — the chip leaves the card (re-read list) before the dialog,
+    // and the tier named is the one the server granted.
+    await confirmSaved(
+      () => api.post<{ data: CertificationRow }>('/user-certifications', { user_id: agentId, cert_tier_id: tier.id }),
+      {
+        apply: reloadCertifications,
+        message: (res) => `อนุมัติ ${res?.data?.cert_tier?.name ?? tier.name} ให้ ${agentNameOf(agentId, agentName)} แล้ว`,
+      },
+    )
   } catch (e) {
     grantErrorAgentId.value = agentId
     if (e instanceof ApiError && e.status === 422) {
@@ -541,8 +559,19 @@ async function applyTeamLeader(agentId: number, next: boolean): Promise<void> {
   structureError.value = ''
   structureErrorAgentId.value = null
   try {
-    await api.put(`/users/${agentId}`, { is_team_leader: next })
-    await reloadRoster()
+    // ADR-052 — the wording follows the flag the SERVER stored, after the
+    // tree has been re-read.
+    await confirmSaved(
+      () => api.put<{ data: { name: string; is_team_leader: boolean } }>(`/users/${agentId}`, { is_team_leader: next }),
+      {
+        apply: reloadRoster,
+        message: (res) => {
+          const name = res?.data?.name ?? agentNameOf(agentId)
+          const stored = res?.data?.is_team_leader ?? next
+          return stored ? `ให้สิทธิ์หัวหน้าทีมแก่ ${name} แล้ว` : `ยกเลิกสิทธิ์หัวหน้าทีมของ ${name} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     reportStructureError(agentId, e, next ? 'ให้สิทธิ์หัวหน้าทีมไม่สำเร็จ' : 'ยกเลิกสิทธิ์หัวหน้าทีมไม่สำเร็จ')
   } finally {
@@ -565,9 +594,25 @@ async function changeManager(agentId: number, managerId: number | null): Promise
   structureError.value = ''
   structureErrorAgentId.value = null
   try {
-    await api.put(`/users/${agentId}`, { manager_id: managerId })
-    await reloadRoster()
+    // ADR-052 — both names in the dialog come from the server: the agent's
+    // from the PUT's answer, the new upline's from the re-read roster, looked
+    // up by the manager_id the server stored.
+    await confirmSaved(
+      () => api.put<{ data: { name: string; manager_id: number | null } }>(`/users/${agentId}`, { manager_id: managerId }),
+      {
+        apply: reloadRoster,
+        message: (res) => {
+          const name = res?.data?.name ?? agentNameOf(agentId)
+          const storedManagerId = res?.data ? res.data.manager_id : managerId
+          return storedManagerId === null
+            ? `${name} ไม่มีหัวหน้าแล้ว`
+            : `เปลี่ยนหัวหน้าของ ${name} เป็น ${agentNameOf(storedManagerId)} แล้ว`
+        },
+      },
+    )
   } catch (e) {
+    // The card's <select> snaps back to the stored value itself (it re-reads
+    // its prop after this promise settles — see SalesTeamCard.onManagerChange).
     reportStructureError(agentId, e, 'เปลี่ยนหัวหน้าไม่สำเร็จ')
   } finally {
     structureSavingAgentId.value = null
@@ -596,8 +641,10 @@ async function approveAgent(agentId: number): Promise<void> {
   approvalError.value = ''
   approvalErrorAgentId.value = null
   try {
-    await api.put(`/agent-approvals/${agentId}/approve`)
-    await reloadRoster()
+    await confirmSaved(() => api.put<{ data: { name: string } }>(`/agent-approvals/${agentId}/approve`), {
+      apply: reloadRoster,
+      message: (res) => `อนุมัติ ${res?.data?.name ?? agentNameOf(agentId)} แล้ว`,
+    })
   } catch (e) {
     approvalErrorAgentId.value = agentId
     approvalError.value = e instanceof ApiError ? `อนุมัติไม่สำเร็จ (${e.status})` : 'อนุมัติไม่สำเร็จ'
@@ -611,13 +658,20 @@ provide(APPROVE_AGENT, approveAgent)
 // "รออนุมัติ" tab (submitReject()) — sent as `undefined` rather than an
 // empty string so the Form Request's `nullable` rule reads it the same way
 // an admin who left the box blank there would produce.
-async function rejectAgent(agentId: number, _agentName: string | null, reason: string): Promise<void> {
+async function rejectAgent(agentId: number, agentName: string | null, reason: string): Promise<void> {
   approvalSavingAgentId.value = agentId
   approvalError.value = ''
   approvalErrorAgentId.value = null
+  // Captured BEFORE the reload: a rejected applicant leaves the roster.
+  const knownName = agentNameOf(agentId, agentName)
   try {
-    await api.put(`/agent-approvals/${agentId}/reject`, { reason: reason || undefined })
-    await reloadRoster()
+    await confirmSaved(
+      () => api.put<{ data: { name: string } }>(`/agent-approvals/${agentId}/reject`, { reason: reason || undefined }),
+      {
+        apply: reloadRoster,
+        message: (res) => `บันทึกว่าไม่อนุมัติ ${res?.data?.name ?? knownName} แล้ว`,
+      },
+    )
   } catch (e) {
     approvalErrorAgentId.value = agentId
     approvalError.value = e instanceof ApiError ? `ปฏิเสธไม่สำเร็จ (${e.status})` : 'ปฏิเสธไม่สำเร็จ'
@@ -625,7 +679,28 @@ async function rejectAgent(agentId: number, _agentName: string | null, reason: s
     approvalSavingAgentId.value = null
   }
 }
-provide(REJECT_AGENT, rejectAgent)
+
+/*
+ * 2026-10-02 (owner decision) — the card's ยืนยันปฏิเสธ no longer sends.
+ *
+ * What the card injects through REJECT_AGENT now only OPENS a ConfirmDialog
+ * naming the agent and quoting the reason; the dialog's confirm is what calls
+ * rejectAgent() above, with exactly the arguments the card passed. Cancel
+ * sends nothing — the reason box is the card's own local state, so it stays
+ * open with the text as typed.
+ */
+const pendingAgentReject = ref<{ agentId: number; agentName: string | null; reason: string } | null>(null)
+function askRejectAgent(agentId: number, agentName: string | null, reason: string): void {
+  if (approvalSavingAgentId.value !== null) return
+  pendingAgentReject.value = { agentId, agentName, reason }
+}
+async function confirmRejectAgent(): Promise<void> {
+  const pending = pendingAgentReject.value
+  if (!pending) return
+  await rejectAgent(pending.agentId, pending.agentName, pending.reason)
+  pendingAgentReject.value = null
+}
+provide(REJECT_AGENT, askRejectAgent)
 
 // ═══════════ TASK-129 — the full agent editor, opened in place ═══════════
 // The card's pencil used to navigate to จัดการตัวแทน because the edit form
@@ -653,15 +728,17 @@ provide(OPEN_AGENT_EDITOR, openAgentEditor)
  */
 // TASK-210 — the modal closes itself on a successful write, so the "it
 // worked" confirmation has to be raised by the host that outlives it.
-const savedMessage = ref('')
-const showSavedDialog = ref(false)
-
-function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string }): void {
-  if (payload.successMessage) {
-    savedMessage.value = payload.successMessage
-    showSavedDialog.value = true
+// ADR-052 — and only once the tree (and the passed-tier chips, which a grant
+// inside the modal changes) have been re-read: the one global dialog, over a
+// screen that already shows what the server stored.
+async function onAgentEditorSaved(payload: { leaderChanged: boolean; successMessage?: string; successTitle?: string }): Promise<void> {
+  try {
+    await Promise.all([reloadRoster(), reloadCertifications()])
+  } catch {
+    notifySaved(SAVED_BUT_STALE_BODY)
+    return
   }
-  void reloadRoster()
+  notifySaved(payload.successMessage ?? 'บันทึกข้อมูลสมาชิกแล้ว', payload.successTitle)
 }
 
 function statusBadgeClasses(statusKey: string): string {
@@ -935,6 +1012,21 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       @update:show="(v) => { if (!v) pendingLeaderRevoke = null }"
     />
 
+    <!-- 2026-10-02 — the second step of rejecting a pending agent from the
+         card (see askRejectAgent()). Inside <main> for the same reason as
+         the dialogs above. -->
+    <ConfirmDialog
+      :show="pendingAgentReject !== null"
+      variant="danger"
+      title="ยืนยันไม่อนุมัติ"
+      :body='pendingAgentReject
+        ? `ไม่อนุมัติ ${agentNameOf(pendingAgentReject.agentId, pendingAgentReject.agentName)} — เหตุผล: ${pendingAgentReject.reason.trim() || "ไม่ระบุ"}`
+        : ""'
+      :busy="approvalSavingAgentId !== null"
+      @confirm="confirmRejectAgent"
+      @update:show="(v) => { if (!v) pendingAgentReject = null }"
+    />
+
     <!-- TASK-129 — the SAME edit form จัดการตัวแทน uses. Inside <main> like
          the dialogs above: a sibling would make this template a multi-root
          Fragment and break App.vue's <Transition mode="out-in">. -->
@@ -944,7 +1036,5 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       @saved="onAgentEditorSaved"
     />
 
-    <!-- TASK-210 — shown after <AgentEditModal> has closed itself. -->
-    <SuccessDialog v-model:show="showSavedDialog" :body="savedMessage" />
   </main>
 </template>

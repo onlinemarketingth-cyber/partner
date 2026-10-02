@@ -30,6 +30,7 @@ import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import { type AgentItem, fetchAllPages } from './agentEdit'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
@@ -80,7 +81,8 @@ const agents = ref<AgentItem[]>([])
 const inviteLinks = ref<AgentInviteLink[]>([])
 const linksLoading = ref(false)
 
-async function loadInviteLinks() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function loadInviteLinks(): Promise<boolean> {
   linksLoading.value = true
   try {
     const [links, roster] = await Promise.all([
@@ -89,9 +91,11 @@ async function loadInviteLinks() {
     ])
     inviteLinks.value = links
     agents.value = roster
+    return true
   } catch (e) {
     errorMessage.value =
       e instanceof ApiError ? `${td('team.load_failed')} (${e.status})` : td('team.load_failed')
+    return false
   } finally {
     linksLoading.value = false
   }
@@ -199,11 +203,23 @@ async function confirmRevokeLink() {
   const link = pendingLinkRevoke.value
   if (!link) return
   revokingLink.value = true
+  errorMessage.value = ''
   try {
-    await api.delete(`/agent-invite-links/${link.id}`)
     // Re-read rather than patching the row locally: DELETE answers 204 with
-    // no body and is_usable is the server's verdict, not ours.
-    await loadInviteLinks()
+    // no body and is_usable is the server's verdict, not ours. ADR-052 — the
+    // dialog follows that re-read, and names the row as the server now has it.
+    await confirmSaved(() => api.delete(`/agent-invite-links/${link.id}`), {
+      apply: async () => {
+        if (!(await loadInviteLinks())) throw new Error('links reload failed')
+      },
+      message: () => {
+        const stored = inviteLinks.value.find((l) => l.id === link.id) ?? link
+        return td('team.revoke_done', 'ยกเลิกลิงก์ "{label}" ของ {owner} แล้ว — ใช้สมัครไม่ได้อีก', {
+          label: stored.label || td('links.untitled'),
+          owner: linkOwnerName(stored),
+        })
+      },
+    })
   } catch (e) {
     errorMessage.value =
       e instanceof ApiError ? `${td('team.revoke_failed')} (${e.status})` : td('team.revoke_failed')
@@ -370,6 +386,7 @@ defineProps<{ embedded?: boolean }>()
               <td class="px-4 py-2 text-right">
                 <button
                   v-if="!link.revoked_at"
+                  data-test="revoke-team-link"
                   class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 whitespace-nowrap"
                   @click="askRevokeLink(link)"
                 >

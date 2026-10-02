@@ -73,6 +73,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import DateRangeFilter from '@/design-system/components/DateRangeFilter.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 // TASK-209 — the header company scope (ADR-038).
 const activeCompany = useActiveCompanyStore()
 
@@ -198,7 +199,8 @@ function buildQuery(): string {
   return params.toString()
 }
 
-async function loadAll() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function loadAll(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -209,8 +211,10 @@ async function loadAll() {
       activeCompany.scopedPath(`/agent-commission-summary${query ? `?${query}` : ''}`),
     )
     summaries.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -227,14 +231,28 @@ function applyFilters() {
 // this file's top docblock). After a successful save the panel stays
 // open and shows the newly-saved number instead of closing/hiding, so
 // the Admin gets immediate confirmation of what was actually recorded.
+//
+// ADR-052 — "what was actually recorded" means the SERVER's copy: the
+// dialog quotes the number from the PUT's answer, and the still-open form is
+// re-filled from the re-read summary row, never left holding what was typed.
 const bankEditId = ref<number | null>(null)
 const bankForm = ref({ bank_name: '', bank_account_number: '', bank_account_holder_name: '' })
 const bankSaving = ref(false)
-const bankSavedMessage = ref('')
+interface StoredBankAccount {
+  bank_name: string | null
+  bank_account_number: string | null
+  bank_account_holder_name: string | null
+}
+function fillBankForm(stored: StoredBankAccount) {
+  bankForm.value = {
+    bank_name: stored.bank_name ?? '',
+    bank_account_number: stored.bank_account_number ?? '',
+    bank_account_holder_name: stored.bank_account_holder_name ?? '',
+  }
+}
 function openBankEdit(agent: AgentSummaryItem) {
   const opening = bankEditId.value !== agent.agent_id
   bankEditId.value = opening ? agent.agent_id : null
-  bankSavedMessage.value = ''
   if (opening) {
     bankForm.value = {
       bank_name: agent.bank_name ?? '',
@@ -250,13 +268,23 @@ async function submitBankAccount(agent: AgentSummaryItem) {
     bank_account_holder_name: bankForm.value.bank_account_holder_name.trim(),
   }
   bankSaving.value = true
-  bankSavedMessage.value = ''
   try {
-    await api.put(`/users/${agent.agent_id}`, payload)
-    // TASK-047 point 2 — do NOT close/hide the panel after saving; show
-    // the just-saved account number in place instead.
-    bankSavedMessage.value = `บันทึกสำเร็จ — เลขที่บัญชี ${payload.bank_account_number || '-'}`
-    await loadAll()
+    // TASK-047 point 2 — do NOT close/hide the panel after saving; it keeps
+    // showing the account, now as the server stored it.
+    await confirmSaved(() => api.put<{ data: StoredBankAccount }>(`/users/${agent.agent_id}`, payload), {
+      apply: async (res) => {
+        const reloaded = await loadAll()
+        // The re-read row when it landed; the PUT's own answer otherwise —
+        // either way a server copy, never the typed one.
+        const row = reloaded ? summaries.value.find((s) => s.agent_id === agent.agent_id) : undefined
+        if (bankEditId.value === agent.agent_id) {
+          const stored = row ?? res?.data
+          if (stored) fillBankForm(stored)
+        }
+        if (!reloaded) throw new Error('summary reload failed')
+      },
+      message: (res) => `บันทึกบัญชีธนาคารแล้ว — เลขที่บัญชี ${res?.data?.bank_account_number || '-'}`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกบัญชีธนาคารไม่สำเร็จ (${e.status})` : 'บันทึกบัญชีธนาคารไม่สำเร็จ'
   } finally {
@@ -443,7 +471,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
       </button>
     </div>
 
-    <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700">
+    <div v-if="errorMessage" class="mt-4 px-4 py-3 rounded-xl bg-rose-50 border border-rose-200 text-sm text-rose-700" data-test="page-error">
       {{ errorMessage }}
     </div>
 
@@ -531,6 +559,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               <button
                 type="button"
                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 whitespace-nowrap"
+                data-test="open-bank-edit"
                 @click="openBankEdit(s)"
               >
                 <Icon name="credit_card" :size="14" />
@@ -547,8 +576,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
             </div>
           </div>
           <div v-if="bankEditId === s.agent_id" class="mt-3 pt-3 border-t border-slate-100">
-            <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
-            <p v-else class="text-xs text-slate-400 mb-2">
+            <p class="text-xs text-slate-400 mb-2" data-test="bank-current">
               ปัจจุบัน: ธนาคาร {{ s.bank_name || '-' }} · เลขบัญชี {{ s.bank_account_number || '-' }} · ชื่อบัญชี {{ s.bank_account_holder_name || '-' }}
               — แก้ไขช่องที่ต้องการเปลี่ยนแล้วกดบันทึก
             </p>
@@ -561,6 +589,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               />
               <input
                 v-model="bankForm.bank_account_number"
+                data-test="bank-number"
                 type="text"
                 inputmode="numeric"
                 placeholder="เลขที่บัญชี"
@@ -577,6 +606,7 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               type="button"
               :disabled="bankSaving"
               class="mt-2 btn-primary"
+              data-test="save-bank"
               @click="submitBankAccount(s)"
             >
               {{ bankSaving ? 'กำลังบันทึก...' : 'บันทึกบัญชีธนาคาร' }}

@@ -49,6 +49,7 @@ import {
   type ClientDetail,
   type ClientDocumentItem,
 } from '@/composables/useClientFile'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const props = defineProps<{
   /** null closes the modal. A number opens (and loads) that client. */
@@ -188,28 +189,35 @@ async function save(): Promise<void> {
   saveError.value = ''
   fieldErrors.value = {}
 
-  try {
-    const res = await api.put<{ data: ClientDetail }>(`/clients/${c.id}`, {
-      name: form.value.name.trim(),
-      phone: form.value.phone.trim(),
-      email: orNull(form.value.email),
-      national_id: orNull(form.value.national_id),
-      consent_given_at: orNull(form.value.consent_given_at),
-      health_notes: orNull(form.value.health_notes),
-      status: form.value.status,
-      lead_source: orNull(form.value.lead_source),
-      date_of_birth: orNull(form.value.date_of_birth),
-      address: orNull(form.value.address),
-      province: orNull(form.value.province),
-      occupation: orNull(form.value.occupation),
-    })
+  const payload = {
+    name: form.value.name.trim(),
+    phone: form.value.phone.trim(),
+    email: orNull(form.value.email),
+    national_id: orNull(form.value.national_id),
+    consent_given_at: orNull(form.value.consent_given_at),
+    health_notes: orNull(form.value.health_notes),
+    status: form.value.status,
+    lead_source: orNull(form.value.lead_source),
+    date_of_birth: orNull(form.value.date_of_birth),
+    address: orNull(form.value.address),
+    province: orNull(form.value.province),
+    occupation: orNull(form.value.occupation),
+  }
 
+  try {
     // The response is the authority, not the form: the server normalises
     // (masking, category name, the reloaded referrals) and re-rendering from
     // what was typed would show a client that does not exist yet.
-    client.value = res.data
-    editing.value = false
-    emit('saved', res.data)
+    // ADR-052 — the save used to switch back to the read view silently; the
+    // dialog now says so, after the view shows the stored record.
+    await confirmSaved(() => api.put<{ data: ClientDetail }>(`/clients/${c.id}`, payload), {
+      apply: (res) => {
+        client.value = res.data
+        editing.value = false
+        emit('saved', res.data)
+      },
+      message: (res) => `บันทึกข้อมูลลูกค้า ${res.data.name} แล้ว`,
+    })
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { message?: string; errors?: Record<string, string[]> } | null

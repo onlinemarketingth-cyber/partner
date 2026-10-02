@@ -50,6 +50,7 @@ vi.mock('vue-router', async () => {
 import UserManagementView from '../UserManagementView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+import { saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const ALL = { update: true, deactivate: true, restore: true, move_company: true }
 
@@ -406,7 +407,11 @@ describe('UserManagementView — creating an account', () => {
     await btn(wrapper, 'submit-create').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('สร้างบัญชี อารีย์ ทองดี')
+    // ADR-052 — the sentence moved from a sticky banner into the global
+    // "saved" dialog; it still names the account and still omits the password.
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('สร้างบัญชี อารีย์ ทองดี')
+    expect(saveFeedbackState.body).not.toContain('Str0ngPass')
     expect(wrapper.text()).not.toContain('Str0ngPass')
   })
 

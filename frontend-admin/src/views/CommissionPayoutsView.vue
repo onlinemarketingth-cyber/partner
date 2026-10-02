@@ -69,6 +69,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const route = useRoute()
 // TASK-209 — the header company scope (ADR-038).
@@ -391,7 +393,7 @@ async function fetchMinimum(): Promise<void> {
  * time its step is opened and then kept, so stepping back and forth does not
  * re-request.
  */
-async function ensureLoaded(force = false): Promise<void> {
+async function ensureLoaded(force = false): Promise<boolean> {
   const wanted: 'pending_review' | 'approved' | null =
     group.value === 'review' ? 'pending_review' : group.value === 'transfer' ? 'approved' : null
 
@@ -401,7 +403,7 @@ async function ensureLoaded(force = false): Promise<void> {
   // band is visible from every group.
   const needTotals = force || !hasLoadedOnce.value
 
-  if (!needPending && !needQueue && !needTotals) return
+  if (!needPending && !needQueue && !needTotals) return true
 
   loading.value = true
   errorMessage.value = ''
@@ -415,8 +417,10 @@ async function ensureLoaded(force = false): Promise<void> {
       queueLoaded.value[wanted] = true
     }
     if (needTotals) await fetchStepTotals()
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -430,9 +434,10 @@ async function ensureLoaded(force = false): Promise<void> {
  * request moves it from step ② to step ③, and a cached step ③ would be missing
  * the row the admin just sent there.
  */
-async function reloadAll(): Promise<void> {
+async function reloadAll(): Promise<boolean> {
   queueLoaded.value = { pending_review: false, approved: false }
-  await ensureLoaded(true)
+
+  return ensureLoaded(true)
 }
 
 onMounted(() => {
@@ -711,13 +716,11 @@ const selectedNetTotalSatang = computed(() =>
 const confirming = ref(false)
 const working = ref(false)
 const batchError = ref('')
-const batchDone = ref<string>('')
 /** One reference for the whole round — see MarkWithdrawalsTransferredRequest. */
 const transferReference = ref('')
 
 function askToPay(): void {
   batchError.value = ''
-  batchDone.value = ''
   confirming.value = true
 }
 
@@ -746,24 +749,47 @@ function askToTransferOne(r: WithdrawalRequest): void {
   askToPay()
 }
 
+/*
+ * ADR-052 — what the dialog says after a batch press is read from the SERVER's
+ * answer (the rows it actually settled or raised), never from the selection
+ * captured before the request: a row another admin had already settled, or a
+ * total the server recalculated, would otherwise be reported as done here.
+ * BR-3 — the sum is integer satang, formatted only for display.
+ */
+function sumAmountSatang(rows: WithdrawalRequest[]): number {
+  return rows.reduce((sum, r) => sum + r.amount_satang, 0)
+}
+
+async function settleBatch(write: () => Promise<{ data: WithdrawalRequest[] }>, describe: (rows: WithdrawalRequest[]) => string): Promise<void> {
+  await confirmSaved(write, {
+    apply: async () => {
+      confirming.value = false
+      clearSelections()
+      if (!(await reloadAll())) throw new Error('payout lists re-read failed')
+    },
+    message: (res) => describe(res.data),
+  })
+}
+
 async function submitBatch(): Promise<void> {
   if (working.value || selectedCount.value === 0) return
 
   working.value = true
   batchError.value = ''
-  const attempted = selectedCount.value
-  const attemptedSatang = selectedTotalSatang.value
 
   try {
     if (canSelectRequests.value) {
-      await api.post('/commission-withdrawals/mark-transferred-batch', {
+      const body = {
         withdrawal_request_ids: selectedRequestRows.value.map((r) => r.id),
         transfer_reference: transferReference.value.trim() || null,
-      })
-      batchDone.value = `บันทึกว่าโอนแล้ว ${attempted} ใบ รวม ${formatSatang(attemptedSatang)} — ปิดรายการค่าแนะนำและแจ้งสมาชิกเรียบร้อย`
+      }
+      await settleBatch(
+        () => api.post<{ data: WithdrawalRequest[] }>('/commission-withdrawals/mark-transferred-batch', body),
+        (rows) => `บันทึกว่าโอนแล้ว ${rows.length} ใบ รวม ${formatSatang(sumAmountSatang(rows))} — ปิดรายการค่าแนะนำและแจ้งสมาชิกเรียบร้อย`,
+      )
       transferReference.value = ''
     } else {
-      await api.post('/commission-withdrawals/payout-batch', {
+      const body = {
         payees: selectedAgentRows.value.map((s) => ({
           agent_id: s.agent_id,
           /*
@@ -774,13 +800,12 @@ async function submitBatch(): Promise<void> {
            */
           expected_total_satang: availableOf(s),
         })),
-      })
-      batchDone.value = `ตั้งจ่าย ${attempted} คน รวม ${formatSatang(attemptedSatang)} เรียบร้อย — ไปรออยู่ที่ขั้นที่ 3 รอฝ่ายบัญชีโอน`
+      }
+      await settleBatch(
+        () => api.post<{ data: WithdrawalRequest[] }>('/commission-withdrawals/payout-batch', body),
+        (rows) => `ตั้งจ่าย ${rows.length} คน รวม ${formatSatang(sumAmountSatang(rows))} เรียบร้อย — ไปรออยู่ที่ขั้นที่ 3 รอฝ่ายบัญชีโอน`,
+      )
     }
-
-    confirming.value = false
-    clearSelections()
-    await reloadAll()
   } catch (e) {
     // The server's own sentence: for a stale total it names both figures and
     // says what to do, which no generic copy here could replace.
@@ -794,6 +819,8 @@ async function submitBatch(): Promise<void> {
 const busyId = ref<number | null>(null)
 const rejectingId = ref<number | null>(null)
 const rejectReason = ref('')
+/** The request whose ไม่อนุมัติ is waiting on the ConfirmDialog (2026-10-02). */
+const pendingReject = ref<WithdrawalRequest | null>(null)
 
 async function decide(r: WithdrawalRequest, action: 'approve' | 'reject', body?: Record<string, unknown>): Promise<void> {
   if (busyId.value !== null) return
@@ -801,10 +828,16 @@ async function decide(r: WithdrawalRequest, action: 'approve' | 'reject', body?:
   busyId.value = r.id
   errorMessage.value = ''
   try {
-    await api.post(`/commission-withdrawals/${r.id}/${action}`, body ?? {})
-    rejectingId.value = null
-    rejectReason.value = ''
-    await reloadAll()
+    // ADR-052 — dialog after the queue was re-read; names and amount are the server's.
+    await confirmSaved(() => api.post<{ data: WithdrawalRequest }>(`/commission-withdrawals/${r.id}/${action}`, body ?? {}), {
+      apply: async () => {
+        rejectingId.value = null
+        rejectReason.value = ''
+        if (!(await reloadAll())) throw new Error('payout lists re-read failed')
+      },
+      message: (res) =>
+        `${action === 'approve' ? 'อนุมัติ' : 'ไม่อนุมัติ'}คำขอถอนของ ${res.data.agent_name ?? '-'} ${formatSatang(res.data.amount_satang)} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'ดำเนินการไม่สำเร็จ'
   } finally {
@@ -833,20 +866,48 @@ function submitReject(r: WithdrawalRequest): void {
     return
   }
 
-  void decide(r, 'reject', { rejection_reason: rejectReason.value.trim() })
+  // 2026-10-02 (owner decision) — the reason is checked above, then a
+  // ConfirmDialog asks before anything is sent; see confirmReject().
+  pendingReject.value = r
+}
+
+/*
+ * The second step of ไม่อนุมัติ. The dialog names the payee and the amount
+ * and quotes the reason the agent will read; its confirm sends exactly what
+ * the row's button used to send. Cancel sends nothing and leaves the row's
+ * panel open with the reason as typed.
+ */
+const rejectConfirmBody = computed(() =>
+  pendingReject.value
+    ? `ไม่อนุมัติคำขอถอนของ ${pendingReject.value.agent_name ?? 'สมาชิก'} ${formatSatang(pendingReject.value.amount_satang)}`
+      + ` — เหตุผล: ${rejectReason.value.trim()}`
+    : '',
+)
+
+async function confirmReject(): Promise<void> {
+  const r = pendingReject.value
+  if (!r) return
+  await decide(r, 'reject', { rejection_reason: rejectReason.value.trim() })
+  // Closed either way: the saved dialog or the error line takes over.
+  pendingReject.value = null
 }
 
 // ── Bank account (TASK-045/047) ─────────────────────────────────────────
+/** The fields of PUT /users/{id}'s UserResource this screen reads back. */
+interface BankAccountResponse {
+  name: string
+  bank_name: string | null
+  bank_account_number: string | null
+  bank_account_holder_name: string | null
+}
 // Prefills from the agent's REAL current number, and the panel stays open
 // after saving showing what was recorded.
 const bankEditId = ref<number | null>(null)
 const bankForm = ref({ bank_name: '', bank_account_number: '', bank_account_holder_name: '' })
 const bankSaving = ref(false)
-const bankSavedMessage = ref('')
 function openBankEdit(agent: AgentSummaryItem) {
   const opening = bankEditId.value !== agent.agent_id
   bankEditId.value = opening ? agent.agent_id : null
-  bankSavedMessage.value = ''
   if (opening) {
     bankForm.value = {
       bank_name: agent.bank_name ?? '',
@@ -862,13 +923,24 @@ async function submitBankAccount(agent: AgentSummaryItem) {
     bank_account_holder_name: bankForm.value.bank_account_holder_name.trim(),
   }
   bankSaving.value = true
-  bankSavedMessage.value = ''
+  errorMessage.value = ''
   try {
-    await api.put(`/users/${agent.agent_id}`, payload)
-    bankSavedMessage.value = `บันทึกสำเร็จ — เลขที่บัญชี ${payload.bank_account_number || '-'}`
-    // Completing an account moves this payee out of ติดปัญหา and into ขั้นที่ 1,
-    // which is the whole reason somebody opened this form.
-    await reloadAll()
+    // ADR-052 — the form is re-filled from what the server stored and the list
+    // re-read before the dialog, which quotes the STORED account number (the
+    // old inline line quoted the typed one).
+    await confirmSaved(() => api.put<{ data: BankAccountResponse }>(`/users/${agent.agent_id}`, payload), {
+      apply: async (res) => {
+        bankForm.value = {
+          bank_name: res.data.bank_name ?? '',
+          bank_account_number: res.data.bank_account_number ?? '',
+          bank_account_holder_name: res.data.bank_account_holder_name ?? '',
+        }
+        // Completing an account moves this payee out of ติดปัญหา and into ขั้นที่ 1,
+        // which is the whole reason somebody opened this form.
+        if (!(await reloadAll())) throw new Error('payout lists re-read failed')
+      },
+      message: (res) => `บันทึกบัญชีธนาคารของ ${res.data.name} แล้ว — เลขที่บัญชี ${res.data.bank_account_number || '-'}`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกบัญชีธนาคารไม่สำเร็จ (${e.status})` : 'บันทึกบัญชีธนาคารไม่สำเร็จ'
   } finally {
@@ -1180,14 +1252,6 @@ watch(() => activeCompany.companyId, () => {
       {{ errorMessage }}
     </div>
 
-    <p
-      v-if="batchDone"
-      class="mt-4 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-sm font-bold text-emerald-700"
-      data-test="payout-batch-done"
-    >
-      {{ batchDone }}
-    </p>
-
     <!--
       The list says which step it is and WHAT A ROW IS, in words, right above
       itself. The unit badge is not decoration: the same person can be a row in
@@ -1491,8 +1555,7 @@ watch(() => activeCompany.companyId, () => {
               <!-- Bank editor, in the row it belongs to. -->
               <tr v-if="bankEditId === s.agent_id" :key="`bank-${s.agent_id}`" class="border-b border-slate-100 bg-slate-50/60">
                 <td :colspan="peopleColumnCount" class="px-4 py-3">
-                  <p v-if="bankSavedMessage" class="text-xs font-bold text-emerald-600 mb-2">{{ bankSavedMessage }}</p>
-                  <p v-else class="text-xs text-slate-400 mb-2">
+                  <p class="text-xs text-slate-400 mb-2">
                     ปัจจุบัน: ธนาคาร {{ s.bank_name || '-' }} · เลขบัญชี {{ s.bank_account_number || '-' }} · ชื่อบัญชี {{ s.bank_account_holder_name || '-' }}
                     — แก้ไขช่องที่ต้องการเปลี่ยนแล้วกดบันทึก
                   </p>
@@ -1940,5 +2003,16 @@ watch(() => activeCompany.companyId, () => {
         </p>
       </div>
     </div>
+
+    <!-- 2026-10-02 — the second step of ไม่อนุมัติ (see confirmReject()). -->
+    <ConfirmDialog
+      :show="pendingReject !== null"
+      variant="danger"
+      title="ยืนยันไม่อนุมัติ"
+      :body="rejectConfirmBody"
+      :busy="busyId !== null"
+      @confirm="confirmReject"
+      @update:show="(v) => { if (!v) pendingReject = null }"
+    />
   </main>
 </template>

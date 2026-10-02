@@ -24,6 +24,7 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { formatVoucherCode, isShortVoucherCode, tidyVoucherCodeInput } from '@/utils/voucherCode'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -129,14 +130,23 @@ async function confirmRedeem() {
   if (!voucher.value || redeeming.value) return
   redeeming.value = true
   redeemError.value = ''
+  const body = {
+    code: voucher.value.code,
+    branch: branchInput.value.trim() || undefined,
+  }
   try {
-    const res = await api.post<{ data: Voucher }>('/vouchers/redeem', {
-      code: voucher.value.code,
-      branch: branchInput.value.trim() || undefined,
+    // ADR-052 — the card (and the inline result, kept: it marks THIS card as
+    // the one just redeemed, for staff at a counter) is filled from the
+    // server's voucher first; the dialog then quotes the server's count.
+    await confirmSaved(() => api.post<{ data: Voucher }>('/vouchers/redeem', body), {
+      apply: (res) => {
+        voucher.value = res.data
+        redeemResult.value = res.data
+        showConfirm.value = false
+      },
+      message: (res) =>
+        `ตัดสิทธิ์บัตรกำนัล ${displayCode(res.data.code)} แล้ว — ใช้ไปแล้ว ${res.data.used_count}${res.data.usage_quota === null ? '' : ` / ${res.data.usage_quota}`} ครั้ง`,
     })
-    voucher.value = res.data
-    redeemResult.value = res.data
-    showConfirm.value = false
   } catch (e) {
     // C3 — distinct Thai messages per refusal reason (exhausted / expired /
     // not found / cross-tenant) already come back on the `code` field;

@@ -32,6 +32,9 @@ import { compressImageToFit } from '@/utils/imageCompression'
 import { useAuthStore } from '@/stores/auth'
 // TASK-208 / ADR-038 — one company scope for the whole Admin app.
 import { useActiveCompanyStore } from '@/stores/activeCompany'
+// ADR-052 — one "saved" dialog per write, raised only after the server
+// answered and the screen was re-read from it.
+import { confirmSaved, notifySaved, SAVED_BUT_STALE_BODY } from '@/composables/useSaveFeedback'
 
 // TASK-208 / ADR-038 — the app-wide company scope. Declared HERE (not beside
 // the rest of the company code far below) because top-level watchers further
@@ -351,6 +354,28 @@ async function loadProducts(): Promise<void> {
 
 onMounted(loadAll)
 
+/*
+ * ADR-052 — raise the "saved" dialog AFTER a write the server confirmed in
+ * full and the reload that followed it. loadAll() reports its own failure in
+ * errorMessage rather than throwing, so a failed re-read is told as "saved,
+ * but the screen may be behind" instead of a plain success over stale rows.
+ */
+function notifySavedAfterReload(body: string): void {
+  notifySaved(errorMessage.value ? SAVED_BUT_STALE_BODY : body)
+}
+
+/** ` "name"` taken from a write's RESPONSE — what was stored, never what was typed. */
+function storedName(res: unknown): string {
+  const name = (res as { data?: { name?: unknown } } | null | undefined)?.data?.name
+
+  return typeof name === 'string' && name ? ` "${name}"` : ''
+}
+
+/** "ให้ 3 บริษัท" when a create/edit fanned out to more than one company. */
+function companiesSuffix(count: number): string {
+  return count > 1 ? ` ให้ ${count} บริษัท` : ''
+}
+
 // TASK-209 — the header scope is part of every list query above, so a change
 // has to refetch; nothing on this screen can be re-derived client-side.
 watch(() => activeCompany.companyId, () => loadAll())
@@ -554,9 +579,12 @@ async function submitBrand() {
     // fresh FormData per company: the same brand mark is uploaded once per
     // company row, which is what "this brand exists in 3 companies" means.
     const platform = isSuperAdmin.value && brandCreateAsPlatform.value
+    const stored: unknown[] = []
     const problem = await createForEachCompany(
       brandCompanyIds.value,
-      (companyId) => api.postForm('/brands', buildBrandCreateFormData(companyId, brandLogoFile.value, true, platform)),
+      async (companyId) => {
+        stored.push(await api.postForm('/brands', buildBrandCreateFormData(companyId, brandLogoFile.value, true, platform)))
+      },
       platform,
     )
 
@@ -575,6 +603,8 @@ async function submitBrand() {
     brandCreateAsPlatform.value = false
     resetBrandLogo('create')
     showBrandForm.value = false
+    // ADR-052 — every company's POST answered 2xx and the list is reloaded.
+    notifySavedAfterReload(`เพิ่มแบรนด์${storedName(stored[stored.length - 1])}${companiesSuffix(stored.length)} แล้ว`)
   } finally {
     savingBrand.value = false
   }
@@ -598,16 +628,20 @@ async function submitCategory() {
   savingCategory.value = true
   try {
     const platform = isSuperAdmin.value && categoryCreateAsPlatform.value
+    const stored: unknown[] = []
     const problem = await createForEachCompany(
       categoryCompanyIds.value,
-      (companyId) =>
-        api.post('/product-categories', {
-          name: categoryForm.value.name,
-          sort_order: categoryForm.value.sort_order,
-          ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
-          // Exactly one of the two, same contract as the brand form above.
-          ...(platform ? { is_platform: true } : companyId === null ? {} : { company_id: companyId }),
-        }),
+      async (companyId) => {
+        stored.push(
+          await api.post('/product-categories', {
+            name: categoryForm.value.name,
+            sort_order: categoryForm.value.sort_order,
+            ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
+            // Exactly one of the two, same contract as the brand form above.
+            ...(platform ? { is_platform: true } : companyId === null ? {} : { company_id: companyId }),
+          }),
+        )
+      },
       platform,
     )
 
@@ -621,6 +655,7 @@ async function submitCategory() {
     categoryForm.value = { name: '', icon: '', sort_order: 0 }
     categoryCreateAsPlatform.value = false
     showCategoryForm.value = false
+    notifySavedAfterReload(`เพิ่มหมวดหมู่${storedName(stored[stored.length - 1])}${companiesSuffix(stored.length)} แล้ว`)
   } finally {
     savingCategory.value = false
   }
@@ -722,7 +757,60 @@ function cancelEditBrand(): void {
 /** First logo found in the group being edited — what the form shows as "current". */
 const editBrandCurrentLogoUrl = computed(() => editBrandRows.value.find((r) => r.logo_url)?.logo_url ?? null)
 
+/*
+ * ADR-052 rule 5 — an edit that UNTICKS a company is a delete in that
+ * company (the reconcile below sends DELETE for it), so it asks first, naming
+ * the companies, before anything is sent. Cancelling sends nothing at all —
+ * not even the rename, because the admin pressed one บันทึก for one change.
+ */
+interface PendingRefRemoval {
+  noun: string
+  name: string
+  companies: string[]
+  run: () => Promise<void>
+}
+const pendingRefRemoval = ref<PendingRefRemoval | null>(null)
+const refRemovalBody = computed(() => {
+  const p = pendingRefRemoval.value
+  if (!p) return ''
+
+  return `บันทึกครั้งนี้จะเอา${p.noun} "${p.name}" ออกจาก ${p.companies.length} บริษัท:\n`
+    + p.companies.map((c) => `• ${c}`).join('\n')
+    + `\n\nข้อมูลไม่ได้หายถาวร กู้คืนได้ที่แท็บ "ถังขยะ"`
+})
+async function confirmRefRemoval(): Promise<void> {
+  const p = pendingRefRemoval.value
+  pendingRefRemoval.value = null
+  if (p) await p.run()
+}
+
+/** The tenant rows an edit's tick boxes would remove — what the reconcile will DELETE. */
+function untickedRows<T extends { company_id: number | null; permissions?: RowPermissions }>(rows: T[], ticked: number[]): T[] {
+  // A Company Admin has no boxes: their own row is always kept (see the reconcile).
+  if (!isSuperAdmin.value) return []
+  // Unticking everything is refused with its own message by the save itself.
+  if (!ticked.length && !rows.some((r) => r.company_id === null)) return []
+
+  return rows.filter((r) => r.company_id !== null && !ticked.includes(r.company_id) && canDelete(r))
+}
+
 async function saveEditBrand(): Promise<void> {
+  if (editingBrandKey.value === null) return
+  const removed = untickedRows(editBrandRows.value, editBrandCompanyIds.value)
+  if (removed.length) {
+    pendingRefRemoval.value = {
+      noun: 'แบรนด์',
+      name: editBrandRows.value[0]?.name ?? editBrandForm.value.name,
+      companies: removed.map((r) => ownerLabel(r.company_id, 'brand')),
+      run: commitEditBrand,
+    }
+
+    return
+  }
+  await commitEditBrand()
+}
+
+async function commitEditBrand(): Promise<void> {
   if (editingBrandKey.value === null) return
   const rows = editBrandRows.value
   // TASK-256 — a platform row is not one of the boxes, so an empty picker on a
@@ -740,6 +828,8 @@ async function saveEditBrand(): Promise<void> {
   const tenantRows = rows.filter((r): r is Brand & { company_id: number } => r.company_id !== null)
   const ticked = isSuperAdmin.value ? editBrandCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
+  // ADR-052 — the last row the server returned, so the dialog quotes the stored name.
+  let lastStored: unknown = null
   const label = (companyId: number | null) => `${ownerLabel(companyId, 'brand')}: `
 
   try {
@@ -768,7 +858,7 @@ async function saveEditBrand(): Promise<void> {
      */
     for (const row of rows.filter((r) => canUpdate(r) && (r.company_id === null || ticked.includes(r.company_id)))) {
       try {
-        await api.postForm(`/brands/${row.id}`, editFormData(null))
+        lastStored = await api.postForm(`/brands/${row.id}`, editFormData(null))
       } catch (e) {
         failures.push(label(row.company_id) + saveFailureMessage(e))
       }
@@ -776,7 +866,7 @@ async function saveEditBrand(): Promise<void> {
 
     for (const companyId of ticked.filter((id) => !tenantRows.some((r) => r.company_id === id))) {
       try {
-        await api.postForm('/brands', editFormData(companyId))
+        lastStored = await api.postForm('/brands', editFormData(companyId))
       } catch (e) {
         failures.push(label(companyId) + saveFailureMessage(e))
       }
@@ -798,6 +888,7 @@ async function saveEditBrand(): Promise<void> {
     }
 
     editingBrandKey.value = null
+    notifySavedAfterReload(`บันทึกแบรนด์${storedName(lastStored)} แล้ว`)
   } finally {
     savingBrandEdit.value = false
   }
@@ -910,7 +1001,8 @@ async function confirmDeleteBrand(): Promise<void> {
   // TASK-245 — only the rows this viewer may delete. A Company Admin removing
   // a name that also exists centrally removes THEIR row; the platform's stays,
   // and the message below says so rather than letting a 403 say it.
-  for (const row of group.rows.filter(canDelete)) {
+  const targets = group.rows.filter(canDelete)
+  for (const row of targets) {
     try {
       await api.delete(`/brands/${row.id}`)
     } catch (e) {
@@ -919,8 +1011,15 @@ async function confirmDeleteBrand(): Promise<void> {
   }
 
   await loadAll()
-  errorMessage.value = failures.join(' / ')
   pendingDeleteBrand.value = null
+  if (failures.length) {
+    errorMessage.value = failures.join(' / ')
+
+    return
+  }
+  // ADR-052 — every row's DELETE answered 2xx (a partial failure above says
+  // which company refused, and raises no dialog).
+  notifySavedAfterReload(`ซ่อนแบรนด์ "${group.name}"${targets.length > 1 ? ` จาก ${targets.length} บริษัท` : ''} แล้ว`)
 }
 
 // pattern used nowhere else on this page yet, closest precedent is
@@ -959,6 +1058,22 @@ function cancelEditCategory(): void {
 }
 async function saveEditCategory(): Promise<void> {
   if (editingCategoryKey.value === null) return
+  const removed = untickedRows(editCategoryRows.value, editCategoryCompanyIds.value)
+  if (removed.length) {
+    pendingRefRemoval.value = {
+      noun: 'หมวดหมู่',
+      name: editCategoryRows.value[0]?.name ?? editCategoryForm.value.name,
+      companies: removed.map((r) => ownerLabel(r.company_id, 'category')),
+      run: commitEditCategory,
+    }
+
+    return
+  }
+  await commitEditCategory()
+}
+
+async function commitEditCategory(): Promise<void> {
+  if (editingCategoryKey.value === null) return
   const hasPlatformRow = editCategoryRows.value.some((r) => r.company_id === null)
   if (isSuperAdmin.value && !editCategoryCompanyIds.value.length && !hasPlatformRow) {
     editCategoryError.value = 'ต้องเหลืออย่างน้อย 1 บริษัท — ถ้าต้องการเอาออกทุกบริษัท ให้ใช้ปุ่มลบ'
@@ -973,6 +1088,7 @@ async function saveEditCategory(): Promise<void> {
   const tenantRows = rows.filter((r): r is ProductCategory & { company_id: number } => r.company_id !== null)
   const ticked = isSuperAdmin.value ? editCategoryCompanyIds.value : tenantRows.map((r) => r.company_id)
   const failures: string[] = []
+  let lastStored: unknown = null
   const label = (companyId: number | null) => `${ownerLabel(companyId, 'category')}: `
   const payload = {
     name: editCategoryForm.value.name,
@@ -989,7 +1105,7 @@ async function saveEditCategory(): Promise<void> {
     // rest only by somebody allowed to rename it.
     for (const row of rows.filter((r) => canUpdate(r) && (r.company_id === null || ticked.includes(r.company_id)))) {
       try {
-        await api.put(`/product-categories/${row.id}`, payload)
+        lastStored = await api.put(`/product-categories/${row.id}`, payload)
       } catch (e) {
         failures.push(label(row.company_id) + saveFailureMessage(e))
       }
@@ -999,7 +1115,7 @@ async function saveEditCategory(): Promise<void> {
       try {
         // StoreProductCategoryRequest treats icon as nullable+optional; send
         // it only when set, matching submitCategory()'s create payload.
-        await api.post('/product-categories', {
+        lastStored = await api.post('/product-categories', {
           ...payload,
           ...(payload.icon ? {} : { icon: undefined }),
           company_id: companyId,
@@ -1025,6 +1141,7 @@ async function saveEditCategory(): Promise<void> {
     }
 
     editingCategoryKey.value = null
+    notifySavedAfterReload(`บันทึกหมวดหมู่${storedName(lastStored)} แล้ว`)
   } finally {
     savingCategoryEdit.value = false
   }
@@ -1057,7 +1174,8 @@ async function confirmDeleteCategory(): Promise<void> {
   const failures: string[] = []
 
   // TASK-245 — same as confirmDeleteBrand(): their rows, not the platform's.
-  for (const row of group.rows.filter(canDelete)) {
+  const targets = group.rows.filter(canDelete)
+  for (const row of targets) {
     try {
       await api.delete(`/product-categories/${row.id}`)
     } catch (e) {
@@ -1066,8 +1184,13 @@ async function confirmDeleteCategory(): Promise<void> {
   }
 
   await loadAll()
-  errorMessage.value = failures.join(' / ')
   pendingDeleteCategory.value = null
+  if (failures.length) {
+    errorMessage.value = failures.join(' / ')
+
+    return
+  }
+  notifySavedAfterReload(`ซ่อนหมวดหมู่ "${group.name}"${targets.length > 1 ? ` จาก ${targets.length} บริษัท` : ''} แล้ว`)
 }
 
 // ── Banners (TASK-068 / ADR-020 row 2) ──────────────────────────────────
@@ -1252,9 +1375,11 @@ async function submitBannerForm(): Promise<void> {
     return
   }
   savingBanner.value = true
+  const editing = editingBannerId.value
+  let created = 0
   try {
-    const path = editingBannerId.value ? `/storefront-banners/${editingBannerId.value}` : '/storefront-banners'
-    if (editingBannerId.value) {
+    const path = editing ? `/storefront-banners/${editing}` : '/storefront-banners'
+    if (editing) {
       await api.postForm(path, buildBannerFormData(bannerImageFiles.value[0] ?? null))
     } else {
       // TASK-073 — human-confirmed via AskUserQuestion (2026-08-02):
@@ -1262,11 +1387,26 @@ async function submitBannerForm(): Promise<void> {
       // each sharing every other field entered once in this form.
       for (const file of bannerImageFiles.value) {
         await api.postForm(path, buildBannerFormData(file))
+        created++
       }
     }
     closeBannerForm()
     await loadAll()
+    // ADR-052 — one dialog for the whole button, however many banners it made.
+    notifySavedAfterReload(editing ? 'บันทึกแบนเนอร์แล้ว' : `เพิ่มแบนเนอร์ ${created} รายการแล้ว`)
   } catch (e) {
+    /*
+     * ADR-052 — a bulk create that failed part-way has still stored the
+     * banners before the failure. Re-read so they are on screen (otherwise
+     * the admin re-uploads them as duplicates) and say how many landed.
+     */
+    if (created > 0) {
+      await loadAll()
+      bannerFormError.value = `เพิ่มแล้ว ${created} จาก ${bannerImageFiles.value.length} รูป — รูปที่เหลือ: ${e instanceof ApiError ? e.message : 'บันทึกไม่สำเร็จ'}`
+      // The stored ones leave the form, so a retry sends only what is left.
+      for (let i = 0; i < created; i++) removeBannerImageAt(0)
+      return
+    }
     bannerFormError.value = e instanceof ApiError ? e.message : 'บันทึกไม่สำเร็จ'
   } finally {
     savingBanner.value = false
@@ -1282,8 +1422,12 @@ async function confirmDeleteBanner(): Promise<void> {
   const banner = pendingDeleteBanner.value
   if (!banner) return
   try {
-    await api.delete(`/storefront-banners/${banner.id}`)
-    banners.value = banners.value.filter((b) => b.id !== banner.id)
+    await confirmSaved(() => api.delete(`/storefront-banners/${banner.id}`), {
+      apply: () => {
+        banners.value = banners.value.filter((b) => b.id !== banner.id)
+      },
+      message: banner.title ? `ลบแบนเนอร์ "${banner.title}" แล้ว` : 'ลบแบนเนอร์แล้ว',
+    })
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -1348,10 +1492,16 @@ async function confirmDeleteProduct(): Promise<void> {
   const product = pendingDeleteProduct.value
   if (!product) return
   try {
-    await api.delete(`/products/${product.id}`)
-    products.value = products.value.filter((p) => p.id !== product.id)
-    // It is in the bin now, and the bin is a sibling tab on this page.
-    await loadTrash()
+    await confirmSaved(() => api.delete(`/products/${product.id}`), {
+      apply: async () => {
+        products.value = products.value.filter((p) => p.id !== product.id)
+        // It is in the bin now, and the bin is a sibling tab on this page.
+        trashError.value = ''
+        await loadTrash()
+        if (trashError.value) throw new Error(trashError.value)
+      },
+      message: `ซ่อนแพ็กเกจ "${product.name}" แล้ว — กู้คืนได้ที่แท็บ "ถังขยะ"`,
+    })
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -1440,12 +1590,27 @@ async function saveCompanySetting(): Promise<void> {
   savingCompanySetting.value = true
   companySettingError.value = ''
   try {
-    await api.put(`/products/${product.id}/company-settings`, {
-      company_id: companyId,
-      price_satang: priceSatang,
-    })
-    await loadProducts()
-    companySettingProduct.value = null
+    await confirmSaved(
+      () =>
+        api.put(`/products/${product.id}/company-settings`, {
+          company_id: companyId,
+          price_satang: priceSatang,
+        }),
+      {
+        apply: async () => {
+          companySettingProduct.value = null
+          await loadProducts()
+        },
+        // The price as the RE-READ row reports it — the number this company
+        // now actually charges, not the one typed into the box.
+        message: () => {
+          const stored = products.value.find((p) => p.id === product.id)
+          const price = stored ? ` — ${formatSatang(stored.effective_price_satang)}` : ''
+
+          return `บันทึกราคาของ ${scopedCompanyLabel.value ?? 'บริษัทนี้'}${price} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     companySettingError.value = saveFailureMessage(e)
   } finally {
@@ -1478,17 +1643,29 @@ async function toggleSellHere(product: Product): Promise<void> {
   try {
     // Only is_active — the price key is deliberately absent, because opening
     // a product for sale must not also decide what it costs.
-    await api.put(`/products/${product.id}/company-settings`, {
-      company_id: companyId,
-      is_active: !product.is_sellable_here,
-    })
-    /*
-     * 2026-09-09 — the pins are refetched too, because closing a sale switches
-     * that company's pin off server-side (CompanyProductSettingService). The
-     * star must go dark in the same paint as the switch, or the row would
-     * contradict itself until the next reload.
-     */
-    await Promise.all([loadProducts(), loadPins()])
+    await confirmSaved(
+      () =>
+        api.put(`/products/${product.id}/company-settings`, {
+          company_id: companyId,
+          is_active: !product.is_sellable_here,
+        }),
+      {
+        /*
+         * 2026-09-09 — the pins are refetched too, because closing a sale switches
+         * that company's pin off server-side (CompanyProductSettingService). The
+         * star must go dark in the same paint as the switch, or the row would
+         * contradict itself until the next reload.
+         */
+        apply: () => Promise.all([loadProducts(), reloadPinsOrThrow()]),
+        // The switch's state as RE-READ from the server.
+        message: () => {
+          const stored = products.value.find((p) => p.id === product.id)
+          const where = scopedCompanyLabel.value ?? 'บริษัทนี้'
+
+          return stored?.is_sellable_here ? `เปิดขาย "${stored.name}" ใน ${where} แล้ว` : `ปิดขาย "${stored?.name ?? product.name}" ใน ${where} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     errorMessage.value = saveFailureMessage(e)
   } finally {
@@ -1717,20 +1894,30 @@ const pinningId = ref<number | null>(null)
 const pinOf = (product: Product) => pins.value.find((pin) => pin.product_id === product.id) ?? null
 const isPinned = (product: Product) => pinOf(product)?.is_active === true
 
-async function loadPins(): Promise<void> {
+/** Resolves false when the list could not be read (ADR-052: a write's re-read must say so). */
+async function loadPins(): Promise<boolean> {
   if (selectedCatalogCompanyId.value === null) {
     pins.value = []
 
-    return
+    return true
   }
   try {
     const res = await api.get<{ data: PinRow[] }>('/product-recommendation-pins')
     pins.value = res.data
+
+    return true
   } catch {
     // A pin list that will not load must not blank the catalogue: the stars
     // simply render unlit, and every other control on the row still works.
     pins.value = []
+
+    return false
   }
+}
+
+/** ADR-052 — loadPins() as a write's `apply`: a failed re-read throws, so the dialog says the screen may be behind. */
+async function reloadPinsOrThrow(): Promise<void> {
+  if (!(await loadPins())) throw new Error('pins re-read failed')
 }
 
 /**
@@ -1749,19 +1936,28 @@ async function togglePin(product: Product): Promise<void> {
   errorMessage.value = ''
   try {
     const existing = pinOf(product)
-    if (existing) {
-      await api.put(`/product-recommendation-pins/${existing.id}`, {
-        sort_order: existing.sort_order,
-        is_active: !existing.is_active,
-      })
-    } else {
-      await api.post('/product-recommendation-pins', {
-        product_id: product.id,
-        sort_order: 0,
-        ...(isSuperAdmin.value ? { company_id: companyId } : {}),
-      })
-    }
-    await loadPins()
+    await confirmSaved(
+      () =>
+        existing
+          ? api.put<{ data?: PinRow }>(`/product-recommendation-pins/${existing.id}`, {
+              sort_order: existing.sort_order,
+              is_active: !existing.is_active,
+            })
+          : api.post<{ data?: PinRow }>('/product-recommendation-pins', {
+              product_id: product.id,
+              sort_order: 0,
+              ...(isSuperAdmin.value ? { company_id: companyId } : {}),
+            }),
+      {
+        apply: reloadPinsOrThrow,
+        // The pin state the server stored: the response row, else the re-read.
+        message: (res) => {
+          const active = res?.data?.is_active ?? isPinned(product)
+
+          return active ? `ปักหมุดแนะนำ "${product.name}" แล้ว` : `เลิกปักหมุด "${product.name}" แล้ว`
+        },
+      },
+    )
   } catch (e) {
     errorMessage.value = saveFailureMessage(e)
   } finally {
@@ -1815,9 +2011,16 @@ async function restoreRow(kind: 'products' | 'brands' | 'product-categories', id
   if (restoringId.value) return
   restoringId.value = key
   trashError.value = ''
+  const bucket = kind === 'products' ? trash.value.products : kind === 'brands' ? trash.value.brands : trash.value.categories
+  const name = (bucket as { id: number; name: string }[]).find((r) => r.id === id)?.name
   try {
-    await api.post(`/${kind}/${id}/restore`, {})
-    await Promise.all([loadAll(), loadTrash()])
+    await confirmSaved(() => api.post(`/${kind}/${id}/restore`, {}), {
+      apply: async () => {
+        await Promise.all([loadAll(), loadTrash()])
+        if (errorMessage.value) throw new Error(errorMessage.value)
+      },
+      message: (res) => `กู้คืน${storedName(res) || (name ? ` "${name}"` : '')} แล้ว`,
+    })
   } catch (e) {
     trashError.value = e instanceof ApiError ? e.message : 'กู้คืนไม่สำเร็จ'
   } finally {
@@ -3332,6 +3535,19 @@ function toggleRefForm(): void {
       :confirm-phrase="deleteBrandPhrase"
       @confirm="confirmDeleteBrand"
       @update:show="(v) => { if (!v) pendingDeleteBrand = null }"
+    />
+
+    <!-- ADR-052 — an edit that unticks companies deletes the row there; asked
+         before anything is sent (see saveEditBrand / saveEditCategory). -->
+    <ConfirmDialog
+      :show="pendingRefRemoval !== null"
+      variant="danger"
+      size="md"
+      :title="pendingRefRemoval ? `เอา${pendingRefRemoval.noun}ออกจากบริษัท?` : ''"
+      :body="refRemovalBody"
+      confirm-label="บันทึกและเอาออก"
+      @confirm="confirmRefRemoval"
+      @update:show="(v) => { if (!v) pendingRefRemoval = null }"
     />
 
     <!-- TASK-088 — soft delete, same wording rationale as the brand dialog. -->

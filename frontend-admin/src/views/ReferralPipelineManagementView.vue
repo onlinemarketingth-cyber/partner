@@ -56,6 +56,7 @@ import {
 } from '@/utils/pipelineStages'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 /**
  * TASK-176 §1.2 — the ONE order this card may act on, as
@@ -239,14 +240,16 @@ const route = useRoute()
 const activeCompany = useActiveCompanyStore()
 const router = useRouter()
 
-async function loadAll() {
+async function loadAll(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: ReferralItem[] }>(activeCompany.scopedPath('/referrals'))
     referrals.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -462,8 +465,15 @@ async function advance(referral: ReferralItem) {
   advancing.value = referral.id
   errorMessage.value = ''
   try {
-    await api.post(`/referrals/${referral.id}/advance`)
-    await loadAll()
+    // ADR-052 — board re-read first; the dialog names the stage the SERVER
+    // moved the referral to, not the column it was dropped on.
+    await confirmSaved(() => api.post<{ data: ReferralItem }>(`/referrals/${referral.id}/advance`), {
+      apply: async () => {
+        if (!(await loadAll())) throw new Error('board re-read failed')
+      },
+      message: (res) =>
+        `เลื่อน${res.data.client ? ` ${res.data.client.name}` : 'รายการ'} ไปขั้น “${stageLabelTh(res.data.current_stage)}” แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ดำเนินการไม่สำเร็จ (${e.status})` : 'ดำเนินการไม่สำเร็จ'
   } finally {
@@ -502,9 +512,14 @@ async function confirmOrderPayment(): Promise<void> {
   confirmingOrderId.value = pending.order.id
   errorMessage.value = ''
   try {
-    await api.post(`/orders/${pending.order.id}/confirm`)
-    pendingConfirm.value = null
-    await loadAll()
+    // ADR-052 — order number and amount (BR-3 satang) quoted from the server's answer.
+    await confirmSaved(() => api.post<{ data: ReferralOrder }>(`/orders/${pending.order.id}/confirm`), {
+      apply: async () => {
+        pendingConfirm.value = null
+        if (!(await loadAll())) throw new Error('board re-read failed')
+      },
+      message: (res) => `ยืนยันรับชำระเงิน ${formatBaht(res.data.amount_satang)} บาท สำหรับ ${res.data.order_number} แล้ว`,
+    })
   } catch (e) {
     pendingConfirm.value = null
     errorMessage.value =

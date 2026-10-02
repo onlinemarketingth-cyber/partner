@@ -40,6 +40,9 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import IconPicker from '@/design-system/components/IconPicker.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useAuthStore } from '@/stores/auth'
+// ADR-052 — every write here ends in ONE "saved" dialog, raised only after the
+// server answered 2xx and the list on screen was re-read from it.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 // TASK-209 P4 — this screen ignores the header company scope on purpose.
 import PlatformScopeBadge from '@/design-system/components/PlatformScopeBadge.vue'
 
@@ -147,6 +150,22 @@ async function loadAll() {
 }
 onMounted(loadAll)
 
+/*
+ * ADR-052 — the re-read after a write, as an `apply` step. loadAll() reports
+ * its own failure through errorMessage rather than throwing, so this turns
+ * that back into a throw: confirmSaved() then says "saved, but the screen
+ * may be behind" instead of a plain success over a list that did not reload.
+ */
+/** ` "name"` from a write's response — the STORED name, never the typed one. */
+function savedName(res: { data?: { name?: string } } | null | undefined): string {
+  return res?.data?.name ? ` "${res.data.name}"` : ''
+}
+
+async function reloadAfterWrite(): Promise<void> {
+  await loadAll()
+  if (errorMessage.value) throw new Error(errorMessage.value)
+}
+
 watch(activeTab, (tab) => {
   if (tab === 'items' && highlightId.value) {
     // Best-effort scroll to the linked item once its tab is actually showing.
@@ -166,11 +185,25 @@ function deleteFailureMessage(e: unknown): string {
 // ── Catalog brand ──
 const showBrandForm = ref(false)
 const brandForm = ref({ name: '' })
+const brandFormError = ref('')
+const savingBrand = ref(false)
 async function submitBrand() {
-  await api.post('/catalog-brands', { name: brandForm.value.name })
-  brandForm.value = { name: '' }
-  showBrandForm.value = false
-  await loadAll()
+  savingBrand.value = true
+  brandFormError.value = ''
+  try {
+    await confirmSaved(() => api.post<{ data: CatalogBrand }>('/catalog-brands', { name: brandForm.value.name }), {
+      apply: async () => {
+        brandForm.value = { name: '' }
+        showBrandForm.value = false
+        await reloadAfterWrite()
+      },
+      message: (res) => `เพิ่มแบรนด์${savedName(res)} แล้ว`,
+    })
+  } catch (e) {
+    brandFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingBrand.value = false
+  }
 }
 const editingBrandId = ref<number | null>(null)
 const editBrandForm = ref({ name: '', is_active: true })
@@ -189,12 +222,20 @@ async function saveEditBrand(): Promise<void> {
   savingBrandEdit.value = true
   editBrandError.value = ''
   try {
-    await api.put(`/catalog-brands/${editingBrandId.value}`, {
-      name: editBrandForm.value.name,
-      is_active: editBrandForm.value.is_active,
-    })
-    editingBrandId.value = null
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.put<{ data: CatalogBrand }>(`/catalog-brands/${editingBrandId.value}`, {
+          name: editBrandForm.value.name,
+          is_active: editBrandForm.value.is_active,
+        }),
+      {
+        apply: async () => {
+          editingBrandId.value = null
+          await reloadAfterWrite()
+        },
+        message: (res) => `บันทึกแบรนด์${savedName(res)} แล้ว`,
+      },
+    )
   } catch (e) {
     editBrandError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -209,8 +250,12 @@ async function confirmDeleteBrand(): Promise<void> {
   const brand = pendingDeleteBrand.value
   if (!brand) return
   try {
-    await api.delete(`/catalog-brands/${brand.id}`)
-    brands.value = brands.value.filter((b) => b.id !== brand.id)
+    await confirmSaved(() => api.delete(`/catalog-brands/${brand.id}`), {
+      apply: () => {
+        brands.value = brands.value.filter((b) => b.id !== brand.id)
+      },
+      message: `ลบแบรนด์ "${brand.name}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -221,15 +266,33 @@ async function confirmDeleteBrand(): Promise<void> {
 // ── Catalog category ──
 const showCategoryForm = ref(false)
 const categoryForm = ref({ name: '', icon: '', sort_order: 0 })
+const categoryFormError = ref('')
+const savingCategory = ref(false)
 async function submitCategory() {
-  await api.post('/catalog-categories', {
-    name: categoryForm.value.name,
-    sort_order: categoryForm.value.sort_order,
-    ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
-  })
-  categoryForm.value = { name: '', icon: '', sort_order: 0 }
-  showCategoryForm.value = false
-  await loadAll()
+  savingCategory.value = true
+  categoryFormError.value = ''
+  try {
+    await confirmSaved(
+      () =>
+        api.post<{ data: CatalogCategory }>('/catalog-categories', {
+          name: categoryForm.value.name,
+          sort_order: categoryForm.value.sort_order,
+          ...(categoryForm.value.icon ? { icon: categoryForm.value.icon } : {}),
+        }),
+      {
+        apply: async () => {
+          categoryForm.value = { name: '', icon: '', sort_order: 0 }
+          showCategoryForm.value = false
+          await reloadAfterWrite()
+        },
+        message: (res) => `เพิ่มหมวดหมู่${savedName(res)} แล้ว`,
+      },
+    )
+  } catch (e) {
+    categoryFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+  } finally {
+    savingCategory.value = false
+  }
 }
 const editingCategoryId = ref<number | null>(null)
 const editCategoryForm = ref({ name: '', icon: '', sort_order: 0, is_active: true })
@@ -253,14 +316,22 @@ async function saveEditCategory(): Promise<void> {
   savingCategoryEdit.value = true
   editCategoryError.value = ''
   try {
-    await api.put(`/catalog-categories/${editingCategoryId.value}`, {
-      name: editCategoryForm.value.name,
-      icon: editCategoryForm.value.icon || null,
-      sort_order: editCategoryForm.value.sort_order,
-      is_active: editCategoryForm.value.is_active,
-    })
-    editingCategoryId.value = null
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.put<{ data: CatalogCategory }>(`/catalog-categories/${editingCategoryId.value}`, {
+          name: editCategoryForm.value.name,
+          icon: editCategoryForm.value.icon || null,
+          sort_order: editCategoryForm.value.sort_order,
+          is_active: editCategoryForm.value.is_active,
+        }),
+      {
+        apply: async () => {
+          editingCategoryId.value = null
+          await reloadAfterWrite()
+        },
+        message: (res) => `บันทึกหมวดหมู่${savedName(res)} แล้ว`,
+      },
+    )
   } catch (e) {
     editCategoryError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -275,8 +346,12 @@ async function confirmDeleteCategory(): Promise<void> {
   const category = pendingDeleteCategory.value
   if (!category) return
   try {
-    await api.delete(`/catalog-categories/${category.id}`)
-    categories.value = categories.value.filter((c) => c.id !== category.id)
+    await confirmSaved(() => api.delete(`/catalog-categories/${category.id}`), {
+      apply: () => {
+        categories.value = categories.value.filter((c) => c.id !== category.id)
+      },
+      message: `ลบหมวดหมู่ "${category.name}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -362,13 +437,20 @@ async function submitItemForm(): Promise<void> {
       default_price_satang: Math.round(Number(itemForm.value.default_price_baht) * 100),
       is_active: itemForm.value.is_active,
     }
-    if (editingItemId.value) {
-      await api.put(`/product-catalog-items/${editingItemId.value}`, payload)
-    } else {
-      await api.post('/product-catalog-items', payload)
-    }
-    closeItemForm()
-    await loadAll()
+    const editing = editingItemId.value
+    await confirmSaved(
+      () =>
+        editing
+          ? api.put<{ data: ProductCatalogItem }>(`/product-catalog-items/${editing}`, payload)
+          : api.post<{ data: ProductCatalogItem }>('/product-catalog-items', payload),
+      {
+        apply: async () => {
+          closeItemForm()
+          await reloadAfterWrite()
+        },
+        message: (res) => (editing ? `บันทึกรายการ${savedName(res)} แล้ว` : `เพิ่มรายการ${savedName(res)} ในแคตตาล็อกกลางแล้ว`),
+      },
+    )
   } catch (e) {
     itemFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -383,8 +465,12 @@ async function confirmDeleteItem(): Promise<void> {
   const item = pendingDeleteItem.value
   if (!item) return
   try {
-    await api.delete(`/product-catalog-items/${item.id}`)
-    items.value = items.value.filter((i) => i.id !== item.id)
+    await confirmSaved(() => api.delete(`/product-catalog-items/${item.id}`), {
+      apply: () => {
+        items.value = items.value.filter((i) => i.id !== item.id)
+      },
+      message: `ลบรายการ "${item.name}" ออกจากแคตตาล็อกกลางแล้ว`,
+    })
   } catch (e) {
     errorMessage.value = deleteFailureMessage(e)
   } finally {
@@ -601,8 +687,9 @@ async function confirmDeleteItem(): Promise<void> {
           <div class="flex-1">
             <label class="text-xs font-bold text-slate-500">ชื่อแบรนด์</label>
             <input v-model="brandForm.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            <p v-if="brandFormError" data-test="brand-form-error" class="mt-1 text-xs font-bold text-rose-600">{{ brandFormError }}</p>
           </div>
-          <button type="submit" class="btn-primary">บันทึก</button>
+          <button type="submit" :disabled="savingBrand" class="btn-primary">{{ savingBrand ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
         </form>
         <EmptyState
           v-if="!brands.length"
@@ -664,8 +751,9 @@ async function confirmDeleteItem(): Promise<void> {
             <label class="text-xs font-bold text-slate-500 block mb-1">ไอคอน (ไม่บังคับ)</label>
             <IconPicker v-model="categoryForm.icon" fallback-icon="box" fallback-label="ยังไม่ได้เลือกไอคอน" clear-label="ล้างไอคอน" />
           </div>
+          <p v-if="categoryFormError" data-test="category-form-error" class="text-xs font-bold text-rose-600">{{ categoryFormError }}</p>
           <div class="flex justify-end">
-            <button type="submit" class="btn-primary">บันทึก</button>
+            <button type="submit" :disabled="savingCategory" class="btn-primary">{{ savingCategory ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
           </div>
         </form>
         <EmptyState

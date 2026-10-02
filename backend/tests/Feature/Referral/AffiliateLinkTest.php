@@ -142,4 +142,53 @@ class AffiliateLinkTest extends TestCase
             'revoking a link must never erase the evidence of how well it worked',
         );
     }
+
+    /**
+     * 2026-10-02 — destroy() is a soft revoke, so the list has to leave the
+     * revoked row out itself. Before this, a link revoked a moment ago came
+     * straight back on the next load looking live.
+     */
+    public function test_a_revoked_link_is_not_listed_again(): void
+    {
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $kept = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id]);
+        $revoked = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id]);
+
+        $this->actingAs($agent)->deleteJson("/api/v1/affiliate-links/{$revoked->id}")->assertNoContent();
+
+        $ids = collect($this->actingAs($agent)->getJson('/api/v1/affiliate-links')->assertOk()->json('data'))->pluck('id');
+
+        $this->assertEquals([$kept->id], $ids->all());
+    }
+
+    public function test_a_company_admin_does_not_see_revoked_links_either(): void
+    {
+        $company = Company::factory()->create();
+        $admin = User::factory()->companyAdmin()->create(['company_id' => $company->id]);
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $kept = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id]);
+        AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id, 'revoked_at' => now()]);
+
+        $ids = collect($this->actingAs($admin)->getJson('/api/v1/affiliate-links')->assertOk()->json('data'))->pluck('id');
+
+        $this->assertEquals([$kept->id], $ids->all());
+    }
+
+    public function test_the_link_says_whether_it_still_works(): void
+    {
+        $company = Company::factory()->create();
+        $agent = User::factory()->agent()->create(['company_id' => $company->id]);
+        $live = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id]);
+        $dead = AffiliateLink::factory()->create(['company_id' => $company->id, 'agent_id' => $agent->id, 'revoked_at' => now()]);
+
+        $this->actingAs($agent)->getJson("/api/v1/affiliate-links/{$live->id}")
+            ->assertOk()
+            ->assertJsonPath('data.is_usable', true)
+            ->assertJsonPath('data.revoked_at', null);
+
+        $this->actingAs($agent)->getJson("/api/v1/affiliate-links/{$dead->id}")
+            ->assertOk()
+            ->assertJsonPath('data.is_usable', false);
+    }
 }

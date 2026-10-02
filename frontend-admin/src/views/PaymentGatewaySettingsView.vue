@@ -55,6 +55,7 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 type AccountMode = 'company' | 'platform'
 
@@ -156,7 +157,6 @@ const liveMode = ref<Record<string, boolean>>({})
 const savingProvider = ref<string | null>(null)
 const activatingProvider = ref<string | null>(null)
 const errorFor = ref<Record<string, string>>({})
-const noticeFor = ref<Record<string, string>>({})
 
 const basePath = computed(() =>
   isPlatform.value ? '/platform-payment-settings/gateways' : `/companies/${activeCompany.companyId}/payment-gateways`,
@@ -246,7 +246,6 @@ function startEditing(gateway: Gateway): void {
   editing.value[gateway.provider] = true
   saveFailed.value[gateway.provider] = false
   errorFor.value[gateway.provider] = ''
-  noticeFor.value[gateway.provider] = ''
   fieldErrorFor.value[gateway.provider] = ''
 }
 
@@ -279,6 +278,12 @@ const onlineGateways = computed(() => gateways.value.filter((g) => !g.always_ava
 const hasOnlineGateway = computed(() => onlineGateways.value.some((g) => g.is_active))
 
 const deactivating = ref(false)
+/**
+ * ADR-052 — this action's own error spot. It used to write `loadError`,
+ * which swaps the WHOLE settings panel for the message: a refused click on
+ * one radio hid every gateway, the payout form and the switch with it.
+ */
+const deactivateError = ref('')
 
 /**
  * Choose "no online gateway".
@@ -290,14 +295,16 @@ const deactivating = ref(false)
 async function useNoOnlineGateway(): Promise<void> {
   if (!isPlatform.value && activeCompany.companyId === null) return
   deactivating.value = true
+  deactivateError.value = ''
   try {
-    const res = await api.post<{ data: Overview }>(
-      `${basePath.value}/deactivate`,
-      {},
-    )
-    applyOverview(res.data)
+    // ADR-052 — the radios are redrawn from the overview the server returns,
+    // then the dialog says it saved.
+    await confirmSaved(() => api.post<{ data: Overview }>(`${basePath.value}/deactivate`, {}), {
+      apply: (res) => applyOverview(res.data),
+      message: 'ปิดช่องทางชำระเงินออนไลน์แล้ว — รับชำระด้วยการโอนเงิน / PromptPay เท่านั้น',
+    })
   } catch (e) {
-    loadError.value = messageFrom(e, 'ปิดช่องทางออนไลน์ไม่สำเร็จ')
+    deactivateError.value = messageFrom(e, 'ปิดช่องทางออนไลน์ไม่สำเร็จ')
   } finally {
     deactivating.value = false
   }
@@ -308,12 +315,12 @@ function applyOverview(data: Overview): void {
   if (data.mode) platformMode.value = data.mode
   if (data.platform_ready_problems) readinessProblems.value = data.platform_ready_problems
   if (data.transfer_account) {
-    payout.value = {
-      payment_promptpay_id: data.transfer_account.promptpay_id ?? '',
-      payment_bank_name: data.transfer_account.bank_name ?? '',
-      payment_bank_account_number: data.transfer_account.bank_account_number ?? '',
-      payment_bank_account_name: data.transfer_account.bank_account_name ?? '',
-    }
+    applyPayout({
+      payment_promptpay_id: data.transfer_account.promptpay_id,
+      payment_bank_name: data.transfer_account.bank_name,
+      payment_bank_account_number: data.transfer_account.bank_account_number,
+      payment_bank_account_name: data.transfer_account.bank_account_name,
+    })
   }
 
   // `active_provider` on the payload is deliberately not stored: each
@@ -396,26 +403,42 @@ const EMPTY_PAYOUT: CompanyPayout = {
 const payout = ref<CompanyPayout>({ ...EMPTY_PAYOUT })
 const savingPayout = ref(false)
 const payoutError = ref('')
-const payoutNotice = ref('')
+
+type StoredPayout = { [K in keyof CompanyPayout]?: string | null }
+
+/**
+ * Put a STORED payout on screen. ?? '', never ||: a column is null when
+ * unset, and an input bound to null renders "null" as its value in some
+ * browsers.
+ */
+function applyPayout(data: StoredPayout): void {
+  payout.value = {
+    payment_promptpay_id: data.payment_promptpay_id ?? '',
+    payment_bank_name: data.payment_bank_name ?? '',
+    payment_bank_account_number: data.payment_bank_account_number ?? '',
+    payment_bank_account_name: data.payment_bank_account_name ?? '',
+  }
+}
+
+/** ADR-052 — the dialog quotes the destination the server stored. */
+function payoutSavedMessage(base: string, stored: StoredPayout): string {
+  const where = [stored.payment_bank_name, stored.payment_bank_account_number].filter(Boolean).join(' ')
+  const promptpay = stored.payment_promptpay_id ? `PromptPay ${stored.payment_promptpay_id}` : ''
+  const detail = [where, promptpay].filter(Boolean).join(' · ')
+
+  return detail ? `${base} — ${detail}` : base
+}
 
 async function loadPayout(): Promise<void> {
   payoutError.value = ''
-  payoutNotice.value = ''
   if (activeCompany.companyId === null) {
     payout.value = { ...EMPTY_PAYOUT }
 
     return
   }
   try {
-    const res = await api.get<{ data: Partial<CompanyPayout> }>(`/companies/${activeCompany.companyId}`)
-    // ?? '', never ||: a column is null when unset, and an input bound to
-    // null renders "null" as its value in some browsers.
-    payout.value = {
-      payment_promptpay_id: res.data.payment_promptpay_id ?? '',
-      payment_bank_name: res.data.payment_bank_name ?? '',
-      payment_bank_account_number: res.data.payment_bank_account_number ?? '',
-      payment_bank_account_name: res.data.payment_bank_account_name ?? '',
-    }
+    const res = await api.get<{ data: StoredPayout }>(`/companies/${activeCompany.companyId}`)
+    applyPayout(res.data)
   } catch (e) {
     payoutError.value = messageFrom(e, 'โหลดข้อมูลบัญชีรับเงินไม่สำเร็จ')
   }
@@ -426,20 +449,28 @@ async function savePayout(): Promise<void> {
     await savePlatformPayout()
     return
   }
-  if (activeCompany.companyId === null) return
+  const companyId = activeCompany.companyId
+  if (companyId === null) return
   savingPayout.value = true
   payoutError.value = ''
-  payoutNotice.value = ''
   try {
     // Blank is sent as null, not "": the column means "not configured", and
     // an empty string would be a configured destination of nothing.
-    await api.put(`/companies/${activeCompany.companyId}`, {
-      payment_promptpay_id: payout.value.payment_promptpay_id.trim() || null,
-      payment_bank_name: payout.value.payment_bank_name.trim() || null,
-      payment_bank_account_number: payout.value.payment_bank_account_number.trim() || null,
-      payment_bank_account_name: payout.value.payment_bank_account_name.trim() || null,
-    })
-    payoutNotice.value = 'บันทึกบัญชีรับเงินแล้ว'
+    // ADR-052 — the form is re-read from the company the server returns
+    // (it used to keep the typed values and print "บันทึกแล้ว").
+    await confirmSaved(
+      () =>
+        api.put<{ data: StoredPayout }>(`/companies/${companyId}`, {
+          payment_promptpay_id: payout.value.payment_promptpay_id.trim() || null,
+          payment_bank_name: payout.value.payment_bank_name.trim() || null,
+          payment_bank_account_number: payout.value.payment_bank_account_number.trim() || null,
+          payment_bank_account_name: payout.value.payment_bank_account_name.trim() || null,
+        }),
+      {
+        apply: (res) => applyPayout(res.data),
+        message: (res) => payoutSavedMessage('บันทึกบัญชีรับเงินแล้ว', res.data),
+      },
+    )
   } catch (e) {
     payoutError.value = messageFrom(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -451,16 +482,25 @@ async function savePayout(): Promise<void> {
 async function savePlatformPayout(): Promise<void> {
   savingPayout.value = true
   payoutError.value = ''
-  payoutNotice.value = ''
   try {
-    const res = await api.put<{ data: Overview }>('/platform-payment-settings/transfer-account', {
-      promptpay_id: payout.value.payment_promptpay_id.trim() || null,
-      bank_name: payout.value.payment_bank_name.trim() || null,
-      bank_account_number: payout.value.payment_bank_account_number.trim() || null,
-      bank_account_name: payout.value.payment_bank_account_name.trim() || null,
-    })
-    applyOverview(res.data)
-    payoutNotice.value = 'บันทึกบัญชีรับเงินกลางแล้ว'
+    await confirmSaved(
+      () =>
+        api.put<{ data: Overview }>('/platform-payment-settings/transfer-account', {
+          promptpay_id: payout.value.payment_promptpay_id.trim() || null,
+          bank_name: payout.value.payment_bank_name.trim() || null,
+          bank_account_number: payout.value.payment_bank_account_number.trim() || null,
+          bank_account_name: payout.value.payment_bank_account_name.trim() || null,
+        }),
+      {
+        apply: (res) => applyOverview(res.data),
+        message: (res) =>
+          payoutSavedMessage('บันทึกบัญชีรับเงินกลางแล้ว', {
+            payment_promptpay_id: res.data.transfer_account?.promptpay_id,
+            payment_bank_name: res.data.transfer_account?.bank_name,
+            payment_bank_account_number: res.data.transfer_account?.bank_account_number,
+          }),
+      },
+    )
   } catch (e) {
     payoutError.value = messageFrom(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -522,12 +562,23 @@ function askMode(mode: AccountMode): void {
 
 async function confirmMode(): Promise<void> {
   if (pendingMode.value === null) return
+  const mode = pendingMode.value
   savingMode.value = true
   modeError.value = ''
   try {
-    const res = await api.put<{ data: Overview }>('/platform-payment-settings/mode', { mode: pendingMode.value })
-    applyOverview(res.data)
-    pendingMode.value = null
+    // ADR-052 — the switch is redrawn from the mode the server stored.
+    await confirmSaved(() => api.put<{ data: Overview }>('/platform-payment-settings/mode', { mode }), {
+      apply: (res) => {
+        applyOverview(res.data)
+        pendingMode.value = null
+      },
+      message: (res) => {
+        const stored = res.data.mode ?? platformMode.value
+        const label = MODE_OPTIONS.find((o) => o.value === stored)?.label ?? stored
+
+        return `เปลี่ยนระบบชำระเงินเป็น "${label}" แล้ว`
+      },
+    })
   } catch (e) {
     modeError.value = messageFrom(e, 'เปลี่ยนโหมดไม่สำเร็จ')
     pendingMode.value = null
@@ -548,20 +599,25 @@ function messageFrom(e: unknown, fallback: string): string {
 async function saveGateway(gateway: Gateway): Promise<void> {
   savingProvider.value = gateway.provider
   errorFor.value[gateway.provider] = ''
-  noticeFor.value[gateway.provider] = ''
   try {
-    const res = await api.put<{
-      data: Overview
-      message: string | null
-    }>(`${basePath.value}/${gateway.provider}`, {
-      credentials: draftFor(gateway.provider),
-      is_live: liveMode.value[gateway.provider] ?? false,
-    })
-    applyOverview(res.data)
-    // The verification note names the ACCOUNT that answered — a green tick
-    // cannot tell an admin they just connected the wrong company's Omise,
-    // and on this screen that is the mistake worth catching.
-    noticeFor.value[gateway.provider] = res.message ?? 'บันทึกและตรวจสอบการเชื่อมต่อสำเร็จ'
+    await confirmSaved(
+      () =>
+        api.put<{
+          data: Overview
+          message: string | null
+        }>(`${basePath.value}/${gateway.provider}`, {
+          credentials: draftFor(gateway.provider),
+          is_live: liveMode.value[gateway.provider] ?? false,
+        }),
+      {
+        apply: (res) => applyOverview(res.data),
+        // The verification note names the ACCOUNT that answered — a green tick
+        // cannot tell an admin they just connected the wrong company's Omise,
+        // and on this screen that is the mistake worth catching. ADR-052 — it
+        // is now the dialog's text instead of a line under the card.
+        message: (res) => res.message ?? 'บันทึกและตรวจสอบการเชื่อมต่อสำเร็จ',
+      },
+    )
   } catch (e) {
     errorFor.value[gateway.provider] = messageFrom(e, 'บันทึกไม่สำเร็จ')
     fieldErrorFor.value[gateway.provider] = failedFieldFrom(e)
@@ -593,14 +649,21 @@ function failedFieldFrom(e: unknown): string {
 async function activateGateway(gateway: Gateway): Promise<void> {
   activatingProvider.value = gateway.provider
   errorFor.value[gateway.provider] = ''
-  noticeFor.value[gateway.provider] = ''
   try {
-    const res = await api.post<{ data: Overview }>(
-      `${basePath.value}/activate`,
-      { provider: gateway.provider },
+    // The radio saves on click — a write like any other (ADR-052): the
+    // radios are redrawn from the server's overview (a refused switch
+    // leaves the stored one filled), then the dialog names what is on.
+    await confirmSaved(
+      () => api.post<{ data: Overview }>(`${basePath.value}/activate`, { provider: gateway.provider }),
+      {
+        apply: (res) => applyOverview(res.data),
+        message: (res) => {
+          const active = res.data.gateways.find((g) => g.is_active && !g.always_available)
+
+          return `เปิดใช้ ${active?.label ?? gateway.label} เป็นช่องทางชำระเงินออนไลน์แล้ว`
+        },
+      },
     )
-    applyOverview(res.data)
-    noticeFor.value[gateway.provider] = 'เปิดใช้งานช่องทางนี้แล้ว'
   } catch (e) {
     errorFor.value[gateway.provider] = messageFrom(e, 'เปิดใช้งานไม่สำเร็จ')
   } finally {
@@ -1048,7 +1111,6 @@ function formatVerifiedAt(value: string | null): string {
             </div>
 
             <p v-if="payoutError" class="text-xs font-bold text-rose-600">{{ payoutError }}</p>
-            <p v-if="payoutNotice" class="text-xs font-bold text-emerald-700">{{ payoutNotice }}</p>
 
             <div class="flex justify-end">
               <button
@@ -1188,9 +1250,6 @@ function formatVerifiedAt(value: string | null): string {
           <p v-if="errorFor[gateway.provider]" class="mt-2 text-xs font-bold text-rose-600">
             {{ errorFor[gateway.provider] }}
           </p>
-          <p v-if="noticeFor[gateway.provider]" class="mt-2 text-xs font-bold text-emerald-600">
-            {{ noticeFor[gateway.provider] }}
-          </p>
             </div><!-- /min-w-0 flex-1 -->
           </div><!-- /flex items-start gap-3 -->
           </div><!-- /card -->
@@ -1225,6 +1284,9 @@ function formatVerifiedAt(value: string | null): string {
             </span>
           </span>
         </button>
+        <p v-if="deactivateError" data-test="deactivate-error" class="text-xs font-bold text-rose-600">
+          {{ deactivateError }}
+        </p>
       </div>
     </template>
 

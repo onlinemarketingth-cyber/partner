@@ -261,11 +261,23 @@ function grantTeamLeader() {
 // Not v-model: the source of truth is the prop, which is re-read from the
 // server after every save (the tree re-shapes). Binding v-model to a local
 // copy would leave the select showing a value the server rejected.
-function onManagerChange(event: Event) {
-  const raw = (event.target as HTMLSelectElement).value
+//
+// ADR-052 — but `:value` alone does not undo the browser: when the save FAILS
+// the prop never changes, Vue has nothing to patch, and the <select> keeps
+// showing the option the admin picked as if it were stored. So once the
+// write has settled (either way) the element is put back on whatever the
+// prop now says — the server's new value after a success, the old one after
+// a refusal.
+async function onManagerChange(event: Event) {
+  const select = event.target as HTMLSelectElement
+  const raw = select.value
   const next = raw === '' ? null : Number(raw)
   if (next === (props.node.manager_id ?? null)) return
-  changeManagerFn?.(props.node.agent_id, next)
+  try {
+    await Promise.resolve(changeManagerFn?.(props.node.agent_id, next))
+  } finally {
+    select.value = props.node.manager_id === null || props.node.manager_id === undefined ? '' : String(props.node.manager_id)
+  }
 }
 
 /**
@@ -310,11 +322,13 @@ function approveThisAgent() {
 }
 
 // Inline reason box, same shape as AgentManagementView's "รออนุมัติ" tab
-// (a text input revealed by "ปฏิเสธ", not a ConfirmDialog — see the
-// SalesTeamView docblock next to its approve/reject functions for why that
-// UX was replicated rather than redesigned). Local to this card, not
-// shared state: only one card's box needs to be open at a time and nothing
-// else on the page depends on which one that is.
+// (a text input revealed by "ปฏิเสธ" — see the SalesTeamView docblock next
+// to its approve/reject functions for why that UX was replicated rather than
+// redesigned). Local to this card, not shared state: only one card's box
+// needs to be open at a time and nothing else on the page depends on which
+// one that is. 2026-10-02 — the injected function no longer sends: it opens
+// SalesTeamView's ConfirmDialog, which quotes this reason before anything is
+// sent (owner decision). The box and its text stay as they are on cancel.
 const showRejectBox = ref(false)
 const rejectReasonLocal = ref('')
 function toggleRejectBox() {
@@ -592,6 +606,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
             type="button"
             :disabled="isSavingStructure"
             class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold disabled:opacity-50 border-amber-500 bg-amber-500 text-white hover:bg-amber-600 hover:border-amber-600"
+            data-test="grant-team-leader"
             @click="grantTeamLeader"
           >
             <Icon name="star" :size="11" />
@@ -606,6 +621,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
             type="button"
             :disabled="grantingTierKey === `${node.agent_id}:${t.id}`"
             class="inline-flex items-center px-2 py-1 rounded-lg border border-slate-200 text-[10px] font-bold text-slate-600 hover:border-brand-400 hover:text-brand-600 disabled:opacity-50"
+            data-test="grant-tier"
             @click="grantCertification(t)"
           >
             {{ grantingTierKey === `${node.agent_id}:${t.id}` ? 'กำลังอนุมัติ...' : `+ ใบรับรอง ${t.name}` }}
@@ -614,7 +630,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
         <p v-if="notYetPassedTiers.length" class="text-[10px] text-slate-400 mt-1 leading-snug">
           ใบรับรองที่อนุมัติจากตรงนี้ไม่ต้องสอบและไม่ได้รับ XP · สิทธิ์หัวหน้าทีม = สร้างลิงก์ชวนคนเข้าทีมและอนุมัติคนที่ตัวเองชวนมาได้เอง
         </p>
-        <p v-if="grantErrorForThisAgent" class="text-[10px] text-rose-600 mt-1">{{ grantErrorForThisAgent }}</p>
+        <p v-if="grantErrorForThisAgent" class="text-[10px] text-rose-600 mt-1" data-test="grant-error">{{ grantErrorForThisAgent }}</p>
       </div>
 
       <!-- Re-parent this agent. Changing it re-shapes the tree the admin is
@@ -650,6 +666,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
           :value="node.manager_id ?? ''"
           :disabled="isSavingStructure"
           class="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-[11px] text-slate-700 focus:outline-none focus:border-brand-400 disabled:opacity-50"
+          data-test="manager-select"
           @change="onManagerChange"
         >
           <option value="">— ไม่มีหัวหน้า —</option>
@@ -662,7 +679,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
              is the server's own wording — "cannot be their own manager",
              "must belong to the same company", "would create a management
              cycle" — not a bare status code. -->
-        <p v-if="structureErrorForThisAgent" class="text-[10px] text-rose-600 mt-1 leading-snug">
+        <p v-if="structureErrorForThisAgent" class="text-[10px] text-rose-600 mt-1 leading-snug" data-test="structure-error">
           {{ structureErrorForThisAgent }}
         </p>
       </div>
@@ -671,10 +688,10 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
            (showApprovalActions), and only while the agent is actually still
            pending (a card can briefly hold stale props during the
            reloadRoster() round-trip after a sibling's action). The reason
-           box below mirrors AgentManagementView's "รออนุมัติ" tab exactly —
-           an inline optional-reason text input revealed by "ปฏิเสธ", not a
-           ConfirmDialog — see this component's script for why that UX was
-           replicated rather than reinvented for the same action. -->
+           box below mirrors AgentManagementView's "รออนุมัติ" tab — an
+           inline optional-reason text input revealed by "ปฏิเสธ"; its
+           ยืนยันปฏิเสธ then asks a ConfirmDialog (2026-10-02) — see this
+           component's script. -->
       <div v-if="showApprovalActions && isPending" class="border-t border-slate-100 pt-2">
         <p class="text-[11px] font-bold text-slate-500 mb-1.5">คำขอเข้าทีม</p>
         <div class="flex flex-wrap items-center gap-1.5">
@@ -682,6 +699,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
             type="button"
             :disabled="isSavingApproval"
             class="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-emerald-500 bg-emerald-500 text-white text-[10px] font-bold hover:bg-emerald-600 hover:border-emerald-600 disabled:opacity-50"
+            data-test="approve-agent"
             @click="approveThisAgent"
           >
             <Icon name="check" :size="11" />
@@ -692,6 +710,7 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
             type="button"
             :disabled="isSavingApproval"
             class="inline-flex items-center px-2 py-1 rounded-lg border border-rose-200 text-[10px] font-bold text-rose-600 hover:border-rose-400 hover:bg-rose-50 disabled:opacity-50"
+            data-test="reject-agent"
             @click="toggleRejectBox"
           >
             ปฏิเสธ
@@ -702,12 +721,14 @@ const stages = computed(() => stageCounts(props.node.deals_by_stage))
             v-model="rejectReasonLocal"
             type="text"
             placeholder="เหตุผล (ไม่บังคับ)"
+            data-test="reject-agent-reason"
             class="flex-1 px-2 py-1.5 rounded-lg border border-slate-200 text-[11px]"
           />
           <button
             type="button"
             :disabled="isSavingApproval"
             class="px-2 py-1.5 rounded-lg bg-rose-600 text-white text-[10px] font-bold hover:bg-rose-700 disabled:opacity-50 whitespace-nowrap"
+            data-test="reject-agent-submit"
             @click="submitReject"
           >
             ยืนยันปฏิเสธ

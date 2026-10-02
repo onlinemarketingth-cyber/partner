@@ -28,6 +28,7 @@ import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -114,14 +115,17 @@ const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
 const promotions = ref<PromotionItem[]>([])
 
-async function loadPromotions() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function loadPromotions(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: PromotionItem[] }>(activeCompany.scopedPath('/agent-promotions'))
     promotions.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -183,6 +187,11 @@ async function ensureLookupsLoaded() {
 onMounted(() => {
   loadPromotions()
 })
+
+/** ADR-052 — step 3 after a write: the list re-read from the server, or a throw. */
+async function reloadAfterWrite(): Promise<void> {
+  if (!(await loadPromotions())) throw new Error('promotions reload failed')
+}
 
 // ── Create/edit form ──
 const showForm = ref(false)
@@ -328,13 +337,25 @@ async function submitForm() {
       starts_at: form.value.starts_at,
       ends_at: form.value.ends_at || null,
     }
-    if (editingId.value) {
-      await api.put(`/agent-promotions/${editingId.value}`, payload)
-    } else {
-      await api.post('/agent-promotions', payload)
-    }
-    closeForm()
-    await loadPromotions()
+    const editId = editingId.value
+    // ADR-052 — the dialog names the promotion as the SERVER stored it, and
+    // only after the list behind it has been re-read.
+    await confirmSaved(
+      () =>
+        editId
+          ? api.put<{ data: PromotionItem }>(`/agent-promotions/${editId}`, payload)
+          : api.post<{ data: PromotionItem }>('/agent-promotions', payload),
+      {
+        apply: async () => {
+          closeForm()
+          await reloadAfterWrite()
+        },
+        message: (res) => {
+          const stored = res?.data?.name ? ` "${res.data.name}"` : ''
+          return editId ? `บันทึก Promotion${stored} แล้ว` : `สร้าง Promotion${stored} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     formError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -351,9 +372,14 @@ function deletePromotion(p: PromotionItem) {
 async function confirmDeletePromotion() {
   const p = pendingDeletePromotion.value
   if (!p) return
+  errorMessage.value = ''
   try {
-    await api.delete(`/agent-promotions/${p.id}`)
-    promotions.value = promotions.value.filter((x) => x.id !== p.id)
+    // ADR-052 — re-read rather than filtering the row out locally, so what
+    // the list shows after the dialog is what the server still holds.
+    await confirmSaved(() => api.delete(`/agent-promotions/${p.id}`), {
+      apply: reloadAfterWrite,
+      message: `ลบ Promotion "${p.name}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   } finally {
@@ -443,10 +469,10 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
               </div>
             </div>
             <div class="flex gap-1 shrink-0">
-              <button class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 flex items-center gap-1" @click="openEditForm(p)">
+              <button class="text-xs font-bold text-slate-500 hover:text-slate-700 px-2 py-1 flex items-center gap-1" data-test="edit-promotion" @click="openEditForm(p)">
                 <Icon name="edit" :size="14" /> แก้ไข
               </button>
-              <button class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 flex items-center gap-1" @click="deletePromotion(p)">
+              <button class="text-xs font-bold text-rose-600 hover:text-rose-700 px-2 py-1 flex items-center gap-1" data-test="delete-promotion" @click="deletePromotion(p)">
                 <Icon name="trash" :size="14" /> ลบ
               </button>
             </div>
@@ -476,7 +502,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
           </button>
         </div>
 
-        <form class="space-y-3" @submit.prevent="submitForm">
+        <form class="space-y-3" data-test="promotion-form" @submit.prevent="submitForm">
           <div v-if="isSuperAdmin && !editingId">
             <label class="text-sm font-bold text-slate-500">บริษัท (Super Admin)</label>
             <select v-model="form.company_id" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
@@ -486,7 +512,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
           </div>
           <div>
             <label class="text-sm font-bold text-slate-500">ชื่อ Promotion</label>
-            <input v-model="form.name" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+            <input v-model="form.name" required data-test="promotion-name" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
           <div>
             <label class="text-sm font-bold text-slate-500">รายละเอียด (ไม่บังคับ)</label>
@@ -591,7 +617,7 @@ watch(() => activeCompany.companyId, () => { loadPromotions() })
             </select>
           </div>
 
-          <div v-if="formError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ formError }}</div>
+          <div v-if="formError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700" data-test="promotion-form-error">{{ formError }}</div>
           <div class="flex justify-end gap-2 pt-2">
             <button type="button" class="btn-secondary" @click="closeForm">ยกเลิก</button>
             <button type="submit" :disabled="saving" class="btn-primary">

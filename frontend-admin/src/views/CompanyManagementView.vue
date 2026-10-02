@@ -29,6 +29,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { api, ApiError } from '@/api/client'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import Icon from '@/design-system/components/Icon.vue'
@@ -165,8 +166,12 @@ const activeCompany = useActiveCompanyStore()
  * that gets forgotten is the one that reintroduces the bug.
  */
 async function reloadAll(): Promise<void> {
-  await loadCompanies()
+  const listed = await loadCompanies()
   await activeCompany.reloadCompanies()
+  // ADR-052 — a write's "saved" dialog follows this re-read; when the list
+  // itself could not be re-read, throwing makes confirmSaved() say the save
+  // landed but the screen may be behind, instead of a plain success.
+  if (!listed) throw new Error('company list reload failed')
 }
 
 const loading = ref(false)
@@ -174,14 +179,17 @@ const hasLoadedOnce = ref(false)
 const errorMessage = ref('')
 const companies = ref<CompanyItem[]>([])
 
-async function loadCompanies() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function loadCompanies(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: CompanyItem[] }>('/companies')
     companies.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `โหลดข้อมูลไม่สำเร็จ (${e.status})` : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -243,16 +251,21 @@ async function submitCreate() {
   creating.value = true
   errorMessage.value = ''
   try {
-    await api.post('/companies', {
+    const payload = {
       name: createForm.value.name,
       slug: createForm.value.slug || slugify(createForm.value.name),
       currency_code: createForm.value.currency_code,
       commission_plan_type: createForm.value.commission_plan_type,
       is_test: createForm.value.is_test,
+    }
+    await confirmSaved(() => api.post<{ data: CompanyItem }>('/companies', payload), {
+      apply: async () => {
+        createForm.value = { name: '', slug: '', currency_code: defaultCurrency.value, commission_plan_type: 'unilevel', is_test: false }
+        showCreateForm.value = false
+        await reloadAll()
+      },
+      message: (res) => (res?.data?.name ? `สร้างบริษัท "${res.data.name}" แล้ว` : 'สร้างบริษัทแล้ว'),
     })
-    createForm.value = { name: '', slug: '', currency_code: defaultCurrency.value, commission_plan_type: 'unilevel', is_test: false }
-    showCreateForm.value = false
-    await reloadAll()
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `สร้างไม่สำเร็จ (${e.status})` : 'สร้างไม่สำเร็จ'
   } finally {
@@ -381,7 +394,7 @@ async function saveEdit(company: CompanyItem) {
   savingEdit.value = true
   errorMessage.value = ''
   try {
-    await api.put(`/companies/${company.id}`, {
+    const payload = {
       name: form.name.trim(),
       slug: form.slug.trim(),
       /*
@@ -398,10 +411,17 @@ async function saveEdit(company: CompanyItem) {
       payment_bank_name: form.payment_bank_name.trim() || null,
       payment_bank_account_number: form.payment_bank_account_number.trim() || null,
       payment_bank_account_name: form.payment_bank_account_name.trim() || null,
+    }
+    // ADR-052 — the row behind the dialog is the re-read one, and the name
+    // the dialog quotes is the one the server stored.
+    await confirmSaved(() => api.put<{ data: CompanyItem }>(`/companies/${company.id}`, payload), {
+      apply: async () => {
+        editingId.value = null
+        editForm.value = null
+        await reloadAll()
+      },
+      message: (res) => `บันทึกข้อมูลบริษัท "${res?.data?.name ?? company.name}" แล้ว`,
     })
-    editingId.value = null
-    editForm.value = null
-    await reloadAll()
   } catch (e) {
     // In full: the server refuses a duplicate slug by name, and "แก้ไขไม่
     // สำเร็จ (422)" would leave somebody guessing which field it meant.
@@ -455,8 +475,17 @@ async function applyActiveChange() {
   savingActive.value = true
   errorMessage.value = ''
   try {
-    await api.put(`/companies/${c.id}`, { is_active: !c.is_active })
-    await reloadAll()
+    await confirmSaved(() => api.put<{ data: CompanyItem }>(`/companies/${c.id}`, { is_active: !c.is_active }), {
+      apply: reloadAll,
+      // Worded from the state the SERVER now holds, not from the button pressed.
+      message: (res) => {
+        const name = res?.data?.name ?? c.name
+        const nowActive = res?.data ? res.data.is_active : !c.is_active
+        return nowActive
+          ? `เปิดบริษัท "${name}" อีกครั้งแล้ว — กลับมาใช้งานได้ตามปกติ`
+          : `ปิดบริษัท "${name}" แล้ว — ทุกระบบของบริษัทนี้หยุดทำงาน`
+      },
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ: ${e.message}` : 'อัปเดตไม่สำเร็จ'
   } finally {
@@ -498,8 +527,14 @@ async function applyTestChange() {
   savingTest.value = true
   errorMessage.value = ''
   try {
-    await api.put(`/companies/${p.company.id}/test-mode`, { is_test: p.to })
-    await reloadAll()
+    await confirmSaved(() => api.put<{ data: CompanyItem }>(`/companies/${p.company.id}/test-mode`, { is_test: p.to }), {
+      apply: reloadAll,
+      message: (res) => {
+        const name = res?.data?.name ?? p.company.name
+        const nowTest = res?.data ? res.data.is_test : p.to
+        return nowTest ? `ตั้ง "${name}" เป็นบริษัททดสอบแล้ว` : `เปลี่ยน "${name}" เป็นบริษัทใช้งานจริงแล้ว`
+      },
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `เปลี่ยนประเภทบริษัทไม่สำเร็จ: ${e.message}` : 'เปลี่ยนประเภทบริษัทไม่สำเร็จ'
   } finally {
@@ -635,12 +670,17 @@ async function confirmRemoval() {
   deleting.value = true
   errorMessage.value = ''
   try {
-    await api.delete(`/companies/${c.id}/purge`, { confirm_name: c.name })
-    if (editingId.value === c.id) {
-      editingId.value = null
-      editForm.value = null
-    }
-    await reloadAll()
+    await confirmSaved(() => api.delete(`/companies/${c.id}/purge`, { confirm_name: c.name }), {
+      apply: async () => {
+        if (editingId.value === c.id) {
+          editingId.value = null
+          editForm.value = null
+        }
+        closeRemoval()
+        await reloadAll()
+      },
+      message: `ลบบริษัท "${c.name}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ: ${e.message}` : 'ลบไม่สำเร็จ'
   } finally {
@@ -664,18 +704,38 @@ async function confirmRemoval() {
  * once is a real view, and it is the same actor behind the same Ability. What
  * changed is which door it knocks on, so there is exactly one.
  */
-async function changePlanType(company: CompanyItem, planType: CommissionPlanType) {
+async function changePlanType(company: CompanyItem, planType: CommissionPlanType, select?: HTMLSelectElement | null) {
   if (planType === company.commission_plan_type) return
+  errorMessage.value = ''
   try {
     // company_id is required here (the endpoint scopes a Super Admin by it),
     // where PUT /companies/{id} carried the company in the path.
-    await api.put('/commission-settings', { company_id: company.id, commission_plan_type: planType })
-    // The switcher shows neither the plan nor the active flag, but this goes
-    // through the same door so that "a write on this screen refreshes the
-    // header" has no exceptions to remember.
-    await reloadAll()
+    await confirmSaved(
+      () =>
+        api.put<{ data: { commission_plan_type: CommissionPlanType | null } }>('/commission-settings', {
+          company_id: company.id,
+          commission_plan_type: planType,
+        }),
+      {
+        // The switcher shows neither the plan nor the active flag, but this goes
+        // through the same door so that "a write on this screen refreshes the
+        // header" has no exceptions to remember.
+        apply: reloadAll,
+        message: (res) => {
+          const stored = res?.data?.commission_plan_type ?? planType
+          return `เปลี่ยนรูปแบบแผนค่าคอมของ "${company.name}" เป็น ${planTypeLabels[stored] ?? stored} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `อัปเดตไม่สำเร็จ (${e.status})` : 'อัปเดตไม่สำเร็จ'
+  } finally {
+    // ADR-052 — `:value` alone cannot undo the browser: after a refusal the
+    // bound value never changed, so Vue patches nothing and the <select> keeps
+    // the rejected choice. Put it back on whatever the list now says is stored.
+    if (select) {
+      select.value = companies.value.find((x) => x.id === company.id)?.commission_plan_type ?? company.commission_plan_type
+    }
   }
 }
 </script>
@@ -798,7 +858,8 @@ async function changePlanType(company: CompanyItem, planType: CommissionPlanType
                 <select
                   :value="c.commission_plan_type"
                   class="text-xs font-bold px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600"
-                  @change="changePlanType(c, ($event.target as HTMLSelectElement).value as CommissionPlanType)"
+                  data-test="plan-type-select"
+                  @change="changePlanType(c, ($event.target as HTMLSelectElement).value as CommissionPlanType, $event.target as HTMLSelectElement)"
                 >
                   <option v-for="pt in planTypeOptions" :key="pt" :value="pt">{{ planTypeLabels[pt] }}</option>
                 </select>

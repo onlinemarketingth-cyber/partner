@@ -20,6 +20,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -494,5 +495,187 @@ describe('SupplierSettlementsView — ยอดค้างรับ', () => {
     expect(text).toContain('30.00')
     expect(text).toContain('970.00')
     expect(text).toContain('WHT-1')
+  })
+})
+
+/* ── ADR-052 — "saved" is the dialog, and only when it is true ─────────── */
+
+describe('ADR-052 — SupplierPayoutsView save feedback', () => {
+  beforeEach(() => {
+    get.mockReset()
+    post.mockReset()
+  })
+
+  it('raise: dialog only after the POST and the re-read, quoting the NET the SERVER raised', async () => {
+    let suppliers = [SUPPLIER]
+    let requests: typeof REQUEST[] = []
+    get.mockImplementation(async (path: string) => (path === '/supplier-payouts' ? { data: suppliers } : { data: requests }))
+    let resolvePost: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (resolvePost = r)))
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="raise-payout"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    // The row offered 1,000.00; the server withheld tax and raised 970.00 net.
+    const raised = { ...REQUEST, id: 9, gross_satang: 100000, wht_satang: 3000, net_satang: 97000 }
+    suppliers = [{ ...SUPPLIER, payable_satang: 0, reserved_satang: 100000 }]
+    requests = [raised]
+    resolvePost({ data: raised })
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/supplier-payouts', { supplier_id: 7 })
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('970.00')
+    // the re-read: the request now waits in รอฝ่ายบัญชีโอน
+    expect(wrapper.find('[data-test="awaiting-table"]').text()).toContain('970.00')
+  })
+
+  it('raise: a refusal raises no dialog and shows the server’s sentence', async () => {
+    mockPayouts([SUPPLIER], [])
+    post.mockRejectedValueOnce(new ApiErrorStub('ยอดคงเหลือของคู่ค้ารายนี้เป็นศูนย์หรือติดลบ'))
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="raise-payout"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('เป็นศูนย์หรือติดลบ')
+  })
+
+  it('mark transferred: asks first (the panel), then quotes the server’s net', async () => {
+    mockPayouts()
+    post.mockResolvedValue({ data: { ...REQUEST, status: 'transferred', net_satang: 96500 } })
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="mark-transferred"]').trigger('click')
+    expect(post).not.toHaveBeenCalled()
+    await wrapper.find('[data-test="confirm-transfer"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('965.00')
+    expect(wrapper.find('[data-test="transfer-panel"]').exists()).toBe(false)
+  })
+
+  it('cancel: asks for a reason first, then the dialog appears after the re-read', async () => {
+    mockPayouts()
+    post.mockResolvedValue({ data: { ...REQUEST, status: 'cancelled', cancel_reason: 'บัญชีผิด' } })
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="open-cancel-payout"]').trigger('click')
+    await wrapper.find('[data-test="cancel-reason"]').setValue('บัญชีผิด')
+    await wrapper.find('[data-test="confirm-cancel-payout"]').trigger('click')
+    // 2026-10-02 — the panel's button asks first; the dialog's confirm sends.
+    const dialog = wrapper.findAllComponents({ name: 'ConfirmDialog' }).find((d) => d.props('show') === true)!
+    expect(post).not.toHaveBeenCalled()
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ยกเลิกรายการตั้งจ่าย')
+    expect(wrapper.find('[data-test="cancel-panel"]').exists()).toBe(false)
+  })
+})
+
+describe('ADR-052 — SupplierOrdersView save feedback', () => {
+  beforeEach(() => {
+    get.mockReset()
+    post.mockReset()
+  })
+
+  it('ship: dialog only after the POST and the re-read, quoting the tracking number the SERVER stored', async () => {
+    let orders = [SHIPPABLE_ORDER]
+    get.mockImplementation(async () => ({ data: orders }))
+    let resolvePost: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (resolvePost = r)))
+    const wrapper = mountView(SupplierOrdersView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="open-ship"]').trigger('click')
+    await wrapper.find('[data-test="tracking-input"]').setValue(' th123 ')
+    await wrapper.find('[data-test="confirm-ship"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    orders = []
+    resolvePost({ data: { ...SHIPPABLE_ORDER, shipping_status: 'shipped', tracking_number: 'TH123' } })
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/supplier/orders/11/ship', { tracking_number: 'th123' })
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ORD-0001')
+    expect(saveFeedbackState.body).toContain('TH123')
+    expect(wrapper.find('[data-test="ship-panel"]').exists()).toBe(false)
+  })
+
+  it('ship: a refusal raises no dialog and shows the server’s reason', async () => {
+    get.mockResolvedValue({ data: [SHIPPABLE_ORDER] })
+    post.mockRejectedValueOnce(new ApiErrorStub('คำสั่งซื้อนี้จัดส่งไปแล้ว'))
+    const wrapper = mountView(SupplierOrdersView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="open-ship"]').trigger('click')
+    await wrapper.find('[data-test="tracking-input"]').setValue('TH1')
+    await wrapper.find('[data-test="confirm-ship"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('คำสั่งซื้อนี้จัดส่งไปแล้ว')
+  })
+
+  it('ship: the filter toggle (a read, not a write) never raises the dialog', async () => {
+    get.mockResolvedValue({ data: [SHIPPABLE_ORDER] })
+    const wrapper = mountView(SupplierOrdersView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="filter-all"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+  })
+})
+
+describe('ADR-052 — a failed re-read after a successful write', () => {
+  beforeEach(() => {
+    get.mockReset()
+    post.mockReset()
+  })
+
+  it('SupplierPayoutsView: raise landed, lists not re-read — the dialog says the screen may be stale', async () => {
+    mockPayouts([SUPPLIER], [])
+    post.mockResolvedValue({ data: { ...REQUEST, id: 9 } })
+    const wrapper = mountView(SupplierPayoutsView)
+    await flushPromises()
+    get.mockImplementation(() => Promise.reject(new ApiErrorStub('down')))
+
+    await wrapper.find('[data-test="raise-payout"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('โหลดข้อมูลไม่สำเร็จ')
+  })
+
+  it('SupplierOrdersView: shipment landed, list not re-read — the dialog says the screen may be stale', async () => {
+    get.mockResolvedValue({ data: [SHIPPABLE_ORDER] })
+    post.mockResolvedValue({ data: { ...SHIPPABLE_ORDER, shipping_status: 'shipped', tracking_number: 'TH1' } })
+    const wrapper = mountView(SupplierOrdersView)
+    await flushPromises()
+    get.mockImplementation(() => Promise.reject(new ApiErrorStub('down')))
+
+    await wrapper.find('[data-test="open-ship"]').trigger('click')
+    await wrapper.find('[data-test="tracking-input"]').setValue('TH1')
+    await wrapper.find('[data-test="confirm-ship"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('โหลดคำสั่งซื้อไม่สำเร็จ')
   })
 })

@@ -346,6 +346,11 @@ describe('the ladder is set beside the chart', () => {
     await wrapper.get('[data-test="ladder-remove"]').trigger('click')
     await wrapper.get('[data-test="ladder-save"]').trigger('click')
     await flushPromises()
+    // ADR-052 — removing a stored rung is a delete, so the save asks first.
+    expect(del).not.toHaveBeenCalled()
+    const confirmButtons = wrapper.get('[data-test="delete-confirm"]').findAll('button')
+    await confirmButtons[confirmButtons.length - 1]!.trigger('click')
+    await flushPromises()
 
     expect(del).toHaveBeenCalledWith('/commission-override-rules/5', undefined)
   })

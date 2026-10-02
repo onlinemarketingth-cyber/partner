@@ -18,6 +18,9 @@
  */
 import { reactive, ref, computed } from 'vue'
 import Icon from './Icon.vue'
+// ADR-052 — the "saved" dialog, raised ONCE per user action from here: once
+// per batch of files (not once per file), once per link added.
+import { notifySaved, SAVED_BUT_STALE_BODY } from '../../composables/useSaveFeedback'
 
 interface UploadFnResult {
   promise: Promise<unknown>
@@ -36,11 +39,19 @@ const props = defineProps<{
    * without re-opening the modal. */
   embedFn?: (url: string) => Promise<unknown>
   embedPlaceholder?: string
+  /**
+   * ADR-052 — the caller's re-read of the list behind this modal. Awaited
+   * after a batch (or a link) succeeds and BEFORE the "saved" dialog, so the
+   * dialog never claims a save the page underneath does not show yet. Should
+   * throw when the re-read fails; the dialog then says the screen may be
+   * behind instead of a plain success.
+   */
+  refresh?: () => Promise<unknown>
 }>()
 
 const emit = defineEmits<{
   close: []
-  /** fired once per file/link that finishes successfully — caller reloads its list */
+  /** fired once per file/link that finishes successfully — caller reloads its list (progressively) */
   uploaded: []
 }>()
 
@@ -55,6 +66,38 @@ interface QueueItem {
 }
 
 const queue = ref<QueueItem[]>([])
+
+/*
+ * ADR-052 — a "batch" is everything picked/dropped while anything is still
+ * uploading: it starts when the first file starts with nothing in flight and
+ * ends when the last one in flight settles. One dialog per batch, and only
+ * when every file in it reached the server — a failed row keeps its own red
+ * line and the batch says nothing (the files that did land are already in
+ * the list behind, via `uploaded`). A cancelled file is the admin's choice,
+ * not a failure, and is simply not counted.
+ */
+const batchSucceeded = ref(0)
+const batchFailed = ref(0)
+
+async function announceSaved(body: string): Promise<void> {
+  try {
+    await props.refresh?.()
+  } catch {
+    notifySaved(SAVED_BUT_STALE_BODY)
+
+    return
+  }
+  notifySaved(body)
+}
+
+function settleBatchIfDone(): void {
+  if (queue.value.some((q) => q.status === 'uploading')) return
+  const succeeded = batchSucceeded.value
+  const failed = batchFailed.value
+  batchSucceeded.value = 0
+  batchFailed.value = 0
+  if (failed === 0 && succeeded > 0) void announceSaved(`อัปโหลดแล้ว ${succeeded} ไฟล์`)
+}
 const isDragging = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -65,6 +108,10 @@ function formatSize(bytes: number): string {
 }
 
 function startUpload(file: File) {
+  if (!queue.value.some((q) => q.status === 'uploading')) {
+    batchSucceeded.value = 0
+    batchFailed.value = 0
+  }
   const id = `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`
   // reactive() (not a plain object) — pushing a raw object into a
   // reactive array and then mutating that SAME raw reference later (via
@@ -95,6 +142,7 @@ function startUpload(file: File) {
     .then(() => {
       item.status = 'done'
       item.progress = 1
+      batchSucceeded.value += 1
       emit('uploaded')
     })
     .catch((e) => {
@@ -102,8 +150,10 @@ function startUpload(file: File) {
       if (queue.value.find((q) => q.id === id)) {
         item.status = 'error'
         item.errorMessage = e instanceof Error ? e.message : 'อัปโหลดไม่สำเร็จ'
+        batchFailed.value += 1
       }
     })
+    .finally(settleBatchIfDone)
 }
 
 function addFiles(fileList: FileList | null) {
@@ -129,6 +179,8 @@ function cancelItem(item: QueueItem) {
   if (item.status === 'uploading') item.abort()
   if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
   queue.value = queue.value.filter((q) => q.id !== item.id)
+  // Cancelling the last file in flight ends the batch too.
+  settleBatchIfDone()
 }
 
 const anyUploading = computed(() => queue.value.some((q) => q.status === 'uploading'))
@@ -152,6 +204,8 @@ async function addEmbed() {
     addedEmbeds.value.push({ id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, url: embedUrl.value })
     embedUrl.value = ''
     emit('uploaded')
+    // ADR-052 — one link, one action, one dialog, after the list re-read.
+    await announceSaved('เพิ่มลิงก์แล้ว')
   } catch (e) {
     embedError.value = e instanceof Error ? e.message : 'เพิ่มลิงก์ไม่สำเร็จ — ตรวจสอบว่าเป็น URL ที่ถูกต้อง'
   } finally {

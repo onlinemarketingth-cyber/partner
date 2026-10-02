@@ -28,6 +28,7 @@ import { api, ApiError } from '@/api/client'
 import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 interface CertTier {
   id: number
@@ -74,6 +75,17 @@ const editingTier = computed(() => tiers.value.find((t) => t.id === editingId.va
 
 function message(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback
+}
+
+/**
+ * ADR-052 — the re-read after a write. load() keeps its failure in
+ * `errorMessage` (it is also the mount loader); this re-throws it so
+ * confirmSaved() says "saved, but the list may be behind" rather than a plain
+ * "saved" over a list that did not refresh.
+ */
+async function reload(): Promise<void> {
+  await load()
+  if (errorMessage.value) throw new Error(errorMessage.value)
 }
 
 async function load(): Promise<void> {
@@ -141,19 +153,30 @@ async function submit(): Promise<void> {
     // tier rather than a wrong list.
     if (form.value.sort_order !== null) payload.sort_order = form.value.sort_order
 
-    if (isEditing.value) {
-      await api.put(`/cert-tiers/${editingId.value}`, payload)
-    } else {
-      await api.post('/cert-tiers', payload)
-    }
+    const wasEditing = isEditing.value
+    await confirmSaved(
+      () =>
+        wasEditing
+          ? api.put<{ data?: CertTier }>(`/cert-tiers/${editingId.value}`, payload)
+          : api.post<{ data?: CertTier }>('/cert-tiers', payload),
+      {
+        apply: async () => {
+          showForm.value = false
+          editingId.value = null
+          await reload()
+          // The parent's Section form builds its required <select> from this
+          // list; without this it would still be empty right after the admin
+          // created the very tier that unblocks it.
+          emit('changed')
+        },
+        // Named from the server's answer, not from the form.
+        message: (res) => {
+          const name = res?.data?.name ? ` “${res.data.name}”` : ''
 
-    showForm.value = false
-    editingId.value = null
-    await load()
-    // The parent's Section form builds its required <select> from this
-    // list; without this it would still be empty right after the admin
-    // created the very tier that unblocks it.
-    emit('changed')
+          return wasEditing ? `บันทึกระดับใบรับรอง${name} แล้ว` : `เพิ่มระดับใบรับรอง${name} แล้ว`
+        },
+      },
+    )
   } catch (e) {
     errorMessage.value = message(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -168,9 +191,14 @@ async function confirmDelete(): Promise<void> {
   deleting.value = true
   errorMessage.value = ''
   try {
-    await api.delete(`/cert-tiers/${tier.id}`)
-    await load()
-    emit('changed')
+    await confirmSaved(() => api.delete(`/cert-tiers/${tier.id}`), {
+      apply: async () => {
+        await reload()
+        emit('changed')
+      },
+      // The stored row's name (from GET /cert-tiers), not anything typed.
+      message: `ลบระดับใบรับรอง “${tier.name}” แล้ว`,
+    })
   } catch (e) {
     // The server answers 422 with a sentence naming exactly what still
     // uses the tier. Surfacing that verbatim is the whole point — a

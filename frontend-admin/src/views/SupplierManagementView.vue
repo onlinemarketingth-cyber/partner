@@ -42,6 +42,7 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import SupplierForm from './supplier/SupplierForm.vue'
 import { formatMoney } from '@/composables/useClientFile'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import {
   GP_MODE_LABELS,
   RELEASE_TRIGGER_LABELS,
@@ -73,7 +74,7 @@ const saving = ref(false)
 const draft = ref<SupplierFormValue>(emptySupplier())
 const formErrors = ref<Record<string, string[]>>({})
 
-async function load(): Promise<void> {
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -83,8 +84,10 @@ async function load(): Promise<void> {
     const qs = params.toString()
     const res = await api.get<{ data: SupplierRow[] }>(`/suppliers${qs ? `?${qs}` : ''}`)
     suppliers.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? e.message : 'โหลดข้อมูลไม่สำเร็จ'
+    return false
   } finally {
     loading.value = false
   }
@@ -156,11 +159,17 @@ async function saveEdit(row: SupplierRow): Promise<void> {
   savingEdit.value = true
   editErrors.value = {}
   errorMessage.value = ''
+  const body = editDraft.value
   try {
-    await api.put(`/suppliers/${row.id}`, editDraft.value)
-    editingId.value = null
-    editDraft.value = null
-    await load()
+    // ADR-052 — list re-read first, then the dialog names what the server stored.
+    await confirmSaved(() => api.put<{ data: SupplierRow }>(`/suppliers/${row.id}`, body), {
+      apply: async () => {
+        editingId.value = null
+        editDraft.value = null
+        if (!(await load())) throw new Error('supplier list re-read failed')
+      },
+      message: (res) => `บันทึกการแก้ไขคู่ค้า ${res.data.name} แล้ว`,
+    })
   } catch (e) {
     const fields = fieldErrors(e)
     if (fields) {
@@ -188,9 +197,13 @@ async function saveNew(): Promise<void> {
   formErrors.value = {}
   errorMessage.value = ''
   try {
-    await api.post('/suppliers', draft.value)
-    creating.value = false
-    await load()
+    await confirmSaved(() => api.post<{ data: SupplierRow }>('/suppliers', draft.value), {
+      apply: async () => {
+        creating.value = false
+        if (!(await load())) throw new Error('supplier list re-read failed')
+      },
+      message: (res) => `เพิ่มคู่ค้า ${res.data.name} แล้ว`,
+    })
   } catch (e) {
     // Field errors go back to the field. The whole point of the paired GP
     // rules is that the message names WHICH half is missing, and flattening
@@ -238,7 +251,12 @@ const autoReceiveDays = ref<number | null>(null)
 // string | number: v-model on a number input hands back a number.
 const autoReceiveInput = ref<string | number>('')
 const savingSetting = ref(false)
-const settingMessage = ref('')
+/*
+ * ADR-052 — success and failure used to share one grey line, so a refusal
+ * read exactly like "บันทึกแล้ว". Success is now the dialog; this holds only
+ * the failure, shown in the error colour.
+ */
+const settingError = ref('')
 
 async function loadSettings(): Promise<void> {
   try {
@@ -255,16 +273,22 @@ const settingChanged = computed(() =>
 
 async function saveSettings(): Promise<void> {
   savingSetting.value = true
-  settingMessage.value = ''
+  settingError.value = ''
   try {
-    const r = await api.put<{ data: { auto_receive_days: number } }>('/supplier-settings', {
-      auto_receive_days: Number(autoReceiveInput.value),
-    })
-    autoReceiveDays.value = r.data.auto_receive_days
-    autoReceiveInput.value = String(r.data.auto_receive_days)
-    settingMessage.value = 'บันทึกแล้ว'
+    await confirmSaved(
+      () => api.put<{ data: { auto_receive_days: number } }>('/supplier-settings', {
+        auto_receive_days: Number(autoReceiveInput.value),
+      }),
+      {
+        apply: (r) => {
+          autoReceiveDays.value = r.data.auto_receive_days
+          autoReceiveInput.value = String(r.data.auto_receive_days)
+        },
+        message: (r) => `บันทึกแล้ว — ยืนยันรับสินค้าอัตโนมัติเมื่อครบ ${r.data.auto_receive_days} วันหลังคู่ค้าจัดส่ง`,
+      },
+    )
   } catch (e) {
-    settingMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ: ${e.message}` : 'บันทึกไม่สำเร็จ'
+    settingError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ: ${e.message}` : 'บันทึกไม่สำเร็จ'
   } finally {
     savingSetting.value = false
   }
@@ -334,7 +358,7 @@ onMounted(() => {
         class="min-h-[36px] px-3 rounded-lg bg-brand-600 text-white text-xs font-bold hover:bg-brand-700 disabled:opacity-50 transition"
         @click="saveSettings"
       >{{ savingSetting ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
-      <span v-if="settingMessage" class="text-xs text-slate-600" data-test="auto-receive-message">{{ settingMessage }}</span>
+      <span v-if="settingError" class="text-xs font-bold text-rose-600" data-test="auto-receive-error">{{ settingError }}</span>
     </section>
 
     <!-- ── Create ────────────────────────────────────────────────────── -->

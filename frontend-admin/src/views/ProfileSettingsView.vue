@@ -20,6 +20,8 @@ import { resolveBackgroundStyle } from '@/utils/userBackground'
 import { compressImage } from '@/utils/imageCompression'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import type { AuthUser } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -45,8 +47,12 @@ async function onAvatarSelected(e: Event): Promise<void> {
     const compressed = await compressImage(file, { maxDimension: 640, quality: 0.85 })
     const formData = new FormData()
     formData.append('avatar', compressed)
-    const res = await api.postForm<{ data: AuthUser }>('/me/avatar', formData)
-    auth.setUser(res.data)
+    // ADR-052 — the avatar shown is the one the server stored (setUser from
+    // the response), then the dialog says it saved.
+    await confirmSaved(() => api.postForm<{ data: AuthUser }>('/me/avatar', formData), {
+      apply: (res) => auth.setUser(res.data),
+      message: 'อัปโหลดรูปโปรไฟล์แล้ว',
+    })
   } catch (e) {
     avatarError.value = e instanceof ApiError ? 'อัปโหลดไม่สำเร็จ — ตรวจสอบชนิดไฟล์ (jpg/png/webp) และขนาด (ไม่เกิน 4MB)' : 'อัปโหลดไม่สำเร็จ'
   } finally {
@@ -55,16 +61,25 @@ async function onAvatarSelected(e: Event): Promise<void> {
   }
 }
 
-async function removeAvatar(): Promise<void> {
+// ADR-052 — removing the avatar is a DELETE, so it asks first.
+// removeAvatar() opens the dialog; confirmRemoveAvatar() does the delete.
+const confirmingRemoveAvatar = ref(false)
+function removeAvatar(): void {
+  confirmingRemoveAvatar.value = true
+}
+async function confirmRemoveAvatar(): Promise<void> {
   avatarBusy.value = true
   avatarError.value = ''
   try {
-    const res = await api.delete<{ data: AuthUser }>('/me/avatar')
-    auth.setUser(res.data)
+    await confirmSaved(() => api.delete<{ data: AuthUser }>('/me/avatar'), {
+      apply: (res) => auth.setUser(res.data),
+      message: 'ลบรูปโปรไฟล์แล้ว',
+    })
   } catch {
     avatarError.value = 'ลบรูปไม่สำเร็จ'
   } finally {
     avatarBusy.value = false
+    confirmingRemoveAvatar.value = false
   }
 }
 
@@ -72,9 +87,22 @@ async function removeAvatar(): Promise<void> {
 type BackgroundTab = 'gradient' | 'image'
 const activeTab = ref<BackgroundTab>(auth.user?.background.type === 'image' ? 'image' : 'gradient')
 
-const color1 = ref(auth.user?.background.config?.color1 ?? '#1e3a8a')
-const color2 = ref(auth.user?.background.config?.color2 ?? '#f59e0b')
-const angle = ref(auth.user?.background.config?.angle ?? 135)
+const DEFAULT_GRADIENT = { color1: '#1e3a8a', color2: '#f59e0b', angle: 135 }
+
+const color1 = ref(auth.user?.background.config?.color1 ?? DEFAULT_GRADIENT.color1)
+const color2 = ref(auth.user?.background.config?.color2 ?? DEFAULT_GRADIENT.color2)
+const angle = ref(auth.user?.background.config?.angle ?? DEFAULT_GRADIENT.angle)
+
+/**
+ * ADR-052 — after a background write the pickers (and so the preview, which
+ * reads them) are re-synced from what the server stored, never left on the
+ * values that were picked.
+ */
+function syncGradientFrom(user: AuthUser): void {
+  color1.value = user.background.config?.color1 ?? DEFAULT_GRADIENT.color1
+  color2.value = user.background.config?.color2 ?? DEFAULT_GRADIENT.color2
+  angle.value = user.background.config?.angle ?? DEFAULT_GRADIENT.angle
+}
 
 const gradientBusy = ref(false)
 const gradientError = ref('')
@@ -83,12 +111,21 @@ async function saveGradient(): Promise<void> {
   gradientBusy.value = true
   gradientError.value = ''
   try {
-    const res = await api.put<{ data: AuthUser }>('/me/background', {
-      color1: color1.value,
-      color2: color2.value,
-      angle: angle.value,
-    })
-    auth.setUser(res.data)
+    await confirmSaved(
+      () =>
+        api.put<{ data: AuthUser }>('/me/background', {
+          color1: color1.value,
+          color2: color2.value,
+          angle: angle.value,
+        }),
+      {
+        apply: (res) => {
+          auth.setUser(res.data)
+          syncGradientFrom(res.data)
+        },
+        message: 'บันทึกพื้นหลังไล่สีแล้ว',
+      },
+    )
   } catch {
     gradientError.value = 'บันทึกไม่สำเร็จ'
   } finally {
@@ -116,8 +153,10 @@ async function onBackgroundImageSelected(e: Event): Promise<void> {
     const compressed = await compressImage(file, { maxDimension: 1920, quality: 0.8 })
     const formData = new FormData()
     formData.append('background_image', compressed)
-    const res = await api.postForm<{ data: AuthUser }>('/me/background/image', formData)
-    auth.setUser(res.data)
+    await confirmSaved(() => api.postForm<{ data: AuthUser }>('/me/background/image', formData), {
+      apply: (res) => auth.setUser(res.data),
+      message: 'อัปโหลดรูปพื้นหลังแล้ว',
+    })
   } catch (e) {
     imageError.value = e instanceof ApiError ? 'อัปโหลดไม่สำเร็จ — ตรวจสอบชนิดไฟล์ (jpg/png/webp) และขนาด (ไม่เกิน 8MB)' : 'อัปโหลดไม่สำเร็จ'
   } finally {
@@ -127,16 +166,29 @@ async function onBackgroundImageSelected(e: Event): Promise<void> {
 }
 
 const resetBusy = ref(false)
-async function resetBackground(): Promise<void> {
+const resetError = ref('')
+// ADR-052 — the reset is a DELETE, so it asks first; and it had no catch at
+// all, so a failure was silent. resetBackground() opens the dialog.
+const confirmingResetBackground = ref(false)
+function resetBackground(): void {
+  confirmingResetBackground.value = true
+}
+async function confirmResetBackground(): Promise<void> {
   resetBusy.value = true
+  resetError.value = ''
   try {
-    const res = await api.delete<{ data: AuthUser }>('/me/background')
-    auth.setUser(res.data)
-    color1.value = '#1e3a8a'
-    color2.value = '#f59e0b'
-    angle.value = 135
+    await confirmSaved(() => api.delete<{ data: AuthUser }>('/me/background'), {
+      apply: (res) => {
+        auth.setUser(res.data)
+        syncGradientFrom(res.data)
+      },
+      message: 'รีเซ็ตพื้นหลังเป็นค่าเริ่มต้นแล้ว',
+    })
+  } catch {
+    resetError.value = 'รีเซ็ตพื้นหลังไม่สำเร็จ'
   } finally {
     resetBusy.value = false
+    confirmingResetBackground.value = false
   }
 }
 
@@ -155,19 +207,28 @@ const firstName = ref(auth.user?.first_name ?? '')
 const lastName = ref(auth.user?.last_name ?? '')
 const nameBusy = ref(false)
 const nameError = ref('')
-const nameSaved = ref(false)
 
 async function saveName(): Promise<void> {
   nameBusy.value = true
   nameError.value = ''
-  nameSaved.value = false
   try {
-    const res = await api.put<{ data: AuthUser }>('/me/name', {
-      first_name: firstName.value,
-      last_name: lastName.value,
-    })
-    auth.setUser(res.data)
-    nameSaved.value = true
+    // ADR-052 — the inputs are re-synced from what the server stored (it may
+    // trim/normalise), then the dialog quotes the stored name.
+    await confirmSaved(
+      () =>
+        api.put<{ data: AuthUser }>('/me/name', {
+          first_name: firstName.value,
+          last_name: lastName.value,
+        }),
+      {
+        apply: (res) => {
+          auth.setUser(res.data)
+          firstName.value = res.data.first_name ?? ''
+          lastName.value = res.data.last_name ?? ''
+        },
+        message: (res) => `บันทึกชื่อ ${res.data.first_name} ${res.data.last_name} แล้ว`,
+      },
+    )
   } catch (e) {
     nameError.value = e instanceof ApiError ? 'บันทึกไม่สำเร็จ — กรุณากรอกทั้งชื่อและนามสกุล' : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -191,23 +252,30 @@ const email = ref(auth.user?.email ?? '')
 const emailPassword = ref('')
 const emailBusy = ref(false)
 const emailError = ref('')
-const emailSaved = ref(false)
 
 async function saveEmail(): Promise<void> {
   emailBusy.value = true
   emailError.value = ''
-  emailSaved.value = false
   try {
-    const res = await api.put<{ data: AuthUser }>('/me/email', {
-      current_password: emailPassword.value,
-      email: email.value,
-    })
     // From the response, not optimistically: the value just changed is the one
     // this session will sign in with next time, so a local guess that drifted
-    // would be the worst possible field to be wrong about.
-    auth.setUser(res.data)
-    emailSaved.value = true
-    emailPassword.value = ''
+    // would be the worst possible field to be wrong about. ADR-052 — the input
+    // itself is re-synced too, and the dialog quotes the STORED address.
+    await confirmSaved(
+      () =>
+        api.put<{ data: AuthUser }>('/me/email', {
+          current_password: emailPassword.value,
+          email: email.value,
+        }),
+      {
+        apply: (res) => {
+          auth.setUser(res.data)
+          email.value = res.data.email ?? ''
+          emailPassword.value = ''
+        },
+        message: (res) => `บันทึกอีเมล ${res.data.email} แล้ว — ครั้งถัดไปให้เข้าสู่ระบบด้วยอีเมลนี้`,
+      },
+    )
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const errors = (e.body as { errors?: Record<string, string[]> } | undefined)?.errors
@@ -229,7 +297,6 @@ const newPassword = ref('')
 const newPasswordConfirmation = ref('')
 const passwordBusy = ref(false)
 const passwordError = ref('')
-const passwordSaved = ref(false)
 
 // Show/hide toggle per field — independent so the person can reveal
 // just the one they're checking, not all three at once.
@@ -240,17 +307,23 @@ const showNewPasswordConfirmation = ref(false)
 async function savePassword(): Promise<void> {
   passwordBusy.value = true
   passwordError.value = ''
-  passwordSaved.value = false
   try {
-    await api.put('/me/password', {
-      current_password: currentPassword.value,
-      password: newPassword.value,
-      password_confirmation: newPasswordConfirmation.value,
-    })
-    passwordSaved.value = true
-    currentPassword.value = ''
-    newPassword.value = ''
-    newPasswordConfirmation.value = ''
+    await confirmSaved(
+      () =>
+        api.put('/me/password', {
+          current_password: currentPassword.value,
+          password: newPassword.value,
+          password_confirmation: newPasswordConfirmation.value,
+        }),
+      {
+        apply: () => {
+          currentPassword.value = ''
+          newPassword.value = ''
+          newPasswordConfirmation.value = ''
+        },
+        message: 'เปลี่ยนรหัสผ่านแล้ว',
+      },
+    )
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const errors = (e.body as { errors?: Record<string, string[]> } | undefined)?.errors
@@ -385,6 +458,7 @@ async function savePassword(): Promise<void> {
         >
           รีเซ็ตเป็นค่าเริ่มต้น
         </button>
+        <p v-if="resetError" class="mt-2 text-xs font-bold text-rose-600">{{ resetError }}</p>
       </div>
     </div>
 
@@ -417,7 +491,6 @@ async function savePassword(): Promise<void> {
           >
             {{ nameBusy ? 'กำลังบันทึก...' : 'บันทึกชื่อ' }}
           </button>
-          <p v-if="nameSaved" class="text-xs font-bold text-emerald-600">บันทึกสำเร็จ</p>
           <p v-if="nameError" class="text-xs font-bold text-rose-600">{{ nameError }}</p>
         </div>
       </div>
@@ -461,7 +534,6 @@ async function savePassword(): Promise<void> {
           >
             {{ emailBusy ? 'กำลังบันทึก...' : 'บันทึกอีเมล' }}
           </button>
-          <p v-if="emailSaved" class="text-xs font-bold text-emerald-600" data-test="profile-email-saved">บันทึกสำเร็จ — ครั้งถัดไปให้เข้าสู่ระบบด้วยอีเมลนี้</p>
           <p v-if="emailError" class="text-xs font-bold text-rose-600" data-test="profile-email-error">{{ emailError }}</p>
         </div>
       </div>
@@ -535,11 +607,28 @@ async function savePassword(): Promise<void> {
           >
             {{ passwordBusy ? 'กำลังบันทึก...' : 'เปลี่ยนรหัสผ่าน' }}
           </button>
-          <p v-if="passwordSaved" class="text-xs font-bold text-emerald-600">เปลี่ยนรหัสผ่านสำเร็จ</p>
           <p v-if="passwordError" class="text-xs font-bold text-rose-600">{{ passwordError }}</p>
           <p class="text-xs text-slate-400">อย่างน้อย 8 ตัวอักษร มีพิมพ์ใหญ่ พิมพ์เล็ก และตัวเลข</p>
         </div>
       </div>
     </div>
+
+    <!-- ADR-052 — both DELETEs on this screen ask first. -->
+    <ConfirmDialog
+      v-model:show="confirmingRemoveAvatar"
+      variant="danger"
+      title="ลบรูปโปรไฟล์"
+      body="ลบรูปโปรไฟล์ของคุณ แล้วกลับไปแสดงตัวอักษรย่อแทน ยืนยันหรือไม่?"
+      :busy="avatarBusy"
+      @confirm="confirmRemoveAvatar"
+    />
+    <ConfirmDialog
+      v-model:show="confirmingResetBackground"
+      variant="danger"
+      title="รีเซ็ตพื้นหลัง"
+      body="ล้างพื้นหลังส่วนตัวที่ตั้งไว้ แล้วกลับไปใช้พื้นหลังเริ่มต้น ยืนยันหรือไม่?"
+      :busy="resetBusy"
+      @confirm="confirmResetBackground"
+    />
   </main>
 </template>

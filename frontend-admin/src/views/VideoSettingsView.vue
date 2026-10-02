@@ -28,6 +28,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { api, ApiError } from '@/api/client'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import Icon from '@/design-system/components/Icon.vue'
 
@@ -58,7 +59,6 @@ const videoSettingsForm = ref({ max_upload_mb: 200, target_resolution: '720p', t
 const loadingVideoSettings = ref(false)
 const savingVideoSettings = ref(false)
 const videoSettingsError = ref('')
-const videoSettingsSaved = ref(false)
 
 async function loadVideoSettings(): Promise<void> {
   if (activeCompany.requiresCompanyPick) return
@@ -85,14 +85,22 @@ async function saveVideoSettings(): Promise<void> {
   }
   savingVideoSettings.value = true
   videoSettingsError.value = ''
-  videoSettingsSaved.value = false
   try {
-    await api.put('/video-processing-settings', {
-      ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
-      ...videoSettingsForm.value,
-    })
-    videoSettingsSaved.value = true
-    setTimeout(() => (videoSettingsSaved.value = false), 2000)
+    // ADR-052 — the form is re-read from what the server stored, then the
+    // dialog says it saved. No more 2-second "บันทึกแล้ว" over typed values.
+    await confirmSaved(
+      () =>
+        api.put<{ data: typeof videoSettingsForm.value }>('/video-processing-settings', {
+          ...(isSuperAdmin.value ? { company_id: activeCompany.companyId } : {}),
+          ...videoSettingsForm.value,
+        }),
+      {
+        apply: (res) => {
+          videoSettingsForm.value = res.data
+        },
+        message: 'บันทึกค่าตั้งวิดีโอแล้ว',
+      },
+    )
   } catch (e) {
     videoSettingsError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ — ตรวจสอบค่าที่กรอก (${e.status})` : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -153,7 +161,6 @@ onMounted(loadVideoSettings)
             <input v-model.number="videoSettingsForm.target_bitrate_kbps" type="number" min="500" max="20000" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
           </div>
           <div class="flex items-center justify-end gap-2">
-            <span v-if="videoSettingsSaved" class="text-xs font-bold text-emerald-600">บันทึกแล้ว</span>
             <button type="submit" :disabled="savingVideoSettings" class="btn-primary">
               {{ savingVideoSettings ? 'กำลังบันทึก...' : 'บันทึกค่าวิดีโอ' }}
             </button>

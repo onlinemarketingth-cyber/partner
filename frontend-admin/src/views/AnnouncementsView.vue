@@ -21,6 +21,7 @@ import { compressImageToFit } from '@/utils/imageCompression'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 // Mirrors StoreAnnouncementRequest/UpdateAnnouncementRequest's
 // 'image' => [...'max:5120'...] rule (5120 KB). Kept as a named
@@ -111,14 +112,16 @@ const announcements = ref<AnnouncementItem[]>([])
 // order (most-recent-first, per Laravel's default index() ordering).
 const sortedAnnouncements = computed(() => [...announcements.value].sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned)))
 
-async function loadAnnouncements() {
+async function loadAnnouncements(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: AnnouncementItem[] }>(activeCompany.scopedPath('/announcements'))
     announcements.value = res.data
+    return true
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลไม่สำเร็จ')
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -166,7 +169,6 @@ const bannerSettingsForm = ref<{ repeat_count: number; display_style: Announceme
 const repeatCountCompanyId = ref<string | number>('') // Super Admin only — '' = platform default (read-only here)
 const savingRepeatCount = ref(false)
 const repeatCountError = ref('')
-const repeatCountSaved = ref(false)
 
 async function loadRepeatCount() {
   repeatCountError.value = ''
@@ -179,21 +181,28 @@ async function loadRepeatCount() {
     repeatCountError.value = apiErrorMessage(e, 'โหลดการตั้งค่าไม่สำเร็จ')
   }
 }
+// ADR-052 — the form is re-synced from the server's answer before the
+// "saved" dialog appears, so what the admin sees is what was stored (the
+// old 2-second "บันทึกแล้ว" flash left the typed values on screen).
 async function saveRepeatCount() {
   savingRepeatCount.value = true
   repeatCountError.value = ''
-  repeatCountSaved.value = false
   try {
     const payload: Record<string, unknown> = {
       repeat_count: bannerSettingsForm.value.repeat_count,
       display_style: bannerSettingsForm.value.display_style,
     }
     if (isSuperAdmin.value && repeatCountCompanyId.value !== '') payload.company_id = Number(repeatCountCompanyId.value)
-    await api.put('/announcement-settings', payload)
-    repeatCountSaved.value = true
-    setTimeout(() => {
-      repeatCountSaved.value = false
-    }, 2000)
+    await confirmSaved(
+      () => api.put<{ data: { repeat_count: number; display_style: AnnouncementDisplayStyle } }>('/announcement-settings', payload),
+      {
+        apply: (res) => {
+          bannerSettingsForm.value.repeat_count = res.data.repeat_count
+          bannerSettingsForm.value.display_style = res.data.display_style
+        },
+        message: (res) => `บันทึกการตั้งค่า Banner ข่าวสารแล้ว — เด้งสูงสุด ${res.data.repeat_count} ครั้ง`,
+      },
+    )
   } catch (e) {
     repeatCountError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -448,6 +457,19 @@ function validateMedia(): string {
   return ''
 }
 
+// ADR-052 — runs only after a 2xx: close the form, re-read the list so the
+// row on screen is the stored one, THEN say it saved (quoting the stored title).
+async function announceSaved(res: { data: AnnouncementItem }): Promise<void> {
+  const wasEditing = editingId.value !== null
+  await confirmSaved(async () => res, {
+    apply: async () => {
+      closeForm()
+      if (!(await loadAnnouncements())) throw new Error('announcements re-read failed')
+    },
+    message: (r) => `${wasEditing ? 'บันทึกการแก้ไขประกาศ' : 'สร้างประกาศ'} "${r.data.title}" แล้ว`,
+  })
+}
+
 async function submitForm() {
   const validation = validateForm() || validateMedia()
   if (validation) {
@@ -496,7 +518,7 @@ async function submitForm() {
       if (!videoMode.value && removeVideo.value) fd.append('remove_video', '1')
 
       const path = editingId.value ? `/announcements/${editingId.value}` : '/announcements'
-      await api.postForm(path, fd)
+      await api.postForm<{ data: AnnouncementItem }>(path, fd).then(announceSaved)
     } else {
       const payload = {
         ...(isSuperAdmin.value ? { company_id: form.value.company_id === '' ? null : Number(form.value.company_id) } : {}),
@@ -521,13 +543,11 @@ async function submitForm() {
           : {}),
       }
       if (editingId.value) {
-        await api.put(`/announcements/${editingId.value}`, payload)
+        await api.put<{ data: AnnouncementItem }>(`/announcements/${editingId.value}`, payload).then(announceSaved)
       } else {
-        await api.post('/announcements', payload)
+        await api.post<{ data: AnnouncementItem }>('/announcements', payload).then(announceSaved)
       }
     }
-    closeForm()
-    await loadAnnouncements()
   } catch (e) {
     formError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -544,9 +564,14 @@ function deleteAnnouncement(item: AnnouncementItem) {
 async function confirmDeleteAnnouncement() {
   const item = pendingDeleteAnnouncement.value
   if (!item) return
+  errorMessage.value = ''
   try {
-    await api.delete(`/announcements/${item.id}`)
-    announcements.value = announcements.value.filter((x) => x.id !== item.id)
+    await confirmSaved(() => api.delete(`/announcements/${item.id}`), {
+      apply: async () => {
+        if (!(await loadAnnouncements())) throw new Error('announcements re-read failed')
+      },
+      message: `ลบประกาศ "${item.title}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   } finally {
@@ -964,7 +989,6 @@ watch(() => activeCompany.companyId, () => { loadAnnouncements() })
 
         <p v-if="repeatCountError" class="text-[11px] text-rose-600 mt-3">{{ repeatCountError }}</p>
         <div class="flex justify-end items-center gap-2 pt-4">
-          <span v-if="repeatCountSaved" class="text-xs font-bold text-emerald-600">บันทึกแล้ว</span>
           <button type="button" class="btn-secondary" @click="showSettingsModal = false">ปิด</button>
           <button
             type="button"

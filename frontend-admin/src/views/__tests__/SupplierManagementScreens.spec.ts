@@ -27,6 +27,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -564,5 +565,189 @@ describe('CompanyManagementView stays free of supplier settings', () => {
     // comment explaining why the panel is gone, and matching the comment
     // would make this test pass for the wrong reason.
     expect(wrapper.text()).not.toContain('ตั้งค่าคู่ค้า')
+  })
+})
+
+// ── ADR-052 — "saved" is the dialog, and only when it is true ───────────
+
+describe('ADR-052 — SupplierManagementView save feedback', () => {
+  it('edit: dialog only after the PUT and the re-read, naming the supplier the SERVER stored', async () => {
+    let rows = [SUPPLIER]
+    get.mockImplementation(async () => ({ data: rows }))
+    let resolvePut: (v: unknown) => void = () => {}
+    put.mockImplementation(() => new Promise((r) => (resolvePut = r)))
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="supplier-name"]').setValue('ชื่อที่พิมพ์')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    const stored = { ...SUPPLIER, name: 'ชื่อที่เซิร์ฟเวอร์เก็บ' }
+    rows = [stored]
+    resolvePut({ data: stored })
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ชื่อที่เซิร์ฟเวอร์เก็บ')
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="suppliers-table"]').text()).toContain('ชื่อที่เซิร์ฟเวอร์เก็บ')
+  })
+
+  it('edit: a refused save raises no dialog and keeps the editor open with the error', async () => {
+    get.mockResolvedValue({ data: [SUPPLIER] })
+    put.mockRejectedValue(new ApiErrorStub('เซิร์ฟเวอร์ไม่รับ'))
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.find('[data-test="edit-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('เซิร์ฟเวอร์ไม่รับ')
+  })
+
+  it('create: dialog names the supplier the server created, after the list was re-read', async () => {
+    get.mockResolvedValue({ data: [SUPPLIER] })
+    post.mockResolvedValue({ data: { ...SUPPLIER, id: 8, name: 'คู่ค้าใหม่ (เซิร์ฟเวอร์)' } })
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="add-supplier"]').trigger('click')
+    await wrapper.find('[data-test="supplier-name"]').setValue('คู่ค้าใหม่')
+    await wrapper.find('[data-test="save-supplier"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('คู่ค้าใหม่ (เซิร์ฟเวอร์)')
+    expect(wrapper.find('[data-test="create-panel"]').exists()).toBe(false)
+    expect(get.mock.calls.filter(([u]) => String(u).startsWith('/suppliers')).length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('ADR-052 — SupplierDetailView save feedback', () => {
+  function mockDetail(overrides: Record<string, unknown> = {}) {
+    get.mockImplementation((url: string) => {
+      if (url === '/suppliers/7') return Promise.resolve({ data: { ...DETAIL, ...overrides } })
+
+      return Promise.resolve({ data: [] })
+    })
+  }
+
+  it('save: the form shows the SERVER’s values and the dialog appears only after the PUT resolved', async () => {
+    mockDetail()
+    let resolvePut: (v: unknown) => void = () => {}
+    put.mockImplementation(() => new Promise((r) => (resolvePut = r)))
+    const wrapper = mountView(SupplierDetailView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="supplier-name"]').setValue('ชื่อที่พิมพ์')
+    await wrapper.find('[data-test="save-supplier"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    resolvePut({ data: { ...DETAIL, name: 'ชื่อที่เซิร์ฟเวอร์เก็บ', gp_value: 2000 } })
+    await flushPromises()
+
+    expect((wrapper.find('[data-test="supplier-name"]').element as HTMLInputElement).value).toBe('ชื่อที่เซิร์ฟเวอร์เก็บ')
+    expect((wrapper.find('[data-test="gp-value"]').element as HTMLInputElement).value).toBe('20')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ชื่อที่เซิร์ฟเวอร์เก็บ')
+    // the inline "บันทึกแล้ว" is gone — the dialog replaces it
+    expect(wrapper.find('[data-test="saved-notice"]').exists()).toBe(false)
+  })
+
+  it('save: a refused save raises no dialog and shows the error', async () => {
+    mockDetail()
+    put.mockRejectedValue(new ApiErrorStub('บันทึกไม่ได้'))
+    const wrapper = mountView(SupplierDetailView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="save-supplier"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('บันทึกไม่ได้')
+  })
+
+  it('create login: dialog quotes the account the SERVER created; the next step stays on the page', async () => {
+    mockDetail()
+    post.mockResolvedValue({ data: { id: 31, name: 'คู่ค้า ทดสอบ', email: 'stored@example.com' } })
+    const wrapper = mountView(SupplierDetailView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="tab-users"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="new-user-email"]').setValue('Typed@Example.com')
+    await wrapper.find('[data-test="new-user-password"]').setValue('Str0ng!Passw0rd#2569')
+    await wrapper.find('[data-test="create-partner-user"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('stored@example.com')
+    expect(saveFeedbackState.body).not.toContain('Typed@Example.com')
+    expect(wrapper.find('[data-test="user-notice"]').text()).toContain('แจ้งรหัสผ่าน')
+    expect(get).toHaveBeenCalledWith('/suppliers/7/users')
+  })
+
+  it('create login: a refused create raises no dialog and puts the error on the email field', async () => {
+    mockDetail()
+    post.mockRejectedValue(new ApiErrorStub('อีเมลนี้ถูกใช้แล้ว'))
+    const wrapper = mountView(SupplierDetailView)
+    await flushPromises()
+
+    await wrapper.find('[data-test="tab-users"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="create-partner-user"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('อีเมลนี้ถูกใช้แล้ว')
+    expect(wrapper.find('[data-test="user-notice"]').exists()).toBe(false)
+  })
+})
+
+describe('ADR-052 — a failed re-read after a successful write (suppliers)', () => {
+  it('SupplierManagementView: edit landed, list not re-read — the dialog says the screen may be stale', async () => {
+    get.mockResolvedValue({ data: [SUPPLIER] })
+    put.mockResolvedValue({ data: SUPPLIER })
+    const wrapper = mountView(SupplierManagementView)
+    await flushPromises()
+    get.mockImplementation(() => Promise.reject(new ApiErrorStub('down')))
+
+    await wrapper.find('[data-test="edit-supplier"]').trigger('click')
+    await wrapper.find('[data-test="save-edit"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.find('[data-test="error"]').text()).toContain('down')
+  })
+
+  it('SupplierDetailView: login created, accounts list not re-read — the dialog says the screen may be stale', async () => {
+    get.mockImplementation((url: string) => {
+      if (url === '/suppliers/7') return Promise.resolve({ data: DETAIL })
+
+      return Promise.resolve({ data: [] })
+    })
+    post.mockResolvedValue({ data: { id: 31, name: 'คู่ค้า ทดสอบ', email: 'stored@example.com' } })
+    const wrapper = mountView(SupplierDetailView)
+    await flushPromises()
+    await wrapper.find('[data-test="tab-users"]').trigger('click')
+    await flushPromises()
+    get.mockImplementation(() => Promise.reject(new ApiErrorStub('down')))
+
+    await wrapper.find('[data-test="new-user-email"]').setValue('partner@example.com')
+    await wrapper.find('[data-test="new-user-password"]').setValue('Str0ng!Passw0rd#2569')
+    await wrapper.find('[data-test="create-partner-user"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.text()).toContain('down')
   })
 })

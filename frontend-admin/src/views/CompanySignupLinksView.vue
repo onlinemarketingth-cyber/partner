@@ -34,6 +34,7 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 import { useAuthStore } from '@/stores/auth'
 import LinkQrModal from '@/design-system/components/LinkQrModal.vue'
 import { useI18n } from '@/composables/useI18n'
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 const { lang, td } = useI18n()
 
@@ -109,7 +110,7 @@ async function submitForm() {
 
   saving.value = true
   try {
-    await api.post('/company-invite-codes', {
+    const payload = {
       ...(isSuperAdmin.value && activeCompany.companyId !== null
         ? { company_id: activeCompany.companyId }
         : {}),
@@ -118,10 +119,21 @@ async function submitForm() {
       // Sent explicitly as null, never omitted — see the comment on `form`.
       expires_at: form.value.hasExpiry ? form.value.expiresAt : null,
       max_uses: form.value.hasLimit ? Number(form.value.maxUses) : null,
+    }
+    // ADR-052 — the new row (with its link) is on the list before the dialog,
+    // and the dialog names the code the SERVER issued — which may differ from
+    // what was typed (blank → generated).
+    await confirmSaved(() => api.post<{ data: SignupLink }>('/company-invite-codes', payload), {
+      apply: async () => {
+        showForm.value = false
+        resetForm()
+        await reloadAfterWrite()
+      },
+      message: (res) =>
+        td('signup.created_done', 'สร้างลิงก์สมัคร {code} แล้ว — คัดลอกหรือแสดง QR ได้จากรายการ', {
+          code: res?.data?.code ?? '',
+        }),
     })
-    showForm.value = false
-    resetForm()
-    await load()
   } catch (e) {
     formError.value = e instanceof ApiError ? e.message : td('signup.err_create_failed')
   } finally {
@@ -130,18 +142,26 @@ async function submitForm() {
 }
 
 // ── List ────────────────────────────────────────────────────────────────
-async function load() {
+/** Resolves false when the read failed (the error is already on screen). */
+async function load(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
     const res = await api.get<{ data: SignupLink[] }>(activeCompany.scopedPath('/company-invite-codes'))
     links.value = res.data
+    return true
   } catch (e) {
     errorMessage.value =
       e instanceof ApiError ? `${td('links.load_failed')} (${e.status})` : td('links.load_failed')
+    return false
   } finally {
     loading.value = false
   }
+}
+
+/** ADR-052 — step 3 after a write: the list re-read, or a throw so the dialog says it may be behind. */
+async function reloadAfterWrite(): Promise<void> {
+  if (!(await load())) throw new Error('signup links reload failed')
 }
 
 async function copy(link: SignupLink) {
@@ -176,13 +196,27 @@ async function confirmRevoke() {
   const link = pendingRevoke.value
   if (!link) return
   revoking.value = true
+  errorMessage.value = ''
   try {
-    await api.delete(`/company-invite-codes/${link.id}`)
-    await load()
-    pendingRevoke.value = null
+    await confirmSaved(() => api.delete(`/company-invite-codes/${link.id}`), {
+      apply: async () => {
+        pendingRevoke.value = null
+        await reloadAfterWrite()
+      },
+      message: () => {
+        // Named from the re-read row — the server's copy, now revoked.
+        const stored = links.value.find((l) => l.id === link.id) ?? link
+        return td('signup.revoke_done', 'ยกเลิกลิงก์สมัคร {name} แล้ว — ใช้สมัครไม่ได้อีก', {
+          name: stored.label || stored.code,
+        })
+      },
+    })
   } catch (e) {
     errorMessage.value =
       e instanceof ApiError ? `${td('links.revoke_failed')} (${e.status})` : td('links.revoke_failed')
+    // ADR-052 — closed on failure too, so the dialog does not sit over the
+    // error it caused.
+    pendingRevoke.value = null
   } finally {
     revoking.value = false
   }

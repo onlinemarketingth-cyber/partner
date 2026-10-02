@@ -39,6 +39,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { SAVED_BUT_STALE_BODY, saveFeedbackState } from '@/composables/useSaveFeedback'
 
 const get = vi.fn()
 const post = vi.fn()
@@ -558,5 +559,93 @@ describe('§4.3 / §4.4 — what the admin can see before deciding', () => {
     const wrapper = await mountBoard([makeReferral({ name: 'ยังไม่จ่าย', order: makeOrder() })])
 
     expect(card(wrapper, 'ยังไม่จ่าย').text()).not.toContain('ยืนยันโดย')
+  })
+})
+
+/**
+ * ADR-052 — every write on the board raises the "saved" dialog, after the
+ * board was re-read, quoting what the SERVER answered.
+ */
+describe('ADR-052 — the saved dialog', () => {
+  it('advance: dialog only after the POST and the re-read, naming the stage the SERVER moved it to', async () => {
+    const before = makeReferral({ id: 1, name: 'มานี', current: WAITING })
+    const wrapper = await mountBoard([before])
+    let resolvePost: (v: unknown) => void = () => {}
+    post.mockImplementation(() => new Promise((r) => (resolvePost = r)))
+
+    await card(wrapper, 'มานี').get('[data-test="advance"]').trigger('click')
+    await flushPromises()
+    expect(saveFeedbackState.show).toBe(false)
+
+    const after = makeReferral({ id: 1, name: 'มานี', current: MEETING })
+    get.mockImplementation((path: string) =>
+      path === '/referrals' ? Promise.resolve({ data: [after] }) : Promise.resolve({ data: [] }),
+    )
+    resolvePost({ data: after })
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/referrals/1/advance')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('มานี')
+    expect(saveFeedbackState.body).toContain('พบแพทย์')
+    // the board is the re-read one: the card now sits in the meeting column
+    expect(column(wrapper, MEETING.key).text()).toContain('มานี')
+  })
+
+  it('advance: a refused move raises no dialog and shows the error', async () => {
+    const wrapper = await mountBoard([makeReferral({ id: 1, name: 'มานี', current: WAITING })])
+    post.mockRejectedValueOnce(new FakeApiError(422, null))
+
+    await card(wrapper, 'มานี').get('[data-test="advance"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ดำเนินการไม่สำเร็จ (422)')
+  })
+
+  it('confirm order: asks first, then quotes the SERVER’s order number and amount', async () => {
+    const wrapper = await mountBoard([
+      makeReferral({ name: 'มานี', order: makeOrder({ status: 'awaiting_verification' }) }),
+    ])
+    post.mockResolvedValueOnce({ data: makeOrder({ status: 'paid', order_number: 'ORD-SRV-1', amount_satang: 990000 }) })
+
+    await confirmButton(wrapper, 'มานี').trigger('click')
+    expect(post).not.toHaveBeenCalled()
+    expect(saveFeedbackState.show).toBe(false)
+
+    await dialogConfirm(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(post).toHaveBeenCalledWith('/orders/77/confirm')
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toContain('ORD-SRV-1')
+    expect(saveFeedbackState.body).toContain('9,900.00')
+  })
+
+  it('confirm order: a refusal raises no dialog', async () => {
+    const wrapper = await mountBoard([
+      makeReferral({ name: 'มานี', order: makeOrder({ status: 'awaiting_verification' }) }),
+    ])
+    post.mockRejectedValueOnce(new FakeApiError(409, null))
+
+    await confirmButton(wrapper, 'มานี').trigger('click')
+    await dialogConfirm(wrapper).trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(false)
+    expect(wrapper.text()).toContain('ยืนยันการชำระเงินไม่สำเร็จ (409)')
+  })
+
+  it('advance landed but the board could not be re-read: the dialog says the screen may be stale', async () => {
+    const wrapper = await mountBoard([makeReferral({ id: 1, name: 'มานี', current: WAITING })])
+    post.mockResolvedValueOnce({ data: makeReferral({ id: 1, name: 'มานี', current: MEETING }) })
+    get.mockImplementation(() => Promise.reject(new FakeApiError(500, null)))
+
+    await card(wrapper, 'มานี').get('[data-test="advance"]').trigger('click')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(saveFeedbackState.body).toBe(SAVED_BUT_STALE_BODY)
+    expect(wrapper.text()).toContain('โหลดข้อมูลไม่สำเร็จ (500)')
   })
 })

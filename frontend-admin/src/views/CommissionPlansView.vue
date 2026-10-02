@@ -139,7 +139,14 @@ import PlanShapePreview from '@/design-system/components/PlanShapePreview.vue'
 import InfoPopover from '@/design-system/components/InfoPopover.vue'
 import CommissionOverview from '@/design-system/components/CommissionOverview.vue'
 import CommissionStepChecklist from '@/design-system/components/CommissionStepChecklist.vue'
+import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import type { CardContext, CardId } from '@/constants/commissionCards'
+/*
+ * ADR-052 — every write on this screen ends in ONE "saved" dialog, raised only
+ * after the server answered 2xx AND the screen has taken the server's answer
+ * (a response assigned, or a reload awaited). See useSaveFeedback.ts.
+ */
+import { confirmSaved } from '@/composables/useSaveFeedback'
 
 function apiErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof ApiError)) return fallback
@@ -240,6 +247,59 @@ const commissionApi = {
 
     return result
   },
+}
+
+/*
+ * ADR-052 — EVERY DELETE ON THIS SCREEN ASKS FIRST, through ONE dialog.
+ *
+ * Four of the six deletes here went straight to the server on the click, and
+ * the other two used the browser's own confirm(). A rate row decides what
+ * somebody is paid, so "ลบ" pressed by mistake must cost a second click, not a
+ * re-entry from memory. One dialog rather than six: each caller names what is
+ * about to go and hands over the function that removes it; the dialog only
+ * asks.
+ */
+interface PendingDelete {
+  title: string
+  body: string
+  /** The confirm button's wording; 'ลบ' unless the action is not a deletion by name. */
+  confirmLabel?: string
+  /** Runs the delete. Owns its own error line — a failure must not raise "saved". */
+  run: () => Promise<void>
+}
+const pendingDelete = ref<PendingDelete | null>(null)
+const pendingDeleteBusy = ref(false)
+
+function askBeforeDeleting(request: PendingDelete): void {
+  pendingDelete.value = request
+}
+
+async function confirmPendingDelete(): Promise<void> {
+  const request = pendingDelete.value
+  if (!request || pendingDeleteBusy.value) return
+
+  pendingDeleteBusy.value = true
+  try {
+    await request.run()
+  } finally {
+    pendingDeleteBusy.value = false
+    pendingDelete.value = null
+  }
+}
+
+function cancelPendingDelete(open: boolean): void {
+  if (!open && !pendingDeleteBusy.value) pendingDelete.value = null
+}
+
+/**
+ * "<what> — 5.00%" from the rate row the SERVER answered with, or the bare
+ * sentence when the answer carried no rate (ADR-052: a dialog that quotes a
+ * number quotes the stored one, never the one that was typed).
+ */
+function savedRateMessage(what: string, response: { data?: { rate_type?: RateType; rate_value?: number } } | null | undefined): string {
+  const row = response?.data
+
+  return row?.rate_type && typeof row.rate_value === 'number' ? `${what} — ${formatRate(row.rate_type, row.rate_value)}` : what
 }
 
 
@@ -774,31 +834,49 @@ async function submitRule() {
           }
         : {}),
     })
-    if (editingRuleId.value) {
-      await commissionApi.put(`/commission-rules/${editingRuleId.value}`, payload)
-    } else {
-      await commissionApi.post('/commission-rules', payload)
-    }
-    resetRuleForm()
-    // TASK-197 §2.2's server-side side effect (a product's FIRST rule
-    // locks in its commission_rate_type) is picked up here: this reload
-    // re-fetches products, so the selector correctly disappears on the
-    // next "+ เพิ่มกฎคอมมิชชั่น" open for the same product.
-    await loadRulesTabData()
-    void loadResolution()
+    const editingId = editingRuleId.value
+    type RuleResponse = { data?: Partial<CommissionRuleItem> }
+    await confirmSaved(
+      () => editingId
+        ? commissionApi.put<RuleResponse>(`/commission-rules/${editingId}`, payload)
+        : commissionApi.post<RuleResponse>('/commission-rules', payload),
+      {
+        apply: async () => {
+          resetRuleForm()
+          // TASK-197 §2.2's server-side side effect (a product's FIRST rule
+          // locks in its commission_rate_type) is picked up here: this reload
+          // re-fetches products, so the selector correctly disappears on the
+          // next "+ เพิ่มกฎคอมมิชชั่น" open for the same product.
+          await loadRulesTabData()
+          await loadResolution()
+        },
+        message: (r) => savedRateMessage(editingId ? 'แก้ไขอัตราค่าคอมแล้ว' : 'เพิ่มอัตราค่าคอมแล้ว', r),
+      },
+    )
   } catch (e) {
     ruleFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
     savingRule.value = false
   }
 }
-async function deleteRule(r: CommissionRuleItem) {
+function deleteRule(r: CommissionRuleItem): void {
+  askBeforeDeleting({
+    title: 'ลบอัตราค่าคอม',
+    body: `ลบอัตรา "${ruleScopeLabel(r)}" (${formatRate(r.rate_type, r.rate_value)})?\nสินค้าที่ใช้อัตรานี้จะไปใช้อัตราของขั้นที่กว้างกว่า หรือไม่มีใครได้ค่าคอม`,
+    run: () => deleteRuleNow(r),
+  })
+}
+async function deleteRuleNow(r: CommissionRuleItem): Promise<void> {
   try {
-    await commissionApi.delete(`/commission-rules/${r.id}`)
-    commissionRules.value = commissionRules.value.filter((x) => x.id !== r.id)
-    // Deleting a rate is the change most likely to drop a product to a
-    // broader rung — or to nobody at all. The table has to say so at once.
-    void loadResolution()
+    await confirmSaved(() => commissionApi.delete(`/commission-rules/${r.id}`), {
+      apply: async () => {
+        commissionRules.value = commissionRules.value.filter((x) => x.id !== r.id)
+        // Deleting a rate is the change most likely to drop a product to a
+        // broader rung — or to nobody at all. The table has to say so at once.
+        await loadResolution()
+      },
+      message: `ลบอัตราค่าคอม "${ruleScopeLabel(r)}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -1090,17 +1168,24 @@ async function submitOverrideRule(): Promise<void> {
       effective_from: overrideForm.value.effective_from,
       effective_to: overrideForm.value.effective_to || null,
     }
-    if (editingOverrideId.value) {
-      await commissionApi.put(`/commission-override-rules/${editingOverrideId.value}`, body)
-    } else {
-      await commissionApi.post('/commission-override-rules', withCompanyBody(body))
-    }
-    resetOverrideForm()
-    await loadRulesTabData()
-    // The table is the consequence of what was just saved; leaving it stale
-    // would make the one screen built to show the outcome show the previous
-    // outcome.
-    void loadResolution()
+    const editingId = editingOverrideId.value
+    type OverrideResponse = { data?: Partial<CommissionOverrideRuleItem> }
+    await confirmSaved(
+      () => editingId
+        ? commissionApi.put<OverrideResponse>(`/commission-override-rules/${editingId}`, body)
+        : commissionApi.post<OverrideResponse>('/commission-override-rules', withCompanyBody(body)),
+      {
+        apply: async () => {
+          resetOverrideForm()
+          await loadRulesTabData()
+          // The table is the consequence of what was just saved; leaving it stale
+          // would make the one screen built to show the outcome show the previous
+          // outcome.
+          await loadResolution()
+        },
+        message: (r) => savedRateMessage(editingId ? 'แก้ไขอัตราหัวหน้าทีมแล้ว' : 'เพิ่มอัตราหัวหน้าทีมแล้ว', r),
+      },
+    )
   } catch (e) {
     overrideFormError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -1116,12 +1201,23 @@ function overrideScopeLabel(r: CommissionOverrideRuleItem): string {
   return 'ทุกสินค้าในบริษัท'
 }
 
-async function deleteOverrideRule(r: CommissionOverrideRuleItem): Promise<void> {
-  if (!window.confirm(`ลบอัตราหัวหน้าทีม "${overrideScopeLabel(r)}"?`)) return
+/** ADR-052 — was window.confirm(); now the screen's own danger dialog. */
+function deleteOverrideRule(r: CommissionOverrideRuleItem): void {
+  askBeforeDeleting({
+    title: 'ลบอัตราหัวหน้าทีม',
+    body: `ลบอัตราหัวหน้าทีม "${overrideScopeLabel(r)}" (${formatRate(r.rate_type, r.rate_value)})?`,
+    run: () => deleteOverrideRuleNow(r),
+  })
+}
+async function deleteOverrideRuleNow(r: CommissionOverrideRuleItem): Promise<void> {
   try {
-    await commissionApi.delete(`/commission-override-rules/${r.id}`)
-    commissionOverrideRules.value = commissionOverrideRules.value.filter((x) => x.id !== r.id)
-    void loadResolution()
+    await confirmSaved(() => commissionApi.delete(`/commission-override-rules/${r.id}`), {
+      apply: async () => {
+        commissionOverrideRules.value = commissionOverrideRules.value.filter((x) => x.id !== r.id)
+        await loadResolution()
+      },
+      message: `ลบอัตราหัวหน้าทีม "${overrideScopeLabel(r)}" แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -1769,6 +1865,7 @@ async function loadCompanySettings(): Promise<void> {
     overrideModeUnknown.value = false
     deepestManagerChain.value = 0
     maxOverrideDepth.value = ''
+    savedMaxOverrideDepth.value = null
     overrideCompression.value = false
     planLock.value = UNLOCKED
     houseAccount.value = null
@@ -1797,6 +1894,7 @@ async function loadCompanySettings(): Promise<void> {
     // null → '' — "no cap" is a real setting and the field must render empty
     // for it, never a 0 that a later save would send back as "pay nobody".
     maxOverrideDepth.value = r.data.max_override_depth ?? ''
+    savedMaxOverrideDepth.value = r.data.max_override_depth ?? null
     overrideCompression.value = r.data.override_compression === true
     planLock.value = r.data.plan_locked_by_sales ?? UNLOCKED
     // Server-computed and never inferred here: the screen shows the maximum
@@ -1820,6 +1918,7 @@ async function loadCompanySettings(): Promise<void> {
     // keeping this company's unread value would be a claim nobody verified.
     // overrideModeUnknown already puts the whole card into its loud state.
     maxOverrideDepth.value = ''
+    savedMaxOverrideDepth.value = null
     overrideCompression.value = false
     /*
      * Cleared, NOT left as "locked". A read that failed knows nothing, and a
@@ -1837,6 +1936,68 @@ async function loadCompanySettings(): Promise<void> {
      */
     uncertifiedLeaders.value = EMPTY_LEADER_WARNING
   }
+}
+
+/**
+ * What PUT /commission-settings (and the house-account door) answer with:
+ * the WHOLE setting, every time — CommissionSettingResource.
+ */
+interface CommissionSettingsData {
+  commission_basis?: CommissionBasis
+  commission_plan_type?: CommissionPlanType | null
+  commission_override_mode?: CommissionOverrideMode
+  deepest_manager_chain?: number
+  max_override_depth?: number | null
+  override_compression?: boolean
+  plan_locked_by_sales?: PlanLock
+  commission_house_account?: HouseAccount | null
+  leaders_missing_certification?: LeaderWarning
+}
+type CommissionSettingsResponse = { data?: CommissionSettingsData } | null | undefined
+
+/**
+ * ADR-052 — put the server's answer on screen after a write to this endpoint.
+ *
+ * Only the fields the answer carries are taken, and only into SAVED state —
+ * never into an input the admin may be half-way through typing in another box
+ * (the depth field is re-synced by its own save, nobody else's). A field the
+ * answer omits keeps what the screen last READ, never what was asked for.
+ */
+function applyCommissionSettings(data: CommissionSettingsData): void {
+  if (data.commission_basis !== undefined) {
+    commissionBasis.value = data.commission_basis
+    basisUnknown.value = false
+  }
+  if (data.commission_plan_type !== undefined) companyPlanTypeFromServer.value = data.commission_plan_type
+  if (data.commission_override_mode !== undefined) {
+    overrideMode.value = data.commission_override_mode
+    overrideModeUnknown.value = false
+  }
+  if (data.max_override_depth !== undefined) savedMaxOverrideDepth.value = data.max_override_depth
+  if (data.override_compression !== undefined) overrideCompression.value = data.override_compression === true
+  if (data.deepest_manager_chain !== undefined) deepestManagerChain.value = data.deepest_manager_chain
+  if (data.plan_locked_by_sales !== undefined) planLock.value = data.plan_locked_by_sales
+  if (data.commission_house_account !== undefined) houseAccount.value = data.commission_house_account
+  if (data.leaders_missing_certification !== undefined) uncertifiedLeaders.value = data.leaders_missing_certification
+}
+
+/**
+ * Take the answer if it carries the field just written; otherwise READ IT
+ * BACK rather than assume the request's value landed. A read-back that fails
+ * throws, so confirmSaved() says "saved, but the screen may be behind" instead
+ * of a plain success over values nobody confirmed.
+ */
+async function takeCommissionSettings(response: CommissionSettingsResponse, written: keyof CommissionSettingsData): Promise<void> {
+  const data = response?.data
+
+  if (data && data[written] !== undefined) {
+    applyCommissionSettings(data)
+
+    return
+  }
+
+  await loadCompanySettings()
+  if (basisUnknown.value) throw new Error('commission settings could not be re-read')
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -2086,20 +2247,31 @@ async function useViewedPlan(): Promise<void> {
   planSwitching.value = true
   planSwitchError.value = ''
   try {
-    const r = await commissionApi.put<{ data: { commission_plan_type?: CommissionPlanType | null } }>(
-      '/commission-settings',
-      withCompanyBody({ commission_plan_type: viewingPlanType.value }),
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>(
+        '/commission-settings',
+        withCompanyBody({ commission_plan_type: viewingPlanType.value }),
+      ),
+      {
+        apply: async (r) => {
+          await takeCommissionSettings(r, 'commission_plan_type')
+          /*
+           * The new plan's structural settings (Binary's cycle, Matrix's width,
+           * Generation's depth …) have never been fetched for this company, and
+           * step 2 is about to render that section. Without this the admin switches
+           * to Matrix and is shown an empty form that looks configured.
+           */
+          await loadReadinessProbe()
+          const tab = planTypeToTab[viewingPlanType.value]
+          if (tab) await ensureTabLoaded(tab)
+        },
+        // The plan the SERVER now holds, which is what step 2 goes on to draw.
+        message: () =>
+          companyPlanTypeFromServer.value
+            ? `เปลี่ยนแผนค่าแนะนำเป็น ${planTypeLabels[companyPlanTypeFromServer.value]} แล้ว`
+            : 'บันทึกแผนค่าแนะนำแล้ว',
+      },
     )
-    companyPlanTypeFromServer.value = r.data.commission_plan_type ?? null
-    /*
-     * The new plan's structural settings (Binary's cycle, Matrix's width,
-     * Generation's depth …) have never been fetched for this company, and
-     * step 2 is about to render that section. Without this the admin switches
-     * to Matrix and is shown an empty form that looks configured.
-     */
-    await loadReadinessProbe()
-    const tab = planTypeToTab[viewingPlanType.value]
-    if (tab) await ensureTabLoaded(tab)
   } catch (e) {
     planSwitchError.value = apiErrorMessage(e, 'เปลี่ยนแผนไม่สำเร็จ')
   } finally {
@@ -2114,11 +2286,18 @@ async function setCommissionBasis(next: CommissionBasis): Promise<void> {
   basisSaving.value = true
   basisError.value = ''
   try {
-    await commissionApi.put('/commission-settings', withCompanyBody({ commission_basis: next }))
-    commissionBasis.value = next
-    // A successful write is also a successful read: whatever made the load
-    // fail, the screen now knows the answer, because it just set it.
-    basisUnknown.value = false
+    /*
+     * ADR-052 — the basis comes from the ANSWER, no longer from `next`. A
+     * successful write is also a successful read: whatever made the load fail,
+     * the screen now knows the answer, because the server just said it.
+     */
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>('/commission-settings', withCompanyBody({ commission_basis: next })),
+      {
+        apply: (r) => takeCommissionSettings(r, 'commission_basis'),
+        message: () => `เปลี่ยนฐานการคำนวณเป็น ${basisLabels[commissionBasis.value]} แล้ว`,
+      },
+    )
   } catch (e) {
     basisError.value = apiErrorMessage(e, 'เปลี่ยนฐานการคำนวณไม่สำเร็จ')
   } finally {
@@ -2323,19 +2502,43 @@ async function saveHouseAccount(enable: boolean): Promise<void> {
   houseAccountError.value = ''
   try {
     const body = withCompanyBody(enable ? { display_name: houseAccountName.value.trim() || null } : {})
-    const r = enable
-      ? await commissionApi.post<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>('/commission-house-account', body)
-      : await commissionApi.delete<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>('/commission-house-account', body)
-
-    houseAccount.value = r.data.commission_house_account ?? null
-    deepestManagerChain.value = r.data.deepest_manager_chain ?? 0
-    showHouseAccountConfirm.value = false
-    void loadResolution()
+    await confirmSaved(
+      () => enable
+        ? commissionApi.post<CommissionSettingsResponse>('/commission-house-account', body)
+        : commissionApi.delete<CommissionSettingsResponse>('/commission-house-account', body),
+      {
+        apply: async (r) => {
+          await takeCommissionSettings(r, 'commission_house_account')
+          showHouseAccountConfirm.value = false
+          await loadResolution()
+        },
+        // The name the SERVER gave the seat — it may have defaulted or trimmed
+        // what was typed.
+        message: () =>
+          houseAccount.value
+            ? `ให้บริษัทรับค่าแนะนำหัวหน้าทีมแล้ว — บัญชี "${houseAccount.value.name}"`
+            : 'ปิดการให้บริษัทรับค่าแนะนำหัวหน้าทีมแล้ว',
+      },
+    )
   } catch (e) {
     houseAccountError.value = apiErrorMessage(e, enable ? 'เปิดบัญชีบริษัทไม่สำเร็จ' : 'ปิดบัญชีบริษัทไม่สำเร็จ')
   } finally {
     houseAccountSaving.value = false
   }
+}
+
+/**
+ * ADR-052 — switching the seat OFF is a DELETE that detaches every agent
+ * under it, so it asks first. Switching it on already has its own
+ * confirmation panel (house-account-confirm), which names what changes.
+ */
+function requestDisableHouseAccount(): void {
+  askBeforeDeleting({
+    title: 'ปิดการให้บริษัทรับค่าแนะนำหัวหน้าทีม',
+    body: 'สมาชิกที่ขึ้นตรงกับบัญชีนี้จะกลับไปไม่มีหัวหน้า และบริษัทจะไม่ได้ส่วนแบ่งจากดีลที่เกิดหลังจากนี้\nค่าแนะนำที่บริษัทได้รับไปแล้วยังอยู่ตามเดิม',
+    confirmLabel: 'ปิดใช้งาน',
+    run: () => saveHouseAccount(false),
+  })
 }
 
 /**
@@ -2384,24 +2587,34 @@ async function renameHouseAccount(): Promise<void> {
   houseAccountSaving.value = true
   houseAccountError.value = ''
   try {
-    const r = await commissionApi.put<{ data: { commission_house_account?: HouseAccount | null; deepest_manager_chain?: number } }>(
-      '/commission-house-account',
-      withCompanyBody({
-        display_name: houseAccountRename.value.trim(),
-        // Trimmed to null rather than '' so clearing a field actually clears
-        // it — the Service treats a blank string as "remove this", and an
-        // account typed into the wrong company has to be removable.
-        bank_name: houseAccountBank.value.bank_name.trim() || null,
-        bank_account_number: houseAccountBank.value.bank_account_number.trim() || null,
-        bank_account_holder_name: houseAccountBank.value.bank_account_holder_name.trim() || null,
-      }),
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>(
+        '/commission-house-account',
+        withCompanyBody({
+          display_name: houseAccountRename.value.trim(),
+          // Trimmed to null rather than '' so clearing a field actually clears
+          // it — the Service treats a blank string as "remove this", and an
+          // account typed into the wrong company has to be removable.
+          bank_name: houseAccountBank.value.bank_name.trim() || null,
+          bank_account_number: houseAccountBank.value.bank_account_number.trim() || null,
+          bank_account_holder_name: houseAccountBank.value.bank_account_holder_name.trim() || null,
+        }),
+      ),
+      {
+        apply: async (r) => {
+          await takeCommissionSettings(r, 'commission_house_account')
+          renamingHouseAccount.value = false
+          // The name is what the resolution table and the payout screens print for
+          // this payee, so the table below is repainted rather than left showing
+          // the old label next to the new one.
+          await loadResolution()
+        },
+        message: () =>
+          houseAccount.value
+            ? `บันทึกชื่อและบัญชีรับเงินของบริษัทแล้ว — "${houseAccount.value.name}"`
+            : 'บันทึกชื่อและบัญชีรับเงินของบริษัทแล้ว',
+      },
     )
-    houseAccount.value = r.data.commission_house_account ?? null
-    renamingHouseAccount.value = false
-    // The name is what the resolution table and the payout screens print for
-    // this payee, so the table below is repainted rather than left showing
-    // the old label next to the new one.
-    void loadResolution()
   } catch (e) {
     houseAccountError.value = apiErrorMessage(e, 'เปลี่ยนชื่อบัญชีบริษัทไม่สำเร็จ')
   } finally {
@@ -2606,12 +2819,18 @@ async function setOverrideMode(next: CommissionOverrideMode): Promise<void> {
   overrideModeSaving.value = true
   overrideModeError.value = ''
   try {
-    const r = await commissionApi.put<{ data: { commission_override_mode?: CommissionOverrideMode } }>(
-      '/commission-settings',
-      withCompanyBody({ commission_override_mode: next }),
+    // ADR-052 — no `?? next` fallback any more: an answer without the mode is
+    // read back, never filled in with what was asked for.
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>(
+        '/commission-settings',
+        withCompanyBody({ commission_override_mode: next }),
+      ),
+      {
+        apply: (r) => takeCommissionSettings(r, 'commission_override_mode'),
+        message: () => `เปลี่ยนที่มาของเงินหัวหน้าทีมเป็น "${overrideModeLabels[overrideMode.value]}" แล้ว`,
+      },
     )
-    overrideMode.value = r.data.commission_override_mode ?? next
-    overrideModeUnknown.value = false
   } catch (e) {
     overrideModeError.value = apiErrorMessage(e, 'เปลี่ยนโหมดไม่สำเร็จ')
   } finally {
@@ -2635,6 +2854,13 @@ async function setOverrideMode(next: CommissionOverrideMode): Promise<void> {
  * rather than showing a ceiling nobody set.
  * ═══════════════════════════════════════════════════════════════════════ */
 const maxOverrideDepth = ref<string | number>('')
+/**
+ * ADR-052 — the cap the SERVER holds, separate from the field above, which is
+ * an input and therefore a draft. The step rail and the ladder's "beyond the
+ * cap" warning state a fact about the company and read this; reading the
+ * input made them agree with a number nobody had saved.
+ */
+const savedMaxOverrideDepth = ref<number | null>(null)
 const overrideCompression = ref(false)
 const depthSaving = ref(false)
 const depthMessage = ref('')
@@ -2673,9 +2899,21 @@ async function saveMaxOverrideDepth(): Promise<void> {
     // Sent as an explicit null, never omitted: on this endpoint absence means
     // "leave the cap alone" and null means "remove it", and the admin clearing
     // the field means the second.
-    await commissionApi.put('/commission-settings', withCompanyBody({ max_override_depth: depth }))
-    depthMessage.value = depth === null ? 'บันทึกแล้ว — จ่ายขึ้นไปทั้งสาย' : `บันทึกแล้ว — จ่าย ${depth} ชั้น`
-    void loadResolution()
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>('/commission-settings', withCompanyBody({ max_override_depth: depth })),
+      {
+        apply: async (r) => {
+          await takeCommissionSettings(r, 'max_override_depth')
+          // The field shows what was STORED, not what was typed ("03" → 3).
+          maxOverrideDepth.value = savedMaxOverrideDepth.value ?? ''
+          await loadResolution()
+        },
+        message: () =>
+          savedMaxOverrideDepth.value === null
+            ? 'บันทึกจำนวนชั้นแล้ว — จ่ายขึ้นไปทั้งสาย'
+            : `บันทึกจำนวนชั้นแล้ว — จ่าย ${savedMaxOverrideDepth.value} ชั้น`,
+      },
+    )
   } catch (e) {
     depthMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -2683,18 +2921,30 @@ async function saveMaxOverrideDepth(): Promise<void> {
   }
 }
 
-async function setOverrideCompression(next: boolean): Promise<void> {
+/**
+ * `el` is the checkbox itself: `:checked` only patches the DOM when the bound
+ * value CHANGES, so after a refused save (value unchanged) the box would stay
+ * ticked over a setting that is still off. It is put back by hand to whatever
+ * the server holds.
+ */
+async function setOverrideCompression(next: boolean, el?: HTMLInputElement): Promise<void> {
   if (!effectiveCompanyId.value || compressionSaving.value || next === overrideCompression.value) return
 
   compressionSaving.value = true
   overrideModeError.value = ''
   try {
-    await commissionApi.put('/commission-settings', withCompanyBody({ override_compression: next }))
-    overrideCompression.value = next
+    await confirmSaved(
+      () => commissionApi.put<CommissionSettingsResponse>('/commission-settings', withCompanyBody({ override_compression: next })),
+      {
+        apply: (r) => takeCommissionSettings(r, 'override_compression'),
+        message: () => (overrideCompression.value ? 'เปิดการเลื่อนชั้นแทนคนที่ถูกข้ามแล้ว' : 'ปิดการเลื่อนชั้นแทนคนที่ถูกข้ามแล้ว'),
+      },
+    )
   } catch (e) {
     overrideModeError.value = apiErrorMessage(e, 'เปลี่ยนการเลื่อนชั้นไม่สำเร็จ')
   } finally {
     compressionSaving.value = false
+    if (el) el.checked = overrideCompression.value
   }
 }
 
@@ -2866,13 +3116,22 @@ const cardContext = computed<CardContext>(() => ({
     ratePct: rank.rate_type === 'percentage' ? rank.rate_value / 100 : null,
     breakaway: rank.is_breakaway_rank,
   })),
-  rankSettings: rankSettingsForm.value.trailing_window_days === ''
-    ? null
-    : {
-        trailingWindowDays: Number(rankSettingsForm.value.trailing_window_days),
-        volumeScope: rankSettingsForm.value.volume_scope,
-        recalculationFrequency: rankSettingsForm.value.recalculation_frequency,
-      },
+  /*
+   * ADR-052 — FROM THE SAVED ROW, NEVER FROM THE FORM. This read
+   * `rankSettingsForm` until 2026-10-01: typing 90 days / group / daily turned
+   * the rail green while nothing had been saved, and a UAT run was blocked a
+   * day later by "company has no rank settings". The rail is a claim about
+   * what the company HAS; a draft is not that.
+   */
+  rankSettings: agentRankSettings.value
+    ? {
+        trailingWindowDays: agentRankSettings.value.trailing_window_days ?? null,
+        // Coalesced exactly as syncRankSettingsForm() and the engine do for a
+        // row that predates the column (AgentRankSetting::volumeScope()).
+        volumeScope: agentRankSettings.value.volume_scope ?? 'personal',
+        recalculationFrequency: agentRankSettings.value.recalculation_frequency ?? null,
+      }
+    : null,
   binary: binarySettings.value
     ? {
         matchedRatePct: binarySettings.value.matched_rate_type === 'percentage'
@@ -2903,14 +3162,18 @@ const cardContext = computed<CardContext>(() => ({
   affiliate: affiliateSettings.value
     ? { attributionWindowDays: affiliateSettings.value.attribution_window_days }
     : null,
-  leaderLevelRatesPct: levelLadderDraft.value.map((row) => row.percent),
+  // The SAVED levelled rows, not the editor's draft — the draft still drives
+  // the chart (liveLevelRates), which is a labelled preview.
+  leaderLevelRatesPct: levelledOverrideRules.value.map((rule) => rule.rate_value / 100),
   leaderFlatRatePct: activeOverrideRules.value.find((rule) => !rule.level && rule.rate_type === 'percentage')
     ? activeOverrideRules.value.find((rule) => !rule.level && rule.rate_type === 'percentage')!.rate_value / 100
     : null,
-  maxOverrideDepth: maxOverrideDepth.value === '' ? null : Number(maxOverrideDepth.value),
+  // Saved values only (ADR-052) — the three inputs these used to read are
+  // drafts until their own บันทึก answers.
+  maxOverrideDepth: savedMaxOverrideDepth.value,
   overrideMode: overrideModeUnknown.value ? null : overrideMode.value,
-  withdrawalMinSatang: minWithdrawalBaht.value === '' ? null : Math.round(Number(minWithdrawalBaht.value) * 100),
-  withholdingTaxPct: whtRatePercent.value === '' ? null : Number(whtRatePercent.value),
+  withdrawalMinSatang: savedMinWithdrawalSatang.value,
+  withholdingTaxPct: savedWhtRate.value === null ? null : savedWhtRate.value / 100,
 }))
 
 /**
@@ -3355,49 +3618,113 @@ async function saveLevelLadder(): Promise<void> {
     return
   }
 
-  levelLadderSaving.value = true
   levelLadderMessage.value = ''
 
   const keptIds = new Set(draft.map((row) => row.id).filter((id): id is number => id !== null))
   const removed = levelledOverrideRules.value.filter((r) => !keptIds.has(r.id))
 
+  /*
+   * ADR-052 — a save that REMOVES stored rungs is a delete, and every delete
+   * on this screen asks first. Nothing is sent until the admin confirms; a
+   * cancel leaves the draft (and the server) exactly as they were.
+   */
+  if (removed.length > 0) {
+    const levels = removed.map((r) => `ชั้นที่ ${r.level} (${formatRate(r.rate_type, r.rate_value)})`).join(', ')
+    askBeforeDeleting({
+      title: 'บันทึกและลบอัตราหัวหน้าทีมตามชั้น',
+      body: `การบันทึกนี้จะลบ ${levels}\nหัวหน้าทีมในชั้นที่ถูกลบจะไม่ได้ค่าแนะนำจากดีลที่เกิดหลังจากนี้`,
+      confirmLabel: 'บันทึกและลบ',
+      run: () => writeLevelLadder(draft, removed),
+    })
+
+    return
+  }
+
+  await writeLevelLadder(draft, removed)
+}
+
+/** The writes behind saveLevelLadder(), once any removal has been confirmed. */
+async function writeLevelLadder(draft: LevelLadderRow[], removed: CommissionOverrideRuleItem[]): Promise<void> {
+  if (levelLadderSaving.value) return
+  levelLadderSaving.value = true
+
+  /*
+   * ADR-052 — how many of the writes below the server has already taken.
+   * The ladder is saved one row at a time (see above), so a refusal on row
+   * three leaves rows one and two STORED. Keeping the draft on screen after
+   * that would show a ladder the server does not hold — part of it saved,
+   * all of it looking unsaved — so a partial failure re-reads instead.
+   */
+  let landed = 0
+
   try {
-    for (const rule of removed) {
-      await commissionApi.delete(`/commission-override-rules/${rule.id}`)
-    }
+    await confirmSaved(
+      async () => {
+        for (const rule of removed) {
+          await commissionApi.delete(`/commission-override-rules/${rule.id}`)
+          landed += 1
+        }
 
-    for (const row of draft) {
-      const body = {
-        product_id: null,
-        product_category_id: null,
-        level: row.level,
-        rate_type: 'percentage' as RateType,
-        // Percent → basis points, rounded once. 2.5% is 250, and 2.555%
-        // typed by a human is 256, never 255.5.
-        rate_value: Math.round(row.percent * 100),
-        // Never sent alongside a level — the server refuses the pair, because
-        // one walk up one chain has one funding model. See the step-4 form.
-        override_mode: null,
-        effective_from: todayIso(),
-        effective_to: null,
-      }
+        for (const row of draft) {
+          const body = {
+            product_id: null,
+            product_category_id: null,
+            level: row.level,
+            rate_type: 'percentage' as RateType,
+            // Percent → basis points, rounded once. 2.5% is 250, and 2.555%
+            // typed by a human is 256, never 255.5.
+            rate_value: Math.round(row.percent * 100),
+            // Never sent alongside a level — the server refuses the pair, because
+            // one walk up one chain has one funding model. See the step-4 form.
+            override_mode: null,
+            effective_from: todayIso(),
+            effective_to: null,
+          }
 
-      if (row.id === null) {
-        await commissionApi.post('/commission-override-rules', withCompanyBody(body))
-      } else {
-        await commissionApi.put(`/commission-override-rules/${row.id}`, body)
-      }
-    }
+          if (row.id === null) {
+            await commissionApi.post('/commission-override-rules', withCompanyBody(body))
+          } else {
+            await commissionApi.put(`/commission-override-rules/${row.id}`, body)
+          }
+          landed += 1
+        }
+      },
+      {
+        apply: async () => {
+          levelLadderDirty.value = false
+          await loadRulesTabData()
+          // Explicit, not left to the watcher: an answer identical to the old
+          // list must still replace whatever the draft holds.
+          syncLevelLadderDraft()
+          await loadResolution()
+        },
+        // Counted off the rows the server returned, not the draft that was sent.
+        message: () => {
+          const saved = levelledOverrideRules.value
 
-    levelLadderDirty.value = false
-    levelLadderMessage.value = draft.length === 0
-      ? 'บันทึกแล้ว — ไม่จ่ายหัวหน้าทีมตามชั้น'
-      : `บันทึกแล้ว — จ่าย ${draft.length} ชั้น`
-
-    await loadRulesTabData()
-    void loadResolution()
+          return saved.length === 0
+            ? 'บันทึกอัตราหัวหน้าทีมตามชั้นแล้ว — ไม่จ่ายหัวหน้าทีมตามชั้น'
+            : `บันทึกอัตราหัวหน้าทีมตามชั้นแล้ว — จ่าย ${saved.length} ชั้น (${saved.map((r) => formatRate(r.rate_type, r.rate_value)).join(' / ')})`
+        },
+      },
+    )
   } catch (e) {
-    levelLadderMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+    const reason = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
+
+    if (landed === 0) {
+      // Nothing reached the server: the draft is still exactly what is unsaved.
+      levelLadderMessage.value = reason
+    } else {
+      levelLadderDirty.value = false
+      try {
+        await loadRulesTabData()
+        syncLevelLadderDraft()
+        await loadResolution()
+        levelLadderMessage.value = `${reason} — บันทึกไปได้บางชั้นแล้ว ตารางนี้แสดงค่าที่บันทึกอยู่จริงตอนนี้`
+      } catch {
+        levelLadderMessage.value = `${reason} — บันทึกไปได้บางชั้นแล้ว แต่โหลดค่าล่าสุดไม่สำเร็จ กรุณาโหลดหน้าใหม่ก่อนแก้ต่อ`
+      }
+    }
   } finally {
     levelLadderSaving.value = false
   }
@@ -3412,9 +3739,11 @@ async function saveLevelLadder(): Promise<void> {
  * and this is the one place their disagreement becomes visible.
  */
 const ladderRungsBeyondCap = computed<number>(() => {
-  const cap = Number(maxOverrideDepth.value)
+  // The SAVED cap (ADR-052): the warning states what step 4 enforces, and a
+  // number typed there but not saved enforces nothing.
+  const cap = savedMaxOverrideDepth.value
 
-  if (!Number.isFinite(cap) || cap <= 0) return 0
+  if (cap === null || cap <= 0) return 0
 
   return Math.max(0, levelLadderDraft.value.length - cap)
 })
@@ -3459,12 +3788,67 @@ const minWithdrawalSaving = ref(false)
 const minWithdrawalMessage = ref('')
 /** Same loud-failure rule as the basis: a floor that would not load is not "no floor". */
 const minWithdrawalUnknown = ref(false)
+/**
+ * ADR-052 — what the SERVER holds for the floor and the tax, separate from the
+ * two inputs (drafts). The step rail's answers read these; reading the inputs
+ * made it report a floor somebody had typed and never saved.
+ */
+const savedMinWithdrawalSatang = ref<number | null>(null)
+const savedWhtRate = ref<number | null>(null)
+
+/** GET and PUT /commission-withdrawal-settings both answer with this, unwrapped. */
+interface WithdrawalSettingsResponse {
+  min_withdrawal_satang?: number | null
+  wht_rate?: number | null
+}
+
+/**
+ * Put the server's floor and/or tax on screen — the saved copies always, the
+ * input only for the setting(s) the write actually sent, so saving one box
+ * never wipes a half-typed value in the other.
+ */
+function applyWithdrawalSettings(r: WithdrawalSettingsResponse, inputs: { floor: boolean; wht: boolean }): void {
+  if (r.min_withdrawal_satang !== undefined) {
+    savedMinWithdrawalSatang.value = r.min_withdrawal_satang
+    minWithdrawalUnknown.value = false
+    if (inputs.floor) {
+      minWithdrawalBaht.value = r.min_withdrawal_satang === null ? '' : (r.min_withdrawal_satang / 100).toFixed(2)
+    }
+  }
+  if (r.wht_rate !== undefined) {
+    savedWhtRate.value = r.wht_rate
+    whtUnknown.value = false
+    if (inputs.wht) whtRatePercent.value = r.wht_rate === null ? '' : (r.wht_rate / 100).toString()
+  }
+}
+
+/**
+ * Take the answer when it carries what was written, otherwise read it back —
+ * never assume the request's value landed. A read-back that fails throws, so
+ * the dialog says the screen may be behind.
+ */
+async function takeWithdrawalSettings(
+  r: WithdrawalSettingsResponse | null | undefined,
+  written: keyof WithdrawalSettingsResponse,
+  inputs: { floor: boolean; wht: boolean },
+): Promise<void> {
+  if (r && r[written] !== undefined) {
+    applyWithdrawalSettings(r, inputs)
+
+    return
+  }
+
+  await loadMinWithdrawal()
+  if (minWithdrawalUnknown.value) throw new Error('withdrawal settings could not be re-read')
+}
 
 async function loadMinWithdrawal(): Promise<void> {
   if (!effectiveCompanyId.value) {
     minWithdrawalBaht.value = ''
+    savedMinWithdrawalSatang.value = null
     minWithdrawalUnknown.value = false
     whtRatePercent.value = ''
+    savedWhtRate.value = null
     whtUnknown.value = false
 
     return
@@ -3480,11 +3864,13 @@ async function loadMinWithdrawal(): Promise<void> {
     // real answer" rule applies to both, for different reasons: no floor, and
     // no withholding.
     whtRatePercent.value = r.wht_rate === null || r.wht_rate === undefined ? '' : (r.wht_rate / 100).toString()
+    savedWhtRate.value = r.wht_rate ?? null
     whtUnknown.value = false
     // EMPTY MEANS NO MINIMUM, and that is a real setting — bound to a string
     // so "" survives as null instead of collapsing into a 0 that would be
     // saved back as a floor of zero baht.
     minWithdrawalBaht.value = r.min_withdrawal_satang === null ? '' : (r.min_withdrawal_satang / 100).toFixed(2)
+    savedMinWithdrawalSatang.value = r.min_withdrawal_satang ?? null
     minWithdrawalUnknown.value = false
   } catch {
     minWithdrawalUnknown.value = true
@@ -3558,16 +3944,30 @@ async function saveWithholdingTax(): Promise<void> {
 
   whtSaving.value = true
   try {
-    // Explicit null, never omitted: absence means "leave it alone" on this
-    // endpoint, and an admin clearing the field means "no withholding".
-    await api.put(`/commission-withdrawal-settings${companyQuery()}`, {
-      // Sent alongside because the endpoint's own rule is that the floor is
-      // `present`-required; sending only the tax would be refused.
-      min_withdrawal_satang: floor.satang,
-      wht_rate: basisPoints,
-    })
-    whtMessage.value = basisPoints === null ? 'บันทึกแล้ว — ไม่หักภาษี' : `บันทึกแล้ว — หัก ${(basisPoints / 100).toString()}%`
-    whtUnknown.value = false
+    /*
+     * ADR-052 — through commissionApi now, not plain `api`: this file's own
+     * rule (see commissionApi) is that EVERY write goes through it so the
+     * readiness banner refreshes, and these two were the exceptions.
+     */
+    await confirmSaved(
+      // Explicit null, never omitted: absence means "leave it alone" on this
+      // endpoint, and an admin clearing the field means "no withholding".
+      () => commissionApi.put<WithdrawalSettingsResponse>(`/commission-withdrawal-settings${companyQuery()}`, {
+        // Sent alongside because the endpoint's own rule is that the floor is
+        // `present`-required; sending only the tax would be refused.
+        min_withdrawal_satang: floor.satang,
+        wht_rate: basisPoints,
+      }),
+      {
+        // Both inputs re-sync: the floor in that box travelled with this save
+        // and is now stored too.
+        apply: (r) => takeWithdrawalSettings(r, 'wht_rate', { floor: true, wht: true }),
+        message: () =>
+          savedWhtRate.value === null
+            ? 'บันทึกภาษีหัก ณ ที่จ่ายแล้ว — ไม่หักภาษี'
+            : `บันทึกภาษีหัก ณ ที่จ่ายแล้ว — หัก ${(savedWhtRate.value / 100).toString()}%`,
+      },
+    )
   } catch (e) {
     whtMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -3621,9 +4021,19 @@ async function saveMinWithdrawal(): Promise<void> {
 
   minWithdrawalSaving.value = true
   try {
-    await api.put(`/commission-withdrawal-settings${companyQuery()}`, { min_withdrawal_satang: satang })
-    minWithdrawalMessage.value = satang === null ? 'บันทึกแล้ว — ไม่มีขั้นต่ำ' : 'บันทึกแล้ว'
-    minWithdrawalUnknown.value = false
+    // commissionApi, not `api` — see saveWithholdingTax().
+    await confirmSaved(
+      () => commissionApi.put<WithdrawalSettingsResponse>(`/commission-withdrawal-settings${companyQuery()}`, { min_withdrawal_satang: satang }),
+      {
+        // Only the floor's input re-syncs: the tax was not sent, so a tax being
+        // typed in the box below is left alone.
+        apply: (r) => takeWithdrawalSettings(r, 'min_withdrawal_satang', { floor: true, wht: false }),
+        message: () =>
+          savedMinWithdrawalSatang.value === null
+            ? 'บันทึกยอดขั้นต่ำในการเบิกแล้ว — ไม่มีขั้นต่ำ'
+            : `บันทึกยอดขั้นต่ำในการเบิกแล้ว — ${formatSatang(savedMinWithdrawalSatang.value)}`,
+      },
+    )
   } catch (e) {
     minWithdrawalMessage.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -3653,6 +4063,9 @@ const productsMissingPointValue = computed<ProductOption[]>(() =>
     // sellableProducts() for the lock this prevents.
     ? sellableProducts.value.filter((p) => p.pv_satang === null || p.pv_satang === undefined)
     : [])
+
+/** What PUT /products/{id} and …/company-settings answer with — only the fields read back here. */
+type ProductWriteResponse = { data?: { pv_satang?: number | null; is_active?: boolean; name?: string } } | null | undefined
 
 // One draft string per product id, so a half-typed number never touches the
 // row it came from and an abandoned edit costs nothing.
@@ -3693,13 +4106,40 @@ async function savePointValue(p: ProductOption): Promise<void> {
   pvSavingId.value = p.id
   pvError.value = ''
   try {
-    await commissionApi.put(`/products/${p.id}`, { pv_satang: next })
-    // Patch the loaded row rather than refetching the whole catalogue: the
-    // list is the only reader, and a reload here would blank every other
-    // draft the admin has in progress.
-    const row = products.value.find((x) => x.id === p.id)
-    if (row) row.pv_satang = next
-    delete pvDrafts.value[p.id]
+    await confirmSaved(
+      // Typed by assertion rather than a type argument: CommissionProductPermissions
+      // reads every `commissionApi.put(\`/products/…` in this file as source text
+      // to pin which product fields this screen may write.
+      () => commissionApi.put(`/products/${p.id}`, { pv_satang: next }) as Promise<ProductWriteResponse>,
+      {
+        apply: async (r) => {
+          const stored = r?.data
+          delete pvDrafts.value[p.id]
+
+          if (stored && stored.pv_satang !== undefined) {
+            // Patch the loaded row rather than refetching the whole catalogue:
+            // the list is the only reader, and a reload here would blank every
+            // other draft the admin has in progress. ADR-052 — patched with the
+            // value the SERVER answered, no longer with the one sent.
+            const row = products.value.find((x) => x.id === p.id)
+            if (row) row.pv_satang = stored.pv_satang
+
+            return
+          }
+
+          // An answer without the field is read back rather than assumed.
+          await loadRulesTabData()
+        },
+        message: () => {
+          const row = products.value.find((x) => x.id === p.id)
+          const pv = row?.pv_satang
+
+          return pv === null || pv === undefined
+            ? `ล้าง PV ของ "${row?.name ?? p.name}" แล้ว`
+            : `บันทึก PV ของ "${row?.name ?? p.name}" แล้ว — ${(pv / 100).toLocaleString('th-TH')}`
+        },
+      },
+    )
   } catch (e) {
     pvError.value = apiErrorMessage(e, 'บันทึก PV ไม่สำเร็จ')
   } finally {
@@ -3773,59 +4213,82 @@ async function toggleSelling(p: ProductOption): Promise<void> {
   const next = p.is_sellable_here !== true
   sellingSavingId.value = p.id
   sellingError.value = ''
+  /*
+   * `company_id` is REQUIRED on the shared route and cannot be inferred
+   * server-side — the only actor who reaches that branch is a Super Admin,
+   * who has no company of their own to infer from, and guessing would open
+   * the wrong tenant's catalogue. Step 3 renders an EmptyState until one is
+   * picked, so it is never null here in practice; the guard is what makes
+   * that true rather than assumed.
+   */
+  const companyId = effectiveCompanyId.value
+  if (p.is_shared === true && companyId === null) {
+    sellingSavingId.value = null
+
+    return
+  }
   try {
-    if (p.is_shared === true) {
-      /*
-       * `company_id` is REQUIRED and cannot be inferred server-side — the only
-       * actor who reaches this branch is a Super Admin, who has no company of
-       * their own to infer from, and guessing would open the wrong tenant's
-       * catalogue. Step 3 renders an EmptyState until one is picked, so it is
-       * never null here in practice; the guard is what makes that true rather
-       * than assumed.
-       *
-       * `is_active` alone, with no `price_satang` key: omitting it means
-       * "leave the price alone", and opening a product for sale must not also
-       * decide what it costs.
-       */
-      if (effectiveCompanyId.value === null) return
-      await commissionApi.put(`/products/${p.id}/company-settings`, {
-        company_id: effectiveCompanyId.value,
-        is_active: next,
-      })
-    } else {
-      /*
-       * A company-owned product has no per-company settings row, and the
-       * endpoint above 422s for it on purpose (ProductController::
-       * updateCompanySetting) — its price and its on/off switch live on the
-       * product itself, and a second place to set them is how the two
-       * disagree. Selling it IS `is_active` (Product::isSellableBy).
-       */
-      await commissionApi.put(`/products/${p.id}`, { is_active: next })
-    }
-    /*
-     * Patch the loaded row, never refetch. Step 2 holds a PV draft per product
-     * id while the admin types, and reloading the catalogue from here would
-     * blank every one of them mid-edit — the same reason savePointValue()
-     * gives, one step over.
-     */
-    const row = products.value.find((x) => x.id === p.id)
-    if (row) row.is_sellable_here = next
-    /*
-     * THE TABLE'S COPY OF THIS FLAG IS THE SERVER'S (`is_sellable` on the
-     * resolution row), and it is what draws the switch the admin just moved.
-     * So it is patched here too — the switch has to move on the click, not one
-     * round trip later, or the admin clicks it twice.
-     *
-     * And then it is REFETCHED anyway, which is not belt and braces: opening a
-     * product changes `max_override_per_level_satang`, because the ceiling is
-     * the worst SELLABLE product's commission divided by the chain. Leaving
-     * that stale would have step 4 offer a leader rate the guard then refuses.
-     * The catalogue list above still must not be refetched (it holds step 2's
-     * PV drafts); this payload holds nothing anybody is typing into.
-     */
-    const resolved = resolution.value?.products.find((x) => x.product_id === p.id)
-    if (resolved) resolved.is_sellable = next
-    void loadResolution()
+    await confirmSaved(
+      () => p.is_shared === true
+        /*
+         * `is_active` alone, with no `price_satang` key: omitting it means
+         * "leave the price alone", and opening a product for sale must not also
+         * decide what it costs.
+         */
+        ? commissionApi.put(`/products/${p.id}/company-settings`, {
+            company_id: companyId,
+            is_active: next,
+          }) as Promise<ProductWriteResponse>
+        /*
+         * A company-owned product has no per-company settings row, and the
+         * endpoint above 422s for it on purpose (ProductController::
+         * updateCompanySetting) — its price and its on/off switch live on the
+         * product itself, and a second place to set them is how the two
+         * disagree. Selling it IS `is_active` (Product::isSellableBy).
+         */
+        : commissionApi.put(`/products/${p.id}`, { is_active: next }) as Promise<ProductWriteResponse>,
+      {
+        apply: async (r) => {
+          /*
+           * Patch the loaded row, never refetch the catalogue. Step 2 holds a PV
+           * draft per product id while the admin types, and reloading the
+           * catalogue from here would blank every one of them mid-edit — the
+           * same reason savePointValue() gives, one step over.
+           *
+           * ADR-052 — patched with what the SERVER answered (`is_active` on both
+           * routes), never with the value that was sent.
+           */
+          const stored = r?.data?.is_active
+          const row = products.value.find((x) => x.id === p.id)
+          const resolvedBefore = resolution.value?.products.find((x) => x.product_id === p.id)
+          if (typeof stored === 'boolean') {
+            if (row) row.is_sellable_here = stored
+            if (resolvedBefore) resolvedBefore.is_sellable = stored
+          }
+          /*
+           * THE TABLE'S COPY OF THIS FLAG IS THE SERVER'S (`is_sellable` on the
+           * resolution row), and it is what draws the switch the admin just
+           * moved. It is re-read, and awaited before the dialog: opening a
+           * product changes `max_override_per_level_satang`, because the ceiling
+           * is the worst SELLABLE product's commission divided by the chain.
+           * Leaving that stale would have step 4 offer a leader rate the guard
+           * then refuses. The catalogue list above still must not be refetched
+           * (it holds step 2's PV drafts); this payload holds nothing anybody is
+           * typing into.
+           */
+          await loadResolution()
+          // And the catalogue row follows the table's answer — the server's
+          // own `is_sellable` for this company, whatever the PUT carried.
+          const resolved = resolution.value?.products.find((x) => x.product_id === p.id)
+          if (row && resolved && typeof resolved.is_sellable === 'boolean') row.is_sellable_here = resolved.is_sellable
+        },
+        message: () => {
+          const row = products.value.find((x) => x.id === p.id)
+
+          return `${row?.is_sellable_here === false ? 'ปิดขาย' : 'เปิดขาย'} "${row?.name ?? p.name}" แล้ว`
+        },
+      },
+    )
   } catch (e) {
     sellingError.value = apiErrorMessage(e, 'เปิด/ปิดขายสินค้าไม่สำเร็จ')
   } finally {
@@ -4790,16 +5253,35 @@ async function confirmCopyRates() {
   copyRatesCopying.value = true
   copyRatesError.value = ''
   try {
-    await commissionApi.post('/commission-rules/copy', {
-      from_company_id: from,
-      to_company_id: to,
-      dry_run: false,
-    })
-    // Reload before closing: the modal disappearing is the admin's signal that
-    // the rows behind it are the new ones, so it must not outrun them.
-    await loadRulesTabData()
-    void loadResolution()
-    closeCopyRatesModal()
+    await confirmSaved(
+      () => commissionApi.post<{ data?: CopyRatesResult } | null>('/commission-rules/copy', {
+        from_company_id: from,
+        to_company_id: to,
+        dry_run: false,
+      }),
+      {
+        apply: async () => {
+          // Reload before closing: the modal disappearing is the admin's signal
+          // that the rows behind it are the new ones, so it must not outrun them.
+          // Closed even if the reload fails — the copy HAS happened, and a
+          // confirm button left on screen would invite a second one.
+          try {
+            await loadRulesTabData()
+            await loadResolution()
+          } finally {
+            closeCopyRatesModal()
+          }
+        },
+        // The count and the source name the SERVER reports having copied.
+        message: (r) => {
+          const result = r?.data
+          if (!result?.agent_rates || !result.leader_rates) return 'คัดลอกอัตราค่าคอมแล้ว'
+          const copied = result.agent_rates.copied.length + result.leader_rates.copied.length
+
+          return `คัดลอกอัตราค่าคอม${result.from_company?.name ? `จาก ${result.from_company.name}` : ''} แล้ว ${copied} รายการ`
+        },
+      },
+    )
   } catch (e) {
     copyRatesError.value = apiErrorMessage(e, 'คัดลอกไม่สำเร็จ')
   } finally {
@@ -5018,8 +5500,23 @@ async function submitBinarySettings() {
       payout_cap_satang: binaryForm.value.payout_cap_thb === '' ? null : Math.round(Number(binaryForm.value.payout_cap_thb) * 100),
       carry_over_unmatched: binaryForm.value.carry_over_unmatched,
     })
-    const res = await commissionApi.put<{ data: BinarySettings }>(`/commission-binary-settings${companyQuery()}`, payload)
-    binarySettings.value = res.data
+    await confirmSaved(
+      () => commissionApi.put<{ data: BinarySettings }>(`/commission-binary-settings${companyQuery()}`, payload),
+      {
+        apply: async (res) => {
+          // ADR-052 — the form re-reads the stored row, so a value the server
+          // normalised is the one left in the box.
+          binarySettings.value = res.data
+          syncBinaryForm(res.data)
+          // Step 2's status reads structureReady, which only the probe sets.
+          await loadReadinessProbe()
+        },
+        message: (res) =>
+          res?.data?.matched_rate_type
+            ? `บันทึกการตั้งค่า Binary แล้ว — Matched ${formatRate(res.data.matched_rate_type, res.data.matched_rate_value)}`
+            : 'บันทึกการตั้งค่า Binary แล้ว',
+      },
+    )
   } catch (e) {
     binaryError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -5066,8 +5563,20 @@ async function submitMatrixSettings() {
       depth: Number(matrixForm.value.depth),
       spillover_rule: matrixForm.value.spillover_rule,
     })
-    const res = await commissionApi.put<{ data: MatrixSettings }>(`/commission-matrix-settings${companyQuery()}`, payload)
-    matrixSettings.value = res.data
+    await confirmSaved(
+      () => commissionApi.put<{ data: MatrixSettings }>(`/commission-matrix-settings${companyQuery()}`, payload),
+      {
+        apply: async (res) => {
+          matrixSettings.value = res.data
+          syncMatrixForm(res.data)
+          await loadReadinessProbe()
+        },
+        message: (res) =>
+          res?.data?.width && res.data.depth
+            ? `บันทึกโครงสร้าง Matrix แล้ว — กว้าง ${res.data.width} · ลึก ${res.data.depth} ชั้น`
+            : 'บันทึกโครงสร้าง Matrix แล้ว',
+      },
+    )
   } catch (e) {
     matrixError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -5086,28 +5595,49 @@ async function submitLevelRate() {
   savingLevelRate.value = true
   matrixError.value = ''
   try {
-    await commissionApi.post(
-      '/commission-matrix-level-rates',
-      withCompanyBody({
-        level: Number(levelRateForm.value.level),
-        rate_type: levelRateForm.value.rate_type,
-        rate_value: rateValueToBasisOrSatang(levelRateForm.value.rate_type, levelRateForm.value.rate_value_input),
-        effective_from: levelRateForm.value.effective_from,
-      }),
+    await confirmSaved(
+      () => commissionApi.post<{ data?: Partial<MatrixLevelRateItem> } | null>(
+        '/commission-matrix-level-rates',
+        withCompanyBody({
+          level: Number(levelRateForm.value.level),
+          rate_type: levelRateForm.value.rate_type,
+          rate_value: rateValueToBasisOrSatang(levelRateForm.value.rate_type, levelRateForm.value.rate_value_input),
+          effective_from: levelRateForm.value.effective_from,
+        }),
+      ),
+      {
+        apply: async () => {
+          levelRateForm.value = { level: '', rate_type: 'percentage', rate_value_input: '', effective_from: new Date().toISOString().slice(0, 10) }
+          showLevelRateForm.value = false
+          await loadMatrixTabData()
+          await loadReadinessProbe()
+        },
+        message: (r) =>
+          savedRateMessage(r?.data?.level ? `เพิ่มอัตรา Matrix ชั้นที่ ${r.data.level} แล้ว` : 'เพิ่มอัตรา Matrix แล้ว', r),
+      },
     )
-    levelRateForm.value = { level: '', rate_type: 'percentage', rate_value_input: '', effective_from: new Date().toISOString().slice(0, 10) }
-    showLevelRateForm.value = false
-    await loadMatrixTabData()
   } catch (e) {
     matrixError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ — level นี้อาจมีอยู่แล้ว')
   } finally {
     savingLevelRate.value = false
   }
 }
-async function deleteLevelRate(item: MatrixLevelRateItem) {
+function deleteLevelRate(item: MatrixLevelRateItem): void {
+  askBeforeDeleting({
+    title: 'ลบอัตรา Matrix',
+    body: `ลบอัตราชั้นที่ ${item.level} (${formatRate(item.rate_type, item.rate_value)})?\nชั้นนี้จะไม่ได้ค่าแนะนำจากดีลที่เกิดหลังจากนี้`,
+    run: () => deleteLevelRateNow(item),
+  })
+}
+async function deleteLevelRateNow(item: MatrixLevelRateItem): Promise<void> {
   try {
-    await commissionApi.delete(`/commission-matrix-level-rates/${item.id}`)
-    matrixLevelRates.value = matrixLevelRates.value.filter((x) => x.id !== item.id)
+    await confirmSaved(() => commissionApi.delete(`/commission-matrix-level-rates/${item.id}`), {
+      apply: async () => {
+        matrixLevelRates.value = matrixLevelRates.value.filter((x) => x.id !== item.id)
+        await loadReadinessProbe()
+      },
+      message: `ลบอัตรา Matrix ชั้นที่ ${item.level} แล้ว`,
+    })
   } catch (e) {
     matrixError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -5185,15 +5715,33 @@ async function submitRankSettings() {
   savingRankSettings.value = true
   rankError.value = ''
   try {
-    const res = await commissionApi.put<{ data: AgentRankSettingsData }>(
-      `/agent-rank-settings${companyQuery()}`,
-      withCompanyBody({
-        trailing_window_days: Number(rankSettingsForm.value.trailing_window_days),
-        volume_scope: rankSettingsForm.value.volume_scope,
-        recalculation_frequency: rankSettingsForm.value.recalculation_frequency,
-      }),
+    await confirmSaved(
+      () => commissionApi.put<{ data: AgentRankSettingsData }>(
+        `/agent-rank-settings${companyQuery()}`,
+        withCompanyBody({
+          trailing_window_days: Number(rankSettingsForm.value.trailing_window_days),
+          volume_scope: rankSettingsForm.value.volume_scope,
+          recalculation_frequency: rankSettingsForm.value.recalculation_frequency,
+        }),
+      ),
+      {
+        apply: async (res) => {
+          // The SAVED row is what the step rail reads (cardContext.rankSettings);
+          // the form is re-synced from it so the two cannot disagree.
+          agentRankSettings.value = res.data
+          syncRankSettingsForm(res.data)
+          await loadReadinessProbe()
+        },
+        message: (res) => {
+          const s = res?.data
+          if (!s?.trailing_window_days || !s.recalculation_frequency) return 'บันทึกการตั้งค่าการเลื่อนขั้นแล้ว'
+          const scope = (s.volume_scope ?? 'personal') === 'group' ? 'ยอดทั้งทีม' : 'ยอดที่ขายเอง'
+          const cadence = { daily: 'รายวัน', weekly: 'รายสัปดาห์', monthly: 'รายเดือน' }[s.recalculation_frequency] ?? s.recalculation_frequency
+
+          return `บันทึกการตั้งค่าการเลื่อนขั้นแล้ว — ย้อนหลัง ${s.trailing_window_days} วัน · ${scope} · คำนวณใหม่${cadence}`
+        },
+      },
     )
-    agentRankSettings.value = res.data
   } catch (e) {
     rankError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -5240,23 +5788,47 @@ async function submitRank() {
       rate_value: rateValueToBasisOrSatang(rankForm.value.rate_type, rankForm.value.rate_value_input),
       is_breakaway_rank: rankForm.value.is_breakaway_rank,
     })
-    if (editingRankId.value) {
-      await commissionApi.put(`/agent-ranks/${editingRankId.value}`, payload)
-    } else {
-      await commissionApi.post('/agent-ranks', payload)
-    }
-    resetRankForm()
-    await loadRanksTabData()
+    const editingId = editingRankId.value
+    type RankResponse = { data?: Partial<AgentRankItem> } | null
+    await confirmSaved(
+      () => editingId
+        ? commissionApi.put<RankResponse>(`/agent-ranks/${editingId}`, payload)
+        : commissionApi.post<RankResponse>('/agent-ranks', payload),
+      {
+        apply: async () => {
+          resetRankForm()
+          await loadRanksTabData()
+          await loadReadinessProbe()
+        },
+        message: (r) => {
+          const what = editingId ? 'แก้ไขอันดับ' : 'เพิ่มอันดับ'
+
+          return savedRateMessage(r?.data?.name ? `${what} "${r.data.name}" แล้ว` : `${what}แล้ว`, r)
+        },
+      },
+    )
   } catch (e) {
     rankError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
     savingRank.value = false
   }
 }
-async function deleteRank(r: AgentRankItem) {
+function deleteRank(r: AgentRankItem): void {
+  askBeforeDeleting({
+    title: 'ลบอันดับ',
+    body: `ลบอันดับ "${r.name}" (${formatRate(r.rate_type, r.rate_value)})?\nสมาชิกที่อยู่ขั้นนี้จะถูกคำนวณขั้นใหม่ในรอบถัดไป`,
+    run: () => deleteRankNow(r),
+  })
+}
+async function deleteRankNow(r: AgentRankItem): Promise<void> {
   try {
-    await commissionApi.delete(`/agent-ranks/${r.id}`)
-    agentRanks.value = agentRanks.value.filter((x) => x.id !== r.id)
+    await confirmSaved(() => commissionApi.delete(`/agent-ranks/${r.id}`), {
+      apply: async () => {
+        agentRanks.value = agentRanks.value.filter((x) => x.id !== r.id)
+        await loadReadinessProbe()
+      },
+      message: `ลบอันดับ "${r.name}" แล้ว`,
+    })
   } catch (e) {
     rankError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -5296,11 +5868,23 @@ async function submitGenerationSettings() {
   savingGenerationSettings.value = true
   generationError.value = ''
   try {
-    const res = await commissionApi.put<{ data: GenerationSettingsData }>(
-      `/commission-generation-settings${companyQuery()}`,
-      withCompanyBody({ max_generation_depth: Number(generationSettingsForm.value.max_generation_depth) }),
+    await confirmSaved(
+      () => commissionApi.put<{ data: GenerationSettingsData }>(
+        `/commission-generation-settings${companyQuery()}`,
+        withCompanyBody({ max_generation_depth: Number(generationSettingsForm.value.max_generation_depth) }),
+      ),
+      {
+        apply: async (res) => {
+          generationSettings.value = res.data
+          syncGenerationSettingsForm(res.data)
+          await loadReadinessProbe()
+        },
+        message: (res) =>
+          res?.data?.max_generation_depth
+            ? `บันทึกความลึก Generation แล้ว — ${res.data.max_generation_depth} รุ่น`
+            : 'บันทึกความลึก Generation แล้ว',
+      },
     )
-    generationSettings.value = res.data
   } catch (e) {
     generationError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -5319,28 +5903,54 @@ async function submitGenerationRule() {
   savingGenerationRule.value = true
   generationError.value = ''
   try {
-    await commissionApi.post(
-      '/commission-generation-rules',
-      withCompanyBody({
-        generation_number: Number(generationRuleForm.value.generation_number),
-        rate_type: generationRuleForm.value.rate_type,
-        rate_value: rateValueToBasisOrSatang(generationRuleForm.value.rate_type, generationRuleForm.value.rate_value_input),
-        effective_from: generationRuleForm.value.effective_from,
-      }),
+    await confirmSaved(
+      () => commissionApi.post<{ data?: Partial<GenerationRuleItem> } | null>(
+        '/commission-generation-rules',
+        withCompanyBody({
+          generation_number: Number(generationRuleForm.value.generation_number),
+          rate_type: generationRuleForm.value.rate_type,
+          rate_value: rateValueToBasisOrSatang(generationRuleForm.value.rate_type, generationRuleForm.value.rate_value_input),
+          effective_from: generationRuleForm.value.effective_from,
+        }),
+      ),
+      {
+        apply: async () => {
+          generationRuleForm.value = { generation_number: '', rate_type: 'percentage', rate_value_input: '', effective_from: new Date().toISOString().slice(0, 10) }
+          showGenerationRuleForm.value = false
+          await loadGenerationTabData()
+          // A generation slot with no rate row pays nobody — the probe's
+          // verdict for this plan turns on exactly this list.
+          await loadReadinessProbe()
+        },
+        message: (r) =>
+          savedRateMessage(
+            r?.data?.generation_number ? `เพิ่มอัตรา Generation รุ่นที่ ${r.data.generation_number} แล้ว` : 'เพิ่มอัตรา Generation แล้ว',
+            r,
+          ),
+      },
     )
-    generationRuleForm.value = { generation_number: '', rate_type: 'percentage', rate_value_input: '', effective_from: new Date().toISOString().slice(0, 10) }
-    showGenerationRuleForm.value = false
-    await loadGenerationTabData()
   } catch (e) {
     generationError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ — generation นี้อาจมีอยู่แล้ว')
   } finally {
     savingGenerationRule.value = false
   }
 }
-async function deleteGenerationRule(item: GenerationRuleItem) {
+function deleteGenerationRule(item: GenerationRuleItem): void {
+  askBeforeDeleting({
+    title: 'ลบอัตรา Generation',
+    body: `ลบอัตรารุ่นที่ ${item.generation_number} (${formatRate(item.rate_type, item.rate_value)})?\nรุ่นนี้จะไม่ได้ค่าแนะนำจากดีลที่เกิดหลังจากนี้`,
+    run: () => deleteGenerationRuleNow(item),
+  })
+}
+async function deleteGenerationRuleNow(item: GenerationRuleItem): Promise<void> {
   try {
-    await commissionApi.delete(`/commission-generation-rules/${item.id}`)
-    generationRules.value = generationRules.value.filter((x) => x.id !== item.id)
+    await confirmSaved(() => commissionApi.delete(`/commission-generation-rules/${item.id}`), {
+      apply: async () => {
+        generationRules.value = generationRules.value.filter((x) => x.id !== item.id)
+        await loadReadinessProbe()
+      },
+      message: `ลบอัตรา Generation รุ่นที่ ${item.generation_number} แล้ว`,
+    })
   } catch (e) {
     generationError.value = apiErrorMessage(e, 'ลบไม่สำเร็จ')
   }
@@ -5370,14 +5980,25 @@ async function submitAffiliateSettings() {
   savingAffiliate.value = true
   affiliateError.value = ''
   try {
-    const res = await commissionApi.put<{ data: AffiliateAttributionSettingsData }>(
-      `/affiliate-attribution-settings${companyQuery()}`,
-      withCompanyBody({
-        attribution_window_days: Number(affiliateForm.value.attribution_window_days),
-        new_vs_returning_rate_differential_enabled: affiliateForm.value.new_vs_returning_rate_differential_enabled,
-      }),
+    await confirmSaved(
+      () => commissionApi.put<{ data: AffiliateAttributionSettingsData }>(
+        `/affiliate-attribution-settings${companyQuery()}`,
+        withCompanyBody({
+          attribution_window_days: Number(affiliateForm.value.attribution_window_days),
+          new_vs_returning_rate_differential_enabled: affiliateForm.value.new_vs_returning_rate_differential_enabled,
+        }),
+      ),
+      {
+        apply: (res) => {
+          affiliateSettings.value = res.data
+          syncAffiliateForm(res.data)
+        },
+        message: (res) =>
+          res?.data?.attribution_window_days
+            ? `บันทึกการตั้งค่า Affiliate แล้ว — นับเครดิตลิงก์ ${res.data.attribution_window_days} วัน`
+            : 'บันทึกการตั้งค่า Affiliate แล้ว',
+      },
     )
-    affiliateSettings.value = res.data
   } catch (e) {
     affiliateError.value = apiErrorMessage(e, 'บันทึกไม่สำเร็จ')
   } finally {
@@ -6335,7 +6956,7 @@ watch(companyPlanType, (pt) => {
                       >{{ levelLadderSaving ? 'กำลังบันทึก...' : 'บันทึก' }}</button>
                     </div>
 
-                    <p v-if="levelLadderMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="ladder-message">
+                    <p v-if="levelLadderMessage" class="mt-1.5 text-[12.5px] font-bold text-rose-600" data-test="ladder-message">
                       {{ levelLadderMessage }}
                     </p>
 
@@ -6351,7 +6972,7 @@ watch(companyPlanType, (pt) => {
                       class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 text-[12px] font-bold text-amber-800"
                       data-test="ladder-beyond-cap"
                     >
-                      ตั้งไว้ {{ levelLadderDraft.length }} ชั้น แต่ขั้นที่ 4 จำกัดการจ่ายไว้ที่ {{ maxOverrideDepth }} ชั้น —
+                      ตั้งไว้ {{ levelLadderDraft.length }} ชั้น แต่ขั้นที่ 4 จำกัดการจ่ายไว้ที่ {{ savedMaxOverrideDepth }} ชั้น —
                       อีก {{ ladderRungsBeyondCap }} ชั้นล่างสุดจะไม่ได้เงิน
                     </p>
                     <p v-if="!canEditCommissionConfig" class="mt-1.5 text-[12px] text-slate-400">
@@ -6476,7 +7097,7 @@ watch(companyPlanType, (pt) => {
                 <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
                   <div v-for="lr in matrixLevelRates" :key="lr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
                     <p class="text-sm font-bold text-slate-900">Level {{ lr.level }} — {{ formatRate(lr.rate_type, lr.rate_value) }}</p>
-                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteLevelRate(lr)">ลบ</button>
+                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" :data-test="`delete-matrix-level-rate-${lr.id}`" @click="deleteLevelRate(lr)">ลบ</button>
                   </div>
                 </TransitionGroup>
               </div>
@@ -6484,16 +7105,16 @@ watch(companyPlanType, (pt) => {
               <!-- ═══════════ Agent Ranks / Stairstep-Breakaway ═══════════ -->
               <div v-else-if="viewingPlanType === 'stairstep_breakaway'" class="pt-2 border-t border-slate-100" data-test="plan-structure-ranks">
                 <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2 px-1 mt-2">ค่าตั้งระดับบริษัทของแผนอันดับ (Stairstep)</h3>
-                <div v-if="rankError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ rankError }}</div>
-                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" @submit.prevent="submitRankSettings">
+                <div v-if="rankError" class="mb-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700" data-test="rank-error">{{ rankError }}</div>
+                <form class="p-4 rounded-xl bg-white/95 border border-slate-200 grid grid-cols-2 gap-3" data-test="rank-settings-form" @submit.prevent="submitRankSettings">
                   <fieldset class="contents" :disabled="!canEditCommissionConfig">
                     <div>
                       <label class="text-sm font-bold text-slate-500">หน้าต่างคำนวณยอดย้อนหลัง (วัน)</label>
-                      <input v-model="rankSettingsForm.trailing_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" />
+                      <input v-model="rankSettingsForm.trailing_window_days" type="number" min="1" max="3650" required class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" data-test="rank-trailing-window" />
                     </div>
                     <div>
                       <label class="text-sm font-bold text-slate-500">ความถี่คำนวณอันดับใหม่</label>
-                      <select v-model="rankSettingsForm.recalculation_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white">
+                      <select v-model="rankSettingsForm.recalculation_frequency" class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm bg-white" data-test="rank-recalc-frequency">
                         <option value="daily">รายวัน</option>
                         <option value="weekly">รายสัปดาห์</option>
                         <option value="monthly">รายเดือน</option>
@@ -6581,7 +7202,7 @@ watch(companyPlanType, (pt) => {
                     </div>
                     <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
                       <button class="text-sm font-bold text-slate-500 hover:text-slate-700" @click="openEditRank(r)">แก้ไข</button>
-                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteRank(r)">ลบ</button>
+                      <button class="text-xs font-bold text-rose-600 hover:text-rose-700" :data-test="`delete-rank-${r.id}`" @click="deleteRank(r)">ลบ</button>
                     </div>
                   </div>
                 </TransitionGroup>
@@ -6615,7 +7236,7 @@ watch(companyPlanType, (pt) => {
                 <TransitionGroup v-else tag="div" name="list-fade" class="space-y-2">
                   <div v-for="gr in generationRules" :key="gr.id" class="bg-white/95 border border-slate-200 rounded-xl p-4 flex items-center justify-between">
                     <p class="text-sm font-bold text-slate-900">Generation {{ gr.generation_number }} — {{ formatRate(gr.rate_type, gr.rate_value) }}</p>
-                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteGenerationRule(gr)">ลบ</button>
+                    <button v-if="canEditCommissionConfig" class="text-xs font-bold text-rose-600 hover:text-rose-700" :data-test="`delete-generation-rule-${gr.id}`" @click="deleteGenerationRule(gr)">ลบ</button>
                   </div>
                 </TransitionGroup>
               </div>
@@ -7551,7 +8172,7 @@ watch(companyPlanType, (pt) => {
                       class="ml-auto text-xs font-bold text-rose-600 hover:text-rose-700"
                       :disabled="houseAccountSaving"
                       data-test="house-account-disable"
-                      @click="saveHouseAccount(false)"
+                      @click="requestDisableHouseAccount"
                     >
                       {{ houseAccountSaving ? 'กำลังบันทึก…' : 'ปิดใช้งาน' }}
                     </button>
@@ -7793,7 +8414,7 @@ watch(companyPlanType, (pt) => {
                       {{ depthSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
                     </button>
                   </div>
-                  <p v-if="depthMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="override-depth-message">
+                  <p v-if="depthMessage" class="mt-1.5 text-[12.5px] font-bold text-rose-600" data-test="override-depth-message">
                     {{ depthMessage }}
                   </p>
 
@@ -7814,7 +8435,7 @@ watch(companyPlanType, (pt) => {
                       :disabled="!canEditCommissionConfig || compressionSaving"
                       class="mt-0.5 h-4 w-4 rounded border-slate-300 disabled:opacity-60"
                       data-test="override-compression-toggle"
-                      @change="setOverrideCompression(($event.target as HTMLInputElement).checked)"
+                      @change="setOverrideCompression(($event.target as HTMLInputElement).checked, $event.target as HTMLInputElement)"
                     />
                     <label for="override-compression-toggle" class="text-[12.5px] text-slate-700 leading-snug">
                       <span class="font-bold">เลื่อนชั้นแทนคนที่ถูกข้าม</span>
@@ -7950,7 +8571,7 @@ watch(companyPlanType, (pt) => {
                         </div>
                         <div v-if="canEditCommissionConfig" class="flex items-center gap-2 shrink-0">
                           <button class="text-sm font-bold text-slate-500 hover:text-slate-700" :data-test="`edit-leader-rule-${r.id}`" @click="openEditOverrideForm(r)">แก้ไข</button>
-                          <button class="text-xs font-bold text-rose-600 hover:text-rose-700" @click="deleteOverrideRule(r)">ลบ</button>
+                          <button class="text-xs font-bold text-rose-600 hover:text-rose-700" :data-test="`delete-leader-rule-${r.id}`" @click="deleteOverrideRule(r)">ลบ</button>
                         </div>
                       </div>
                     </TransitionGroup>
@@ -8069,7 +8690,7 @@ watch(companyPlanType, (pt) => {
                     {{ minWithdrawalSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
                   </button>
                 </div>
-                <p v-if="minWithdrawalMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="withdrawal-min-message">
+                <p v-if="minWithdrawalMessage" class="mt-1.5 text-[12.5px] font-bold text-rose-600" data-test="withdrawal-min-message">
                   {{ minWithdrawalMessage }}
                 </p>
                 <p class="mt-2 text-[12px] text-slate-400">
@@ -8147,7 +8768,7 @@ watch(companyPlanType, (pt) => {
                     {{ whtSaving ? 'กำลังบันทึก...' : 'บันทึก' }}
                   </button>
                 </div>
-                <p v-if="whtMessage" class="mt-1.5 text-[12.5px] font-bold text-slate-600" data-test="wht-message">
+                <p v-if="whtMessage" class="mt-1.5 text-[12.5px] font-bold text-rose-600" data-test="wht-message">
                   {{ whtMessage }}
                 </p>
                 <p class="mt-2 text-[12px] text-slate-400">
@@ -8550,7 +9171,7 @@ watch(companyPlanType, (pt) => {
 
     <!-- อัตราตัวแทนผู้ขาย — opened from step 3 -->
     <div v-if="showRuleForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRuleForm">
-      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRule">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" data-test="rule-form" @submit.prevent="submitRule">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
             <p class="text-xs font-bold tracking-wide text-brand-700">{{ editingRuleId ? 'แก้ไข' : 'เพิ่ม' }}อัตราค่าแนะนำสมาชิกผู้ขาย</p>
@@ -8561,7 +9182,7 @@ watch(companyPlanType, (pt) => {
           </button>
         </div>
         <div class="flex-1 min-h-0 overflow-y-auto py-3 -mx-1 px-1 space-y-3">
-          <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">{{ ruleFormError }}</div>
+          <div v-if="ruleFormError" class="px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700" data-test="rule-form-error">{{ ruleFormError }}</div>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div class="col-span-2">
               <label class="text-sm font-bold text-slate-500">ขอบเขต</label>
@@ -8624,6 +9245,7 @@ watch(companyPlanType, (pt) => {
                 step="0.01"
                 required
                 class="mt-1 w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                data-test="rule-form-rate-value"
                 @input="recheckRuleCapDebounced"
                 @blur="recheckRuleCap"
               />
@@ -8860,7 +9482,7 @@ watch(companyPlanType, (pt) => {
 
     <!-- ขั้นอันดับ (Stairstep) — opened from step 2's อันดับ structure -->
     <div v-if="showRankForm" class="fixed inset-0 z-[1000] bg-black/60 flex items-center justify-center p-4" @click.self="resetRankForm">
-      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" @submit.prevent="submitRank">
+      <form class="w-[70vw] min-w-[320px] max-w-[70vw] h-[60vh] p-5 rounded-2xl bg-white shadow-2xl flex flex-col" data-test="rank-form" @submit.prevent="submitRank">
         <div class="shrink-0 flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
           <div class="min-w-0">
             <p class="text-xs font-bold tracking-wide text-slate-400">{{ editingRankId ? 'แก้ไข' : 'เพิ่ม' }}ขั้นอันดับ (Stairstep)</p>
@@ -9008,5 +9630,23 @@ watch(companyPlanType, (pt) => {
         </div>
       </div>
     </div>
+
+    <!--
+      ADR-052 — the one "are you sure" for every delete on this screen (see
+      askBeforeDeleting). Inside <main>, never a sibling of it: a multi-root
+      template breaks App.vue's <Transition mode="out-in"> around RouterView
+      (AcademyManagementView's ConfirmDialogs carry the same note).
+    -->
+    <ConfirmDialog
+      :show="pendingDelete !== null"
+      variant="danger"
+      :title="pendingDelete?.title ?? ''"
+      :body="pendingDelete?.body ?? ''"
+      :busy="pendingDeleteBusy"
+      :confirm-label="pendingDelete?.confirmLabel ?? 'ลบ'"
+      data-test="delete-confirm"
+      @confirm="confirmPendingDelete"
+      @update:show="cancelPendingDelete"
+    />
   </main>
 </template>

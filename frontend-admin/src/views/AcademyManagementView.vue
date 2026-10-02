@@ -33,6 +33,9 @@ import { useActiveCompanyStore } from '@/stores/activeCompany'
 import CompanyScopeNotice from '@/design-system/components/CompanyScopeNotice.vue'
 import { classifyEmbedUrl, toEmbedUrl } from '@/utils/embedUrl'
 import { readStored, writeStored } from '@/utils/safeStorage'
+// ADR-052 — the one "saved" dialog, raised only after a 2xx AND after the
+// screen shows what the server stored.
+import { confirmSaved } from '@/composables/useSaveFeedback'
 // TASK-188 §4.B3 — the builder's copy, defined once. Four of these strings used
 // to exist twice in this file and two of the pairs had already drifted.
 import {
@@ -457,6 +460,26 @@ async function loadAll() {
 }
 onMounted(loadAll)
 
+/*
+ * ADR-052 — re-reads that THROW.
+ *
+ * Every loader on this screen keeps its failure in its own error ref instead
+ * of throwing, because each is also a mount/tab loader whose error has a
+ * place on screen. After a WRITE that is the wrong shape: confirmSaved()
+ * needs a failed re-read to throw, so the dialog says "saved, but the screen
+ * may be behind" instead of a plain "saved" over values that did not refresh.
+ * These wrap the loaders and re-throw; the loaders themselves are unchanged.
+ */
+async function reloadAll(): Promise<void> {
+  await loadAll()
+  if (errorMessage.value) throw new Error(errorMessage.value)
+}
+
+/** ` “name”` when there is a name to quote, nothing when there is not — never an empty pair of quotes. */
+function quoted(name: string | null | undefined): string {
+  return name ? ` “${name}”` : ''
+}
+
 // ── Section (Module) form — ADR-009: pure grouping/ordering, no
 // content fields at all anymore (those moved to Lesson below). ──
 const showModuleForm = ref(false)
@@ -472,16 +495,24 @@ async function submitModule() {
   submittingModule.value = true
   moduleError.value = ''
   try {
-    await api.post('/modules', {
-      title: moduleForm.value.title,
-      cert_tier_id: Number(moduleForm.value.cert_tier_id),
-      product_id: moduleForm.value.product_id ? Number(moduleForm.value.product_id) : null,
-      is_published: moduleForm.value.is_published,
-      ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
-    })
-    moduleForm.value = { title: '', cert_tier_id: '', product_id: '', is_published: true }
-    showModuleForm.value = false
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.post<{ data?: ModuleItem }>('/modules', {
+          title: moduleForm.value.title,
+          cert_tier_id: Number(moduleForm.value.cert_tier_id),
+          product_id: moduleForm.value.product_id ? Number(moduleForm.value.product_id) : null,
+          is_published: moduleForm.value.is_published,
+          ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+        }),
+      {
+        apply: async () => {
+          moduleForm.value = { title: '', cert_tier_id: '', product_id: '', is_published: true }
+          showModuleForm.value = false
+          await reloadAll()
+        },
+        message: (res) => `เพิ่ม Section${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     moduleError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ — ตรวจสอบข้อมูลที่กรอก (${e.status})` : 'บันทึกไม่สำเร็จ'
   } finally {
@@ -519,15 +550,23 @@ function cancelEditModule() {
 }
 async function saveEditModule(moduleId: number) {
   try {
-    await api.put(`/modules/${moduleId}`, {
-      title: editModuleForm.value.title,
-      cert_tier_id: Number(editModuleForm.value.cert_tier_id),
-      product_id: editModuleForm.value.product_id ? Number(editModuleForm.value.product_id) : null,
-      sort_order: Number(editModuleForm.value.sort_order),
-      is_published: editModuleForm.value.is_published,
-    })
-    editingModuleId.value = null
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.put<{ data?: ModuleItem }>(`/modules/${moduleId}`, {
+          title: editModuleForm.value.title,
+          cert_tier_id: Number(editModuleForm.value.cert_tier_id),
+          product_id: editModuleForm.value.product_id ? Number(editModuleForm.value.product_id) : null,
+          sort_order: Number(editModuleForm.value.sort_order),
+          is_published: editModuleForm.value.is_published,
+        }),
+      {
+        apply: async () => {
+          editingModuleId.value = null
+          await reloadAll()
+        },
+        message: (res) => `บันทึก Section${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   }
@@ -542,9 +581,16 @@ function deleteModule(moduleId: number) {
 async function confirmDeleteModule() {
   const moduleId = pendingDeleteModuleId.value
   if (moduleId === null) return
+  // The stored row's title (from GET /modules) — read before it is gone.
+  const title = modules.value.find((m) => m.id === moduleId)?.title
   try {
-    await api.delete(`/modules/${moduleId}`)
-    modules.value = modules.value.filter((m) => m.id !== moduleId)
+    await confirmSaved(() => api.delete(`/modules/${moduleId}`), {
+      // Re-read rather than filter locally: the Section's lessons go with it,
+      // and the outline, inspector and progress denominators all derive from
+      // this list.
+      apply: () => reloadAll(),
+      message: `ลบ Section${quoted(title)} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
   } finally {
@@ -685,13 +731,29 @@ async function onModuleDrop(target: ModuleItem) {
   savingOrder.value = true
   reorderError.value = ''
   try {
-    const res = await api.put<{ data: ModuleItem[] }>(`/cert-tiers/${certTierId}/modules/reorder`, {
-      module_ids: reordered.map((m) => m.id),
-    })
-    // Take the server's renumbering rather than assuming 0..n-1: sort_order
-    // is displayed on the row and in the edit form.
-    const byId = new Map(res.data.map((m) => [m.id, m]))
-    modules.value = modules.value.map((m) => byId.get(m.id) ?? m)
+    await confirmSaved(
+      () =>
+        api.put<{ data: ModuleItem[] }>(`/cert-tiers/${certTierId}/modules/reorder`, {
+          module_ids: reordered.map((m) => m.id),
+        }),
+      {
+        // Take the server's renumbering rather than assuming 0..n-1: sort_order
+        // is displayed on the row and in the edit form. The rows are placed in
+        // the order the SERVER returned, so the list on screen is the stored
+        // order, not merely the dragged one.
+        apply: (res) => {
+          const byId = new Map(res.data.map((m) => [m.id, m]))
+          const serverIndex = new Map(res.data.map((m, i) => [m.id, i]))
+          modules.value = moduleGroups.value.flatMap((g) => {
+            const rows = g.modules.map((m) => byId.get(m.id) ?? m)
+            if (g.key !== group.key) return rows
+
+            return [...rows].sort((x, y) => (serverIndex.get(x.id) ?? 0) - (serverIndex.get(y.id) ?? 0))
+          })
+        },
+        message: 'จัดลำดับ Section แล้ว',
+      },
+    )
   } catch (e) {
     modules.value = previous
     reorderError.value =
@@ -740,10 +802,18 @@ async function onLessonDrop(m: ModuleItem, target: ModuleLessonItem) {
   savingOrder.value = true
   reorderError.value = ''
   try {
-    const res = await api.put<{ data: ModuleLessonItem[] }>(`/modules/${m.id}/lessons/reorder`, {
-      lesson_ids: reordered.map((l) => l.id),
-    })
-    m.lessons = res.data
+    await confirmSaved(
+      () =>
+        api.put<{ data: ModuleLessonItem[] }>(`/modules/${m.id}/lessons/reorder`, {
+          lesson_ids: reordered.map((l) => l.id),
+        }),
+      {
+        apply: (res) => {
+          m.lessons = res.data
+        },
+        message: 'จัดลำดับบทเรียนแล้ว',
+      },
+    )
   } catch (e) {
     m.lessons = previous
     reorderError.value =
@@ -784,21 +854,24 @@ const expandedSectionSettingsId = ref<number | null>(null)
  */
 const sectionSettingsForm = ref<Record<number, { enforce_sequential: boolean; drip_days: string; is_published: boolean }>>({})
 const savingSectionSettingsFor = ref<number | null>(null)
-const sectionSettingsSavedFor = ref<number | null>(null)
 const sectionSettingsError = ref('')
 
-function toggleSectionSettings(m: ModuleItem) {
-  sectionSettingsSavedFor.value = null
-  sectionSettingsError.value = ''
-  if (expandedSectionSettingsId.value === m.id) {
-    expandedSectionSettingsId.value = null
-    return
-  }
+/** Seeds the gear form FROM a stored Section — on open, and again from the server's answer after a save. */
+function seedSectionSettingsForm(m: ModuleItem) {
   sectionSettingsForm.value[m.id] = {
     enforce_sequential: m.enforce_sequential,
     drip_days: m.drip_days === null ? '' : String(m.drip_days),
     is_published: m.is_published,
   }
+}
+
+function toggleSectionSettings(m: ModuleItem) {
+  sectionSettingsError.value = ''
+  if (expandedSectionSettingsId.value === m.id) {
+    expandedSectionSettingsId.value = null
+    return
+  }
+  seedSectionSettingsForm(m)
   expandedSectionSettingsId.value = m.id
 }
 
@@ -813,20 +886,33 @@ async function saveSectionSettings(m: ModuleItem) {
   const form = sectionSettingsForm.value[m.id]
   if (!form) return
   savingSectionSettingsFor.value = m.id
-  sectionSettingsSavedFor.value = null
   sectionSettingsError.value = ''
   try {
-    const raw = form.drip_days.trim()
-    const res = await api.put<{ data: ModuleItem }>(`/modules/${m.id}`, {
-      enforce_sequential: form.enforce_sequential,
-      drip_days: raw === '' ? null : Number(raw),
-      is_published: form.is_published,
-    })
-    // Patch the row in place rather than reloading the whole screen: a full
-    // loadAll() would collapse the lessons panel the admin is working in.
-    const index = modules.value.findIndex((x) => x.id === m.id)
-    if (index !== -1) modules.value[index] = res.data
-    sectionSettingsSavedFor.value = m.id
+    // String() first: v-model on an <input type="number"> hands back a NUMBER
+    // once the admin types (Vue casts type=number), and `7.trim()` threw —
+    // so every save after editing this field failed with the generic
+    // "บันทึกการตั้งค่าไม่สำเร็จ" and never reached the server (ADR-052 audit).
+    const raw = String(form.drip_days ?? '').trim()
+    await confirmSaved(
+      () =>
+        api.put<{ data: ModuleItem }>(`/modules/${m.id}`, {
+          enforce_sequential: form.enforce_sequential,
+          drip_days: raw === '' ? null : Number(raw),
+          is_published: form.is_published,
+        }),
+      {
+        apply: (res) => {
+          // Patch the row in place rather than reloading the whole screen: a full
+          // loadAll() would collapse the lessons panel the admin is working in.
+          const index = modules.value.findIndex((x) => x.id === m.id)
+          if (index !== -1) modules.value[index] = res.data
+          // ADR-052 — and the FORM too. It used to keep what was typed, so a
+          // value the server normalised (or ignored) still read as stored.
+          seedSectionSettingsForm(res.data)
+        },
+        message: (res) => `บันทึกการตั้งค่า Section${quoted(res.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     sectionSettingsError.value = e instanceof ApiError ? e.message : 'บันทึกการตั้งค่าไม่สำเร็จ'
   } finally {
@@ -1036,33 +1122,37 @@ async function submitLesson(moduleId: number) {
   try {
     const isFileUpload = isUploadableType(form.content_type) && form.source_type === 'upload'
 
-    if (isFileUpload) {
-      const file = lessonVideoFile.value[moduleId]
-      if (!file) {
-        lessonError.value[moduleId] = 'กรุณาเลือกไฟล์'
-        return
+    const file = lessonVideoFile.value[moduleId]
+    if (isFileUpload && !file) {
+      lessonError.value[moduleId] = 'กรุณาเลือกไฟล์'
+      return
+    }
+
+    // ADR-052 — ONE dialog for the admin's one action. The chunk POSTs inside
+    // postFileWithProgress are transport, not saves of their own.
+    const write = async (): Promise<{ data?: ModuleLessonItem }> => {
+      if (isFileUpload && file) {
+        const upload = api.postFileWithProgress<{ data?: ModuleLessonItem }>(
+          `/modules/${moduleId}/lessons`,
+          file,
+          {
+            title: form.title,
+            content_type: form.content_type,
+            source_type: 'upload',
+            is_published: form.is_published ? '1' : '0',
+            // Prohibited by the API for anything that is not an upload, so
+            // it is sent on this branch only.
+            is_downloadable: form.is_downloadable ? '1' : '0',
+          },
+          (fraction) => {
+            lessonUploadProgress.value[moduleId] = fraction
+          },
+        )
+        lessonUploadAbort[moduleId] = upload.abort
+        return upload.promise
       }
 
-      const upload = api.postFileWithProgress(
-        `/modules/${moduleId}/lessons`,
-        file,
-        {
-          title: form.title,
-          content_type: form.content_type,
-          source_type: 'upload',
-          is_published: form.is_published ? '1' : '0',
-          // Prohibited by the API for anything that is not an upload, so
-          // it is sent on this branch only.
-          is_downloadable: form.is_downloadable ? '1' : '0',
-        },
-        (fraction) => {
-          lessonUploadProgress.value[moduleId] = fraction
-        },
-      )
-      lessonUploadAbort[moduleId] = upload.abort
-      await upload.promise
-    } else {
-      await api.post(`/modules/${moduleId}/lessons`, {
+      return api.post<{ data?: ModuleLessonItem }>(`/modules/${moduleId}/lessons`, {
         title: form.title,
         content_type: form.content_type,
         // A video that's an iframe/external embed still uses
@@ -1077,11 +1167,16 @@ async function submitLesson(moduleId: number) {
       })
     }
 
-    lessonForm.value[moduleId] = defaultLessonForm()
-    lessonVideoFile.value[moduleId] = null
-    showLessonForm.value[moduleId] = false
-    expandedModuleId.value = moduleId
-    await loadAll()
+    await confirmSaved(write, {
+      apply: async () => {
+        lessonForm.value[moduleId] = defaultLessonForm()
+        lessonVideoFile.value[moduleId] = null
+        showLessonForm.value[moduleId] = false
+        expandedModuleId.value = moduleId
+        await reloadAll()
+      },
+      message: (res) => `เพิ่มบทเรียน${quoted(res?.data?.title)} แล้ว`,
+    })
   } catch (e) {
     // ApiError.extractMessage() already surfaces Laravel's real validation
     // message (and a readable 413), so show it rather than a status code.
@@ -1321,35 +1416,37 @@ async function saveEditLesson(lessonId: number) {
       }
     : {}
   try {
-    if (editLessonVideoFile.value) {
-      // Same chunked transport as create. `_method=PUT` rides along as a
-      // normal form field, which is how Laravel method-spoofing works and
-      // is preserved unchanged through the chunked path.
-      const fields: Record<string, string> = {
-        _method: 'PUT',
-        title: editLessonForm.value.title,
-        sort_order: editLessonForm.value.sort_order,
-        xp_reward: editLessonForm.value.xp_reward,
-        is_published: editLessonForm.value.is_published ? '1' : '0',
-        // ADR-031 §2.4 — travels with the multipart replace too, or saving a
-        // new file would silently revert the flag to the form's default.
-        is_optional: editLessonForm.value.is_optional ? '1' : '0',
-        ...Object.fromEntries(Object.entries(retypeFields).map(([k, v]) => [k, String(v)])),
-      }
-      if (sendsFile) fields.is_downloadable = editLessonForm.value.is_downloadable ? '1' : '0'
+    const write = async (): Promise<{ data?: ModuleLessonItem }> => {
+      if (editLessonVideoFile.value) {
+        // Same chunked transport as create. `_method=PUT` rides along as a
+        // normal form field, which is how Laravel method-spoofing works and
+        // is preserved unchanged through the chunked path.
+        const fields: Record<string, string> = {
+          _method: 'PUT',
+          title: editLessonForm.value.title,
+          sort_order: editLessonForm.value.sort_order,
+          xp_reward: editLessonForm.value.xp_reward,
+          is_published: editLessonForm.value.is_published ? '1' : '0',
+          // ADR-031 §2.4 — travels with the multipart replace too, or saving a
+          // new file would silently revert the flag to the form's default.
+          is_optional: editLessonForm.value.is_optional ? '1' : '0',
+          ...Object.fromEntries(Object.entries(retypeFields).map(([k, v]) => [k, String(v)])),
+        }
+        if (sendsFile) fields.is_downloadable = editLessonForm.value.is_downloadable ? '1' : '0'
 
-      const upload = api.postFileWithProgress(
-        `/module-lessons/${lessonId}`,
-        editLessonVideoFile.value,
-        fields,
-        (fraction) => {
-          editLessonUploadProgress.value = fraction
-        },
-      )
-      editLessonUploadAbort = upload.abort
-      await upload.promise
-    } else {
-      await api.put(`/module-lessons/${lessonId}`, {
+        const upload = api.postFileWithProgress<{ data?: ModuleLessonItem }>(
+          `/module-lessons/${lessonId}`,
+          editLessonVideoFile.value,
+          fields,
+          (fraction) => {
+            editLessonUploadProgress.value = fraction
+          },
+        )
+        editLessonUploadAbort = upload.abort
+        return upload.promise
+      }
+
+      return api.put<{ data?: ModuleLessonItem }>(`/module-lessons/${lessonId}`, {
         title: editLessonForm.value.title,
         ...retypeFields,
         // Prohibited by the API for an uploaded lesson (§5 rule 6 — the
@@ -1362,13 +1459,24 @@ async function saveEditLesson(lessonId: number) {
         is_optional: editLessonForm.value.is_optional,
       })
     }
-    // The lesson IS the new type now. Without this the inspector (which keeps
-    // its form open across a save) would offer to retype it a second time.
-    editingLessonContentType.value = editLessonForm.value.content_type
-    editingLessonIsUpload.value = sendsFile
-    editingLessonId.value = null
-    editLessonVideoFile.value = null
-    await loadAll()
+
+    await confirmSaved(write, {
+      apply: async () => {
+        // The lesson IS the new type now. Without this the inspector (which keeps
+        // its form open across a save) would offer to retype it a second time.
+        editingLessonContentType.value = editLessonForm.value.content_type
+        editingLessonIsUpload.value = sendsFile
+        editingLessonId.value = null
+        editLessonVideoFile.value = null
+        await reloadAll()
+        // ADR-052 — the inspector keeps this form open across a save, so its
+        // checkboxes must show what the SERVER stored, not what was ticked.
+        // Re-seeded from the reloaded row (which also re-reads the type).
+        const stored = modules.value.flatMap((x) => x.lessons).find((x) => x.id === lessonId)
+        if (stored && selectedLessonId.value === lessonId) seedEditLessonForm(stored)
+      },
+      message: (res) => `บันทึกบทเรียน${quoted(res?.data?.title)} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = editLessonUploadCancelled
       ? 'ยกเลิกการอัปโหลดแล้ว'
@@ -1428,13 +1536,18 @@ async function confirmDeleteLesson() {
   if (!l) return
   deletingLesson.value = true
   try {
-    await api.delete(`/module-lessons/${l.id}`)
-    // Selecting a row that no longer exists leaves the inspector rendering
-    // a lesson that is gone until the next click.
-    if (selectedLessonId.value === l.id) selectedLessonId.value = null
-    if (editingLessonId.value === l.id) editingLessonId.value = null
-    pendingDeleteLesson.value = null
-    await loadAll()
+    await confirmSaved(() => api.delete(`/module-lessons/${l.id}`), {
+      apply: async () => {
+        // Selecting a row that no longer exists leaves the inspector rendering
+        // a lesson that is gone until the next click.
+        if (selectedLessonId.value === l.id) selectedLessonId.value = null
+        if (editingLessonId.value === l.id) editingLessonId.value = null
+        pendingDeleteLesson.value = null
+        await reloadAll()
+      },
+      // The stored row's title (from GET /modules), not anything typed.
+      message: `ลบบทเรียน${quoted(l.title)} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
   } finally {
@@ -1491,6 +1604,12 @@ async function loadLessonProgress(lessonId: number) {
   }
 }
 
+/** ADR-052 — loadLessonProgress() keeps its failure in `lessonProgressError`; after a write it must throw. */
+async function reloadLessonProgress(lessonId: number): Promise<void> {
+  await loadLessonProgress(lessonId)
+  if (lessonProgressError.value) throw new Error(lessonProgressError.value)
+}
+
 function progressRowName(row: LessonProgressRow): string {
   const user = row.user
   return user ? `${user.first_name} ${user.last_name}`.trim() : `ผู้ใช้ #${row.user_id}`
@@ -1525,12 +1644,30 @@ async function confirmCompletionOverride() {
   const pending = pendingCompletionOverride.value
   if (!pending) return
   overridingCompletion.value = true
+  lessonProgressError.value = ''
   try {
-    await api.post(`/module-lessons/${pending.lesson.id}/completions/override`, { user_id: pending.row.user_id })
-    // An override writes a completion, so the ความคืบหน้าตัวแทน fractions move —
-    // refresh them, but only if that tab has ever been opened (the endpoint is
-    // several GROUP BY passes and is throttled server-side).
-    if (progressLoadedOnce.value) await loadProgressSummary()
+    await confirmSaved(
+      () =>
+        api.post<{ data?: { module_lesson?: { title?: string } | null } }>(
+          `/module-lessons/${pending.lesson.id}/completions/override`,
+          { user_id: pending.row.user_id },
+        ),
+      {
+        apply: async () => {
+          // ADR-052 — this panel used to stay exactly as it was after an
+          // override, so nothing on screen confirmed it. Re-read it.
+          await reloadLessonProgress(pending.lesson.id)
+          // An override writes a completion, so the ความคืบหน้าตัวแทน fractions move —
+          // refresh them, but only if that tab has ever been opened (the endpoint is
+          // several GROUP BY passes and is throttled server-side).
+          if (progressLoadedOnce.value) await reloadProgressSummary()
+        },
+        // The learner's name is the stored progress row's; the lesson title is
+        // the server's answer where it carries one.
+        message: (res) =>
+          `บันทึกว่า ${progressRowName(pending.row)} เรียนจบบทเรียน${quoted(res?.data?.module_lesson?.title ?? pending.lesson.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     lessonProgressError.value = e instanceof ApiError ? e.message : 'ทำเครื่องหมายว่าเรียนจบไม่สำเร็จ'
   } finally {
@@ -1644,11 +1781,9 @@ onMounted(loadCompletionSettings)
  */
 const showCompletionSettingsForm = ref(false)
 const savingCompletionSettings = ref(false)
-const completionSettingsSaved = ref(false)
 
 function toggleCompletionSettingsForm() {
   showCompletionSettingsForm.value = !showCompletionSettingsForm.value
-  completionSettingsSaved.value = false
   const current = completionSettings.value
   if (showCompletionSettingsForm.value && current) {
     completionSettingsForm.value = {
@@ -1666,16 +1801,31 @@ async function saveCompletionSettings() {
   }
   savingCompletionSettings.value = true
   completionSettingsError.value = ''
-  completionSettingsSaved.value = false
   try {
-    const res = await api.put<{ data: AcademyCompletionSettings }>('/academy-completion-settings', {
-      video_watch_percent: Number(completionSettingsForm.value.video_watch_percent),
-      pdf_read_percent: Number(completionSettingsForm.value.pdf_read_percent),
-      quiz_pass_percent: Number(completionSettingsForm.value.quiz_pass_percent),
-      ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
-    })
-    completionSettings.value = res.data
-    completionSettingsSaved.value = true
+    await confirmSaved(
+      () =>
+        api.put<{ data: AcademyCompletionSettings }>('/academy-completion-settings', {
+          video_watch_percent: Number(completionSettingsForm.value.video_watch_percent),
+          pdf_read_percent: Number(completionSettingsForm.value.pdf_read_percent),
+          quiz_pass_percent: Number(completionSettingsForm.value.quiz_pass_percent),
+          ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+        }),
+      {
+        apply: (res) => {
+          completionSettings.value = res.data
+          // ADR-052 — the form used to keep what was TYPED after a save, so a
+          // value the server stored differently still read as saved.
+          completionSettingsForm.value = {
+            video_watch_percent: String(res.data.video_watch_percent),
+            pdf_read_percent: String(res.data.pdf_read_percent),
+            quiz_pass_percent: String(res.data.quiz_pass_percent),
+          }
+        },
+        // Every number quoted is the server's.
+        message: (res) =>
+          `บันทึกเกณฑ์การเรียนจบแล้ว — ดูวิดีโอ ${res.data.video_watch_percent}% · อ่านเอกสาร ${res.data.pdf_read_percent}% · ผ่านแบบทดสอบ ${res.data.quiz_pass_percent}%`,
+      },
+    )
   } catch (e) {
     completionSettingsError.value = e instanceof ApiError ? e.message : 'บันทึกเกณฑ์ไม่สำเร็จ'
   } finally {
@@ -1714,31 +1864,47 @@ const quizError = ref('')
  */
 const quizSettingsForm = ref<Record<number, { quiz_pass_percent: string; quiz_blocks_completion: boolean }>>({})
 const savingQuizSettingsFor = ref<number | null>(null)
-const quizSettingsSavedFor = ref<number | null>(null)
 
-function ensureQuizSettingsForm(lesson: ModuleLessonItem) {
-  if (quizSettingsForm.value[lesson.id]) return
+/** Seeds the per-lesson quiz settings form FROM a stored lesson. */
+function seedQuizSettingsForm(lesson: ModuleLessonItem) {
   quizSettingsForm.value[lesson.id] = {
     quiz_pass_percent: lesson.quiz_pass_percent === null ? '' : String(lesson.quiz_pass_percent),
     quiz_blocks_completion: lesson.quiz_blocks_completion,
   }
 }
 
+function ensureQuizSettingsForm(lesson: ModuleLessonItem) {
+  if (quizSettingsForm.value[lesson.id]) return
+  seedQuizSettingsForm(lesson)
+}
+
 async function saveQuizSettings(lessonId: number) {
   const form = quizSettingsForm.value[lessonId]
   if (!form) return
   savingQuizSettingsFor.value = lessonId
-  quizSettingsSavedFor.value = null
   quizError.value = ''
   try {
-    const raw = form.quiz_pass_percent.trim()
-    await api.put(`/module-lessons/${lessonId}`, {
-      quiz_pass_percent: raw === '' ? null : Number(raw),
-      quiz_blocks_completion: form.quiz_blocks_completion,
-    })
-    await loadAll()
-    expandedQuizLessonId.value = lessonId
-    quizSettingsSavedFor.value = lessonId
+    // String() first — same type=number cast as saveSectionSettings: a typed
+    // pass mark arrives as a number and `.trim()` threw before the PUT.
+    const raw = String(form.quiz_pass_percent ?? '').trim()
+    await confirmSaved(
+      () =>
+        api.put<{ data?: ModuleLessonItem }>(`/module-lessons/${lessonId}`, {
+          quiz_pass_percent: raw === '' ? null : Number(raw),
+          quiz_blocks_completion: form.quiz_blocks_completion,
+        }),
+      {
+        apply: async () => {
+          await reloadAll()
+          expandedQuizLessonId.value = lessonId
+          // ADR-052 — ensureQuizSettingsForm() keeps a cached form, so the
+          // typed values used to outlive the save. Refill from the stored row.
+          const stored = modules.value.flatMap((m) => m.lessons).find((l) => l.id === lessonId)
+          if (stored) seedQuizSettingsForm(stored)
+        },
+        message: (res) => `บันทึกการตั้งค่าแบบทดสอบของบทเรียน${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     quizError.value = e instanceof ApiError ? e.message : 'บันทึกการตั้งค่าแบบทดสอบไม่สำเร็จ'
   } finally {
@@ -1821,6 +1987,9 @@ async function reloadOpenLessonQuiz(): Promise<void> {
   const lessonId = expandedQuizLessonId.value
   await loadAll()
   expandedQuizLessonId.value = lessonId
+  // ADR-052 — a write's confirmSaved() (here and in QuizQuestionEditor) needs
+  // a failed re-read to THROW, so it can say the screen may be behind.
+  if (errorMessage.value) throw new Error(errorMessage.value)
 }
 
 // ── ADR-030 §2.3/§2.5 — attach / detach a LIBRARY quiz ──────────────
@@ -1883,9 +2052,14 @@ async function attachQuiz(lesson: ModuleLessonItem, quizId: number) {
   attachingQuizId.value = quizId
   quizError.value = ''
   try {
-    await api.put(`/module-lessons/${lesson.id}/quiz`, { quiz_id: quizId })
-    showQuizPickerFor.value = null
-    await reloadOpenLessonQuiz()
+    await confirmSaved(() => api.put<{ data?: ModuleLessonItem }>(`/module-lessons/${lesson.id}/quiz`, { quiz_id: quizId }), {
+      apply: async () => {
+        showQuizPickerFor.value = null
+        await reloadOpenLessonQuiz()
+      },
+      // The quiz the server says is now attached — not the row that was clicked.
+      message: (res) => `เชื่อมโยงชุดคำถาม${quoted(res?.data?.quiz?.title)} กับบทเรียนแล้ว`,
+    })
   } catch (e) {
     availableQuizzesError.value = e instanceof ApiError ? e.message : 'เชื่อมโยงแบบทดสอบไม่สำเร็จ'
   } finally {
@@ -1944,10 +2118,16 @@ async function confirmDetachQuiz() {
   if (!lesson) return
   detaching.value = true
   quizError.value = ''
+  // The stored link's title, read before the unlink clears it.
+  const quizTitle = lesson.quiz?.title
   try {
-    await api.delete(`/module-lessons/${lesson.id}/quiz`)
-    showQuizPickerFor.value = null
-    await reloadOpenLessonQuiz()
+    await confirmSaved(() => api.delete(`/module-lessons/${lesson.id}/quiz`), {
+      apply: async () => {
+        showQuizPickerFor.value = null
+        await reloadOpenLessonQuiz()
+      },
+      message: `ยกเลิกการเชื่อมโยงชุดคำถาม${quoted(quizTitle)} แล้ว`,
+    })
   } catch (e) {
     quizError.value = e instanceof ApiError ? e.message : 'ยกเลิกการเชื่อมโยงไม่สำเร็จ'
   } finally {
@@ -2110,21 +2290,39 @@ function lessonGateSummary(l: ModuleLessonItem): string {
 const showExamForm = ref(false)
 const examForm = ref({ title: '', cert_tier_id: '', passing_score: '70' })
 const examFormError = ref('')
+const submittingExam = ref(false)
 async function submitExam() {
   if (isSuperAdmin.value && !selectedCompanyId.value) {
     examFormError.value = 'กรุณาเลือกบริษัทก่อนบันทึก'
     return
   }
   examFormError.value = ''
-  await api.post('/exams', {
-    title: examForm.value.title,
-    cert_tier_id: Number(examForm.value.cert_tier_id),
-    passing_score: Number(examForm.value.passing_score),
-    ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
-  })
-  examForm.value = { title: '', cert_tier_id: '', passing_score: '70' }
-  showExamForm.value = false
-  await loadAll()
+  submittingExam.value = true
+  // ADR-052 — this write had no error handling at all: a 422 became an
+  // unhandled rejection and the form just sat there looking unsaved-or-saved.
+  try {
+    await confirmSaved(
+      () =>
+        api.post<{ data?: ExamItem }>('/exams', {
+          title: examForm.value.title,
+          cert_tier_id: Number(examForm.value.cert_tier_id),
+          passing_score: Number(examForm.value.passing_score),
+          ...(isSuperAdmin.value ? { company_id: selectedCompanyId.value } : {}),
+        }),
+      {
+        apply: async () => {
+          examForm.value = { title: '', cert_tier_id: '', passing_score: '70' }
+          showExamForm.value = false
+          await reloadAll()
+        },
+        message: (res) => `เพิ่มแบบประเมินผล${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
+  } catch (e) {
+    examFormError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ — ${e.message}` : 'บันทึกไม่สำเร็จ'
+  } finally {
+    submittingExam.value = false
+  }
 }
 
 // ── Exam edit/delete (Academy Sprint 2 — previously create-only) ──
@@ -2139,23 +2337,53 @@ function cancelEditExam() {
 }
 async function saveEditExam(examId: number) {
   try {
-    await api.put(`/exams/${examId}`, {
-      title: editExamForm.value.title,
-      cert_tier_id: Number(editExamForm.value.cert_tier_id),
-      passing_score: Number(editExamForm.value.passing_score),
-    })
-    editingExamId.value = null
-    await loadAll()
+    await confirmSaved(
+      () =>
+        api.put<{ data?: ExamItem }>(`/exams/${examId}`, {
+          title: editExamForm.value.title,
+          cert_tier_id: Number(editExamForm.value.cert_tier_id),
+          passing_score: Number(editExamForm.value.passing_score),
+        }),
+      {
+        apply: async () => {
+          editingExamId.value = null
+          await reloadAll()
+        },
+        message: (res) => `บันทึกแบบประเมินผล${quoted(res?.data?.title)} แล้ว`,
+      },
+    )
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   }
 }
-async function deleteExam(examId: number) {
+/*
+ * ADR-052 — deleting an exam (with its whole question bank) used to fire
+ * straight off the trash icon. It now asks first, like every delete here.
+ */
+const pendingDeleteExam = ref<ExamItem | null>(null)
+const deletingExam = ref(false)
+function deleteExam(ex: ExamItem) {
+  pendingDeleteExam.value = ex
+}
+async function confirmDeleteExam() {
+  const ex = pendingDeleteExam.value
+  if (!ex) return
+  deletingExam.value = true
   try {
-    await api.delete(`/exams/${examId}`)
-    exams.value = exams.value.filter((e) => e.id !== examId)
+    await confirmSaved(() => api.delete(`/exams/${ex.id}`), {
+      apply: async () => {
+        if (expandedExamId.value === ex.id) expandedExamId.value = null
+        delete questionsByExam.value[ex.id]
+        await reloadAll()
+      },
+      // The stored row's title (from GET /exams), not anything typed.
+      message: `ลบแบบประเมินผล${quoted(ex.title)} แล้ว`,
+    })
   } catch (e) {
     errorMessage.value = e instanceof ApiError ? `ลบไม่สำเร็จ (${e.status})` : 'ลบไม่สำเร็จ'
+  } finally {
+    deletingExam.value = false
+    pendingDeleteExam.value = null
   }
 }
 
@@ -2237,6 +2465,12 @@ async function loadQuestionsFor(examId: number) {
   }
 }
 
+/** ADR-052 — loadQuestionsFor() keeps its failure in `questionError`; after a write it must throw. */
+async function reloadExamQuestions(examId: number): Promise<void> {
+  await loadQuestionsFor(examId)
+  if (questionError.value) throw new Error(questionError.value)
+}
+
 const newQuestionText = ref<Record<number, string>>({})
 const addingQuestionFor = ref<number | null>(null)
 async function addQuestion(examId: number) {
@@ -2245,9 +2479,13 @@ async function addQuestion(examId: number) {
   addingQuestionFor.value = examId
   questionError.value = ''
   try {
-    await api.post(`/exams/${examId}/questions`, { question_text: text })
-    newQuestionText.value[examId] = ''
-    await loadQuestionsFor(examId)
+    await confirmSaved(() => api.post(`/exams/${examId}/questions`, { question_text: text }), {
+      apply: async () => {
+        newQuestionText.value[examId] = ''
+        await reloadExamQuestions(examId)
+      },
+      message: 'เพิ่มคำถามแล้ว',
+    })
   } catch (e) {
     questionError.value = e instanceof ApiError ? `เพิ่มคำถามไม่สำเร็จ (${e.status})` : 'เพิ่มคำถามไม่สำเร็จ'
   } finally {
@@ -2255,12 +2493,33 @@ async function addQuestion(examId: number) {
   }
 }
 
-async function deleteQuestion(examId: number, questionId: number) {
+/*
+ * ADR-052 — question and option deletes asked nothing before; both now go
+ * through ConfirmDialog. One pending slot each, carrying the exam id so the
+ * re-read after the delete refreshes the right bank.
+ */
+const pendingDeleteExamQuestion = ref<{ examId: number; question: ExamQuestionItem } | null>(null)
+const pendingDeleteExamOption = ref<{ examId: number; option: ExamQuestionOptionItem } | null>(null)
+const deletingExamQuestionPart = ref(false)
+
+function deleteQuestion(examId: number, question: ExamQuestionItem) {
+  pendingDeleteExamQuestion.value = { examId, question }
+}
+async function confirmDeleteQuestion() {
+  const pending = pendingDeleteExamQuestion.value
+  if (!pending) return
+  deletingExamQuestionPart.value = true
+  questionError.value = ''
   try {
-    await api.delete(`/exam-questions/${questionId}`)
-    await loadQuestionsFor(examId)
+    await confirmSaved(() => api.delete(`/exam-questions/${pending.question.id}`), {
+      apply: () => reloadExamQuestions(pending.examId),
+      message: 'ลบคำถามแล้ว',
+    })
   } catch (e) {
     questionError.value = e instanceof ApiError ? `ลบคำถามไม่สำเร็จ (${e.status})` : 'ลบคำถามไม่สำเร็จ'
+  } finally {
+    deletingExamQuestionPart.value = false
+    pendingDeleteExamQuestion.value = null
   }
 }
 
@@ -2279,13 +2538,17 @@ async function addOption(examId: number, questionId: number) {
   addingOptionFor.value = questionId
   questionError.value = ''
   try {
-    await api.post(`/exam-questions/${questionId}/options`, { option_text: text })
-    newOptionText.value[questionId] = ''
-    await loadQuestionsFor(examId)
-    // Keep focus in the input so an admin can add several options in a
-    // row without re-clicking — wait a tick for the re-render first.
-    await nextTick()
-    optionInputEls[questionId]?.focus()
+    await confirmSaved(() => api.post(`/exam-questions/${questionId}/options`, { option_text: text }), {
+      apply: async () => {
+        newOptionText.value[questionId] = ''
+        await reloadExamQuestions(examId)
+        // Keep focus in the input so an admin can add several options in a
+        // row without re-clicking — wait a tick for the re-render first.
+        await nextTick()
+        optionInputEls[questionId]?.focus()
+      },
+      message: 'เพิ่มตัวเลือกแล้ว',
+    })
   } catch (e) {
     questionError.value = e instanceof ApiError ? `เพิ่มตัวเลือกไม่สำเร็จ (${e.status})` : 'เพิ่มตัวเลือกไม่สำเร็จ'
   } finally {
@@ -2294,20 +2557,40 @@ async function addOption(examId: number, questionId: number) {
 }
 
 async function markOptionCorrect(examId: number, optionId: number) {
+  questionError.value = ''
   try {
-    await api.put(`/exam-question-options/${optionId}`, { is_correct: true })
-    await loadQuestionsFor(examId)
+    await confirmSaved(
+      () => api.put<{ data?: { option_text?: string } }>(`/exam-question-options/${optionId}`, { is_correct: true }),
+      {
+        apply: () => reloadExamQuestions(examId),
+        // Quoted from the server's answer, not from the row that was clicked.
+        message: (res) =>
+          res?.data?.option_text ? `ตั้ง “${res.data.option_text}” เป็นคำตอบที่ถูกต้องแล้ว` : 'บันทึกคำตอบที่ถูกต้องแล้ว',
+      },
+    )
   } catch (e) {
     questionError.value = e instanceof ApiError ? `บันทึกไม่สำเร็จ (${e.status})` : 'บันทึกไม่สำเร็จ'
   }
 }
 
-async function deleteOption(examId: number, optionId: number) {
+function deleteOption(examId: number, option: ExamQuestionOptionItem) {
+  pendingDeleteExamOption.value = { examId, option }
+}
+async function confirmDeleteOption() {
+  const pending = pendingDeleteExamOption.value
+  if (!pending) return
+  deletingExamQuestionPart.value = true
+  questionError.value = ''
   try {
-    await api.delete(`/exam-question-options/${optionId}`)
-    await loadQuestionsFor(examId)
+    await confirmSaved(() => api.delete(`/exam-question-options/${pending.option.id}`), {
+      apply: () => reloadExamQuestions(pending.examId),
+      message: 'ลบตัวเลือกแล้ว',
+    })
   } catch (e) {
     questionError.value = e instanceof ApiError ? `ลบตัวเลือกไม่สำเร็จ (${e.status})` : 'ลบตัวเลือกไม่สำเร็จ'
+  } finally {
+    deletingExamQuestionPart.value = false
+    pendingDeleteExamOption.value = null
   }
 }
 
@@ -2383,6 +2666,12 @@ async function loadProgressSummary() {
     progressLoading.value = false
     progressLoadedOnce.value = true
   }
+}
+
+/** ADR-052 — loadProgressSummary() keeps its failure in `progressError`; after a write it must throw. */
+async function reloadProgressSummary(): Promise<void> {
+  await loadProgressSummary()
+  if (progressError.value) throw new Error(progressError.value)
 }
 
 /** Debounced: `q` is a server round-trip now, not a filter over memory. */
@@ -2470,10 +2759,20 @@ async function confirmGrantCertification() {
   grantingTierKey.value = key
   grantError.value = ''
   try {
-    await api.post('/user-certifications', { user_id: agentId, cert_tier_id: tier.id })
-    // Only the progress readout changed — reloading the whole screen would
-    // also collapse whatever the admin had open on the โมดูล tab.
-    await loadProgressSummary()
+    await confirmSaved(
+      () =>
+        api.post<{ data?: { cert_tier?: { name?: string } | null } }>('/user-certifications', {
+          user_id: agentId,
+          cert_tier_id: tier.id,
+        }),
+      {
+        // Only the progress readout changed — reloading the whole screen would
+        // also collapse whatever the admin had open on the โมดูล tab.
+        apply: () => reloadProgressSummary(),
+        // The tier the server says it granted.
+        message: (res) => `อนุมัติใบรับรอง${quoted(res?.data?.cert_tier?.name ?? tier.name)} แล้ว`,
+      },
+    )
   } catch (e) {
     if (e instanceof ApiError && e.status === 422) {
       const body = e.body as { errors?: Record<string, string[]> }
@@ -2607,7 +2906,6 @@ async function confirmGrantCertification() {
         </div>
         <p v-if="completionSettingsError" class="mt-2 text-xs font-bold text-rose-600">{{ completionSettingsError }}</p>
         <div class="mt-3 flex items-center justify-end gap-2">
-          <span v-if="completionSettingsSaved" class="text-[11px] font-bold text-emerald-600">บันทึกแล้ว</span>
           <button class="btn-primary" :disabled="savingCompletionSettings || completionSettingsLoading" @click="saveCompletionSettings">
             {{ savingCompletionSettings ? 'กำลังบันทึก...' : 'บันทึกเกณฑ์' }}
           </button>
@@ -3187,7 +3485,6 @@ async function confirmGrantCertification() {
               <button class="btn-primary" :disabled="savingSectionSettingsFor === m.id" @click.stop="saveSectionSettings(m)">
                 {{ savingSectionSettingsFor === m.id ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า' }}
               </button>
-              <span v-if="sectionSettingsSavedFor === m.id" class="text-[11px] font-bold text-emerald-600">บันทึกแล้ว</span>
             </div>
           </div>
 
@@ -3786,11 +4083,14 @@ async function confirmGrantCertification() {
                         <Icon name="settings" :size="14" class="text-slate-400 shrink-0" />
                         <span class="min-w-0 flex-1">
                           <span class="text-xs font-bold text-slate-900 block">การตั้งค่าแบบทดสอบของบทเรียนนี้</span>
-                          <span class="text-[11px] text-slate-500 block truncate">
+                          <!-- ADR-052 — the summary states what is STORED on the
+                               lesson, never the half-typed form below it: it is
+                               what an admin reads to know the gate is on. -->
+                          <span class="text-[11px] text-slate-500 block truncate" data-test="quiz-settings-summary">
                             เกณฑ์ผ่าน
-                            {{ quizSettingsForm[l.id]!.quiz_pass_percent === '' ? 'ตามค่าของบริษัท' : quizSettingsForm[l.id]!.quiz_pass_percent + '%' }}
+                            {{ l.quiz_pass_percent === null ? 'ตามค่าของบริษัท' : l.quiz_pass_percent + '%' }}
                             ·
-                            {{ quizSettingsForm[l.id]!.quiz_blocks_completion ? 'ต้องทำให้ผ่านจึงจะเรียนจบได้' : 'ไม่บังคับต้องผ่าน' }}
+                            {{ l.quiz_blocks_completion ? 'ต้องทำให้ผ่านจึงจะเรียนจบได้' : 'ไม่บังคับต้องผ่าน' }}
                           </span>
                         </span>
                         <Icon
@@ -3859,7 +4159,6 @@ async function confirmGrantCertification() {
                         >
                           {{ savingQuizSettingsFor === l.id ? 'กำลังบันทึก...' : 'บันทึกการตั้งค่า' }}
                         </button>
-                        <span v-if="quizSettingsSavedFor === l.id" class="text-[11px] font-bold text-emerald-600">บันทึกแล้ว</span>
                       </div>
                     </div>
 
@@ -4141,7 +4440,9 @@ async function confirmGrantCertification() {
         </div>
         <p v-if="examFormError" class="col-span-2 text-xs font-bold text-rose-600">{{ examFormError }}</p>
         <div class="col-span-2 flex justify-end">
-          <button type="submit" class="btn-primary">บันทึก</button>
+          <button type="submit" class="btn-primary" :disabled="submittingExam">
+            {{ submittingExam ? 'กำลังบันทึก...' : 'บันทึก' }}
+          </button>
         </div>
       </form>
       <p v-if="questionError" class="mb-2 text-xs font-bold text-rose-600">{{ questionError }}</p>
@@ -4187,7 +4488,7 @@ async function confirmGrantCertification() {
               <button class="text-slate-400 hover:text-brand-600" title="แก้ไข" @click="startEditExam(ex)">
                 <Icon name="pencil" :size="16" />
               </button>
-              <button class="text-rose-600 hover:text-rose-700" title="ลบ" @click="deleteExam(ex.id)">
+              <button class="text-rose-600 hover:text-rose-700" title="ลบ" data-test="delete-exam" @click="deleteExam(ex)">
                 <Icon name="trash" :size="16" />
               </button>
             </div>
@@ -4202,7 +4503,7 @@ async function confirmGrantCertification() {
                 <div v-for="q in questionsByExam[ex.id]" :key="q.id" class="p-3 rounded-lg bg-slate-50/60 border border-slate-100">
                   <div class="flex items-center justify-between gap-2 mb-1.5">
                     <p class="text-sm font-bold text-slate-700">{{ q.question_text }}</p>
-                    <button class="text-rose-500 hover:text-rose-700 shrink-0" title="ลบคำถาม" @click="deleteQuestion(ex.id, q.id)">
+                    <button class="text-rose-500 hover:text-rose-700 shrink-0" title="ลบคำถาม" data-test="delete-exam-question" @click="deleteQuestion(ex.id, q)">
                       <Icon name="trash" :size="14" />
                     </button>
                   </div>
@@ -4217,7 +4518,7 @@ async function confirmGrantCertification() {
                         <Icon v-if="opt.is_correct" name="check" :size="9" class="text-white" />
                       </button>
                       <span :class="opt.is_correct ? 'font-bold text-emerald-700' : 'text-slate-600'" class="flex-1">{{ opt.option_text }}</span>
-                      <button class="text-slate-300 hover:text-rose-600" title="ลบตัวเลือก" @click="deleteOption(ex.id, opt.id)">
+                      <button class="text-slate-300 hover:text-rose-600" title="ลบตัวเลือก" data-test="delete-exam-option" @click="deleteOption(ex.id, opt)">
                         <Icon name="x" :size="12" />
                       </button>
                     </div>
@@ -4511,6 +4812,35 @@ async function confirmGrantCertification() {
       :busy="retypeSaving"
       @confirm="confirmRetypeLesson"
       @update:show="(v) => { if (!v) pendingRetype = null }"
+    />
+    <!-- ADR-052 — the exam bank's three deletes, which used to fire off the
+         click with no question asked. -->
+    <ConfirmDialog
+      :show="pendingDeleteExam !== null"
+      variant="danger"
+      title="ลบแบบประเมินผล"
+      :body="pendingDeleteExam ? `ลบแบบประเมินผล “${pendingDeleteExam.title}” พร้อมคำถามทั้งหมดในชุด การลบย้อนกลับไม่ได้ ยืนยันหรือไม่?` : ''"
+      :busy="deletingExam"
+      @confirm="confirmDeleteExam"
+      @update:show="(v) => { if (!v) pendingDeleteExam = null }"
+    />
+    <ConfirmDialog
+      :show="pendingDeleteExamQuestion !== null"
+      variant="danger"
+      title="ลบคำถาม"
+      :body="pendingDeleteExamQuestion ? `ลบคำถาม “${pendingDeleteExamQuestion.question.question_text}” พร้อมตัวเลือกทั้งหมด ยืนยันหรือไม่?` : ''"
+      :busy="deletingExamQuestionPart"
+      @confirm="confirmDeleteQuestion"
+      @update:show="(v) => { if (!v) pendingDeleteExamQuestion = null }"
+    />
+    <ConfirmDialog
+      :show="pendingDeleteExamOption !== null"
+      variant="danger"
+      title="ลบตัวเลือก"
+      :body="pendingDeleteExamOption ? `ลบตัวเลือก “${pendingDeleteExamOption.option.option_text}” ยืนยันหรือไม่?` : ''"
+      :busy="deletingExamQuestionPart"
+      @confirm="confirmDeleteOption"
+      @update:show="(v) => { if (!v) pendingDeleteExamOption = null }"
     />
     <ConfirmDialog
       :show="pendingGrant !== null"

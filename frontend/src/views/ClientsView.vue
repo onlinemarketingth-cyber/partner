@@ -1151,8 +1151,9 @@ async function submitReferral() {
     referralForm.value = { product_id: '', branch: '', preferred_time: '' }
     referralFormError.value = ''
     showReferralForm.value = false
-    await refreshSelectedClient()
+    const fresh = await refreshSelectedClient()
     toast.success('เพิ่มสินค้าที่สนใจแล้ว')
+    warnIfStale(fresh)
   } catch (e) {
     // The BR-1 422 branch is left exactly as-is — its translated sentence
     // is more specific than anything the shared normalizer can produce.
@@ -1183,23 +1184,32 @@ async function submitReferral() {
  * full list reload.
  */
 async function onCoAgentSaved() {
-  await refreshSelectedClient()
+  warnIfStale(await refreshSelectedClient())
 }
 
 // Re-fetches just the open client (not the whole list) so the drawer's
 // "สินค้าที่สนใจ" section shows the brand-new referral immediately.
-async function refreshSelectedClient() {
-  if (!selectedClientId.value) return
+//
+// ADR-052 — resolves true when the drawer now shows the server's copy. It
+// used to swallow a failure silently, which left the drawer showing the
+// state from BEFORE a successful write next to a success toast — exactly
+// the "only true after F5" case. Callers that just wrote something pass
+// a false result to warnIfStale(), which says the SCREEN may be out of
+// date without calling the (successful) save a failure.
+async function refreshSelectedClient(): Promise<boolean> {
+  if (!selectedClientId.value) return false
   try {
     const res = await api.get<{ data: ClientItem }>(`/clients/${selectedClientId.value}`, pageAbort.signal)
     const idx = clients.value.findIndex((c) => c.id === selectedClientId.value)
     if (idx !== -1) clients.value[idx] = res.data
+    return true
   } catch {
-    // Silent — the referral itself was created successfully (the part
-    // that matters); the drawer just won't reflect it until the next
-    // full list reload. Not worth surfacing a second error on top of a
-    // successful create.
+    return false
   }
+}
+
+function warnIfStale(fresh: boolean): void {
+  if (!fresh) toast.info('บันทึกแล้ว แต่โหลดข้อมูลล่าสุดไม่สำเร็จ — ข้อมูลบนหน้าจออาจไม่เป็นปัจจุบัน')
 }
 
 function formatDateTime(iso: string | null): string {
@@ -1314,8 +1324,9 @@ async function updateStatus(statusKey: string) {
   errorMessage.value = ''
   try {
     await api.put(`/clients/${selectedClientId.value}`, { status: statusKey })
-    await refreshSelectedClient()
+    const fresh = await refreshSelectedClient()
     toast.success('อัปเดตสถานะแล้ว')
+    warnIfStale(fresh)
   } catch (e) {
     reportDrawerError(e, 'เปลี่ยนสถานะไม่สำเร็จ')
   } finally {
@@ -1334,9 +1345,10 @@ async function updateCategory(categoryIdValue: string) {
     await api.put(`/clients/${selectedClientId.value}`, {
       client_category_id: categoryIdValue ? Number(categoryIdValue) : null,
     })
-    await refreshSelectedClient()
+    const fresh = await refreshSelectedClient()
     await loadClients()
     toast.success('อัปเดตประเภทลูกค้าแล้ว')
+    warnIfStale(fresh)
   } catch (e) {
     reportDrawerError(e, 'เปลี่ยนประเภทลูกค้าไม่สำเร็จ')
   } finally {

@@ -28,6 +28,10 @@ class AffiliateLinkResource extends JsonResource
             'clicks_count' => $this->whenCounted('clicks'),
             'conversions_count' => $this->whenCounted('attributedReferrals'),
             'created_at' => $this->created_at,
+            // 2026-10-02 — show() still answers for a revoked link, so the
+            // caller is told it is dead instead of having to guess.
+            'revoked_at' => $this->revoked_at,
+            'is_usable' => $this->isUsable(),
         ];
     }
 }

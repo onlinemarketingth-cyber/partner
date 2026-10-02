@@ -260,7 +260,8 @@ onUnmounted(() => pageAbort.abort())
 
 // ── load ───────────────────────────────────────────────────────────────
 
-async function loadTeam() {
+/** Resolves true when the roster on screen is now the server's. */
+async function loadTeam(): Promise<boolean> {
   loading.value = true
   errorMessage.value = ''
   try {
@@ -273,10 +274,12 @@ async function loadTeam() {
     // longer on screen.
     childrenByParent.value = {}
     expandedIds.value = new Set()
+    return true
   } catch (e) {
-    if (isAbortError(e)) return
+    if (isAbortError(e)) return false
     errorMessage.value = apiErrorMessage(e, 'โหลดข้อมูลทีมไม่สำเร็จ')
     toast.error(errorMessage.value)
+    return false
   } finally {
     loading.value = false
     hasLoadedOnce.value = true
@@ -615,16 +618,37 @@ async function loadRecruitData() {
 }
 
 /** Re-read the links only. Used after a revoke, because DELETE answers 204
- *  with no body and `is_usable` is the server's to decide, not ours. */
-async function reloadLinks() {
+ *  with no body and `is_usable` is the server's to decide, not ours.
+ *  Resolves true when the list on screen is now the server's. */
+async function reloadLinks(): Promise<boolean> {
   try {
     const res = await api.get<{ data: AgentInviteLink[] }>('/agent-invite-links', pageAbort.signal)
     inviteLinks.value = res.data
+    return true
   } catch (e) {
-    if (isAbortError(e)) return
+    if (isAbortError(e)) return false
     recruitError.value = apiErrorMessage(e, 'โหลดรายการลิงก์ไม่สำเร็จ')
+    return false
   }
 }
+
+/** Re-read the pending queue only (ADR-052 — after an approve the queue is
+ *  the server's answer, never a local filter). Resolves true on success. */
+async function reloadPendingRecruits(): Promise<boolean> {
+  try {
+    const res = await api.get<{ data: PendingRecruit[] }>('/agent-approvals/my-recruits', pageAbort.signal)
+    pendingRecruits.value = res.data
+    return true
+  } catch (e) {
+    if (isAbortError(e)) return false
+    recruitError.value = apiErrorMessage(e, 'โหลดรายชื่อผู้สมัครไม่สำเร็จ')
+    return false
+  }
+}
+
+/** Said when a write succeeded but re-reading the screen did not — the save
+ *  is NOT reported as failed, only the screen as possibly out of date. */
+const STALE_AFTER_SAVE = 'โหลดข้อมูลล่าสุดไม่สำเร็จ — ข้อมูลบนหน้าจออาจไม่เป็นปัจจุบัน'
 
 // ── create a link ──────────────────────────────────────────────────────
 
@@ -732,11 +756,14 @@ async function confirmRevoke() {
     await api.delete(`/agent-invite-links/${link.id}`)
     showRevokeConfirm.value = false
     revokeTarget.value = null
-    toast.success('ยกเลิกลิงก์แล้ว')
     // Soft revoke (ADR-025 §3): the row survives so every recruit's
     // attribution keeps pointing at a real link. So it must NOT be dropped
     // from the list — refetch and let the server say what it is now.
-    await reloadLinks()
+    // ADR-052: the toast waits for that refetch, so it never announces a
+    // state the list does not yet show.
+    const fresh = await reloadLinks()
+    toast.success('ยกเลิกลิงก์แล้ว')
+    if (!fresh) toast.info(STALE_AFTER_SAVE)
   } catch (e) {
     if (isAbortError(e)) return
     // Toast as well as the banner: the dialog stays open over the page.
@@ -791,14 +818,17 @@ async function confirmApprove() {
   if (!recruit || approving.value) return
   approving.value = true
   try {
-    await api.put(`/agent-approvals/${recruit.id}/approve`)
-    pendingRecruits.value = pendingRecruits.value.filter((r) => r.id !== recruit.id)
+    const res = await api.put<{ data: { name: string } }>(`/agent-approvals/${recruit.id}/approve`)
     approveTarget.value = null
-    toast.success(`รับ ${recruit.name} เข้าทีมแล้ว`)
     // The approved recruit is now a direct report, so the roster and its
     // rollups are stale — re-read them rather than patching a tree
-    // client-side (this screen never sums a team itself).
-    await loadTeam()
+    // client-side (this screen never sums a team itself). ADR-052: the
+    // pending queue is re-read too, instead of filtered locally, and the
+    // toast waits for both so it never describes a screen that is not there.
+    const [queueFresh, rosterFresh] = await Promise.all([reloadPendingRecruits(), loadTeam()])
+    if (!queueFresh) pendingRecruits.value = pendingRecruits.value.filter((r) => r.id !== recruit.id)
+    toast.success(`รับ ${res.data?.name ?? recruit.name} เข้าทีมแล้ว`)
+    if (!queueFresh || !rosterFresh) toast.info(STALE_AFTER_SAVE)
   } catch (e) {
     if (isAbortError(e)) return
     const message = apiErrorMessage(e, 'อนุมัติไม่สำเร็จ')
