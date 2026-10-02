@@ -7168,8 +7168,15 @@ watch(companyPlanType, (pt) => {
                         <option value="personal">เฉพาะยอดที่ขายเอง (ค่าเริ่มต้น — เท่าเดิม)</option>
                         <option value="group">ยอดทั้งทีม (ยอดตัวเอง + ทุกคนใต้สายงาน)</option>
                       </select>
+                      <!--
+                        2026-10-02 (owner: "มันชวนงงจริงๆ") — shown only while
+                        "ยอดทั้งทีม" is CHOSEN BUT NOT YET SAVED. It used to show
+                        whenever the select read "group", so it stayed after the
+                        save and still said "ก่อนบันทึก" — an admin who had done
+                        exactly the right thing read it as something unfinished.
+                      -->
                       <p
-                        v-if="rankSettingsForm.volume_scope === 'group'"
+                        v-if="rankSettingsForm.volume_scope === 'group' && (agentRankSettings?.volume_scope ?? 'personal') !== 'group'"
                         class="mt-1.5 text-[12px] font-bold text-amber-700"
                         data-test="rank-volume-scope-warning"
                       >

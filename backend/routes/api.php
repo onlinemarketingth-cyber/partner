@@ -101,6 +101,7 @@ use App\Http\Controllers\Api\V1\RewardItemController;
 use App\Http\Controllers\Api\V1\RewardRedemptionController;
 use App\Http\Controllers\Api\V1\SalesMaterialShareLinkController;
 use App\Http\Controllers\Api\V1\SalesTeamOverviewController;
+use App\Http\Controllers\Api\V1\SchedulerHealthController;
 use App\Http\Controllers\Api\V1\ShareLinkEmailController;
 use App\Http\Controllers\Api\V1\StorefrontBannerController;
 use App\Http\Controllers\Api\V1\SupplierController;
@@ -1419,6 +1420,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/platform-payment-settings/gateways/deactivate', [PlatformPaymentSettingController::class, 'deactivateGateway']);
         Route::put('/platform-payment-settings/gateways/{provider}', [PlatformPaymentSettingController::class, 'updateGateway']);
         Route::get('/platform-payment-settings/gateways/{provider}/webhook-check', [PlatformPaymentSettingController::class, 'checkWebhook']);
+
+        // 2026-10-02 — is cron running? Super Admin only (checked in the
+        // controller). Read-only: last scheduler heartbeat and a flag.
+        Route::get('/platform/scheduler-health', [SchedulerHealthController::class, 'show']);
 
         Route::get('/platform/mail-settings', [PlatformMailSettingController::class, 'show']);
         Route::put('/platform/mail-settings', [PlatformMailSettingController::class, 'update']);

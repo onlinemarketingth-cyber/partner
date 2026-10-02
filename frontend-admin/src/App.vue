@@ -9,6 +9,8 @@ import AdminNavigation from '@/design-system/components/AdminNavigation.vue'
 import CommissionReadinessBanner from '@/design-system/components/CommissionReadinessBanner.vue'
 // ADR-052 — the one "บันทึกสำเร็จ" dialog every write in this app raises.
 import SaveFeedbackHost from '@/design-system/components/SaveFeedbackHost.vue'
+// 2026-10-02 — warns a Super Admin when cron (schedule:run) has gone quiet.
+import SchedulerHealthBanner from '@/design-system/components/SchedulerHealthBanner.vue'
 import { useAuthStore } from '@/stores/auth'
 import { resolveBackgroundStyle } from '@/utils/userBackground'
 
@@ -29,6 +31,7 @@ const backgroundStyle = computed(() => resolveBackgroundStyle(auth.user?.backgro
        it off the login screen; the component itself also refuses to render
        before /me has answered and for any role the endpoint would 403. -->
   <CommissionReadinessBanner v-if="showChrome" />
+  <SchedulerHealthBanner v-if="showChrome" />
   <!-- Bug fix (2026-08-01, human report: "sub-menu ต้องกด refresh ก่อน
        ถึงจะขึ้นถูก"): wrapping the RouterView-resolved async component in
        <Transition> (any mode, even with no mode attribute at all) breaks

@@ -311,6 +311,53 @@ describe('the step rail reads SAVED rank settings, never the form', () => {
   })
 })
 
+// ── The "ยอดทั้งทีม" caution: before saving only ─────────────────────────────
+
+describe('the team-volume caution shows only until it is saved', () => {
+  const warning = (wrapper: VueWrapper) => wrapper.find('[data-test="rank-volume-scope-warning"]')
+
+  it('appears when ยอดทั้งทีม is chosen and not yet saved, and goes once the server stores it', async () => {
+    mockApi({ rankSettings: null })
+    put.mockResolvedValueOnce({ data: { trailing_window_days: 90, volume_scope: 'group', recalculation_frequency: 'daily' } })
+    const wrapper = await mountView()
+    await goToStep(wrapper, 2)
+
+    await wrapper.get('[data-test="rank-trailing-window"]').setValue('90')
+    await wrapper.get('[data-test="rank-volume-scope"]').setValue('group')
+    await wrapper.get('[data-test="rank-recalc-frequency"]').setValue('daily')
+    expect(warning(wrapper).exists()).toBe(true)
+
+    await wrapper.get('[data-test="rank-settings-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(saveFeedbackState.show).toBe(true)
+    expect(warning(wrapper).exists()).toBe(false)
+  })
+
+  it('does not appear on a company that already stores ยอดทั้งทีม', async () => {
+    mockApi({ rankSettings: { trailing_window_days: 90, volume_scope: 'group', recalculation_frequency: 'daily' } })
+    const wrapper = await mountView()
+    await goToStep(wrapper, 2)
+
+    expect((wrapper.get('[data-test="rank-volume-scope"]').element as HTMLSelectElement).value).toBe('group')
+    expect(warning(wrapper).exists()).toBe(false)
+  })
+
+  it('stays after a refused save, because nothing changed yet', async () => {
+    mockApi({ rankSettings: null })
+    put.mockRejectedValueOnce(new Error('422'))
+    const wrapper = await mountView()
+    await goToStep(wrapper, 2)
+
+    await wrapper.get('[data-test="rank-trailing-window"]').setValue('90')
+    await wrapper.get('[data-test="rank-volume-scope"]').setValue('group')
+    await wrapper.get('[data-test="rank-settings-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(warning(wrapper).exists()).toBe(true)
+  })
+})
+
 // ── Step 2's own status, without F5 ─────────────────────────────────────────
 
 describe('step 2 status follows a structural save at once', () => {

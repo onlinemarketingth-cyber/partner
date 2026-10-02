@@ -9,6 +9,7 @@ use App\Console\Commands\PruneChunkedUploadsCommand as PruneChunkedUploads;
 use App\Console\Commands\RecalculateAgentRanks;
 use App\Console\Commands\RunDueBinaryMatchingCycles;
 use App\Models\PaymentWebhookEvent;
+use App\Services\Platform\SchedulerHeartbeatService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -81,3 +82,15 @@ Schedule::command(PruneChunkedUploads::class)->hourly();
  * look for it.
  */
 Schedule::command('model:prune', ['--model' => [PaymentWebhookEvent::class]])->daily();
+
+/*
+ * 2026-10-02 — the scheduler's own pulse (SchedulerHeartbeatService).
+ *
+ * Every minute, so the timestamp it leaves proves the whole chain ran:
+ * cron fired, the right PHP started, Laravel booted, the schedule ran. The
+ * admin console warns a Super Admin when it goes quiet — the jobs above fail
+ * silently otherwise (no promotions, no renewals, no notification emails).
+ */
+Schedule::call(fn () => app(SchedulerHeartbeatService::class)->beat())
+    ->everyMinute()
+    ->name('scheduler-heartbeat');
