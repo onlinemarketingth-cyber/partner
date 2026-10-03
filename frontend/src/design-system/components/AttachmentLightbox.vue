@@ -30,6 +30,7 @@ import Icon from './Icon.vue'
 // The shared YouTube-URL normaliser. This component used to carry its own
 // copy of the regex; it is now one of four call sites reading the same one.
 import { toEmbedUrl } from '@/utils/embedUrl'
+import { useCloseOnBack } from '@/platform/backStack'
 
 export interface LightboxItem {
   id: number | string
@@ -52,6 +53,9 @@ const emit = defineEmits<{
 }>()
 
 const current = computed<LightboxItem | null>(() => props.items[props.index] ?? null)
+
+// MOB-25 (2026-10-02) — Android's back button closes this before it navigates.
+useCloseOnBack(() => props.open, () => emit('close'))
 const hasMultiple = computed(() => props.items.length > 1)
 
 function go(step: number) {
@@ -111,7 +115,7 @@ onBeforeUnmount(() => {
     <Transition name="fade">
       <div
         v-if="open && current"
-        class="fixed inset-0 z-[1100] bg-black/90 flex flex-col"
+        class="fixed inset-0 z-[1100] bg-black/90 flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
         @touchstart.passive="onTouchStart"
         @touchend.passive="onTouchEnd"
       >

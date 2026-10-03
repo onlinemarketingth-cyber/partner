@@ -16,7 +16,7 @@
  * 6 — see UserProfileService's own comment on why that rule doesn't
  * apply to these non-sensitive, decorative images).
  */
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
@@ -35,7 +35,15 @@ import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import NationalIdSegments from '@/design-system/components/NationalIdSegments.vue'
 import AppButton from '@/design-system/components/AppButton.vue'
 import Icon from '@/design-system/components/Icon.vue'
-import type { AuthUser } from '@/stores/auth'
+import InfoPopover from '@/design-system/components/InfoPopover.vue'
+import AccountDeletionDialog from '@/design-system/components/AccountDeletionDialog.vue'
+import {
+  authenticateBiometric,
+  checkBiometricSupport,
+  isBiometricLockEnabled,
+  setBiometricLockEnabled,
+} from '@/platform/biometric'
+import type { AccountDeletionOutcome, AuthUser } from '@/stores/auth'
 
 const { td } = useI18n()
 const auth = useAuthStore()
@@ -311,6 +319,97 @@ async function savePassword(): Promise<void> {
   }
 }
 
+/* --- Biometric unlock (MOB-29, 2026-10-02) ---------------------------------
+ *
+ * Owner decision: the agent switches it on and off here. Shown ONLY inside
+ * the iOS/Android app and only when the phone can actually do it (hardware
+ * present and a face/finger enrolled) — in a browser checkBiometricSupport()
+ * answers "unavailable" without loading anything, so the row never renders.
+ *
+ * Exception: a lock that is already ON stays visible even if the phone has
+ * since lost its biometrics, so the agent can still switch it off (the lock
+ * screen falls back to the device passcode meanwhile).
+ *
+ * Switching ON asks for a successful scan first: a setting that would lock
+ * the agent out on the next launch must be proven to work now, while they
+ * can still back out. Switching OFF needs nothing — it only removes a gate.
+ * The setting lives on the phone (platform/biometric.ts), never on the server.
+ */
+const showBiometric = ref(false)
+const biometricEnabled = ref(false)
+const savingBiometric = ref(false)
+const biometricError = ref('')
+
+onMounted(async () => {
+  const userId = auth.user?.id
+  if (userId === undefined) return
+
+  const [support, enabled] = await Promise.all([checkBiometricSupport(), isBiometricLockEnabled(userId)])
+  biometricEnabled.value = enabled
+  showBiometric.value = support.available || enabled
+})
+
+async function toggleBiometric(): Promise<void> {
+  const userId = auth.user?.id
+  if (savingBiometric.value || userId === undefined) return
+
+  const next = !biometricEnabled.value
+  savingBiometric.value = true
+  biometricError.value = ''
+  try {
+    if (next) {
+      const result = await authenticateBiometric({
+        reason: td('profile.biometric_confirm_reason', 'ยืนยันตัวตนเพื่อเปิดใช้การปลดล็อก'),
+        cancel: td('common.cancel', 'ยกเลิก'),
+        title: td('profile.biometric_title', 'ปลดล็อกด้วย Face ID / ลายนิ้วมือ'),
+      })
+      if (result !== 'ok') {
+        if (result !== 'cancelled') {
+          biometricError.value = td('profile.biometric_not_confirmed', 'ยังไม่ได้เปิด — ยืนยันตัวตนไม่สำเร็จ')
+        }
+
+        return
+      }
+    }
+
+    await setBiometricLockEnabled(userId, next)
+    biometricEnabled.value = next
+    toast.success(
+      next
+        ? td('profile.biometric_enabled', 'เปิดการปลดล็อกด้วย Face ID / ลายนิ้วมือแล้ว')
+        : td('profile.biometric_disabled', 'ปิดการปลดล็อกด้วย Face ID / ลายนิ้วมือแล้ว'),
+    )
+  } catch {
+    biometricError.value = td('profile.biometric_save_failed', 'บันทึกไม่สำเร็จ — กรุณาลองใหม่')
+  } finally {
+    savingBiometric.value = false
+  }
+}
+
+/* --- Account deletion request (MOB-30, 2026-10-02) ------------------------
+ *
+ * Both the web portal and the app — one rule for both. The dialog collects
+ * the password and reason; the auth store sends the request and forgets the
+ * session (the server has revoked it). This view only decides where the
+ * agent lands: the login screen, carrying a flag that makes it say the
+ * request was sent — otherwise a person who just asked to be removed would
+ * see a plain login form and wonder whether anything happened.
+ */
+const showDeletionDialog = ref(false)
+
+/*
+ * MOB-12 follow-up (owner decision 2026-10-03): the account may already be
+ * GONE ('deleted' — nothing unpaid, or waived) or WAITING for an admin
+ * ('pending' — the agent kept their unpaid commission). Two different
+ * notices, because "your request was sent" over an account that no longer
+ * exists would send the person back to wait for something already done.
+ */
+function onDeletionRequested(outcome: AccountDeletionOutcome = 'pending'): void {
+  const login = themeStore.loginRouteLocation()
+  const notice = outcome === 'deleted' ? 'account_deleted' : 'deletion_requested'
+  void router.replace({ ...login, query: { ...login.query, notice } })
+}
+
 /**
  * TASK-105 (human: "frontend ตรง head ปรับชื่อให้ตรงกับ setup จากระบบ").
  *
@@ -452,6 +551,49 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
         </button>
 
         <p v-if="emailPrefError" class="text-xs font-bold text-ink-danger mt-2">{{ emailPrefError }}</p>
+      </div>
+
+      <!-- Biometric unlock (MOB-29) — app only; see showBiometric. The
+           explanation is behind the ⓘ (CLAUDE.md §7), the row stays one
+           control. Same switch markup as the email row above. -->
+      <div v-if="showBiometric" class="bg-surface-card/95 border border-line-card rounded-2xl p-5">
+        <div class="flex items-center gap-1 mb-3">
+          <h2 class="text-sm font-bold text-ink-card">
+            {{ td('profile.biometric_title', 'ปลดล็อกด้วย Face ID / ลายนิ้วมือ') }}
+          </h2>
+          <InfoPopover :label="td('profile.biometric_title', 'ปลดล็อกด้วย Face ID / ลายนิ้วมือ')">
+            {{
+              td(
+                'profile.biometric_help',
+                'เมื่อเปิดไว้ แอปจะขอสแกนใบหน้าหรือลายนิ้วมือ (หรือรหัสผ่านเครื่อง) ทุกครั้งที่เปิดแอป และเมื่อกลับเข้าแอปหลังจากออกไปนานกว่า 1 นาที เพื่อไม่ให้คนที่หยิบโทรศัพท์ของคุณไปเห็นข้อมูลลูกค้าและค่าแนะนำ — ระบบไม่ได้เก็บรหัสผ่านของคุณ และข้อมูลใบหน้า/ลายนิ้วมือไม่ออกจากเครื่อง',
+              )
+            }}
+          </InfoPopover>
+        </div>
+
+        <button
+          type="button"
+          :disabled="savingBiometric"
+          class="w-full min-h-[44px] flex items-center justify-between gap-3 disabled:opacity-60"
+          @click="toggleBiometric"
+        >
+          <span class="text-sm font-bold text-ink-card">
+            {{ biometricEnabled ? td('profile.switch_on', 'เปิดอยู่') : td('profile.switch_off', 'ปิดอยู่') }}
+          </span>
+          <span
+            class="relative shrink-0 w-12 h-7 rounded-full transition-colors"
+            :class="biometricEnabled ? 'bg-surface-primary' : 'bg-surface-chip'"
+            role="switch"
+            :aria-checked="biometricEnabled"
+          >
+            <span
+              class="absolute top-1 w-5 h-5 rounded-full bg-surface-card shadow transition-all"
+              :class="biometricEnabled ? 'left-6' : 'left-1'"
+            ></span>
+          </span>
+        </button>
+
+        <p v-if="biometricError" class="text-xs font-bold text-ink-danger mt-2">{{ biometricError }}</p>
       </div>
 
       <!-- Password -->
@@ -668,6 +810,36 @@ const pageIcon = computed(() => themeStore.icon('nav_profile', 'user'))
           {{ loggingOut ? 'กำลังออกจากระบบ...' : 'ออกจากระบบ' }}
         </button>
       </div>
+
+      <!-- Danger zone — account deletion request (MOB-30). Last on the page
+           and visually apart, so nobody reaches it on the way to something
+           else. What happens next is behind the ⓘ and repeated, in full, in
+           the dialog itself before anything is sent. -->
+      <div class="bg-surface-card/95 border border-rose-200 rounded-2xl p-5 shadow-sm">
+        <div class="flex items-center gap-1 mb-3">
+          <h3 class="text-sm font-bold text-ink-danger">{{ td('profile.delete_title', 'ขอลบบัญชี') }}</h3>
+          <InfoPopover :label="td('profile.delete_title', 'ขอลบบัญชี')">
+            {{
+              td(
+                'profile.delete_help',
+                'คำขอจะถูกส่งไปให้ผู้ดูแลระบบของบริษัทพิจารณาและดำเนินการ เมื่อส่งแล้วคุณจะออกจากระบบทันที ประวัติค่าแนะนำและการเบิกเงินจะยังถูกเก็บไว้เป็นหลักฐานทางการเงิน',
+              )
+            }}
+          </InfoPopover>
+        </div>
+        <button
+          type="button"
+          class="w-full min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-rose-200 bg-surface-card text-ink-danger font-bold text-sm hover:bg-surface-danger"
+          @click="showDeletionDialog = true"
+        >
+          <Icon name="trash" :size="18" />
+          {{ td('profile.delete_button', 'ขอลบบัญชี') }}
+        </button>
+      </div>
     </div>
+
+    <!-- Inside <main> on purpose: a second root would make this view a
+         multi-root fragment (see ClientsView's note on ConfirmDialog). -->
+    <AccountDeletionDialog v-model:show="showDeletionDialog" @requested="onDeletionRequested" />
   </main>
 </template>

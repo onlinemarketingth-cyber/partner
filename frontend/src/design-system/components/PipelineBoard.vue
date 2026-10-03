@@ -166,6 +166,7 @@ import {
   type PipelineStageRef,
 } from '@/utils/pipelineStages'
 import { useAuthStore } from '@/stores/auth'
+import { useCloseOnBack } from '@/platform/backStack'
 
 /**
  * Structurally identical to HeroHeader's `HeroKpi`, declared here so the
@@ -867,6 +868,9 @@ function closeDrawer() {
   stageLogs.value = []
 }
 
+// MOB-25 (2026-10-02) — Android's back button closes the drawer first.
+useCloseOnBack(() => selectedReferral.value !== null, closeDrawer)
+
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' })
 }
@@ -1178,7 +1182,7 @@ function formatDateTime(iso: string): string {
     <Transition name="drawer">
       <div v-if="selectedReferral" class="fixed inset-0 z-50 flex justify-end">
         <div class="absolute inset-0 bg-slate-900/30" @click="closeDrawer" />
-        <div class="drawer-panel relative w-full max-w-md bg-surface-card h-full shadow-xl p-5 overflow-y-auto">
+        <div class="drawer-panel relative w-full max-w-md bg-surface-card h-full shadow-xl p-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))] overflow-y-auto">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-lg font-bold text-ink-card">{{ selectedReferral.client?.name }}</h2>
             <button class="min-h-[44px] min-w-[44px] -mr-2 inline-flex items-center justify-center text-ink-card-subtle hover:text-ink-card-muted active:scale-90 transition-transform" @click="closeDrawer"><Icon name="close" :size="20" /></button>

@@ -74,6 +74,8 @@ import AnnouncementModal, { type AnnouncementDisplayStyle } from '@/design-syste
 import AnnouncementBanner from '@/design-system/components/AnnouncementBanner.vue'
 import { bannerAnnouncementsForPage, type BannerAwareAnnouncement } from '@/utils/announcementBanners'
 import { recordAnnouncementView } from '@/utils/seenAnnouncements'
+// MOB-22 (2026-10-02) — a new tab in a browser, the in-app browser in the app.
+import { openExternal } from '@/platform/browser'
 
 interface ProductItem extends ProductCardItem {
   description: string | null
@@ -288,7 +290,7 @@ async function loadBanners() {
 //               routes (whitelisted server-side, never free text).
 function handleBannerClick(banner: StorefrontBannerItem) {
   if (banner.link_type === 'url') {
-    if (banner.external_url) window.open(banner.external_url, '_blank', 'noopener')
+    if (banner.external_url) void openExternal(banner.external_url)
     return
   }
   if (banner.link_type === 'internal') {

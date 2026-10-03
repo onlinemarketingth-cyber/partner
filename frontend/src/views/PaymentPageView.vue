@@ -41,6 +41,10 @@ import { useThemeStore, type Theme } from '@/stores/theme'
 // inside that util, never at import time: most orders here are paid by bank
 // transfer and must not fetch a third-party script to do it.
 import { openCardForm } from '@/utils/omiseCard'
+// MOB-21 / MOB-23 (2026-10-02) — copy and "save the QR" work inside the
+// iOS/Android app too; in a browser both run the code this page had.
+import { copyText } from '@/platform/share'
+import { saveDataUrl } from '@/platform/files'
 
 const route = useRoute()
 const token = route.params.token as string
@@ -440,7 +444,7 @@ async function copyAccount() {
   const acct = order.value?.company_payment.bank_account_number
   if (!acct) return
   try {
-    await navigator.clipboard.writeText(acct)
+    await copyText(acct)
     copied.value = true
     setTimeout(() => (copied.value = false), 1800)
   } catch {
@@ -858,7 +862,7 @@ async function copyAmount(): Promise<void> {
 
   const plain = (satang / 100).toFixed(2).replace(/\.00$/, '')
   try {
-    await navigator.clipboard.writeText(plain)
+    await copyText(plain)
     amountCopied.value = true
     window.setTimeout(() => { amountCopied.value = false }, 2000)
   } catch {
@@ -879,12 +883,9 @@ async function copyAmount(): Promise<void> {
 function saveQrImage(): void {
   if (!qrDataUrl.value || !order.value) return
 
-  const link = document.createElement('a')
-  link.href = qrDataUrl.value
-  link.download = `promptpay-${order.value.order_number}.png`
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
+  // The same anchor click as before in a browser (platform/files.ts); the
+  // share sheet's "Save Image" inside the app, where `download` does nothing.
+  void saveDataUrl(qrDataUrl.value, `promptpay-${order.value.order_number}.png`).catch(() => {})
 }
 
 /**

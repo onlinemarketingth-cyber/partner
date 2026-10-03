@@ -50,6 +50,8 @@ import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import AuthenticatedMedia from '@/design-system/components/AuthenticatedMedia.vue'
 import LessonVideoPlayer from '@/design-system/components/LessonVideoPlayer.vue'
 import PdfViewerModal from '@/design-system/components/PdfViewerModal.vue'
+// MOB-22 (2026-10-02) — a new tab in a browser, the in-app browser in the app.
+import { openExternal as openOutside } from '@/platform/browser'
 
 const route = useRoute()
 const router = useRouter()
@@ -302,8 +304,9 @@ async function downloadLessonFile() {
 
 function openExternal() {
   const ref_ = lesson.value?.content_ref
-  // `noopener`, same rule the storefront banner's external links use.
-  if (ref_) window.open(ref_, '_blank', 'noopener')
+  // `noopener`, same rule the storefront banner's external links use (now
+  // inside platform/browser.ts, which keeps it for the browser build).
+  if (ref_) void openOutside(ref_)
 }
 
 const heroTitle = computed(() => lesson.value?.title ?? 'บทเรียน')

@@ -3,6 +3,7 @@ import HomeView from '../views/HomeView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { hasChosenToStayInAgentPortal } from '@/utils/portalChoice'
 import { useThemeStore } from '@/stores/theme'
+import { installCustomerLinkGuard } from '@/platform/customerLinks'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -302,6 +303,13 @@ const router = createRouter({
     },
   ],
 })
+
+// MOB-32 (2026-10-02) — inside the iOS/Android app ONLY, the customer and
+// recruit pages (/p/, /pay/, /l/, /c/, /j/, /in/, /register) open on the web
+// origin in the in-app browser instead of inside the app; see
+// platform/customerLinks.ts for why. Registered BEFORE the session guard below
+// so it sees the navigation first. Installs nothing in a browser.
+installCustomerLinkGuard(router)
 
 // Sanctum SPA session guard (BR-1 access-gating for cert-locked routes is
 // enforced separately, server-side, per feature — this guard only handles

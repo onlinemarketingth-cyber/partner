@@ -56,7 +56,7 @@
  * not the backend's; tenant isolation for /clients and /orders is enforced
  * and tested server-side (BR-6, §5.4).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 // TASK-169 Phase 3 — the view mode is read from the URL, so the view now
@@ -97,6 +97,17 @@ vi.mock('@/api/client', () => ({
     downloadAbsolute: vi.fn(),
   },
   ApiError: FakeApiError,
+}))
+
+// MOB-24 (2026-10-02) — the camera input exists only inside the app. Every
+// other test in this file runs as the browser (native = false), which is what
+// the real Capacitor reports in jsdom anyway.
+const native = { value: false }
+vi.mock('@capacitor/core', () => ({
+  Capacitor: {
+    isNativePlatform: () => native.value,
+    getPlatform: () => (native.value ? 'android' : 'web'),
+  },
 }))
 
 import ClientsView from '../ClientsView.vue'
@@ -904,5 +915,47 @@ describe('ClientsView — TASK-174 co-agent split switched OFF', () => {
 
     expect(wrapper.findAllComponents(CoAgentEditor)).toHaveLength(1)
     expect(get.mock.calls.map((c) => c[0])).toContain('/referrals/co-agent-options')
+  })
+})
+
+/**
+ * MOB-24 (2026-10-02) — "photograph the document".
+ *
+ * WHAT BREAKS SILENTLY: on Android the ordinary picker (pdf, jpg, png) never
+ * offers the camera — Capacitor's WebView only opens it for an `image/*`
+ * input with `capture`. Without the second input an agent in the field has
+ * to take the photo in the camera app, then find it again. And the web
+ * portal must keep its single upload control: the camera button is app-only.
+ */
+describe('ClientsView — document upload controls (MOB-24)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    signIn()
+    vi.clearAllMocks()
+    wire({ referrals: [] })
+  })
+
+  afterEach(() => {
+    native.value = false
+  })
+
+  it('browser: one upload control, exactly as before', async () => {
+    const wrapper = await openDrawer(await mountList())
+
+    const inputs = wrapper.findAll('input[type="file"]')
+    expect(inputs).toHaveLength(1)
+    expect(inputs[0]?.attributes('accept')).toBe('.pdf,.jpg,.jpeg,.png')
+    expect(inputs[0]?.attributes('capture')).toBeUndefined()
+  })
+
+  it('app: adds a direct camera input that still uploads through the same handler', async () => {
+    native.value = true
+    const wrapper = await openDrawer(await mountList())
+
+    const inputs = wrapper.findAll('input[type="file"]')
+    expect(inputs).toHaveLength(2)
+    expect(inputs[1]?.attributes('accept')).toBe('image/*')
+    expect(inputs[1]?.attributes('capture')).toBe('environment')
+    expect(wrapper.text()).toContain('ถ่ายรูปเอกสาร')
   })
 })

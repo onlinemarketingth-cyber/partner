@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "879723294928",
+    "project_id": "live-to-100-club-partner",
+    "storage_bucket": "live-to-100-club-partner.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879723294928:android:7fd0325aae53d77ec82ed5",
+        "android_client_info": {
+          "package_name": "io.syncvision.partner"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGcSQvPwqcSG8Of0p2cbXsQw45alu90gM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

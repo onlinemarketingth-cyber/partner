@@ -35,11 +35,6 @@
 import { onUnmounted, ref, watch, type Ref } from 'vue'
 import { authHeaders } from '@/api/client'
 
-function getCookie(name: string): string | null {
-  const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))
-  return match?.[2] ? decodeURIComponent(match[2]) : null
-}
-
 /*
  * ═══ TASK-223 — WHY THERE ARE THREE MAPS AND NOT ONE ═══
  *
@@ -118,11 +113,15 @@ function fetchAsObjectUrl(sourceUrl: string): Promise<string> {
   if (pending) return pending
 
   const request = (async () => {
-    // Bearer token (portal) — and the XSRF cookie is still sent alongside
-    // it, so this same file keeps working if a host is ever stateful again.
+    // Bearer token (portal).
+    //
+    // MOB-33 (2026-10-02) — the X-XSRF-TOKEN header read from document.cookie
+    // that used to follow is gone. This is a GET, and Laravel's CSRF check
+    // never inspects GET/HEAD requests, so the header could not matter even
+    // on a cookie-session host; with token auth there is no XSRF cookie to
+    // read at all (and inside the app document.cookie belongs to
+    // capacitor://localhost, not the API).
     const headers = authHeaders(new Headers())
-    const xsrfToken = getCookie('XSRF-TOKEN')
-    if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
     let res: Response
     try {

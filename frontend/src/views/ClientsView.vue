@@ -106,6 +106,11 @@ import ShareLinkModal from '@/design-system/components/ShareLinkModal.vue'
 import { useReferralOrders } from '@/composables/useReferralOrders'
 import { THAILAND_PROVINCES } from '@/design-system/constants/thailandProvinces'
 import { useThemeStore } from '@/stores/theme'
+// MOB-21 / MOB-24 / MOB-25 (2026-10-02) — app-aware copy, the app-only
+// "take a photo" button, and Android back closing the drawer.
+import { copyText } from '@/platform/share'
+import { isNativeApp } from '@/platform'
+import { useCloseOnBack } from '@/platform/backStack'
 
 const theme = useThemeStore()
 
@@ -775,6 +780,9 @@ async function openClient(client: ClientItem) {
   await Promise.all([loadDocuments(client.id), loadActivities(client.id), ensureOrdersLoaded()])
 }
 
+// MOB-25 (2026-10-02) — Android's back button closes the drawer first.
+useCloseOnBack(() => selectedClient.value !== null, closeDrawer)
+
 function closeDrawer() {
   selectedClientId.value = null
   documents.value = []
@@ -1068,7 +1076,7 @@ async function confirmRevokeShareLink() {
 
 async function copyShareLink(link: ShareLinkItem) {
   try {
-    await navigator.clipboard.writeText(link.share_url)
+    await copyText(link.share_url)
     copiedShareLinkId.value = link.id
     setTimeout(() => {
       if (copiedShareLinkId.value === link.id) copiedShareLinkId.value = null
@@ -1372,6 +1380,23 @@ function statusBadgeClasses(statusKey: string): string {
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 
+/*
+ * MOB-24 (2026-10-02) — "photograph the document" inside the iOS/Android app.
+ *
+ * The existing picker (pdf, jpg, png) is unchanged and still offers the
+ * photo library and files on both platforms. What it does NOT reliably offer
+ * on Android is the camera: Capacitor's WebView only opens the camera for an
+ * input that asks for `image/*` with `capture`, and such an input can then
+ * no longer pick a PDF. So the app gets a SECOND input for exactly that — a
+ * direct "take a photo" — and keeps the first as it was.
+ *
+ * App only: the web portal shows the same single upload control as before.
+ * The camera returns a JPEG on both platforms, which the server's
+ * pdf/jpg/png rule already accepts; it goes through the same uploadFile().
+ */
+const canTakePhoto = isNativeApp()
+const cameraInput = ref<HTMLInputElement | null>(null)
+
 async function uploadFile(event: Event) {
   const file = (event.target as HTMLInputElement).files?.[0]
   if (!file || !selectedClientId.value) return
@@ -1388,6 +1413,7 @@ async function uploadFile(event: Event) {
   } finally {
     uploading.value = false
     if (fileInput.value) fileInput.value.value = ''
+    if (cameraInput.value) cameraInput.value.value = ''
   }
 }
 
@@ -1728,7 +1754,7 @@ watch(isListMode, (listMode) => {
     <Transition name="drawer">
       <div v-if="selectedClient" class="fixed inset-0 z-50 flex justify-end">
         <div class="absolute inset-0 bg-slate-900/30" @click="closeDrawer" />
-        <div class="drawer-panel relative w-full max-w-md bg-surface-card h-full shadow-xl p-5 overflow-y-auto">
+        <div class="drawer-panel relative w-full max-w-md bg-surface-card h-full shadow-xl p-5 pt-[calc(1.25rem+env(safe-area-inset-top))] pb-[calc(1.25rem+env(safe-area-inset-bottom))] overflow-y-auto">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-lg font-bold text-ink-card">{{ selectedClient.name }}</h2>
             <button class="min-h-[44px] min-w-[44px] -mr-2 inline-flex items-center justify-center text-ink-card-subtle hover:text-ink-card-muted active:scale-90 transition-transform" @click="closeDrawer"><Icon name="close" :size="20" /></button>
@@ -2127,6 +2153,12 @@ watch(isListMode, (listMode) => {
             <Icon name="upload" :size="16" />
             {{ uploading ? 'กำลังอัปโหลด...' : 'อัปโหลดเอกสาร (pdf, jpg, png · สูงสุด 10MB)' }}
             <input ref="fileInput" type="file" accept=".pdf,.jpg,.jpeg,.png" class="hidden" :disabled="uploading" @change="uploadFile" />
+          </label>
+          <!-- MOB-24 — app only; see `canTakePhoto`. -->
+          <label v-if="canTakePhoto" class="mt-2 flex min-h-[44px] items-center justify-center gap-2 px-3 py-2 rounded-lg border border-dashed border-line-card text-sm text-ink-card-muted cursor-pointer hover:border-brand-400 hover:text-ink-brand">
+            <Icon name="camera" :size="16" />
+            {{ td('client.take_photo', 'ถ่ายรูปเอกสาร') }}
+            <input ref="cameraInput" type="file" accept="image/*" capture="environment" class="hidden" :disabled="uploading" @change="uploadFile" />
           </label>
         </div>
       </div>

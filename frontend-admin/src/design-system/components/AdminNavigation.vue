@@ -199,6 +199,8 @@ const navItems: NavItem[] = [
       // actually came for — into second place.
       { name: 'agent-roster', icon: 'list', label: { th: 'รายชื่อสมาชิก', en: 'Member Roster' } },
       { name: 'agent-approvals', icon: 'clock', label: { th: 'รออนุมัติ', en: 'Pending Approvals' } },
+      // MOB-12 (2026-10-02) — next to the other people-decision queue.
+      { name: 'account-deletion-requests', icon: 'trash', label: { th: 'คำขอลบบัญชี', en: 'Account Deletion Requests' } },
       // 2026-08-22 — three entries (ลิงก์ชวนทีม / ลิงก์สมัครตัวแทน /
       // ลิงก์ทั้งบริษัท) collapsed into one, because their names could not be
       // told apart and the screens behind them were two CRUD surfaces and one
@@ -395,6 +397,9 @@ const navItems: NavItem[] = [
       // not per-company) — visibleSubMenus/visibleActiveSubMenus filter
       // it out for Company Admin, who still sees "ธีม / แบรนด์" above.
       { name: 'mail-settings', icon: 'mail', label: { th: 'ตั้งค่า Email SMTP', en: 'Mail Settings' }, superAdminOnly: true },
+      // 2026-10-02 — MOB-13. One app binary serves every company, so its
+      // version policy is platform config: Super Admin only, like SMTP above.
+      { name: 'app-version-settings', icon: 'display_cog', label: { th: 'เวอร์ชันแอปมือถือ', en: 'Mobile app versions' }, superAdminOnly: true },
       // ADR-027 (TASK-139) — Super-Admin-only for the same reason as
       // "ตั้งค่า Email SMTP" above, but for a stronger one: this screen
       // holds the credentials each tenant's customer payments are taken

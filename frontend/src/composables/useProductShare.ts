@@ -2,6 +2,7 @@ import { ref, type Ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import { apiErrorMessage, isAbortError } from '@/utils/apiError'
+import { openExternal } from '@/platform/browser'
 
 /**
  * Minting (or reusing) an agent's public share link for a product, plus the
@@ -176,7 +177,11 @@ export function useProductShare(options: {
       return
     }
 
-    window.location.assign(target)
+    // MOB-22 (2026-10-02) — `web: 'same-tab'` keeps the browser's
+    // location.assign() exactly. Inside the app the origins never match (the
+    // app is capacitor://localhost) and assign() would replace the whole app
+    // with the customer's page, so it opens in the in-app browser instead.
+    await openExternal(target, { web: 'same-tab' })
   }
 
   return {

@@ -5,11 +5,12 @@ import { createPinia } from 'pinia'
 
 import App from './App.vue'
 import router from './router'
-import { setUnauthorizedHandler } from './api/client'
+import { restoreNativeToken, setUnauthorizedHandler } from './api/client'
 import { useAuthStore } from './stores/auth'
 import { useThemeStore } from './stores/theme'
 import { installStaleAssetRecovery } from './utils/staleAssets'
 import { isPublicLinkPage, startLinkPrefetch } from './utils/bootPrefetch'
+import { isNativeApp, NATIVE_LAYER_KEY } from './platform'
 
 const app = createApp(App)
 
@@ -113,6 +114,17 @@ function withTimeout(promise: Promise<void>, ms: number): Promise<void> {
 // The page picks up this same request; nothing is asked twice.
 const linkPrefetch = startLinkPrefetch()
 
+// MOB-25..31 (2026-10-02) — the app-only launch work (platform/nativeBoot.ts):
+// splash, back button, push, lock, offline notice, update check. Loaded with
+// import() and only inside the app, so a browser never downloads any of it.
+// Started here so it loads while the session check below is in flight.
+const nativeBootLoading = isNativeApp() ? import('./platform/nativeBoot').catch(() => null) : null
+
+// MOB-01 — inside the iOS/Android app, put the saved token back BEFORE the
+// session check below, or /me would go out without it and the agent would
+// land on the login screen every launch. Resolves at once in a browser.
+await withTimeout(restoreNativeToken(), 3000)
+
 await Promise.allSettled([
   withTimeout(themeStore.loadPublic(), 8000).then(() => bumpSplash(55)),
   withTimeout(bootAuthStore.fetchUser(), 8000).then(() => bumpSplash(90)),
@@ -149,7 +161,12 @@ if (splash) {
 //
 // 2026-10-02 (owner decision) — NOT for a page a recruit or customer opens
 // from a shared link: for them the splash is only as long as the loading.
-const splashFloorMs = isPublicLinkPage(window.location.pathname) ? 0 : SPLASH_MIN_MS
+//
+// MOB-26 (2026-10-02) — and NOT inside the app either. The floor exists so a
+// web visit shows the brand instead of a flash; the app already showed its
+// native launch screen while the WebView started, so another 3 seconds on
+// top of that is just waiting.
+const splashFloorMs = isNativeApp() || isPublicLinkPage(window.location.pathname) ? 0 : SPLASH_MIN_MS
 const remainingMs = splashFloorMs - (performance.now() - bootStartedAt)
 if (remainingMs > 0) await new Promise((resolve) => window.setTimeout(resolve, remainingMs))
 window.clearInterval(splashTicker)
@@ -160,10 +177,29 @@ if (splashBar) splashBar.style.width = '100%'
  * the server deleted (deploy.sh rsyncs with --delete), so every navigation
  * fails silently and the menu just stops working. See utils/staleAssets;
  * installed before mount so a failure on the very first navigation counts too.
+ *
+ * MOB-26 (2026-10-02) — web only. The app's chunks are bundled INSIDE the
+ * app and never deleted by a deploy, so a failed chunk load there is a real
+ * error, and "reload to fetch the new build" would only reload the same one.
  */
-installStaleAssetRecovery(router)
+if (!isNativeApp()) installStaleAssetRecovery(router)
+
+// MOB-27/29/31 — the app-only overlays (lock, offline, update), handed to
+// App.vue by injection so App.vue never imports them; and the biometric lock
+// goes up BEFORE the first frame, so the portal never shows behind it.
+const nativeBoot = nativeBootLoading ? await nativeBootLoading : null
+if (nativeBoot) {
+  app.provide(NATIVE_LAYER_KEY, nativeBoot.NativeAppLayer)
+  await nativeBoot.beforeMount(pinia)
+} else if (nativeBootLoading) {
+  // capacitor.config.ts keeps the native splash up until it is hidden; if
+  // nativeBoot itself failed to load, hide it here or the app never shows.
+  void import('@capacitor/splash-screen').then((m) => m.SplashScreen.hide()).catch(() => {})
+}
 
 app.mount('#app')
+
+nativeBoot?.afterMount({ router, pinia })
 
 // Fade + remove the boot splash now that Vue owns the screen. The very
 // first router navigation (router/index.ts's beforeEach) already resolves

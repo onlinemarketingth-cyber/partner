@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api, ApiError, ensureCsrfCookie, setToken } from '@/api/client'
 import { forgetPortalChoice } from '@/utils/portalChoice'
+import { isNativeApp } from '@/platform'
 
 // Matches App\Enums\UserRole (backend). Kept as a string union rather than
 // re-declaring business rules on the frontend — role gates itself live in
@@ -197,23 +198,103 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout(): Promise<void> {
+    // MOB-28 (2026-10-02) — inside the iOS/Android app, stop pushes to this
+    // phone for this account BEFORE the token is revoked (the request needs
+    // it). Bounded and never rejects, so it can never hold a logout up. A
+    // browser has no push registration and never loads platform/push.ts.
+    if (isNativeApp()) {
+      const { unregisterPushDevice } = await import('@/platform/push')
+      await unregisterPushDevice()
+    }
+
     try {
       await api.post('/logout')
     } finally {
-      // Cleared in `finally`, never only on success: if the revoke call
-      // fails (offline, server down) the person still pressed logout, and
-      // leaving a usable token in localStorage on a machine somebody is
-      // walking away from is the worst possible way to honour that. The
-      // server-side revoke is what makes it unusable elsewhere; this is
-      // what makes it gone from here.
-      setToken(null)
-      user.value = null
-      // A Super Admin's "stay in the Agent Portal" choice belongs to the
-      // person, not to the browser. Cleared here so the next sign-in on
-      // this machine is asked in their own right — including the same
-      // person coming back tomorrow, for whom it is a fresh question.
-      forgetPortalChoice()
+      endSessionLocally()
     }
+  }
+
+  /**
+   * Forget the session on this device — the client-side half of a logout.
+   *
+   * Cleared in `finally` by logout(), never only on success: if the revoke
+   * call fails (offline, server down) the person still pressed logout, and
+   * leaving a usable token in localStorage on a machine somebody is walking
+   * away from is the worst possible way to honour that. The server-side
+   * revoke is what makes it unusable elsewhere; this is what makes it gone
+   * from here.
+   *
+   * Also used on its own by requestAccountDeletion(), where the SERVER has
+   * already revoked the token and there is nothing left to call.
+   */
+  function endSessionLocally(): void {
+    setToken(null)
+    user.value = null
+    // A Super Admin's "stay in the Agent Portal" choice belongs to the
+    // person, not to the browser. Cleared here so the next sign-in on
+    // this machine is asked in their own right — including the same
+    // person coming back tomorrow, for whom it is a fresh question.
+    forgetPortalChoice()
+  }
+
+  /**
+   * MOB-30 (2026-10-02) — "please delete my account" (App Store guideline
+   * 5.1.1(v) requires the option inside the app).
+   *
+   * MOB-12 follow-up (owner decision 2026-10-03) — it is no longer always a
+   * request an admin approves:
+   *   * nothing unpaid, or the agent waives what is unpaid → the server
+   *     deletes the account ON THE SPOT and answers 200 `status: 'deleted'`;
+   *   * the agent keeps their unpaid commission → 202 `status: 'pending'`,
+   *     the request a company admin decides, as before.
+   * The caller branches on the returned status (which notice the login
+   * screen shows).
+   *
+   * POST /me/account-deletion-request { password, reason?, commission_choice? }.
+   * `commission_choice` is sent only when the dialog asked for one; the
+   * server re-decides whether it is required (it recomputes what is unpaid)
+   * and answers 422 if it is missing, so a stale preview cannot slip past.
+   *
+   * On either success the server has ALREADY revoked this session's token,
+   * so the client simply forgets it — calling /logout would only 401.
+   * Inside the app the push token is thrown away as well: the server can no
+   * longer be asked to drop the device (no session), and the account must
+   * stop receiving pushes now, not whenever FCM next reports the token dead.
+   *
+   * @throws {ApiError} 422 (wrong password / choice missing), 409 (a request
+   * already pending, or waiving while a payout is in flight), or any
+   * transport error — nothing is cleared in that case.
+   */
+  async function requestAccountDeletion(
+    password: string,
+    reason: string | null,
+    commissionChoice: AccountDeletionChoice | null = null,
+  ): Promise<AccountDeletionOutcome> {
+    const trimmed = reason?.trim() ?? ''
+    const res = await api.post<{ data?: { status?: string } }>('/me/account-deletion-request', {
+      password,
+      ...(trimmed !== '' ? { reason: trimmed } : {}),
+      ...(commissionChoice !== null ? { commission_choice: commissionChoice } : {}),
+    })
+
+    endSessionLocally()
+    if (isNativeApp()) void import('@/platform/push').then((push) => push.forgetPushToken())
+
+    // Anything but an explicit 'deleted' is treated as the waiting request:
+    // telling somebody their account is gone when it is not would be the
+    // worse of the two mistakes.
+    return res?.data?.status === 'deleted' ? 'deleted' : 'pending'
+  }
+
+  /**
+   * MOB-12 follow-up — what the deletion dialog must show before the agent
+   * chooses: the unpaid commission (integer satang, BR-3 — divided by 100
+   * only on screen) and whether waiving it is possible right now.
+   */
+  async function previewAccountDeletion(): Promise<AccountDeletionPreview> {
+    const res = await api.get<{ data: AccountDeletionPreview }>('/me/account-deletion-request/preview')
+
+    return res.data
   }
 
   /** Profile endpoints (avatar/background) return the fresh UserResource
@@ -223,7 +304,31 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = updated
   }
 
-  return { user, status, isAuthenticated, fetchUser, login, logout, setUser }
+  return {
+    user,
+    status,
+    isAuthenticated,
+    fetchUser,
+    login,
+    logout,
+    endSessionLocally,
+    requestAccountDeletion,
+    previewAccountDeletion,
+    setUser,
+  }
 })
 
 export { ApiError }
+
+/** MOB-12 follow-up — the dialog's answer when commission is unpaid. */
+export type AccountDeletionChoice = 'waive' | 'keep'
+
+/** 'deleted' = gone now; 'pending' = waiting for a company admin. */
+export type AccountDeletionOutcome = 'deleted' | 'pending'
+
+/** GET /me/account-deletion-request/preview → data. */
+export interface AccountDeletionPreview {
+  pending_commission_satang: number
+  can_waive: boolean
+  waive_blocked_reason: string | null
+}

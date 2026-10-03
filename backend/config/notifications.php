@@ -128,4 +128,68 @@ return [
         'stale_hours' => 24,
     ],
 
+    /*
+    |--------------------------------------------------------------------
+    | Mobile push (2026-10-02 — MOB-11)
+    |--------------------------------------------------------------------
+    |
+    | Owner decision: EVERY notification that reaches the in-app bell is
+    | also pushed to the recipient's phones. There is no per-type switch
+    | here, unlike email above — a push costs nothing and lands where the
+    | agent already is.
+    |
+    | Whether push is ON at all is not decided here: it is on exactly when
+    | config('services.firebase') is complete (see FcmClient).
+    |
+    | ── PDPA: WHAT THE LOCK SCREEN MAY SHOW ──
+    |
+    | A push is displayed on a locked phone to whoever is holding it. A
+    | notification's own title/body can name a client ("คุณสมชาย ชำระเงิน
+    | แล้ว"), and client data is PDPA-sensitive (CLAUDE.md §6). So the push
+    | NEVER carries the notification's text. Its title is the recipient's
+    | COMPANY NAME (owner decision 2026-10-03, "ใช้ตามชื่อบริษัท" — a
+    | company name is not personal data) and its body is a fixed sentence
+    | per TYPE; tapping it opens the app, behind its login, where the real
+    | text is. See PushNotificationService::titleFor() for which name.
+    |
+    | `title` below is now only the FALLBACK, used when the recipient's
+    | company or its name is missing.
+    |
+    | The two exam types share one neutral sentence on purpose: "สอบไม่ผ่าน"
+    | on a lock screen tells the person sitting next to the agent something
+    | the agent did not choose to share.
+    |
+    | A type missing from `bodies` falls back to `fallback_body` — a new
+    | NotificationType is pushed with the neutral sentence until someone
+    | writes it one, rather than not at all.
+    |
+    | stale_minutes  A push that reaches the queue worker later than this
+    |                is dropped: "your payment was confirmed" two hours late
+    |                is noise, and the bell already has it.
+    */
+    'push' => [
+        // Fallback only — normally the recipient's company name (see above).
+        'title' => env('PUSH_NOTIFICATION_TITLE', 'Live to 100 Club'),
+
+        'fallback_body' => 'มีการแจ้งเตือนใหม่',
+
+        'bodies' => [
+            NotificationType::Announcement->value => 'มีข่าวสารใหม่ถึงคุณ',
+            NotificationType::FollowUpDue->value => 'ถึงเวลาติดตามลูกค้าแล้ว',
+            NotificationType::ExamPassed->value => 'ผลสอบของคุณออกแล้ว',
+            NotificationType::ExamFailed->value => 'ผลสอบของคุณออกแล้ว',
+            NotificationType::CommissionPaid->value => 'มีการจ่ายค่าแนะนำให้คุณ',
+            NotificationType::ApprovalStatus->value => 'สถานะบัญชีของคุณมีการเปลี่ยนแปลง',
+            NotificationType::Reward->value => 'มีอัปเดตเรื่องรางวัลของคุณ',
+            NotificationType::System->value => 'มีการแจ้งเตือนใหม่',
+            NotificationType::OrderPaymentConfirmed->value => 'มีการยืนยันการชำระเงินของลูกค้า',
+            NotificationType::OrderPaymentFailed->value => 'มีรายการชำระเงินที่ไม่สำเร็จ',
+            NotificationType::OrderRefundReported->value => 'มีการแจ้งคืนเงินรายการขาย',
+            NotificationType::CommissionWithdrawalRequested->value => 'มีคำขอเบิกค่าแนะนำรอตรวจสอบ',
+            NotificationType::CommissionWithdrawalDecided->value => 'คำขอเบิกค่าแนะนำของคุณมีผลแล้ว',
+        ],
+
+        'stale_minutes' => 120,
+    ],
+
 ];

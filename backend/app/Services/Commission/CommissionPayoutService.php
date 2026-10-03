@@ -63,6 +63,15 @@ class CommissionPayoutService
     {
         $this->assertNotCompanyShare($row);
 
+        // MOB-12 — a commission the agent gave up when deleting their account
+        // is not owed to anybody; settling it here would record a payment to
+        // an account that no longer exists.
+        if ($row->payment_status === PaymentStatus::Forfeited) {
+            throw ValidationException::withMessages([
+                'commission_ledger' => 'รายการนี้สมาชิกสละสิทธิ์ไปแล้วตอนลบบัญชี จึงไม่มียอดให้ทำจ่าย',
+            ]);
+        }
+
         $before = $row->payment_status;
 
         $row->update([

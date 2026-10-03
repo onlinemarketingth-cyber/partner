@@ -62,7 +62,23 @@ const theme = useThemeStore()
  * and the honest response is to show no company at all.
  */
 const companyName = computed(() => theme.theme?.company?.name ?? null)
-const { lang, t, setLang } = useI18n()
+const { lang, t, td, setLang } = useI18n()
+
+/**
+ * MOB-30 (2026-10-02) — arriving here straight after "ขอลบบัญชี" was sent
+ * (ProfileSettingsView adds ?notice=deletion_requested). Without it, somebody
+ * who just asked to be removed lands on a plain login form and cannot tell
+ * whether the request went anywhere.
+ */
+const deletionRequested = computed(() => route.query.notice === 'deletion_requested')
+/**
+ * MOB-12 follow-up (owner decision 2026-10-03) — the account was deleted on
+ * the spot (nothing unpaid, or the agent waived it). ProfileSettingsView adds
+ * ?notice=account_deleted. A different sentence from the one above: telling
+ * somebody their request "was sent" when the account is already gone would
+ * leave them waiting for something that has happened.
+ */
+const accountDeleted = computed(() => route.query.notice === 'account_deleted')
 
 // TASK-055 / ADR-018 — per-company app-name override for the wordmark
 // (benefits from the pre-login public theme load). `t` here is the TH/EN
@@ -193,6 +209,21 @@ async function handleSubmit() {
   } catch (err) {
     if (err instanceof ApiError && err.status === 403 && isLoginBlockedBody(err.body)) {
       blocked.value = err.body
+    } else if (err instanceof ApiError && err.status === 403) {
+      /*
+       * MOB-30 (2026-10-02) — a 403 whose error_code this screen has no
+       * dedicated panel for (first case: 'deletion_requested', an account
+       * whose owner asked for it to be deleted). The credentials were right
+       * and the server says why the door is shut, in Thai — so that sentence
+       * is shown. Falling through to the branch below would have told them
+       * "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้", which is false and sends them to check
+       * their Wi-Fi.
+       */
+      const message = (err.body as { message?: unknown } | null)?.message
+      errorMessage.value =
+        typeof message === 'string' && message.trim() !== ''
+          ? message
+          : td('login.blocked_generic', 'บัญชีนี้เข้าสู่ระบบไม่ได้ในขณะนี้ — กรุณาติดต่อผู้ดูแลระบบของบริษัท')
     } else if (err instanceof ApiError && err.status === 422) {
       const body = err.body as { errors?: Record<string, string[]> }
       fieldErrors.value = body.errors ?? {}
@@ -281,6 +312,37 @@ async function handleSubmit() {
       </div>
 
       <form class="mt-8 space-y-4" @submit.prevent="handleSubmit" novalidate>
+          <!-- MOB-12 follow-up — the account was deleted immediately. -->
+          <div
+            v-if="accountDeleted"
+            class="flex items-start gap-2 rounded-xl bg-surface-success border border-line-card px-3 py-3 text-sm text-ink-success"
+            role="status"
+            data-test="account-deleted-notice"
+          >
+            <Icon name="check_circle" :size="16" class="mt-0.5 shrink-0" />
+            <div class="min-w-0">
+              <p class="font-bold">{{ td('login.account_deleted_title', 'บัญชีของคุณถูกลบแล้ว') }}</p>
+              <p class="mt-1 leading-relaxed">
+                {{ td('login.account_deleted_body', 'ข้อมูลส่วนตัวของคุณถูกลบเรียบร้อย ขอบคุณที่ร่วมงานกับเรา') }}
+              </p>
+            </div>
+          </div>
+
+          <!-- MOB-30 — confirmation after an account deletion request. -->
+          <div
+            v-else-if="deletionRequested"
+            class="flex items-start gap-2 rounded-xl bg-surface-warning border border-amber-100 px-3 py-3 text-sm text-ink-warning"
+            role="status"
+          >
+            <Icon name="check_circle" :size="16" class="mt-0.5 shrink-0" />
+            <div class="min-w-0">
+              <p class="font-bold">{{ td('login.deletion_requested_title', 'ส่งคำขอลบบัญชีแล้ว') }}</p>
+              <p class="mt-1 leading-relaxed">
+                {{ td('login.deletion_requested_body', 'ผู้ดูแลระบบของบริษัทจะดำเนินการตามคำขอของคุณ ระหว่างนี้บัญชีนี้จะเข้าสู่ระบบไม่ได้') }}
+              </p>
+            </div>
+          </div>
+
           <!-- ══ TASK-116 / TASK-115 — the three login-blocked states ══════
                A 403 is NOT the generic error banner below: the password was
                right, so the copy must say what is actually holding the

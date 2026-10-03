@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from '@/composables/useI18n'
+import { commissionPaymentStatusClass, commissionPaymentStatusLabel } from '@/utils/commissionPaymentStatus'
 const { td } = useI18n()
 
 /**
@@ -48,7 +49,7 @@ interface LedgerItem {
   rate_type_applied: 'percentage' | 'fixed_satang'
   rate_applied: number
   amount_satang: number
-  payment_status: 'pending' | 'paid'
+  payment_status: 'pending' | 'paid' | 'forfeited'
   paid_at: string | null
   created_at: string
 }
@@ -178,6 +179,9 @@ const filteredEntries = computed(() => {
 const PAYMENT_STATUS_GROUPS: { key: LedgerItem['payment_status']; label: string }[] = [
   { key: 'pending', label: 'รอจ่าย' },
   { key: 'paid', label: 'จ่ายแล้ว' },
+  // MOB-12 — given up on account deletion. Its own group so it can never be
+  // read as part of either of the two above.
+  { key: 'forfeited', label: 'สละสิทธิ์' },
 ]
 const groupedEntries = computed(() =>
   PAYMENT_STATUS_GROUPS.map((g) => ({
@@ -388,9 +392,9 @@ const pageIcon = computed(() => theme.icon('nav_commission', 'money'))
                          are business meaning, not decoration — untouched. -->
                     <span
                       class="text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap"
-                      :class="e.payment_status === 'paid' ? 'text-ink-success bg-surface-success' : 'text-ink-warning bg-surface-warning'"
+                      :class="commissionPaymentStatusClass(e.payment_status)"
                     >
-                      {{ e.payment_status === 'paid' ? 'จ่ายแล้ว' : 'รอจ่าย' }}
+                      {{ commissionPaymentStatusLabel(e.payment_status) }}
                     </span>
                   </div>
                 </AppCard>

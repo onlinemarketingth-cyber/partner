@@ -1,0 +1,16 @@
+App/build
+App/Pods
+App/output
+App/App/public
+DerivedData
+xcuserdata
+
+# Cordova plugins for Capacitor
+capacitor-cordova-ios-plugins
+
+# Generated Config files
+App/App/capacitor.config.json
+App/App/config.xml
+
+# MOB-28 — recreated by `npx cap sync` on each machine (absolute path inside)
+App/CapApp-SPM/symlinks

@@ -65,6 +65,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, nextTick 
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 import Icon from './Icon.vue'
 import { authHeaders } from '@/api/client'
+import { useCloseOnBack } from '@/platform/backStack'
 
 const props = withDefaults(
   defineProps<{
@@ -106,11 +107,6 @@ const emit = defineEmits<{
   progress: [payload: { page: number; furthest: number; totalPages: number }]
   download: []
 }>()
-
-function getCookie(name: string): string | null {
-  const match = document.cookie.match(new RegExp(`(^|;\\s*)${name}=([^;]*)`))
-  return match?.[2] ? decodeURIComponent(match[2]) : null
-}
 
 // ── State ───────────────────────────────────────────────────────────
 const loading = ref(true)
@@ -202,9 +198,10 @@ async function load() {
     // Same fix as useAuthenticatedMedia (2026-09-04): this reaches an
     // auth:sanctum URL by hand, so it has to carry the portal's bearer
     // token. Without it every spec-sheet PDF answers 401.
+    // MOB-33 (2026-10-02) — no X-XSRF-TOKEN from document.cookie any more:
+    // this is a GET, which Laravel's CSRF check never inspects, so it was a
+    // leftover from the cookie-session days (see useAuthenticatedMedia.ts).
     const headers = authHeaders(new Headers())
-    const xsrfToken = getCookie('XSRF-TOKEN')
-    if (xsrfToken) headers.set('X-XSRF-TOKEN', xsrfToken)
 
     const res = await fetch(props.inlineUrl, { method: 'GET', headers, credentials: 'include' })
     if (!res.ok) throw new Error(String(res.status))
@@ -455,6 +452,17 @@ function onBackdropClick(event: MouseEvent) {
  * give the page every pixel (TASK-158).
  */
 const isOverlay = computed(() => !props.embedded || expanded.value)
+
+// MOB-25 (2026-10-02) — Android's back button behaves like Escape (TASK-158:
+// one level at a time — reading mode first, then the viewer). Registered only
+// while this covers the screen; an embedded viewer is page content.
+useCloseOnBack(
+  () => isOverlay.value,
+  () => {
+    if (expanded.value) void toggleExpanded()
+    else emit('close')
+  },
+)
 </script>
 
 <template>
@@ -464,7 +472,7 @@ const isOverlay = computed(() => !props.embedded || expanded.value)
   <div
     :class="
       isOverlay
-        ? 'fixed inset-0 z-50 bg-black/70 flex items-stretch sm:items-center justify-center p-0 sm:p-4'
+        ? 'fixed inset-0 z-50 bg-black/70 flex items-stretch sm:items-center justify-center p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] sm:p-4'
         : 'flex w-full'
     "
     :role="isOverlay ? 'dialog' : undefined"

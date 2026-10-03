@@ -96,6 +96,7 @@ import Icon from '@/design-system/components/Icon.vue'
 import ShareLinkModal from '@/design-system/components/ShareLinkModal.vue'
 import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 import BuddhistDateInput from '@/design-system/components/BuddhistDateInput.vue'
+import { useCloseOnBack } from '@/platform/backStack'
 
 // ── API contract (backend: MeTeamController + TeamNodeResource) ─────────
 
@@ -531,6 +532,9 @@ function closeSheet() {
   sheetMember.value = null
 }
 
+// MOB-25 (2026-10-02) — Android's back button closes the sheet first.
+useCloseOnBack(() => sheetMember.value !== null, closeSheet)
+
 /**
  * The client's stage as this subordinate sees it. At `names` the API sends
  * `current_stage` directly; at `full_file` the shape is the full Client
@@ -653,6 +657,8 @@ const STALE_AFTER_SAVE = 'โหลดข้อมูลล่าสุดไม
 // ── create a link ──────────────────────────────────────────────────────
 
 const showCreateSheet = ref(false)
+// MOB-25 (2026-10-02) — Android's back button closes the sheet first.
+useCloseOnBack(() => showCreateSheet.value, () => { showCreateSheet.value = false })
 const creating = ref(false)
 const createError = ref('')
 const createForm = ref({ label: '', expiresOn: '', maxUses: '' })
@@ -812,6 +818,9 @@ function closeRecruit() {
   if (approving.value) return
   approveTarget.value = null
 }
+
+// MOB-25 — same rule as the backdrop: refused while the approval is saving.
+useCloseOnBack(() => approveTarget.value !== null, closeRecruit)
 
 async function confirmApprove() {
   const recruit = approveTarget.value

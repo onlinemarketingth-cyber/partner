@@ -57,6 +57,7 @@
 import { computed, watch } from 'vue'
 import Icon from './Icon.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useCloseOnBack } from '@/platform/backStack'
 
 export interface FilterOption {
     value: string | number | null
@@ -115,6 +116,9 @@ function choose(value: string | number | null) {
  * scrolls the client list underneath — the single most obvious "this is a
  * web page, not an app" tell on a modal surface.
  */
+// MOB-25 (2026-10-02) — Android's back button closes the sheet first.
+useCloseOnBack(() => props.open, close)
+
 watch(() => props.open, (open) => {
     document.body.style.overflow = open ? 'hidden' : ''
 })

@@ -7,6 +7,7 @@ use App\Enums\CommissionPlanType;
 use App\Enums\UserRole;
 use App\Models\AuditLog;
 use App\Models\User;
+use App\Services\Account\AccountDeletionService;
 use App\Services\Commission\MatrixCommissionService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -743,6 +744,19 @@ class UserService
     /** TASK-183 §4.1 — the mirror of deactivate(): restoring hands every right back. */
     public function restore(User $target, User $actor): User
     {
+        /*
+         * MOB-12 (2026-10-02) — an account its owner asked to delete, and an
+         * admin approved deleting, is soft-deleted exactly like a switched-off
+         * one, so the roster offers กู้คืน on it. Restoring it would bring
+         * back a placeholder row the owner asked us to be rid of, so it is
+         * refused here rather than relying on the login gate to keep it shut.
+         */
+        if (AccountDeletionService::wasDeletedOnRequest($target)) {
+            throw ValidationException::withMessages([
+                'user' => 'บัญชีนี้ถูกลบตามคำขอของเจ้าของบัญชีแล้ว จึงกู้คืนไม่ได้',
+            ]);
+        }
+
         /*
          * 2026-09-18 — giving the address back, and the one way that can
          * fail.

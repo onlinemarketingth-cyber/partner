@@ -26,7 +26,8 @@ use Illuminate\Http\Request;
  *
  *   403 {
  *     "message":                 "<Thai, user-facing>",
- *     "error_code":              "email_unverified" | "approval_pending" | "approval_rejected",
+ *     "error_code":              "email_unverified" | "approval_pending" | "approval_rejected"
+ *                                | "company_inactive" | "deletion_requested" (MOB-12),
  *     "can_resend_verification": bool,   // true only for email_unverified
  *     "can_reapply":             bool,   // true only for approval_rejected (ADR-005 d7)
  *     "rejection_reason":        string|null  // populated only for approval_rejected

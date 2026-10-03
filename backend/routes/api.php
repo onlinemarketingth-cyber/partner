@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AcademyCompletionSettingController;
 use App\Http\Controllers\Api\V1\AcademyProgressSummaryController;
+use App\Http\Controllers\Api\V1\AccountDeletionRequestController;
 use App\Http\Controllers\Api\V1\AffiliateAttributionSettingController;
 use App\Http\Controllers\Api\V1\AffiliateLeadCaptureController;
 use App\Http\Controllers\Api\V1\AffiliateLinkController;
@@ -16,6 +17,7 @@ use App\Http\Controllers\Api\V1\AgentRankSettingController;
 use App\Http\Controllers\Api\V1\AgentTargetController;
 use App\Http\Controllers\Api\V1\AnnouncementController;
 use App\Http\Controllers\Api\V1\AnnouncementSettingController;
+use App\Http\Controllers\Api\V1\AppVersionPolicyController;
 use App\Http\Controllers\Api\V1\AuditLogController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BadgeController;
@@ -55,6 +57,7 @@ use App\Http\Controllers\Api\V1\CompanyThemeController;
 use App\Http\Controllers\Api\V1\ComplianceReportController;
 use App\Http\Controllers\Api\V1\ConfigHealthReportController;
 use App\Http\Controllers\Api\V1\CurrencyController;
+use App\Http\Controllers\Api\V1\DeviceTokenController;
 use App\Http\Controllers\Api\V1\ExamAttemptController;
 use App\Http\Controllers\Api\V1\ExamController;
 use App\Http\Controllers\Api\V1\ExamQuestionController;
@@ -62,6 +65,7 @@ use App\Http\Controllers\Api\V1\ExamQuestionOptionController;
 use App\Http\Controllers\Api\V1\GamificationRuleController;
 use App\Http\Controllers\Api\V1\LeaderboardController;
 use App\Http\Controllers\Api\V1\LevelThresholdController;
+use App\Http\Controllers\Api\V1\MeAccountDeletionRequestController;
 use App\Http\Controllers\Api\V1\MeController;
 use App\Http\Controllers\Api\V1\MeTeamController;
 use App\Http\Controllers\Api\V1\ModuleCompletionController;
@@ -347,6 +351,14 @@ Route::prefix('v1')->group(function () {
         ->middleware('throttle:60,1')
         ->name('public-theme.show');
 
+    // 2026-10-02 — MOB-13. The mobile app's launch check ("is this build
+    // still supported?"), asked BEFORE login because a build too old for the
+    // API may not be able to log in. Public + throttled; returns only version
+    // numbers and a store link (see ShowAppVersionPolicyRequest).
+    Route::get('/app/version-policy', [AppVersionPolicyController::class, 'show'])
+        ->middleware('throttle:60,1')
+        ->name('app-version-policy.show');
+
     // TASK-056 Sprint P1 — PUBLIC Product Share landing page + the file
     // routes it needs. Same opaque-token + throttled treatment as every
     // other public route above; never a raw storage path (§5 rule 6).
@@ -464,6 +476,18 @@ Route::prefix('v1')->group(function () {
         Route::put('/me/email', [UserProfileController::class, 'updateEmail']);
         // 2026-08-22 — the agent's own notification-email off switch.
         Route::put('/me/notification-preferences', [UserProfileController::class, 'updateNotificationPreferences']);
+        // 2026-10-02 — MOB-10. The mobile app's push token for this phone.
+        // Self-scoped (no id in the URL; see DeviceTokenController).
+        // Throttled: the app registers on launch and on token refresh, a few
+        // times a day at most. DELETE is excluded from company.operational
+        // for the same reason as logout above — the app calls it right
+        // before logging out, it grants nothing, and refusing it would leave
+        // a closed company's phone receiving pushes.
+        Route::post('/me/devices', [DeviceTokenController::class, 'store'])
+            ->middleware('throttle:30,1');
+        Route::delete('/me/devices', [DeviceTokenController::class, 'destroy'])
+            ->middleware('throttle:30,1')
+            ->withoutMiddleware('company.operational');
 
         // TASK-053 / ADR-016 Phase 1 — personal notifications (the real
         // bell, replacing the stub) + per-agent targets (goal ring).
@@ -505,6 +529,23 @@ Route::prefix('v1')->group(function () {
         // /me/bank-account on purpose: the two together are the "can this
         // person be paid" record, and a payout flow will check both.
         Route::put('/me/id-document', [UserProfileController::class, 'updateIdDocument']);
+
+        /*
+         * MOB-12 (2026-10-02) — in-app account deletion (App Store 5.1.1(v)).
+         * Files a REQUEST a Company Admin decides; the caller is signed out
+         * everywhere and blocked at login until then. Agents only (Policy).
+         * Self-scoped like every /me/* route. Throttled per user: the
+         * password inside it is also throttled login-style by the Service,
+         * this tier only stops the endpoint being hammered.
+         *
+         * 2026-10-03 (owner) — nothing unpaid, or unpaid commission waived →
+         * deleted immediately (200 `deleted`); "keep" → the request above
+         * (202 `pending`). /preview tells the dialog which it will be.
+         */
+        Route::get('/me/account-deletion-request/preview', [MeAccountDeletionRequestController::class, 'preview'])
+            ->middleware('throttle:30,1');
+        Route::post('/me/account-deletion-request', [MeAccountDeletionRequestController::class, 'store'])
+            ->middleware('throttle:10,1');
 
         // TASK-055 / ADR-018 — per-company white-label theme. /me/theme is
         // readable by ANY authenticated user (agents render the branded
@@ -1442,6 +1483,13 @@ Route::prefix('v1')->group(function () {
         Route::get('/platform/commission-cap', [PlatformCommissionSettingController::class, 'show']);
         Route::put('/platform/commission-cap', [PlatformCommissionSettingController::class, 'update']);
 
+        // 2026-10-02 — MOB-13. Mobile app version policy (one row per
+        // platform, no company_id — see the migration). Super Admin only,
+        // read included: index() via abort_unless, update() via
+        // UpdateAppVersionPolicyRequest::authorize(). Audit-logged.
+        Route::get('/platform/app-version-policies', [AppVersionPolicyController::class, 'index']);
+        Route::put('/platform/app-version-policies', [AppVersionPolicyController::class, 'update']);
+
         // Commission Ledger — BR-2 (rate depends on cert tier x
         // product), BR-4 (immutable ledger, system-created only —
         // CommissionService::recordForReferral(), triggered by
@@ -1721,6 +1769,17 @@ Route::prefix('v1')->group(function () {
         // concrete form of ADR-025 §7's "Company Admins keep the full
         // approval queue and can reverse anything a leader did".
         Route::put('/agent-approvals/{user}/revoke', [AgentApprovalController::class, 'revoke']);
+
+        // MOB-12 (2026-10-02) — the admin queue for in-app account deletion
+        // requests. Company Admin (own company, TenantScope on the binding)
+        // or Super Admin; see AccountDeletionRequestController. Decisions are
+        // throttled like the other admin decision endpoints that move money
+        // or people.
+        Route::get('/account-deletion-requests', [AccountDeletionRequestController::class, 'index']);
+        Route::post('/account-deletion-requests/{accountDeletionRequest}/approve', [AccountDeletionRequestController::class, 'approve'])
+            ->middleware('throttle:30,1');
+        Route::post('/account-deletion-requests/{accountDeletionRequest}/reject', [AccountDeletionRequestController::class, 'reject'])
+            ->middleware('throttle:30,1');
 
         // TASK-041 — Policy & Report IA item 4 ("มุมที่ 4"). Four
         // read-only reporting endpoints, each gated inside its own

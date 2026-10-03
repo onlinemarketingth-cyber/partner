@@ -53,6 +53,12 @@ import Icon from './Icon.vue'
 import { api, ApiError } from '@/api/client'
 import { useI18n } from '../../composables/useI18n'
 import { generateQrDataUrl } from '../../utils/qrCode'
+// MOB-21 / MOB-25 (2026-10-02) — copy, share and save go through platform/,
+// which runs this component's original browser code in a browser and the
+// native clipboard / share sheet inside the iOS/Android app.
+import { canOpenShareSheet, copyText, shareImage, shareLink } from '@/platform/share'
+import { saveDataUrl } from '@/platform/files'
+import { useCloseOnBack } from '@/platform/backStack'
 
 type ShareEmailType = 'order' | 'product_share' | 'agent_invite'
 
@@ -118,20 +124,25 @@ const hasCoarsePointer = (() => {
 /**
  * The share button shows only where it actually leads somewhere: the API
  * exists AND this is a touch device.
+ *
+ * MOB-21 — the rule itself moved to platform/share.ts (unchanged for a
+ * browser); inside the app the button is always there, because Android's
+ * WebView has no navigator.share and the native sheet replaces it.
  */
-const canNativeShare = computed(
-    () => typeof navigator !== 'undefined' && !!navigator.share && hasCoarsePointer,
-)
+const canNativeShare = computed(() => canOpenShareSheet(hasCoarsePointer))
 
-/**
+/*
  * The QR tab's "share this image" button keeps the SUPPORT-ONLY check on
- * purpose. It is a different action with a different fallback: a QR image
- * has a Download button sitting beside it, so on a desktop that supports
- * file sharing the extra route is a bonus rather than a dead end.
+ * purpose (`navigator.canShare`, now inside platform/share.ts shareImage()).
+ * It is a different action with a different fallback: a QR image has a
+ * Download button sitting beside it, so on a desktop that supports file
+ * sharing the extra route is a bonus rather than a dead end.
  */
-const canNativeShareFile = computed(() => typeof navigator !== 'undefined' && !!navigator.canShare)
 
 const close = () => emit('update:show', false)
+
+// MOB-25 — Android's back button closes this sheet before it navigates.
+useCloseOnBack(() => props.show, close)
 
 const selectInput = (event: Event) => {
     const target = event.target as HTMLInputElement | null
@@ -140,7 +151,7 @@ const selectInput = (event: Event) => {
 
 const copyLink = async () => {
     try {
-        await navigator.clipboard.writeText(props.url)
+        await copyText(props.url)
         copied.value = true
         setTimeout(() => { copied.value = false }, 1800)
     } catch {
@@ -223,31 +234,35 @@ const sendEmail = async () => {
 const shareLinkNative = async () => {
     if (!canNativeShare.value) return
     try {
-        await navigator.share({ title: props.heading || undefined, url: props.url })
+        await shareLink({ title: props.heading || undefined, url: props.url })
     } catch {
         // user cancelled the share sheet — no-op
     }
 }
 
-const downloadQr = () => {
+// MOB-23 — in the app a WebView ignores `<a download>`; saveDataUrl() hands
+// the PNG to the share sheet there ("Save Image" / LINE). Browser unchanged.
+const downloadQr = async () => {
     if (!qrDataUrl.value) return
-    const a = document.createElement('a')
-    a.href = qrDataUrl.value
-    a.download = 'qr-code.png'
-    a.click()
+    try {
+        await saveDataUrl(qrDataUrl.value, 'qr-code.png')
+    } catch {
+        // Nothing saved; the QR stays on screen for a screenshot.
+    }
 }
 
 const shareQrNative = async () => {
     if (!qrDataUrl.value || !canNativeShare.value) return
     try {
-        const res = await fetch(qrDataUrl.value)
-        const blob = await res.blob()
-        const file = new File([blob], 'qr-code.png', { type: 'image/png' })
-        if (canNativeShareFile.value && navigator.canShare({ files: [file] })) {
-            await navigator.share({ files: [file], title: props.heading || undefined })
-        } else {
-            await navigator.share({ title: props.heading || undefined, url: props.url })
-        }
+        // MOB-21 — the image itself in the app (a cached file:// URI the
+        // native sheet accepts); the original File / link fallback in a
+        // browser. See platform/share.ts.
+        await shareImage({
+            dataUrl: qrDataUrl.value,
+            filename: 'qr-code.png',
+            title: props.heading || undefined,
+            fallbackUrl: props.url,
+        })
     } catch {
         // user cancelled — no-op
     }

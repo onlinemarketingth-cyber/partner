@@ -115,6 +115,15 @@ class UatResetCommand extends Command
         'personal_access_tokens',
         'password_reset_tokens',
         'social_accounts',
+        // MOB-12 — a person's own request to have their account deleted.
+        // Kept with `users`: wiping a pending one would silently unblock
+        // the login of somebody who asked to leave, and an approved one is
+        // the only record of why that users row is anonymised.
+        'account_deletion_requests',
+        // MOB-10 — the phones those kept users receive pushes on. Kept with
+        // `sessions`: wiping them would silently stop push for every agent
+        // until each one happened to reopen the app.
+        'device_tokens',
         'companies',
         'company_invite_codes',
 
@@ -173,6 +182,8 @@ class UatResetCommand extends Command
         'video_processing_settings',
         // ADR-048 — the supplier auto-receive window. Config, kept.
         'supplier_platform_settings',
+        // MOB-13 — the mobile app's minimum / latest version. Config, kept.
+        'app_version_policies',
     ];
 
     /**

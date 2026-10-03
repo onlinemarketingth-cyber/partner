@@ -37,6 +37,7 @@ import Icon from './Icon.vue'
 // write, see App\Support\RichText).
 import RichText from './RichText.vue'
 import { toEmbedUrl } from '@/utils/embedUrl'
+import { useCloseOnBack } from '@/platform/backStack'
 
 export interface AnnouncementModalVideo {
   type: 'upload' | 'embed'
@@ -88,6 +89,11 @@ const showExpanded = computed(
     Boolean(props.show && props.announcement) &&
     !(displayStyle.value === 'bottom_strip' && !stripExpanded.value),
 )
+
+// MOB-25 (2026-10-02) — Android's back button does what a backdrop tap does
+// (collapse a bottom strip, otherwise close), and only while the panel is up:
+// the collapsed strip is not blocking anything, so back navigates as usual.
+useCloseOnBack(() => showExpanded.value, () => handleBackdropClick())
 
 function handleBackdropClick() {
   // bottom_strip: backdrop tap collapses back to the non-blocking strip
@@ -231,7 +237,7 @@ function formatDate(iso: string): string {
     <!-- bottom_strip, collapsed: small non-blocking bar pinned to the bottom -->
     <div
       v-if="show && announcement && displayStyle === 'bottom_strip' && !stripExpanded"
-      class="fixed bottom-0 inset-x-0 z-[70] bg-surface-card border-t border-line-card shadow-[0_-4px_16px_rgba(0,0,0,0.12)] px-4 py-3 flex items-center gap-3 cursor-pointer"
+      class="fixed bottom-0 inset-x-0 z-[70] bg-surface-card border-t border-line-card shadow-[0_-4px_16px_rgba(0,0,0,0.12)] px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] flex items-center gap-3 cursor-pointer"
       @click="stripExpanded = true"
     >
       <img v-if="announcement.image_url" :src="announcement.image_url" alt="" class="w-10 h-10 rounded-lg object-cover shrink-0" />

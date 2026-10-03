@@ -61,6 +61,7 @@
  * display layer.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { commissionPaymentStatusClass, commissionPaymentStatusLabel } from '@/utils/commissionPaymentStatus'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
@@ -225,7 +226,7 @@ interface LedgerItem {
   amount_satang: number
   sale_price_satang_at_time: number | null
   applied_price_promotion: { id: number; note: string | null; discounted_price_satang: number } | null
-  payment_status: 'pending' | 'paid'
+  payment_status: 'pending' | 'paid' | 'forfeited'
   earned_via: EarnedVia | null
   /** Whose sale produced this override — null on a row the agent earned themselves. */
   override_source_agent: { id: number; name: string } | null
@@ -1638,9 +1639,9 @@ watch(() => activeCompany.companyId, () => {
                           <td class="py-2 whitespace-nowrap">
                             <span
                               class="text-[10px] font-bold px-1.5 py-0.5 rounded"
-                              :class="e.payment_status === 'paid' ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'"
+                              :class="commissionPaymentStatusClass(e.payment_status)"
                             >
-                              {{ e.payment_status === 'paid' ? 'จ่ายแล้ว' : 'รอจ่าย' }}
+                              {{ commissionPaymentStatusLabel(e.payment_status) }}
                             </span>
                           </td>
                         </tr>

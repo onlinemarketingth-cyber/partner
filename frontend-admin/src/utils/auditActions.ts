@@ -72,6 +72,16 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
       { value: 'move_to_company', label: 'ย้ายบริษัท' },
     ],
   },
+  // MOB-12 (2026-10-02) — in-app account deletion requests.
+  {
+    label: 'คำขอลบบัญชี',
+    prefix: 'account_deletion.',
+    actions: [
+      { value: 'account_deletion.requested', label: 'สมาชิกขอลบบัญชี' },
+      { value: 'account_deletion.approved', label: 'อนุมัติลบบัญชี (ลบข้อมูลส่วนตัวแล้ว)' },
+      { value: 'account_deletion.rejected', label: 'ปฏิเสธคำขอลบบัญชี' },
+    ],
+  },
   {
     label: 'เข้าสู่ระบบ',
     prefix: 'auth.',
@@ -140,6 +150,8 @@ export const AUDIT_ACTION_GROUPS: AuditActionGroup[] = [
     actions: [
       { value: 'platform_mail_settings.updated', label: 'แก้ไขการตั้งค่าอีเมล' },
       { value: 'platform_mail_settings.test_sent', label: 'ส่งอีเมลทดสอบ' },
+      // MOB-13 — mobile app minimum / latest version.
+      { value: 'app_version_policy.updated', label: 'แก้ไขเวอร์ชันแอปมือถือ' },
     ],
   },
 ]

@@ -6,6 +6,7 @@ use App\Enums\AgentApprovalStatus;
 use App\Enums\LoginBlockReason;
 use App\Exceptions\LoginBlockedException;
 use App\Models\User;
+use App\Services\Account\AccountDeletionService;
 
 /**
  * TASK-115 (implements TASK-021, pulled in by ADR-025 §8) — THE login gate.
@@ -107,6 +108,20 @@ class LoginGateService
         // next login, which for an already-active user could be never.
         if (! $user->belongsToOperationalCompany()) {
             throw new LoginBlockedException(LoginBlockReason::CompanyInactive);
+        }
+
+        // ── MOB-12 (2026-10-02): the owner asked for this account to go. ──
+        // Second, after the company check (a closed company is the broader
+        // fact and is answered first, for the same "answer what the person
+        // cannot change first" reason given above), and ABOVE the isAgent()
+        // early return: only agents can file a request today, but a request
+        // must keep its account out even if the row's role is changed while
+        // it is pending — the block belongs to the request, not to the role.
+        // Only reachable with the correct password, like every case here, so
+        // it reveals nothing about which addresses exist (see the class
+        // docblock's NON-ENUMERATION ANALYSIS).
+        if (AccountDeletionService::blocksLogin($user)) {
+            throw new LoginBlockedException(LoginBlockReason::DeletionRequested);
         }
 
         // ADR-025 §8 / TASK-021's out-of-scope note: "Company Admin/Super

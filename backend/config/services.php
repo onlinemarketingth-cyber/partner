@@ -87,4 +87,22 @@ return [
      * here. There are none today.
      */
 
+    /*
+     * 2026-10-02 — MOB-11. Firebase Cloud Messaging (HTTP v1) for mobile push,
+     * iOS and Android alike (the app's token is always an FCM token).
+     *
+     * `credentials` is the ABSOLUTE PATH to a Google service-account JSON on
+     * the server, never the JSON itself: the file holds a private key, and a
+     * path in .env keeps it out of the env dump, out of config:cache output,
+     * and out of git (§6 "Secrets").
+     *
+     * Either value missing, or the file unreadable = push is OFF. Nothing
+     * throws and the in-app bell and email work exactly as before; FcmClient
+     * logs the reason once per process.
+     */
+    'firebase' => [
+        'project_id' => env('FIREBASE_PROJECT_ID'),
+        'credentials' => env('FIREBASE_CREDENTIALS'),
+    ],
+
 ];

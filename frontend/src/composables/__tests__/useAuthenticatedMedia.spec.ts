@@ -21,8 +21,9 @@ async function freshModule() {
   created = 0
   revoked = []
   // jsdom always provides `document` — vitest.config.ts pins the
-  // environment for the whole project — so this only clears the cookie jar
-  // to keep the XSRF header deterministic between tests. An earlier
+  // environment for the whole project — so this only clears the cookie jar.
+  // (It once kept an XSRF header deterministic; MOB-33 removed that header,
+  // and clearing stays harmless.) An earlier
   // version also assigned a `{ cookie: '' }` fallback for a hypothetical
   // non-jsdom environment; it needed a @ts-expect-error that `vue-tsc
   // --build` then reported as UNUSED, which is TypeScript stating the

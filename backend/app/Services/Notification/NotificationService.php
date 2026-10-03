@@ -3,9 +3,13 @@
 namespace App\Services\Notification;
 
 use App\Enums\NotificationType;
+use App\Jobs\SendPushNotification;
 use App\Models\Notification;
 use App\Models\User;
+use App\Services\Notification\Push\PushNotificationService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * TASK-053 / ADR-016 Phase 1 — the single place anything in the platform
@@ -47,10 +51,22 @@ use Illuminate\Support\Facades\DB;
  * runs immediately when there is no transaction open. So the mail goes out
  * only if the fact it describes is actually true, and every existing caller
  * gets that for free without knowing it.
+ *
+ * ─────────────────────────────────────────────────────────────────────
+ * PUSH (2026-10-02, MOB-11 — owner: every bell notification also pushes)
+ *
+ * Same single funnel, same afterCommit. A queued SendPushNotification job
+ * per notification whose recipient has a registered phone; the push carries
+ * a fixed per-type sentence, never this notification's title/body (PDPA —
+ * see config('notifications.push')). See queuePush() for why it can never
+ * throw into a caller.
  */
 class NotificationService
 {
-    public function __construct(private NotificationMailer $mailer) {}
+    public function __construct(
+        private NotificationMailer $mailer,
+        private PushNotificationService $push,
+    ) {}
 
     /**
      * @param  array<string, mixed>|null  $data
@@ -77,6 +93,10 @@ class NotificationService
             'email_due_at' => $this->wantsEmail($user, $type) ? now() : null,
         ]);
 
+        // Registered BEFORE the email callback, and unable to throw (see
+        // queuePush), so neither delivery channel can stop the other.
+        $this->queuePush($notification);
+
         if ($notification->email_due_at !== null && ! $this->isDeferred($type)) {
             // The row is reloaded inside the callback: by commit time the
             // instance held here may be stale, and the mailer's exactly-once
@@ -92,6 +112,44 @@ class NotificationService
         }
 
         return $notification;
+    }
+
+    /**
+     * MOB-11 — queue a push to the recipient's phones, after commit, for the
+     * same reason as the email: a push about a payment that then rolled back
+     * is a lie on somebody's lock screen.
+     *
+     * EVERY type is pushed (owner decision) — there is no per-type gate
+     * like wantsEmail(). Push is skipped only when FCM is not configured or
+     * the recipient has no registered phone.
+     *
+     * Nothing here may throw. notify() is called from inside commission and
+     * payment transactions, and a push is the one part of a notification
+     * nobody depends on; a broken Firebase config or a full jobs table must
+     * cost a phone buzz, never the notification row or the email.
+     */
+    private function queuePush(Notification $notification): void
+    {
+        try {
+            if (! $this->push->isEnabled()) {
+                return;
+            }
+
+            $id = $notification->id;
+            $userId = $notification->user_id;
+
+            DB::afterCommit(function () use ($id, $userId) {
+                try {
+                    if ($this->push->hasDevices($userId)) {
+                        SendPushNotification::dispatch($id);
+                    }
+                } catch (Throwable $e) {
+                    Log::warning("NotificationService: could not queue push for notification #{$id} — ".$e->getMessage());
+                }
+            });
+        } catch (Throwable $e) {
+            Log::warning("NotificationService: push skipped for notification #{$notification->id} — ".$e->getMessage());
+        }
     }
 
     /**

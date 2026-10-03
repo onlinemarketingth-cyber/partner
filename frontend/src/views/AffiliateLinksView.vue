@@ -47,6 +47,8 @@ import ConfirmDialog from '@/design-system/components/ConfirmDialog.vue'
 // comparable items (here: which link is actually converting).
 import AppCard from '@/design-system/components/AppCard.vue'
 import AppList from '@/design-system/components/AppList.vue'
+// MOB-21 (2026-10-02) — see platform/share.ts copyText().
+import { copyText } from '@/platform/share'
 
 interface ProductOption {
   id: number
@@ -171,7 +173,7 @@ async function createLink() {
 const copiedLinkId = ref<number | null>(null)
 async function copyLink(link: AffiliateLinkItem) {
   try {
-    await navigator.clipboard.writeText(link.short_url ?? link.public_url)
+    await copyText(link.short_url ?? link.public_url)
     copiedLinkId.value = link.id
     setTimeout(() => {
       if (copiedLinkId.value === link.id) copiedLinkId.value = null

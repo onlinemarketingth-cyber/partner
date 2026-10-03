@@ -11,6 +11,7 @@
  */
 import { computed } from 'vue'
 import { useI18n, I18N } from '../../composables/useI18n'
+import { useCloseOnBack } from '@/platform/backStack'
 
 const props = defineProps({
     show:    { type: Boolean, default: false },
@@ -53,6 +54,10 @@ const close = () => {
 }
 
 const confirm = () => emit('confirm')
+
+// MOB-25 (2026-10-02) — Android's back button is "Cancel", never "Confirm";
+// ignored while busy, exactly like the Cancel button (disabled then).
+useCloseOnBack(() => props.show, () => { if (!props.busy) close() })
 </script>
 
 <template>

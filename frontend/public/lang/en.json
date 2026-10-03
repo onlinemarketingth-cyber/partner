@@ -240,7 +240,8 @@
     "source_label": "Source: {value}",
     "dob_label": "Date of birth: {value}",
     "province_label": "Province: {value}",
-    "occupation_label": "Occupation: {value}"
+    "occupation_label": "Occupation: {value}",
+    "take_photo": "Take a photo of a document"
   },
   "product": {
     "select": "Select product",
@@ -458,7 +459,19 @@
     "password_rule": "At least 8 characters, with upper case, lower case and a number",
     "account": "Account",
     "signout_help": "Sign out on this device",
-    "subtitle": "Your photo and personal details"
+    "subtitle": "Your photo and personal details",
+    "biometric_title": "Unlock with Face ID / fingerprint",
+    "biometric_help": "When on, the app asks for your face or fingerprint (or the device passcode) every time it opens, and when you return after more than 1 minute away, so someone who picks up your phone cannot see your clients and commission — your password is not stored, and face/fingerprint data never leaves the device",
+    "biometric_confirm_reason": "Confirm it is you to turn on unlocking",
+    "biometric_not_confirmed": "Not turned on — could not confirm it is you",
+    "biometric_enabled": "Face ID / fingerprint unlock is on",
+    "biometric_disabled": "Face ID / fingerprint unlock is off",
+    "biometric_save_failed": "Could not save — please try again",
+    "switch_on": "On",
+    "switch_off": "Off",
+    "delete_title": "Delete account",
+    "delete_help": "The request goes to your company administrator to review and carry out. You are signed out as soon as it is sent. Your commission and withdrawal history is kept as financial records",
+    "delete_button": "Request account deletion"
   },
   "file": {
     "cannot_open": "Could not open this file"
@@ -595,5 +608,58 @@
     "page_of": "Page {current} of {total}",
     "resume_note": "You left off on page {page}",
     "resume_cta": "Resume on page {page}"
+  },
+  "app": {
+    "lock_title": "The app is locked",
+    "lock_body": "Use Face ID, your fingerprint or your device passcode to continue",
+    "lock_reason": "Confirm it is you to open the app",
+    "lock_unlock": "Unlock",
+    "lock_cancelled": "Cancelled — tap Unlock to try again",
+    "lock_failed": "Could not confirm it is you — please try again",
+    "lock_unavailable": "This device cannot use Face ID, a fingerprint or its passcode right now — sign out and sign in with your password instead",
+    "offline_title": "No internet connection",
+    "offline_body": "Check your Wi-Fi or mobile data and try again — this screen goes away by itself when you are back online",
+    "offline_checking": "Checking...",
+    "update_required_title": "Please update the app",
+    "update_required_body": "This version of the app is no longer supported. Please update to the latest version to continue",
+    "update_required_no_store": "Open the App Store or Google Play and update this app",
+    "update_open_store": "Go to update",
+    "update_available": "A new version is available ({version})",
+    "update_now": "Update"
+  },
+  "account_deletion": {
+    "title": "Delete account",
+    "password": "Current password (to confirm it is you)",
+    "show_password": "Show password",
+    "hide_password": "Hide password",
+    "reason": "Reason (optional)",
+    "reason_ph": "You may tell us why you want to delete your account",
+    "submit": "Send deletion request",
+    "submitting": "Processing...",
+    "password_required": "Please enter your password",
+    "failed": "Could not send the request. Please try again",
+    "info_records": "Your commission and withdrawal history is kept, because these are financial records that must be retained. Your personal details (name, email, phone, bank account, profile picture) are deleted",
+    "info_waive": "If you give up the unpaid commission, it will not be paid and your account is deleted immediately. If you keep it, your company administrator pays you first and then deletes the account; you cannot sign in meanwhile",
+    "info_team": "Your team members and customers will be reassigned by your company administrator",
+    "preview_loading": "Checking unpaid commission...",
+    "preview_failed": "Could not load your unpaid commission",
+    "retry": "Try again",
+    "immediate_title": "Your account will be deleted as soon as you confirm",
+    "immediate_body": "You have no unpaid commission. Your account and personal details are deleted immediately and this cannot be undone",
+    "goes_to_admin": "The request goes to your company administrator. You cannot sign in until it is handled",
+    "owed_prefix": "You have unpaid commission of",
+    "choice_waive": "Give up the commission",
+    "choice_waive_hint": "Waive the unpaid commission and delete the account now. This cannot be undone",
+    "choice_keep": "I want to be paid",
+    "choice_keep_hint": "Your administrator pays you first, then deletes the account. You cannot sign in meanwhile",
+    "choice_required": "Please choose whether to be paid or to give up the commission",
+    "submit_delete": "Delete account now"
+  },
+  "login": {
+    "blocked_generic": "This account cannot sign in right now — please contact your company administrator",
+    "deletion_requested_title": "Account deletion requested",
+    "deletion_requested_body": "Your company administrator will process your request. Until then this account cannot sign in",
+    "account_deleted_title": "Your account has been deleted",
+    "account_deleted_body": "Your personal details have been removed. Thank you for working with us"
   }
 }

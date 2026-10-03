@@ -31,6 +31,7 @@ import { api } from '@/api/client'
 import { apiErrorMessage } from '@/utils/apiError'
 import Icon from './Icon.vue'
 import { useI18n } from '@/composables/useI18n'
+import { useCloseOnBack } from '@/platform/backStack'
 
 const { td } = useI18n()
 
@@ -39,6 +40,9 @@ const props = defineProps<{
   orderNumber?: string | null
 }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
+
+// MOB-25 (2026-10-02) — Android's back button closes this before it navigates.
+useCloseOnBack(() => props.orderId !== null, () => emit('close'))
 
 const objectUrl = ref<string | null>(null)
 const isImage = ref(true)

@@ -36,6 +36,16 @@ enum LoginBlockReason: string
      * which share this one string so the SPA has a single branch to handle.
      */
     case CompanyInactive = 'company_inactive';
+    /**
+     * MOB-12 (2026-10-02) — the owner of this account asked for it to be
+     * deleted (in-app, App Store guideline 5.1.1(v)) and a Company Admin has
+     * not decided yet; also kept for an approved request, see
+     * AccountDeletionRequestStatus::blockingLogin(). Same enumeration footing
+     * as the cases above: emitted only after the password was verified, so
+     * its only possible reader is the account's own owner, who already knows
+     * they asked.
+     */
+    case DeletionRequested = 'deletion_requested';
 
     /**
      * User-facing Thai copy. Deliberately phrased so that the rejected case
@@ -55,6 +65,11 @@ enum LoginBlockReason: string
             // soft-deleted tenant and a switched-off one are the same fact to
             // the person locked out, and the distinction is internal.
             self::CompanyInactive => 'บริษัทของคุณถูกระงับการใช้งานอยู่ในขณะนี้ จึงไม่สามารถเข้าใช้งานระบบได้ กรุณาติดต่อผู้ดูแลระบบของบริษัทของคุณ',
+            // MOB-12 — names the person's OWN request, so it is not mistaken
+            // for a fault or a password problem, and says what changes it:
+            // the company deciding. Contacting the admin is also how a person
+            // who changed their mind withdraws it (an admin rejects it).
+            self::DeletionRequested => 'บัญชีนี้มีคำขอลบบัญชีที่คุณส่งไว้ จึงเข้าสู่ระบบไม่ได้ระหว่างรอบริษัทพิจารณา หากต้องการยกเลิกคำขอ กรุณาติดต่อผู้ดูแลระบบของบริษัทของคุณ',
         };
     }
 }

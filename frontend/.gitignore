@@ -11,6 +11,8 @@ node_modules
 .DS_Store
 dist
 dist-ssr
+# MOB-01 — app build output (npm run build:app); Capacitor copies it into ios/ and android/
+dist-app
 coverage
 *.local
 
@@ -18,6 +20,7 @@ coverage
 # environment-specific — see .env.production.example / TASK-205).
 # frontend/.env itself (dev defaults) stays committed on purpose.
 .env.production
+.env.app
 
 # Editor directories and files
 .vscode/*

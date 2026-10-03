@@ -107,6 +107,18 @@ export const routes: RouteRecordRaw[] = [
       meta: { navLabel: 'รออนุมัติ' },
     },
     /*
+     * MOB-12 (2026-10-02) — agents' in-app account deletion requests (App
+     * Store 5.1.1(v)). Same access level as the approvals queue beside it —
+     * Company Admin (own company) and Super Admin, no `requiresSuperAdmin`;
+     * the API enforces the same line (AccountDeletionRequestPolicy).
+     */
+    {
+      path: '/agents/deletion-requests',
+      name: 'account-deletion-requests',
+      component: () => import('../views/AccountDeletionRequestsView.vue'),
+      meta: { navLabel: 'คำขอลบบัญชี' },
+    },
+    /*
      * 2026-08-22 — ONE links page with three tabs, replacing three menu
      * entries nobody could tell apart by name (human request).
      *
@@ -592,6 +604,16 @@ export const routes: RouteRecordRaw[] = [
       name: 'mail-settings',
       component: () => import('../views/MailSettingsView.vue'),
       meta: { navLabel: 'ตั้งค่า Email SMTP', requiresSuperAdmin: true },
+    },
+    // 2026-10-02 — MOB-13. Mobile app version policy (platform-wide, one
+    // row per platform). Same `requiresSuperAdmin` convention as
+    // '/mail-settings' above (UX only — AppVersionPolicyController enforces
+    // Super Admin server-side, read included).
+    {
+      path: '/app-version-settings',
+      name: 'app-version-settings',
+      component: () => import('../views/AppVersionSettingsView.vue'),
+      meta: { navLabel: 'เวอร์ชันแอปมือถือ', requiresSuperAdmin: true },
     },
     // ADR-027 (TASK-139) — per-company payment gateway credentials. Same
     // `requiresSuperAdmin: true` convention as '/mail-settings' above (UX

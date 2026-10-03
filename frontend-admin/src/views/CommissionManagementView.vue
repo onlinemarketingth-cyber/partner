@@ -12,6 +12,7 @@
  * payment_status/paid_at — no other field is ever editable here.
  */
 import { computed, onMounted, ref, watch } from 'vue'
+import { commissionPaymentStatusClass, commissionPaymentStatusLabel } from '@/utils/commissionPaymentStatus'
 import { useRoute } from 'vue-router'
 import { api, ApiError } from '@/api/client'
 import HeroHeader from '@/design-system/components/HeroHeader.vue'
@@ -61,7 +62,7 @@ interface LedgerItem {
   rate_type_applied: 'percentage' | 'fixed_satang'
   rate_applied: number
   amount_satang: number
-  payment_status: 'pending' | 'paid'
+  payment_status: 'pending' | 'paid' | 'forfeited'
   earned_via: EarnedVia | null
   /** Whose sale produced this override — null on a row the agent earned themselves. */
   override_source_agent: { id: number; name: string } | null
@@ -317,9 +318,9 @@ watch(() => activeCompany.companyId, () => { loadAll() })
               <p class="text-sm font-bold text-slate-900">{{ formatSatang(e.amount_satang) }}</p>
               <span
                 class="text-xs font-bold px-2 py-0.5 rounded-lg whitespace-nowrap"
-                :class="e.payment_status === 'paid' ? 'text-emerald-600 bg-emerald-50' : 'text-amber-600 bg-amber-50'"
+                :class="commissionPaymentStatusClass(e.payment_status)"
               >
-                {{ e.payment_status === 'paid' ? 'จ่ายแล้ว' : 'รอจ่าย' }}
+                {{ commissionPaymentStatusLabel(e.payment_status) }}
               </span>
             </div>
             <!--

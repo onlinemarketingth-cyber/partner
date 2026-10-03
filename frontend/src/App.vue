@@ -2,7 +2,7 @@
 import { useI18n } from '@/composables/useI18n'
 const { td } = useI18n()
 
-import { computed, onBeforeUnmount, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppLogo from '@/design-system/components/AppLogo.vue'
 import BottomNav from '@/design-system/components/BottomNav.vue'
@@ -14,6 +14,7 @@ import { useNotificationsStore } from '@/stores/notifications'
 import { usePageHeaderStore } from '@/stores/pageHeader'
 import { useThemeStore } from '@/stores/theme'
 import { initials } from '@/utils/initials'
+import { isNativeApp, NATIVE_LAYER_KEY } from '@/platform'
 
 const route = useRoute()
 const router = useRouter()
@@ -112,6 +113,22 @@ const showBottomNav = computed(() => showChrome.value && !route.meta.hideBottomN
  */
 const backgroundStyle = computed(() => theme.companyBackgroundStyle)
 
+/*
+ * MOB-25..31 (2026-10-02) — the iOS/Android app's own overlays (lock screen,
+ * offline notice, forced update). main.ts provides the component inside the
+ * app only; in a browser this is null and nothing below renders.
+ */
+const nativeLayer = inject(NATIVE_LAYER_KEY, null)
+
+/*
+ * MOB-25 — inside the app the page runs edge to edge (viewport-fit=cover is
+ * added to index.html by the app build only — vite.config.ts), so screens
+ * without the top bar need the status-bar inset themselves. A separate
+ * wrapper only in the app: the web portal's public pages keep exactly the
+ * DOM they had.
+ */
+const native = isNativeApp()
+
 // Per-company app name override for the wordmark (falls back to built-in).
 // TASK-121 — the app name is now resolved inside AppLogo, so this local
 // copy is gone. Kept as a comment rather than silently deleted because the
@@ -147,12 +164,22 @@ const backgroundStyle = computed(() => theme.companyBackgroundStyle)
   <!-- Public pages (login/register/verify/affiliate) render full-bleed.
        Transition removed here too — same reason as the authenticated
        RouterView below; login→register must never be able to blank out. -->
-  <RouterView v-if="!showChrome" />
+  <template v-if="!showChrome">
+    <div v-if="native" class="pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
+      <RouterView />
+    </div>
+    <RouterView v-else />
+  </template>
 
   <!-- Authenticated mobile-app shell: slim top bar + app column + bottom nav. -->
   <template v-else>
+    <!-- MOB-25 — `pt-[env(safe-area-inset-top)]`: in the app the bar
+         extends up behind the status bar (the clock sits on the nav
+         colour) and its contents start below it. The inset is 0 in a
+         browser — the web build never sets viewport-fit=cover — so this
+         changes nothing there. -->
     <header
-      class="sticky top-0 z-40 backdrop-blur border-b border-slate-200"
+      class="sticky top-0 z-40 backdrop-blur border-b border-slate-200 pt-[env(safe-area-inset-top)]"
       :style="{ background: 'var(--nav-bg)', color: 'var(--nav-text)' }"
     >
       <!-- TASK-086 / ADR-021 — this row used to show the same logo on every
@@ -234,8 +261,13 @@ const backgroundStyle = computed(() => theme.companyBackgroundStyle)
          kept in main.css, unused, deliberately: see the note there before
          reintroducing any transition at this level.
          pb-24 clears the fixed BottomNav — and drops to pb-6 on the screens
-         that hide it, or they would end in 96px of nothing. -->
-    <main class="mx-auto w-full max-w-md min-h-screen" :class="showBottomNav ? 'pb-24' : 'pb-6'">
+         that hide it, or they would end in 96px of nothing.
+         MOB-25 — plus the home-indicator inset the BottomNav already pads
+         itself by (0 in a browser, so still exactly 6rem / 1.5rem there). -->
+    <main
+      class="mx-auto w-full max-w-md min-h-screen"
+      :class="showBottomNav ? 'pb-[calc(6rem+env(safe-area-inset-bottom))]' : 'pb-[calc(1.5rem+env(safe-area-inset-bottom))]'"
+    >
       <RouterView />
     </main>
 
@@ -246,4 +278,7 @@ const backgroundStyle = computed(() => theme.companyBackgroundStyle)
        public pages (login/register/payment) get toasts too. It Teleports
        to <body> itself, so its position in this tree doesn't matter. -->
   <ToastHost />
+
+  <!-- MOB-27/29/31 — app only (see `nativeLayer` above). -->
+  <component :is="nativeLayer" v-if="nativeLayer" />
 </template>

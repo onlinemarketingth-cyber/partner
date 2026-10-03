@@ -39,6 +39,9 @@
  * JSON).
  */
 
+import { readNativeToken, writeNativeToken } from '@/platform/secureTokenStore'
+import { saveBlob } from '@/platform/files'
+
 /**
  * TASK-241 — falls back to '' (relative / same-origin) when unset, rather
  * than trusting the env var is always a real host string.
@@ -68,6 +71,22 @@ let token: string | null = (() => {
   }
 })()
 
+/**
+ * MOB-01 (2026-10-02) — inside the iOS/Android app, load the token an
+ * earlier launch saved in the Keychain/Keystore. main.ts awaits this before
+ * the boot session check, so /me already carries it.
+ *
+ * The Keychain wins over localStorage: iOS may have cleared the WebView's
+ * localStorage, and the Keychain is the copy that survives that. A token
+ * found only in localStorage is copied across so the next launch has it.
+ * In a browser this does nothing at all.
+ */
+export async function restoreNativeToken(): Promise<void> {
+  const saved = await readNativeToken()
+  if (saved) token = saved
+  else if (token) writeNativeToken(token)
+}
+
 /** The token this tab is currently using, if any. */
 export function getToken(): string | null {
   return token
@@ -82,6 +101,9 @@ export function getToken(): string | null {
  */
 export function setToken(next: string | null): void {
   token = next
+  // MOB-01 — inside the iOS/Android app the token is also kept in the
+  // Keychain/Keystore (platform/secureTokenStore.ts). No-op in a browser.
+  writeNativeToken(next)
   try {
     if (next) localStorage.setItem(TOKEN_KEY, next)
     else localStorage.removeItem(TOKEN_KEY)
@@ -402,14 +424,12 @@ async function requestDownload(path: string, filename: string): Promise<void> {
   } finally {
     deadline.done()
   }
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
+
+  // MOB-23 — the browser's invisible-link click, unchanged, lives in
+  // platform/files.ts now; inside the iOS/Android app the same call writes the
+  // file to the app's cache and opens the share sheet instead (a WebView has
+  // no downloads).
+  await saveBlob(blob, filename)
 }
 
 /**
@@ -454,14 +474,8 @@ async function requestDownloadAbsolute(url: string, filename?: string): Promise<
   const resolved = filename ?? (match?.[1] ? decodeURIComponent(match[1]) : 'download')
 
   const blob = await res.blob()
-  const objectUrl = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = objectUrl
-  link.download = resolved
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(objectUrl)
+  // MOB-23 — same split as requestDownload(): see platform/files.ts.
+  await saveBlob(blob, resolved)
 }
 
 /**
@@ -534,7 +548,12 @@ export const api = {
   // omitted `data` argument skips the body.
   patch: <T>(path: string, data?: unknown, signal?: AbortSignal) =>
     request<T>(path, { method: 'PATCH', body: data !== undefined ? JSON.stringify(data) : undefined, signal }),
-  delete: <T>(path: string, signal?: AbortSignal) => request<T>(path, { method: 'DELETE', signal }),
+  // MOB-28 (2026-10-02) — `data` is optional and only DELETE /me/devices
+  // sends one ({ token }): the push token identifies the row and is too long
+  // and too sensitive for a query string. Every existing call passes no body
+  // and is unchanged.
+  delete: <T>(path: string, signal?: AbortSignal, data?: unknown) =>
+    request<T>(path, { method: 'DELETE', body: data !== undefined ? JSON.stringify(data) : undefined, signal }),
   download: (path: string, filename: string) => requestDownload(path, filename),
   /** TASK-144 — download from an absolute, authenticated URL (stream_url). */
   downloadAbsolute: (url: string, filename?: string) => requestDownloadAbsolute(url, filename),

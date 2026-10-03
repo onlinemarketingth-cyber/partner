@@ -28,6 +28,9 @@ import Icon from '@/design-system/components/Icon.vue'
 import EmptyState from '@/design-system/components/EmptyState.vue'
 import LoadingSkeleton from '@/design-system/components/LoadingSkeleton.vue'
 import { useToastStore } from '@/stores/toast'
+// MOB-21 (2026-10-02) — the browser clipboard in a browser, the native one
+// in the iOS/Android app (Android's WebView refuses navigator.clipboard).
+import { copyText } from '@/platform/share'
 
 const toast = useToastStore()
 
@@ -100,7 +103,7 @@ async function load() {
 
 async function copy(link: TrackedLink) {
   try {
-    await navigator.clipboard.writeText(link.short_url)
+    await copyText(link.short_url)
     copiedId.value = link.id
     setTimeout(() => {
       if (copiedId.value === link.id) copiedId.value = null
